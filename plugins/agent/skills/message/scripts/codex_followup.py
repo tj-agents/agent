@@ -25,6 +25,61 @@ class ReceiptMismatch(FollowupError):
     pass
 
 
+def _agent_store_reader():
+    """Load the Store reader only from this package's nearest verified root."""
+    for root in Path(__file__).resolve().parents:
+        runtime = root / ".agents" / "agent" / "runtime"
+        locator = runtime / "package_root.py"
+        if not locator.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("followup_package_root", locator)
+        package_root = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(package_root)
+        if not package_root.is_package_root(root):
+            continue
+        path = root / ".agents" / "agent-store" / "runtime" / "reader.py"
+        if not path.is_file():
+            break
+        spec = importlib.util.spec_from_file_location("followup_store_reader", path)
+        reader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reader)
+        return reader
+    raise FollowupError("The shipped Agent Store reader is unavailable; no send attempted")
+
+
+def responsibility(receipt):
+    reader = _agent_store_reader()
+    snapshot = reader.ReadOnlyWorkItemStore().inspect(execution_key=receipt["routing"]["execution_key"])
+    if snapshot["work_items"][0]["status"] == "done":
+        raise FollowupError("Recipient execution is complete; reconcile responsibility before sending")
+    matches = [row for row in snapshot["sessions"]
+               if row["handle"] == "codex:" + receipt["thread_id"] and row["ended_at"] is None
+               and (row["role"] == "owner" or (row["role"] or "").startswith("bounded: "))
+               and path_key(row["cwd"]) == receipt["cwd"]
+               and path_key(row.get("profile") or "") == receipt["codex_home"]]
+    if len(matches) != 1:
+        raise FollowupError("Recipient has no verified responsibility for this execution; no send attempted")
+    return matches[0]["role"]
+
+
+def admit_route(proxy, receipt):
+    route = receipt.get("routing") or {}
+    if not isinstance(route.get("reason"), str) or not route["reason"].strip():
+        raise FollowupError("State the concrete reason this recipient needs the message")
+    if route.get("execution_key"):
+        responsibility(receipt)
+        return
+    original_path = route.get("corrects")
+    if not original_path:
+        raise FollowupError("Resolve recipient responsibility or identify the mistaken delivery receipt")
+    original = json.loads(Path(original_path).read_text(encoding="utf-8"))
+    validate_receipt(original)
+    if any(original[key] != receipt[key] for key in ("thread_id", "cwd", "codex_home")):
+        raise FollowupError("Correction must address the original recipient and profile")
+    if original["client_id"] == receipt["client_id"] or delivery(proxy, original) is None:
+        raise FollowupError("Original mistaken message delivery is unverified; no correction sent")
+
+
 def path_key(value):
     value = str(value)
     if value.startswith('\\\\?\\UNC\\'):
@@ -174,6 +229,8 @@ def send(proxy, receipt, receipt_path, message):
         method = 'turn/start'
     else:
         raise FollowupError(f'Target runtime state {state!r} does not permit a follow-up')
+    if not receipt_path.exists():
+        admit_route(proxy, receipt)
     try:
         with receipt_path.open('x', encoding='utf-8') as output:
             json.dump(receipt, output, indent=2)
@@ -213,6 +270,10 @@ def main(argv=None):
     submit.add_argument('--codex-home', default=os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
     submit.add_argument('--message-file', required=True, type=Path)
     submit.add_argument('--receipt', required=True, type=Path)
+    route = submit.add_mutually_exclusive_group(required=True)
+    route.add_argument('--execution-key')
+    route.add_argument('--corrects', type=Path)
+    submit.add_argument('--reason', required=True)
     status = sub.add_parser('status')
     status.add_argument('--receipt', required=True, type=Path)
     args = parser.parse_args(argv)
@@ -233,10 +294,17 @@ def main(argv=None):
             expected = {'version': 1, 'thread_id': str(args.thread), 'client_id': str(uuid.uuid4()),
                         'cwd': path_key(args.cwd), 'codex_home': path_key(args.codex_home),
                         'message_sha256': hashlib.sha256(message.encode('utf-8')).hexdigest()}
+            expected['routing'] = {'reason': args.reason,
+                                   **({'execution_key': args.execution_key} if args.execution_key
+                                      else {'corrects': str(args.corrects.resolve())})}
             receipt = json.loads(args.receipt.read_text(encoding='utf-8')) if exists else expected
             validate_receipt(receipt, expected)
             if exists:
                 reserved = True
+            elif args.execution_key:
+                if not args.reason.strip():
+                    raise FollowupError('State the concrete reason this recipient needs the message')
+                responsibility(receipt)
         else:
             receipt = json.loads(args.receipt.read_text(encoding='utf-8'))
             validate_receipt(receipt)

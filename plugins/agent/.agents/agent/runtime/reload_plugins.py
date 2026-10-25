@@ -176,7 +176,7 @@ def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]]
                  updates: list[tuple[str, str, Path]], starting=None) -> list[str]:
     for identity, scope in installs:
         run([executable, "plugin", "install", identity, "--scope", scope], project)
-    expected, updated = [], []
+    expected, updated = [], list(dict.fromkeys(identity for identity, _ in installs))
     for identity, scope, owner in updates:
         if starting is not None:
             starting(identity, scope, owner)
@@ -187,6 +187,10 @@ def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]]
             updated.append(identity)
     after = json.loads(run([executable, "plugin", "list", "--json"], project))
     problems = persistence_problems(expected, after) + plugin_errors(after, project)
+    for identity, scope in installs:
+        entry = entry_for(after, identity, scope, project)
+        if entry is None or entry.get("enabled") is not True:
+            problems.append(f"{identity} ({scope}): native installation did not persist enabled")
     if problems:
         raise RefreshError("; ".join(problems))
     return updated
@@ -218,6 +222,32 @@ def refresh(host: str, executable: str, project: Path, marketplaces: dict, plugi
         run([executable, "plugin", "add", identity], project)
     plugin_autoupdate.remove_user_plugins(user_config, set(plugins) - user_enabled)
     return []
+
+
+def repair_missing(host: str, project: Path, missing, executable: str | None = None) -> None:
+    executable = (executable_for(host) if not executable or Path(executable).suffix.casefold() in {".cmd", ".ps1", ".bat"}
+                  else executable)
+    if not executable:
+        raise RefreshError(f"Cannot repair required {host} plugins: executable is unavailable")
+    marketplaces, enabled = selection(host, executable, project)
+    undeclared = sorted(set(missing) - set(enabled))
+    if undeclared:
+        raise RefreshError("Required plugins are not enabled in this host's configuration: "
+                           + ", ".join(undeclared) + ". Repair repository selection; no setting was enabled.")
+    marketplaces = {name: source for name, source in marketplaces.items()
+                    if any(identity.endswith("@" + name) for identity in missing)}
+    refresh_marketplaces(host, executable, project, marketplaces)
+    if host == "claude":
+        installs = [(identity, scope) for identity in missing
+                    for scope in declared_scopes(identity, project) or ["user"]]
+        apply_claude(executable, project, installs, [])
+    else:
+        user_config = configuration_root(host) / "config.toml"
+        user_enabled = plugin_autoupdate.enabled_identities(plugin_autoupdate.load_toml(user_config))
+        for identity in missing:
+            run([executable, "plugin", "add", identity], project)
+        plugin_autoupdate.remove_user_plugins(user_config, set(missing) - user_enabled)
+    required_plugins.check(project, host, executable)
 
 
 def installed_entries() -> list[dict]:
@@ -290,9 +320,8 @@ def reconcile_claude(project: Path, event: bool = False, repositories: set[str] 
         key, path = publishers.get(name, {}).get(plugin, (None, None))
         head = contents["heads"].get(key) if key else None
         forced = event and key is None and (repositories is None or marketplaces.get(name) in repositories)
-        if event:
-            installs += [(identity, scope) for scope in declared_scopes(identity, project)
-                         if entry_for(installations, identity, scope, project) is None]
+        installs += [(identity, scope) for scope in declared_scopes(identity, project) or ["user"]
+                     if entry_for(installations, identity, scope, project) is None]
         for scope, owner in update_targets(identity, project, installations):
             entry = entry_for(installations, identity, scope, owner)
             if entry is None:

@@ -866,6 +866,7 @@ def main(argv=None):
     parser.add_argument("--latest", action="store_true")
     parser.add_argument("--topic")
     parser.add_argument("--checkout")
+    parser.add_argument("--expected-cwd", type=Path)
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--include-history", action="store_true")
     parser.add_argument("--prompt")
@@ -933,6 +934,10 @@ def main(argv=None):
             return 0
         if len(hosts) != 1 or not args.id:
             raise ValueError("open requires one --host and an exact --id.")
+        if args.expected_cwd is not None:
+            item = find(hosts[0], args.id, roots)
+            if Path(item["cwd"]).resolve() != args.expected_cwd.resolve():
+                raise ValueError("The exact session does not match the expected refresh checkout.")
         item = open_session(hosts[0], args.id, args.prompt if args.prompt_path else args.prompt or "Continue the requested work.", args.title, roots, args.confirm_closed,
                             args.prompt_path, args.model, native_arguments=args.native_argument)
         print(json.dumps(item, indent=2))

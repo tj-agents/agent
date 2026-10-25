@@ -95,7 +95,7 @@ def codex_arguments(argv: list[str]) -> list[str]:
             if selector:
                 selector = False
                 continue
-            break
+            continue
         if len(token) > 2 and token[:2] in {"-c", "-m", "-p", "-s", "-a", "-C", "-i"}:
             name, equals = token[:2], True
         if name in flags and not equals:
@@ -182,11 +182,14 @@ def stale_plugins(pid: int, project: Path, identities: list[str], installed: dic
 
 
 def utility_script(skill: str, name: str) -> Path:
-    for root in HERE.parents:
-        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        path = root / ".agents" / "agent" / "utility" / skill / "scripts" / name
-        if path.is_file() and any(marker.exists() for marker in markers):
-            return path
+    root_helper = HERE / "package_root.py"
+    spec = importlib.util.spec_from_file_location("session_relaunch_package_root", root_helper)
+    package_root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_root)
+    root = package_root.find_package_root(HERE)
+    path = root / ".agents" / "agent" / "utility" / skill / "scripts" / name
+    if path.is_file():
+        return path
     raise RuntimeError(f"the packaged Agent {skill} utility ({name}) was not found")
 
 
@@ -250,6 +253,31 @@ def arm_codex_close(project: Path, entry: dict, cli_close: Path, token: str) -> 
             "completion_token": token}
 
 
+def claim_record(record: Path, value: dict) -> None:
+    record.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(value, indent=2).encode("utf-8") + b"\n"
+    try:
+        with record.open("xb") as stream:
+            stream.write(encoded)
+        return
+    except FileExistsError:
+        existing = read_json(record)
+        if existing.get("state") == "waiting":
+            raise RuntimeError("an automatic refresh recovery is already armed for this exact session")
+    write_json(record, value)
+
+
+def cancel_codex_close(close: dict, reason: str) -> None:
+    try:
+        path = Path(close["cancel"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8") as stream:
+            json.dump({"cancelled": True, "reason": reason}, stream)
+            stream.write("\n")
+    except (KeyError, OSError, TypeError):
+        pass
+
+
 def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, host="claude") -> dict:
     if close is None and host == "claude":
         raise RuntimeError("session relaunch is unavailable until the declared CLI close capability supplies an exact target")
@@ -269,14 +297,16 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         cli_close = None
     token = secrets.token_hex(16)
     record = record_path(session_id)
-    write_json(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
-                        "host": host, "profile": entry.get("profile"), "cwd": str(project.resolve()),
-                        "native_arguments": native, "at": time.time()})
+    claim_record(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
+                          "host": host, "profile": entry.get("profile"), "cwd": str(project.resolve()),
+                          "native_arguments": native, "at": time.time()})
     options = ["--host", host, "--session-id", session_id, "--pid", str(entry["pid"]),
                "--pid-started-at", repr(entry["pid_started_at"]), "--record", str(record), "--token", token,
                "--recovery", str(recovery_script(project, installed)), "--title", entry.get("title") or host.title(),
                "--prompt", PROMPT, "--timeout", str(WAIT_SECONDS),
+               "--expected-cwd", str(project.resolve()),
                *[f"--native-argument={value}" for value in native]]
+    armed = None
     if entry.get("profile"):
         options += ["--profile", str(entry["profile"])]
     try:
@@ -287,6 +317,8 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         else:
             armed = close.arm()
     except Exception as error:
+        if host == "codex" and armed is not None:
+            cancel_codex_close(armed, "automatic refresh recovery was cancelled before relaunch")
         write_json(record, {**read_json(record), "state": "cancelled", "reason": str(error), "at": time.time()})
         raise RuntimeError(f"relaunch was not armed: {error}") from error
     return {"relaunch": "armed", "session_id": session_id, "native_arguments": native,

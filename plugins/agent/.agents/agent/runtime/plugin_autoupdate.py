@@ -25,8 +25,6 @@ import time
 GIT_TIMEOUT_SECONDS = 30
 SWEEP_TIMEOUT_SECONDS = 1800
 SCRIPT_NAME = "plugin_autoupdate.py"
-RUNTIME = ("plugin_autoupdate.py", "machine_events.py", "launch_check.py", "reload_plugins.py", "agent_cli.py",
-           "codex_hook_trust.py", "codex_websocket.py", "required_plugins.py", "cli_client.py", "terminal_command.py")
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 CLI_TIMEOUT_SECONDS = 60
 STILL_ACTIVE = 259
@@ -641,30 +639,99 @@ def sweep_worktrees(codex_config: dict) -> str:
     return "ran" if result.returncode == 0 else f"failed with exit code {result.returncode}"
 
 
+def _receipt(root: Path) -> dict | None:
+    try:
+        value = json.loads((root / "source.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    exports, digest, revision = (value.get(name) for name in ("exports", "sha256", "revision")) if isinstance(value, dict) else (None, None, None)
+    if (not isinstance(value, dict) or value.get("repository") != "tj-agents/agent"
+            or not isinstance(exports, list) or not exports or len(exports) != len(set(exports))
+            or not all(isinstance(item, str) and item.startswith(".agents/") for item in exports)
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or not isinstance(revision, str) or not revision):
+        return None
+    return value
+
+
+def _receipt_path(root: Path, relative: str) -> Path:
+    item = PurePosixPath(relative)
+    if item.is_absolute() or ".." in item.parts or "\\" in relative or ":" in relative:
+        raise ValueError("unsafe receipted runtime path")
+    candidate = root.joinpath(*item.parts)
+    if not candidate.resolve().is_relative_to(root.resolve()):
+        raise ValueError("receipted runtime path escapes its root")
+    return candidate
+
+
+def _closure(root: Path, exports: list[str]) -> dict[str, bytes]:
+    result = {}
+    for relative in exports:
+        target = _receipt_path(root, relative)
+        if not target.exists():
+            raise ValueError("receipted runtime export is unavailable")
+        paths = target.rglob("*") if target.is_dir() else (target,)
+        for path in sorted(paths):
+            if path.is_symlink() or not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            name = path.relative_to(root).as_posix()
+            if name in result:
+                raise ValueError("receipted runtime exports overlap")
+            result[name] = path.read_bytes()
+    return result
+
+
+def _digest(contents: dict[str, bytes]) -> str:
+    value = hashlib.sha256()
+    for name, body in sorted(contents.items()):
+        value.update(name.encode("utf-8") + b"\0" + str(len(body)).encode("ascii") + b"\0" + body)
+    return value.hexdigest()
+
+
+def _receipt_root(current: Path) -> Path | None:
+    for root in (current.parent, *current.parents):
+        if current.resolve() == (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).resolve() and _receipt(root):
+            return root
+    return None
+
+
 def packaged_copies(codex_config: dict) -> list[Path]:
-    relative = Path("resources", "machine", "scripts", SCRIPT_NAME)
-    return [root / relative for root in installed_plugin_roots("machine", claude_home(), codex_config)
-            if (root / relative).is_file()]
+    return [root for root in installed_plugin_roots("agent", claude_home(), codex_config)
+            if _receipt(root) and (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).is_file()]
 
 
 def self_update(current: Path, codex_config: dict) -> bool:
-    candidates = [path for path in packaged_copies(codex_config) if path.resolve() != current.resolve()
-                  and all(path.with_name(name).is_file() for name in RUNTIME)]
+    target = _receipt_root(current)
+    if target is None:
+        return False
+    candidates = [root for root in packaged_copies(codex_config) if root.resolve() != target.resolve()]
     if not candidates:
         return False
-    newest = max(candidates, key=lambda path: path.stat().st_mtime)
+    source = max(candidates, key=lambda root: (root / "source.json").stat().st_mtime)
+    receipt = _receipt(source)
     try:
+        contents = _closure(source, receipt["exports"])
+        if _digest(contents) != receipt["sha256"]:
+            return False
         changed = False
-        for name in RUNTIME:
-            source, target = newest.with_name(name), current.with_name(name)
-            if target.is_file() and source.read_bytes() == target.read_bytes():
+        for name, body in contents.items():
+            destination = _receipt_path(target, name)
+            if destination.is_file() and destination.read_bytes() == body:
                 continue
-            shutil.copyfile(source, target.with_name(target.name + ".next"))
-            os.replace(target.with_name(target.name + ".next"), target)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_name(destination.name + ".next")
+            temporary.write_bytes(body)
+            os.replace(temporary, destination)
             changed = True
-    except OSError:
+        source_receipt = (source / "source.json").read_bytes()
+        if not (target / "source.json").is_file() or (target / "source.json").read_bytes() != source_receipt:
+            temporary = target / "source.json.next"
+            temporary.write_bytes(source_receipt)
+            os.replace(temporary, target / "source.json")
+            changed = True
+        return changed
+    except (OSError, ValueError):
         return False
-    return changed
 
 
 def acquire_lock(path: Path):
