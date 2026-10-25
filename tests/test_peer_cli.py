@@ -47,6 +47,46 @@ class PeerCliTests(unittest.TestCase):
         self.assertIn('-TabId', calls[0])
         self.assertEqual('42:11', calls[0][calls[0].index('-TabId') + 1])
 
+    def test_windows_focus_uses_captured_runtime_id_after_title_changes(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        entry = {
+            'title': 'native cli changed the tab title',
+            'terminal': {
+                'kind': 'windows-terminal',
+                'tab_binding': {'runtime_id': '42:11', 'observed_title': 'launch nonce'},
+            },
+        }
+        target = {'title': entry['title'], 'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
+        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
+                mock.patch.object(peer_cli.close_tab.session_close, 'liveness', return_value=True), \
+                mock.patch.object(peer_cli.close_tab, 'windows_inventory', return_value=[target]), \
+                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed) as run:
+            peer_cli.close_tab.focus_entry(entry)
+        command = run.call_args.args[0]
+        self.assertEqual('42:11', command[command.index('-TabId') + 1])
+        self.assertNotIn('-Title', command)
+
+    def test_windows_peer_close_uses_captured_runtime_id_after_title_changes(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        entry = {
+            'title': 'native cli changed the tab title',
+            'terminal': {
+                'kind': 'windows-terminal',
+                'tab_binding': {'runtime_id': '42:11', 'observed_title': 'launch nonce'},
+            },
+        }
+        target = {'title': entry['title'], 'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
+        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
+                mock.patch.object(peer_cli.close_tab.session_close, 'liveness', return_value=True), \
+                mock.patch.object(peer_cli.close_tab, 'windows_inventory', return_value=[target]), \
+                mock.patch.object(peer_cli.close_tab, 'target_liveness', return_value=False), \
+                mock.patch.object(peer_cli.close_tab, 'require_closed'), \
+                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed) as run:
+            peer_cli.close_tab.close_entry(entry)
+        command = run.call_args.args[0]
+        self.assertEqual('42:11', command[command.index('-TabId') + 1])
+        self.assertNotIn('-Title', command)
+
     def test_codex_native_session_id_prevents_peer_attachment_selection(self):
         host = peer_cli.register_session.ProcessInfo(10, 1, 'codex.exe', 20.0)
         own = {'host': 'codex', 'session_id': 'own', 'cwd': str(PATH.parents[4]),
