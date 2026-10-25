@@ -750,7 +750,7 @@ def open_session(host, session_id, prompt="Continue the requested work.", title=
             _verify_codex_resume(executable)
             old_profile = os.environ.get("CODEX_HOME")
             os.environ["CODEX_HOME"] = item["profile"]
-            arguments = ["resume", session_id]
+            arguments = [*native_arguments, "resume", session_id]
             if model:
                 arguments += ["-m", model]
             arguments.append(instruction)
@@ -933,8 +933,6 @@ def main(argv=None):
             return 0
         if len(hosts) != 1 or not args.id:
             raise ValueError("open requires one --host and an exact --id.")
-        if args.native_argument and hosts[0] != "claude":
-            raise ValueError("--native-argument is supported only for Claude sessions.")
         item = open_session(hosts[0], args.id, args.prompt if args.prompt_path else args.prompt or "Continue the requested work.", args.title, roots, args.confirm_closed,
                             args.prompt_path, args.model, native_arguments=args.native_argument)
         print(json.dumps(item, indent=2))

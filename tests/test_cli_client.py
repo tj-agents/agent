@@ -53,7 +53,7 @@ class ClientAttributionTests(unittest.TestCase):
             mock.patch.object(CLIENT, "daemon_identity", return_value=self.backend),
             mock.patch.object(CLIENT, "process_context", side_effect=lambda pid: self.contexts.get(pid, {})),
             mock.patch.object(CLIENT, "process_arguments", side_effect=lambda pid: self.commands[pid]),
-            mock.patch.object(CLIENT, "current_input", return_value="own-input"),
+            mock.patch.object(CLIENT, "current_input", return_value={"turn_id": "turn", "client_message_id": "own-input"}),
             mock.patch.object(codex_hook_trust, "AppServer"),
         ]
         for patcher in self.patchers:
@@ -85,6 +85,7 @@ class ClientAttributionTests(unittest.TestCase):
         info, record = self.resolve()
         self.assertEqual(123, info.pid)
         self.assertEqual("own-input", record["client_message_id"])
+        self.assertEqual("turn", record["turn_id"])
         CLIENT.release(ticket)
 
     def test_newer_unattributed_input_refuses_the_old_frontend(self):

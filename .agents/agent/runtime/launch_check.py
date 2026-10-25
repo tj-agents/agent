@@ -250,7 +250,10 @@ def ensure_hooks(project: Path, executable: str | None = None, *, running_sessio
             expected[identity] = definitions
     codex_hook_trust.apply_trust(binary, project.resolve(), required=expected)
     if running_session:
-        codex_hook_trust.reload_running(binary, project.resolve(), required=expected)
+        try:
+            codex_hook_trust.reload_running(binary, project.resolve(), required=expected)
+        except (OSError, RuntimeError) as error:
+            raise codex_hook_trust.RestartRequired(str(error)) from error
 
 
 def main(argv: list[str] | None = None) -> int:

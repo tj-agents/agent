@@ -17,6 +17,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agent_cli
+import codex_hook_trust
 from codex_hook_trust import AppServer, github_repository
 import launch_check
 import plugin_autoupdate
@@ -24,7 +25,7 @@ import required_plugins
 
 TIMEOUT = 300
 IN_USE = ".in_use"
-ADOPTION = "Updated instruction text may require resuming the same Codex conversation; daemon hook reload is checked during sync."
+ADOPTION = "Client adoption is separate from installed package verification; an armed restart resumes this same conversation automatically."
 
 
 class RefreshError(RuntimeError):
@@ -465,11 +466,22 @@ def relaunch_session(project: Path, updated: set[str]) -> dict | None:
     return {"relaunch": "manual", "stale": stale, "instruction": instruction}
 
 
+def relaunch_codex(project: Path, reason: str, allowed: bool) -> dict:
+    import session_relaunch
+
+    if not allowed:
+        raise RefreshError("Codex requires client restart, but --no-relaunch forbids it: " + reason)
+    result = session_relaunch.relaunch(project, {}, host="codex")
+    if result.get("relaunch") != "armed":
+        raise RefreshError("The owning Codex client restart was not armed")
+    return {**result, "reason": reason, "adoption": "pending"}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", choices=("claude", "codex", "both"), default="both")
     parser.add_argument("--project", type=Path, default=Path.cwd())
-    parser.add_argument("--no-relaunch", action="store_true", help="Never relaunch the calling Claude session")
+    parser.add_argument("--no-relaunch", action="store_true", help="Never relaunch the calling CLI session")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--all", action="store_true", help="Refresh every selected plugin, not only published changes")
     modes.add_argument("--verify", action="store_true", help="Refresh, then inspect native installations and remote main revisions")
@@ -493,15 +505,24 @@ def main(argv: list[str] | None = None) -> int:
                                     host=None if arguments.host == "both" else arguments.host)
         if result != "unconfigured":
             summary = {"check": result}
+            restart_reason = None
             if "codex" in hosts and result in {"current", "updated", "offline"}:
                 try:
                     launch_check.ensure_hooks(project, running_session=True)
+                except codex_hook_trust.RestartRequired as error:
+                    restart_reason = str(error)
                 except Exception as error:
                     summary["hook_readiness_error"] = str(error)
                     result = "failed"
             setup_errors = (converge_plugin_setup() if result not in {"failed", "busy"}
                             else [f"skipped because launch check is {result}"])
             summary["plugin setup"] = setup_errors
+            if restart_reason and result not in {"failed", "busy", "offline"} and not setup_errors:
+                try:
+                    summary["codex"] = relaunch_codex(project, restart_reason, not arguments.no_relaunch)
+                except (OSError, ValueError, RuntimeError) as error:
+                    summary["hook_readiness_error"] = str(error)
+                    result = "failed"
             relaunched = relaunch_session(project, updated) if relaunch_allowed and result != "failed" and not setup_errors else None
             if relaunched:
                 summary["claude"] = relaunched
@@ -511,6 +532,7 @@ def main(argv: list[str] | None = None) -> int:
             failed = bool(relaunched and relaunched["relaunch"] == "failed")
             return int(result in {"failed", "offline", "busy"} or failed or bool(setup_errors))
     reports = []
+    restart_reason = None
     for host in hosts:
         try:
             executable = executable_for(host)
@@ -520,7 +542,10 @@ def main(argv: list[str] | None = None) -> int:
             report = (verify(host, executable, project, marketplaces, plugins)
                       if arguments.verify or arguments.verify_only else {"host": host, "plugins": plugins, "problems": []})
             if host == "codex" and not arguments.verify_only and not report["problems"]:
-                launch_check.ensure_hooks(project, executable, running_session=True)
+                try:
+                    launch_check.ensure_hooks(project, executable, running_session=True)
+                except codex_hook_trust.RestartRequired as error:
+                    restart_reason = str(error)
         except (RefreshError, agent_cli.LaunchError, OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
             report = {"host": host, "problems": [str(error)]}
         reports.append(report)
@@ -528,6 +553,13 @@ def main(argv: list[str] | None = None) -> int:
                     else ["skipped because plugin refresh or verification failed"])
     if setup_errors:
         reports.append({"host": "plugin setup", "plugins": [], "problems": setup_errors})
+    if restart_reason and not any(report["problems"] for report in reports):
+        try:
+            result = relaunch_codex(project, restart_reason, not arguments.no_relaunch)
+        except (OSError, ValueError, RuntimeError) as error:
+            reports.append({"host": "codex restart", "plugins": [], "problems": [str(error)]})
+        else:
+            reports.append({"host": "codex restart", **result, "problems": []})
     if "claude" in hosts and relaunch_allowed and not any(report["problems"] for report in reports):
         relaunched = relaunch_session(project, updated)
         if relaunched:

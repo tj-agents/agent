@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,9 @@ import shlex
 import subprocess
 import sys
 import time
+
+import agent_cli
+import required_plugins
 
 HERE = Path(__file__).resolve().parent
 IN_USE = ".in_use"
@@ -66,6 +70,50 @@ def preserved_arguments(argv: list[str]) -> list[str]:
                 index += 1
             if values:
                 kept += [token, *values]
+    return kept
+
+
+def codex_arguments(argv: list[str]) -> list[str]:
+    kept, index, selector, subcommand = [], 0, False, False
+    single = {"--config", "-c", "--model", "-m", "--profile", "-p", "--sandbox", "-s",
+              "--ask-for-approval", "-a", "--add-dir", "--enable", "--disable",
+              "--remote", "--remote-auth-token-env", "--local-provider"}
+    flags = {"--no-daemon", "--no-alt-screen", "--search", "--oss", "--strict-config",
+             "--approve-for-me", "--dangerously-bypass-approvals-and-sandbox"}
+    recorder = {f'shell_environment_policy.set.{name}=\"\"' for name in
+                ("CODEX_TUI_RECORD_SESSION", "CODEX_TUI_SESSION_LOG_PATH")}
+    while index < len(argv):
+        token = argv[index]
+        name, equals, _ = token.partition("=")
+        index += 1
+        if token == "--":
+            break
+        if not token.startswith("-"):
+            if token in {"resume", "fork"} and not subcommand:
+                subcommand, selector = True, True
+                continue
+            if selector:
+                selector = False
+                continue
+            break
+        if len(token) > 2 and token[:2] in {"-c", "-m", "-p", "-s", "-a", "-C", "-i"}:
+            name, equals = token[:2], True
+        if name in flags and not equals:
+            kept.append(token)
+        elif name in single and equals:
+            value = token[2:].removeprefix("=") if name in {"-c", "-m", "-p", "-s", "-a"} else token.partition("=")[2]
+            if name not in {"-c", "--config"} or value not in recorder:
+                kept.append(token)
+        elif name in single and index < len(argv):
+            if name not in {"-c", "--config"} or argv[index] not in recorder:
+                kept += [token, argv[index]]
+            index += 1
+        elif name in {"--cd", "-C", "--image", "-i"} and not equals:
+            index += 1
+        elif name == "--dangerously-bypass-hook-trust":
+            raise RuntimeError("Refusing to carry a hook-trust bypass into recovery")
+        elif name == "--last":
+            selector = False
     return kept
 
 
@@ -155,32 +203,94 @@ def recovery_script(project: Path, installed: dict) -> Path:
     return HERE / "agent_recovery.py"
 
 
-def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments) -> dict:
-    if close is None:
+def codex_close_capability(project: Path) -> Path:
+    executable, _ = agent_cli.resolve_codex_executable()
+    result = subprocess.run([executable, "plugin", "list", "--json"], cwd=project, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace",
+                            timeout=required_plugins.INVENTORY_TIMEOUT_SECONDS)
+    if result.returncode:
+        raise RuntimeError("Codex plugin inventory could not resolve the declared CLI close capability")
+    try:
+        roster = json.loads(result.stdout)
+    except ValueError as error:
+        raise RuntimeError("Codex plugin inventory returned invalid JSON") from error
+    entries = roster.get("installed") if isinstance(roster, dict) else None
+    if not isinstance(entries, list):
+        raise RuntimeError("Codex plugin inventory returned an invalid roster")
+    root = required_plugins.enabled_roots("codex", project, entries).get("cli@tj-agents")
+    if root is None:
+        raise RuntimeError("Automatic refresh requires enabled cli@tj-agents with its close capability")
+    script = root / ".agents" / "cli" / "utility" / "close" / "scripts" / "process_identity.py"
+    if not script.is_file():
+        raise RuntimeError("The enabled cli@tj-agents package does not ship process_identity.py")
+    return script
+
+
+def arm_codex_close(project: Path, entry: dict, cli_close: Path, token: str) -> dict:
+    close = utility_script("close", "agent_close.py")
+    root = state_directory() / "refresh-close" / token
+    target, completion, cancel = root / "target.json", root / "complete.json", root / "cancel.json"
+    prepared = subprocess.run([sys.executable, "-B", str(close), "prepare", "--session-id", entry["session_id"],
+                               "--profile", entry["profile"], "--target", str(target)], cwd=project,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    if prepared.returncode:
+        raise RuntimeError((prepared.stderr or prepared.stdout).strip() or "cannot prepare exact client close")
+    armed = subprocess.run([sys.executable, "-B", str(close), "arm", "--host", "codex",
+                             "--session-id", entry["session_id"], "--turn-id", entry["native_turn_id"],
+                             "--target", str(target), "--profile", entry["profile"], "--cli-close", str(cli_close),
+                             "--completion", str(completion), "--cancel", str(cancel), "--completion-token", token],
+                            cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    if armed.returncode:
+        raise RuntimeError((armed.stderr or armed.stdout).strip() or "cannot arm exact client close")
+    request = state_directory() / "client-close" / f"{token}.json"
+    result = state_directory() / "client-close" / f"{token}.result.json"
+    raw = request.read_bytes()
+    return {"request": str(request.resolve()), "request_sha256": hashlib.sha256(raw).hexdigest(),
+            "result": str(result.resolve()), "completion": str(completion.resolve()), "cancel": str(cancel.resolve()),
+            "completion_token": token}
+
+
+def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, host="claude") -> dict:
+    if close is None and host == "claude":
         raise RuntimeError("session relaunch is unavailable until the declared CLI close capability supplies an exact target")
     shared = shared or load(utility_script("peer", "session_close.py"), "session_close")
     entry = shared.own_host_and_entry()
-    if entry.get("host") != "claude":
-        raise RuntimeError("the calling session is not a registered Claude session")
+    if host not in {"claude", "codex"} or entry.get("host") != host:
+        raise RuntimeError("the calling session is not the expected registered CLI")
+    if host == "codex" and Path(entry.get("launch_cwd", "")).resolve() != project.resolve():
+        raise RuntimeError("the refresh checkout does not match this Codex client's checkout")
     session_id = entry["session_id"]
-    native = preserved_arguments(arguments(entry["pid"]))
+    native = (codex_arguments if host == "codex" else preserved_arguments)(arguments(entry["pid"]))
+    if host == "codex":
+        executable, _ = agent_cli.resolve_codex_executable()
+        required_plugins.check_launch(project, "codex", executable, [*native, "resume", session_id, PROMPT])
+        cli_close = codex_close_capability(project)
+    else:
+        cli_close = None
     token = secrets.token_hex(16)
     record = record_path(session_id)
     write_json(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
+                        "host": host, "profile": entry.get("profile"), "cwd": str(project.resolve()),
                         "native_arguments": native, "at": time.time()})
-    options = ["--session-id", session_id, "--pid", str(entry["pid"]),
+    options = ["--host", host, "--session-id", session_id, "--pid", str(entry["pid"]),
                "--pid-started-at", repr(entry["pid_started_at"]), "--record", str(record), "--token", token,
-               "--recovery", str(recovery_script(project, installed)), "--title", entry.get("title") or "Claude",
+               "--recovery", str(recovery_script(project, installed)), "--title", entry.get("title") or host.title(),
                "--prompt", PROMPT, "--timeout", str(WAIT_SECONDS),
                *[f"--native-argument={value}" for value in native]]
+    if entry.get("profile"):
+        options += ["--profile", str(entry["profile"])]
     try:
         shared.start_detached(HERE / "relaunch_watcher.py", options)
-        armed = close.arm()
+        if host == "codex":
+            armed = arm_codex_close(project, entry, cli_close, token)
+            write_json(record, {**read_json(record), "close": armed, "at": time.time()})
+        else:
+            armed = close.arm()
     except Exception as error:
         write_json(record, {**read_json(record), "state": "cancelled", "reason": str(error), "at": time.time()})
         raise RuntimeError(f"relaunch was not armed: {error}") from error
     return {"relaunch": "armed", "session_id": session_id, "native_arguments": native,
-            "close": armed.get("status")}
+            "close": "armed" if host == "codex" else armed.get("status")}
 
 
 def session_identity() -> tuple[str, int] | None:
