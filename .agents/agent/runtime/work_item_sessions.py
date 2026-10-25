@@ -26,9 +26,9 @@ _SESSION_CLOSE = None
 
 
 def _package_root():
+    from package_root import is_package_root
     for root in HERE.parents:
-        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        if (root / ".agents" / "agent" / "runtime").is_dir() and any(marker.exists() for marker in markers):
+        if is_package_root(root):
             return root
     raise RuntimeError(f"The Agent package root was not found relative to {HERE}.")
 

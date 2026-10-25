@@ -17,8 +17,8 @@ or check remains. Respect an explicit keep-open request; a question about a miss
 outcome, not authorization to close.
 
 ```json
-python -B "<skill-directory>/scripts/agent_close.py" prepare --session-id "<exact-id>" --target target.json
-python -B "<skill-directory>/scripts/agent_close.py" arm --target target.json --cli-close "<declared-cli-close-script>" --receipt receipt.json --completion complete.json --cancel cancel.json
+python -B "<skill-directory>/scripts/agent_close.py" prepare --session-id "<exact-id>" --profile "<profile>" --target target.json
+python -B "<skill-directory>/scripts/agent_close.py" arm --host codex --session-id "<exact-id>" --turn-id "<current-turn>" --target target.json --cli-close "<declared-cli-close-script>" --receipt receipt.json --completion complete.json --cancel cancel.json
 ```
 
 `prepare` accepts only a separately recorded exact `frontend` identity and terminal identity with exact
@@ -27,8 +27,12 @@ python -B "<skill-directory>/scripts/agent_close.py" arm --target target.json --
 terminal:{kind,...,binding:{pid,started_at}}}`. CLI owns rechecking native process/terminal state and its
 durable receipt; Agent does not infer a target or treat arming as closure.
 
-After the final reply, signal the returned completion token with `complete`; on a new prompt or changed
-eligibility, signal `cancel` instead. For linked-worktree removal, Agent or Engineering separately creates
+Arm before producing the final reply. The native Stop adapter signals the returned completion token
+synchronously for that exact armed turn; the next UserPromptSubmit cancels it for the same host/session.
+Claude binds arming to the latest non-sidechain user UUID in its exact transcript. Its Stop adapter requires
+that same transcript to end in an assistant `end_turn` response after that user; tool-use, a later user, a
+missing transcript, or changed path refuses completion rather than guessing from a session-wide Stop.
+For linked-worktree removal, Agent or Engineering separately creates
 fresh (at most 300 seconds) external eligibility binding this exact target, worktree, branch, head, remote
 base and base OID, with positive merged/no-other-owner evidence and provenance. CLI alone rechecks native
 and Git proof. If prepare or CLI refuses, keep the session open and report the reason. Never close a peer;
