@@ -17,7 +17,7 @@ from a zombie by age. The signal is that whatever owned the session is gone. Rea
 
 Both owners in (1) are needed, because the two ways a session is launched here fail differently. A
 session started from a shell prompt is a child of that shell, and closing the tab kills the shell —
-parent-gone catches it. A session started by a terminal launcher such as handoff-claude's is spawned
+parent-gone catches it. A session started by Agent's terminal handoff launcher is spawned
 by `wt.exe` and so is a direct child of `WindowsTerminal.exe`, which outlives the tab it was closed
 in; parent-gone never fires for those, and they are the ones this machine accumulates. What does die
 with the tab is the `OpenConsole.exe` hosting it, which `ProcessConsoleHostProcess` names.

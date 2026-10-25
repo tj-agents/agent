@@ -3,11 +3,13 @@
   "dependencies": [
     "tj-agents/base",
     "agent-store",
-    "tj-agents/machine"
+    "tj-agents/machine",
+    "tj-agents/cli"
   ],
   "profiles": {
     "core": [
       "close",
+      "handoff",
       "lanes",
       "listen",
       "message",
@@ -31,6 +33,21 @@
       ],
       "requires": [
         "cli close capability"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "handoff",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python",
+        "native host"
       ],
       "provenance": [
         "house"

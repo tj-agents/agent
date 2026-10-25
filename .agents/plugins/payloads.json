@@ -2,29 +2,17 @@
   "payloads": {
     "agent-store": ["agent-store"],
     "agent": ["agent"],
-    "codex": ["codex"],
-    "cc": ["cc"]
+    "codex": ["codex"]
   },
   "dependencies": {
-    "agent": ["tj-agents/base", "agent-store", "tj-agents/machine"],
-    "codex": ["agent"],
-    "cc": ["agent"]
+    "agent": ["tj-agents/base", "agent-store", "tj-agents/machine", "tj-agents/cli"],
+    "codex": ["agent"]
   },
   "resources": [
     {"plugin": "agent-store", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
     {"plugin": "agent", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
-    {"plugin": "codex", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
-    {"plugin": "cc", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
     {"plugin": "agent", "source": ".agents/agent/runtime", "destination": ".agents/agent/runtime"},
-    {"plugin": "codex", "source": ".agents/agent/runtime", "destination": ".agents/agent/runtime"},
-    {"plugin": "cc", "source": ".agents/agent/runtime", "destination": ".agents/agent/runtime"},
-    {"plugin": "agent", "source": ".agents/agent/resources", "destination": ".agents/agent/resources"},
-    {"plugin": "codex", "source": ".agents/agent/resources", "destination": ".agents/agent/resources"},
-    {"plugin": "cc", "source": ".agents/agent/resources", "destination": ".agents/agent/resources"},
-    {"plugin": "codex", "source": ".agents/agent/utility/peer/scripts", "destination": ".agents/agent/utility/peer/scripts"},
-    {"plugin": "cc", "source": ".agents/agent/utility/peer/scripts", "destination": ".agents/agent/utility/peer/scripts"},
-    {"plugin": "codex", "source": ".agents/agent/utility/plugins/scripts", "destination": ".agents/agent/utility/plugins/scripts"},
-    {"plugin": "cc", "source": ".agents/agent/utility/plugins/scripts", "destination": ".agents/agent/utility/plugins/scripts"}
+    {"plugin": "agent", "source": ".agents/agent/resources", "destination": ".agents/agent/resources"}
   ],
   "host_adapters": [
     {"skill": "agent:listen", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/listen.md"},

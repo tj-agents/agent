@@ -6,6 +6,7 @@ Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; a skill's n
 
 - `lanes` — policy — core — `.agents/agent/policy/lanes/SKILL.md`
 - `close` — utility — core — `.agents/agent/utility/close/SKILL.md`
+- `handoff` — utility — core — `.agents/agent/utility/handoff/SKILL.md`
 - `listen` — utility — core — `.agents/agent/utility/listen/SKILL.md`
 - `message` — utility — core — `.agents/agent/utility/message/SKILL.md`
 - `open` — utility — core — `.agents/agent/utility/open/SKILL.md`
@@ -20,14 +21,7 @@ Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; a skill's n
 
 - `inspect` — utility — core — `.agents/agent-store/utility/inspect/SKILL.md`
 
-## cc
-
-- `handoff` — utility — core — `.agents/cc/utility/handoff/SKILL.md`
-- `open` — utility — core — `.agents/cc/utility/open/SKILL.md`
-
 ## codex
 
-- `handoff` — utility — core — `.agents/codex/utility/handoff/SKILL.md`
 - `hooks` — utility — core — `.agents/codex/utility/hooks/SKILL.md`
 - `memory` — utility — core — `.agents/codex/utility/memory/SKILL.md`
-- `open` — utility — core — `.agents/codex/utility/open/SKILL.md`

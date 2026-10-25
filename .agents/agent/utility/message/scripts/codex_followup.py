@@ -265,7 +265,7 @@ def main(argv=None):
                 'No send was attempted. Preserve task-specific authority evidence and the authorized scope, '
                 'limits, holds, and remaining gates in the private recovery context and any required tool '
                 'approval justification. Assess available supported automated coordination through '
-                'codex:open for the verified exact owner; verify the exact native id, cwd, and Codex '
+                'agent:open for the verified exact owner; verify the exact native id, cwd, and Codex '
                 'profile. If automated coordination is unavailable or ineligible, report the blocker and '
                 'provide the message for the user to paste.'
             )

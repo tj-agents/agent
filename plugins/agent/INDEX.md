@@ -2,6 +2,7 @@
 
 - `lanes` — policy — core
 - `close` — utility — core
+- `handoff` — utility — core
 - `listen` — utility — core
 - `message` — utility — core
 - `open` — utility — core

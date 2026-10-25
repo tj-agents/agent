@@ -26,17 +26,6 @@
       ]
     },
     {
-      "name": "cc",
-      "source": "./plugins/cc",
-      "description": "Claude-specific agent session launch and control.",
-      "category": "Productivity",
-      "keywords": [
-        "agents",
-        "claude",
-        "sessions"
-      ]
-    },
-    {
       "name": "codex",
       "source": "./plugins/codex",
       "description": "Codex-specific agent session launch and control.",

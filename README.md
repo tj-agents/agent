@@ -8,8 +8,7 @@ Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 
 - `agent-store`: recorded sessions and execution state.
 - `agent`: host-neutral coordination, recovery, history, lanes and refresh.
-- `codex`: Codex-specific handoff, opening, hooks and memory.
-- `cc`: Claude-specific handoff and opening.
+- `codex`: Codex-specific hooks and memory.
 
 The generated packages have no dependency on a Core checkout. Shared runtime is authored beneath
 `.agents/agent/runtime` and `.agents/agent-store/runtime`; generated payloads embed the canonical paths
@@ -21,11 +20,10 @@ the adjacent `marketplace_catalog.lock.json` is the canonical producer snapshot.
 
 ## Skills
 
-- `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
+- `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
   `agent:recent`, `agent:recover`, `agent:refresh`, `agent:search`, `agent:close`
 - `agent-store:inspect`
-- `codex:handoff`, `codex:hooks`, `codex:memory`, `codex:open`
-- `cc:handoff`, `cc:open`
+- `codex:hooks`, `codex:memory`
 
 ## Authoring and verification
 

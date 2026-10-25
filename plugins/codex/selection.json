@@ -6,29 +6,12 @@
   ],
   "profiles": {
     "core": [
-      "handoff",
       "hooks",
-      "memory",
-      "open"
+      "memory"
     ]
   },
   "compatibilitySkillAliases": {},
   "skills": [
-    {
-      "name": "handoff",
-      "kind": "utility",
-      "profile": "core",
-      "applicability": [
-        "codex sessions"
-      ],
-      "requires": [
-        "python",
-        "codex"
-      ],
-      "provenance": [
-        "house"
-      ]
-    },
     {
       "name": "hooks",
       "kind": "utility",
@@ -53,21 +36,6 @@
       ],
       "requires": [
         "python"
-      ],
-      "provenance": [
-        "house"
-      ]
-    },
-    {
-      "name": "open",
-      "kind": "utility",
-      "profile": "core",
-      "applicability": [
-        "codex sessions"
-      ],
-      "requires": [
-        "python",
-        "codex"
       ],
       "provenance": [
         "house"

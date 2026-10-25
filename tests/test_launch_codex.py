@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / '.agents/codex/utility/handoff/scripts/launch_codex.py'
+SCRIPT = ROOT / '.agents/agent/resources/handoff/launch_codex.py'
 CODEX_LANES = json.loads((ROOT / '.agents/agent/resources/lanes/codex.json').read_text(encoding='utf-8'))
 
 _TESTS_DIR = Path(__file__).resolve().parent
@@ -433,7 +433,7 @@ class InstalledLayoutTests(unittest.TestCase):
     LAYOUTS = ('skills',)
 
     def test_the_authored_and_every_packaged_copy_loads_agent_cli(self):
-        copies = [SCRIPT] + [ROOT / 'plugins/codex' / layout / 'handoff/scripts/launch_codex.py'
+        copies = [SCRIPT] + [ROOT / 'plugins/agent' / '.agents/agent/resources/handoff/launch_codex.py'
                              for layout in self.LAYOUTS]
         for copy in copies:
             with self.subTest(copy=str(copy.relative_to(ROOT))):
