@@ -70,10 +70,11 @@ exits nonzero on drift, which is what CI runs. An unknown stack or plugin is rej
 
 Personal is only for personal projects explicitly adopting `personal@tj-agents`. Read the repository's
 README.md and AGENTS.md before selection; a GitHub owner, home directory or publisher account never
-establishes personal scope. `--plugin personal` selects it explicitly, and later adoption preserves that
-selection. Ownership alone never adds it. Infonetica, including `tj-agents/infonetica` work-tooling source
-and its worktrees, is work scope: never select or inject Personal there. Owner-based project/local file
-placement is independent of this policy boundary. Selecting a profile does not prove its instructions loaded.
+establishes personal scope. When the user explicitly confirms personal scope, include `--plugin personal`;
+otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it. Infonetica,
+including `tj-agents/infonetica` work-tooling source and its worktrees, is work scope: never select or inject
+Personal there. Owner-based project/local file placement is independent of this policy boundary.
+Selecting a profile does not prove its instructions loaded.
 
 A bare `--plugin <name>` selects from `tj-agents`. Add a foreign plugin with
 `--plugin concertable@agents --marketplace agents=Concertable/agents`. Subsequent adoption preserves
