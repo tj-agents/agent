@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -65,7 +66,39 @@ class RuntimeDeliveryTests(unittest.TestCase):
         errors = DELIVERY.apply(self.target, self.source, desired)
         self.assertTrue(any("unowned" in error for error in errors))
         self.assertEqual(b"local", collision.read_bytes())
-        self.assertIn("pending", json.loads((self.target / "source.json").read_text(encoding="utf-8")))
+        self.assertFalse((self.target / "source.json").exists())
+        retry = DELIVERY.apply(self.target, self.source, desired)
+        self.assertTrue(any("unowned" in error for error in retry))
+        self.assertEqual(b"local", collision.read_bytes())
+
+    def test_state_root_with_a_linked_ancestor_is_refused_without_touching_outside(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "sentinel").write_bytes(b"keep")
+        linked = self.root / "state"
+        try:
+            os.symlink(outside, linked, target_is_directory=True)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"links unavailable: {error}")
+        desired = self.desired({".agents/agent/runtime/live.py": b"published"})
+        with self.assertRaisesRegex(DELIVERY.DeliveryError, "traverses a link"):
+            DELIVERY.apply(linked / "bin", self.source, desired)
+        self.assertEqual(b"keep", (outside / "sentinel").read_bytes())
+        self.assertFalse((outside / "bin").exists())
+
+    def test_linked_source_root_and_malformed_exports_are_refused(self):
+        desired = self.desired({".agents/agent/runtime/live.py": b"published"})
+        source_link = self.root / "source-link"
+        try:
+            os.symlink(self.source, source_link, target_is_directory=True)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"links unavailable: {error}")
+        with self.assertRaisesRegex(DELIVERY.DeliveryError, "source root traverses a link"):
+            DELIVERY.closure(source_link, desired["exports"])
+        malformed = dict(desired)
+        malformed["exports"] = [{}]
+        with self.assertRaises(DELIVERY.DeliveryError):
+            DELIVERY.validate_receipt(malformed, self.source)
 
     def test_unchanged_apply_is_idempotent(self):
         desired = self.desired({".agents/agent/runtime/live.py": b"published"})
@@ -74,6 +107,17 @@ class RuntimeDeliveryTests(unittest.TestCase):
         before = (payload.stat().st_mtime_ns, (self.target / "source.json").stat().st_mtime_ns)
         self.assertEqual([], DELIVERY.apply(self.target, self.source, desired))
         self.assertEqual(before, (payload.stat().st_mtime_ns, (self.target / "source.json").stat().st_mtime_ns))
+
+    def test_interrupted_owned_delivery_resumes_from_the_pending_receipt(self):
+        first = self.desired({".agents/agent/runtime/retired.py": b"old"}, "v1")
+        self.assertEqual([], DELIVERY.apply(self.target, self.source, first))
+        (self.source / ".agents/agent/runtime/retired.py").unlink()
+        second = self.desired({".agents/agent/runtime/live.py": b"new"}, "v2")
+        (self.target / "source.json").write_text(json.dumps(DELIVERY._pending(first, second)), encoding="utf-8")
+        self.assertEqual([], DELIVERY.apply(self.target, self.source, second))
+        self.assertFalse((self.target / ".agents/agent/runtime/retired.py").exists())
+        self.assertEqual(b"new", (self.target / ".agents/agent/runtime/live.py").read_bytes())
+        self.assertEqual([], DELIVERY.check(self.target, self.source, second))
 
 
 if __name__ == "__main__":

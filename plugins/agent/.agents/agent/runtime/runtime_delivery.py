@@ -26,6 +26,26 @@ def is_reparse(path: Path) -> bool:
         return True
 
 
+def _lexical_ancestors(path: Path, label: str) -> Path:
+    """Reject a selected path whose lexical route crosses a link.
+
+    ``Path.resolve`` intentionally follows links, so it cannot establish that a
+    caller-selected state root (or source root) was not reached through one.
+    Check the lexical chain first, then use resolve only for containment.
+    """
+    lexical = Path(os.path.abspath(os.fspath(path)))
+    for current in (lexical, *lexical.parents):
+        try:
+            current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise DeliveryError(f"{label} is unavailable: {current}") from error
+        if is_reparse(current):
+            raise DeliveryError(f"{label} traverses a link: {current}")
+    return lexical
+
+
 def relative(value: object) -> str:
     if not isinstance(value, str) or not value or "\\" in value or ":" in value:
         raise DeliveryError(f"unsafe runtime path: {value!r}")
@@ -41,6 +61,7 @@ def _key(value: str) -> str:
 
 def _safe(root: Path, name: str, *, allow_missing=True) -> Path:
     name = relative(name)
+    root = _lexical_ancestors(root, "managed runtime root")
     if is_reparse(root):
         raise DeliveryError(f"managed runtime root is a link: {root}")
     current = root
@@ -67,7 +88,7 @@ def digest(contents: dict[str, bytes]) -> str:
 
 
 def closure(root: Path, exports: list[str]) -> dict[str, bytes]:
-    root = root.resolve()
+    root = _lexical_ancestors(root, "runtime source root")
     if is_reparse(root):
         raise DeliveryError(f"runtime source root is a link: {root}")
     results, aliases = {}, set()
@@ -105,21 +126,34 @@ def _files(value: object) -> dict[str, str]:
     return result
 
 
+def _exports(value: object, label: str) -> list[str]:
+    if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
+        raise DeliveryError(f"{label} are malformed")
+    try:
+        if len(value) != len(set(value)):
+            raise DeliveryError(f"{label} contain duplicates")
+    except TypeError as error:
+        raise DeliveryError(f"{label} are malformed") from error
+    values = [relative(item) for item in value]
+    if not all(item.startswith(".agents/") for item in values):
+        raise DeliveryError(f"{label} are malformed")
+    return values
+
+
 def validate_receipt(value: object, source: Path | None = None) -> dict:
     if not isinstance(value, dict) or value.get("repository") != REPOSITORY:
         raise DeliveryError("runtime receipt is not an Agent receipt")
     revision, exports, aggregate = value.get("revision"), value.get("exports"), value.get("sha256")
-    if (not isinstance(revision, str) or not revision or not isinstance(exports, list) or not exports
-            or len(exports) != len(set(exports)) or not all(relative(item).startswith(".agents/") for item in exports)
+    if (not isinstance(revision, str) or not revision
             or not isinstance(aggregate, str) or not SHA256.fullmatch(aggregate)):
         raise DeliveryError("runtime receipt is malformed")
+    exports = _exports(exports, "runtime receipt exports")
     files = _files(value.get("files"))
     pending = value.get("pending")
     if pending is not None:
         if not isinstance(pending, dict) or set(pending) != {"files", "exports"}:
             raise DeliveryError("runtime pending receipt is malformed")
-        if not isinstance(pending["exports"], list) or not pending["exports"]:
-            raise DeliveryError("runtime pending exports are malformed")
+        _exports(pending["exports"], "runtime pending exports")
         pending_files = pending["files"]
         if not isinstance(pending_files, dict):
             raise DeliveryError("runtime pending files are malformed")
@@ -223,7 +257,7 @@ def _inspect(root: Path, desired: dict, previous: dict | None) -> list[str]:
 
 def check(root: Path, source: Path, receipt: dict) -> list[str]:
     desired = validate_receipt(receipt, source)
-    root = Path(root)
+    root = _lexical_ancestors(Path(root), "managed runtime root")
     if not root.exists():
         return ["managed runtime root is missing"]
     if is_reparse(root):
@@ -240,7 +274,7 @@ def check(root: Path, source: Path, receipt: dict) -> list[str]:
 
 def apply(root: Path, source: Path, receipt: dict) -> list[str]:
     desired = validate_receipt(receipt, source)
-    root = Path(root)
+    root = _lexical_ancestors(Path(root), "managed runtime root")
     if root.exists() and is_reparse(root):
         raise DeliveryError("managed runtime root is a link")
     root.mkdir(parents=True, exist_ok=True)
@@ -252,7 +286,6 @@ def apply(root: Path, source: Path, receipt: dict) -> list[str]:
         previous = _read(receipt_path)
         if previous == desired and not _inspect(root, desired, previous):
             return []
-        _write_receipt(root, _pending(previous, desired))
         owned = _owned(previous)
         contents = closure(source, desired["exports"])
         errors = []
@@ -262,6 +295,10 @@ def apply(root: Path, source: Path, receipt: dict) -> list[str]:
                 errors.append(f"unowned runtime path conflicts: {name}")
         if errors:
             return errors
+        # Do not publish incoming hashes until every destination is either
+        # absent or already owned. Otherwise a retry could mistake a user's
+        # colliding file for payload interrupted after write-ahead.
+        _write_receipt(root, _pending(previous, desired))
         for name, body in contents.items():
             path = _safe(root, name)
             if path.is_file() and path.read_bytes() == body:

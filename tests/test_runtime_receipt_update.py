@@ -1,6 +1,8 @@
 import hashlib
 import importlib.util
 import json
+import contextlib
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -63,7 +65,7 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         target = self.receipt_root("old", b"old runtime", b"old resource")
         source = self.native_root("new", b"new runtime", b"new resource")
         current = target / ".agents/agent/runtime/plugin_autoupdate.py"
-        with mock.patch.object(self.runtime, "installed_plugin_roots", return_value=[source]):
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[source]):
             self.assertTrue(self.runtime.self_update(current, {}))
         self.assertEqual(b"new runtime", current.read_bytes())
         self.assertEqual(b"new resource", (target / ".agents/agent/resources/utility-peer.txt").read_bytes())
@@ -73,7 +75,7 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
     def test_self_update_refuses_a_source_with_a_bad_receipt_digest(self):
         target = self.receipt_root("old", b"old runtime", b"old resource")
         source = self.native_root("bad", b"new runtime", b"new resource", repository="https://github.com/other/agent")
-        with mock.patch.object(self.runtime, "installed_plugin_roots", return_value=[source]):
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[source]):
             self.assertFalse(self.runtime.self_update(target / ".agents/agent/runtime/plugin_autoupdate.py", {}))
         self.assertEqual(b"old runtime", (target / ".agents/agent/runtime/plugin_autoupdate.py").read_bytes())
 
@@ -82,9 +84,41 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         source = self.native_root("native", b"same runtime", b"same resource")
         current = target / ".agents/agent/runtime/plugin_autoupdate.py"
         original = (target / "source.json").read_bytes()
-        with mock.patch.object(self.runtime, "installed_plugin_roots", return_value=[source]):
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[source]):
             self.assertFalse(self.runtime.self_update(current, {}))
         self.assertEqual(original, (target / "source.json").read_bytes())
+
+    def test_exact_enabled_identity_not_manifest_claim_selects_native_source(self):
+        source = self.native_root("source", b"runtime", b"resource")
+        claude = self.root / "claude"
+        (claude / "plugins").mkdir(parents=True)
+        (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"agent@other": True}}), encoding="utf-8")
+        (claude / "plugins" / "installed_plugins.json").write_text(json.dumps({"plugins": {
+            "agent@other": [{"installPath": str(source)}],
+            "agent@tj-agents": [{"installPath": str(source)}],
+        }}), encoding="utf-8")
+        with mock.patch.object(self.runtime, "claude_home", return_value=claude):
+            self.assertEqual([], self.runtime.native_agent_roots({}))
+            (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"agent@tj-agents": True}}), encoding="utf-8")
+            self.assertEqual([source], self.runtime.native_agent_roots({}))
+
+    def test_pending_target_is_a_self_update_failure_not_a_silent_success(self):
+        target = self.receipt_root("old", b"old runtime", b"old resource")
+        receipt = json.loads((target / "source.json").read_text(encoding="utf-8"))
+        receipt["pending"] = {"files": {}, "exports": []}
+        (target / "source.json").write_text(json.dumps(receipt), encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "incomplete"):
+            self.runtime.self_update(target / ".agents/agent/runtime/plugin_autoupdate.py", {})
+
+    def test_main_returns_nonzero_when_managed_delivery_fails(self):
+        output = io.StringIO()
+        with mock.patch.object(self.runtime, "state_directory", return_value=self.root / "state"), \
+                mock.patch.object(self.runtime, "load_codex_config", return_value={}), \
+                mock.patch.object(self.runtime.shutil, "which", return_value=None), \
+                mock.patch.object(self.runtime, "self_update", side_effect=RuntimeError("delivery blocked")), \
+                contextlib.redirect_stderr(output):
+            self.assertEqual(1, self.runtime.main(["--no-sweep"]))
+        self.assertIn("delivery blocked", output.getvalue())
 
     def test_machine_events_only_allows_self_update_from_nested_managed_runtime(self):
         state = self.root / "state"
