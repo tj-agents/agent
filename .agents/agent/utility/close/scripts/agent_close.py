@@ -9,7 +9,6 @@ import math
 import os
 from pathlib import Path
 import secrets
-import subprocess
 import sys
 
 
@@ -43,38 +42,28 @@ def identity(value: object, label: str) -> dict:
 
 
 def target_from_record(record: dict) -> dict:
-    # Legacy registry pid is host bookkeeping and can be a shared daemon. Only a
-    # separately recorded frontend identity is eligible for native closure.
-    frontend = identity(record.get("frontend"), "frontend")
-    terminal = record.get("terminal")
-    if not isinstance(terminal, dict) or not isinstance(terminal.get("kind"), str):
-        raise ValueError("terminal identity is unavailable")
-    wrapper = identity(terminal.get("binding"), "launch wrapper")
-    terminal = {key: value for key, value in terminal.items() if key != "binding"}
-    target = {"schema_version": 1, "frontend": frontend, "wrapper": wrapper, "terminal": terminal}
-    return target
-
-
-def verified_receipt(record: dict, session_id: str, profile: str) -> None:
-    provenance = record.get("provenance")
-    if (record.get("session_id") != session_id or record.get("profile") != profile
-            or not isinstance(provenance, dict) or provenance.get("source") != "agent-startup-binding"
-            or not isinstance(provenance.get("receipt"), str)):
-        raise ValueError("record is not the verified startup binding for this session and profile")
-    path = Path(provenance["receipt"]).resolve()
-    root = (state_root() / "recovery-launches").resolve()
-    if root not in path.parents:
-        raise ValueError("startup binding receipt is outside private runtime state")
-    receipt = read_object(path)
-    wrapper = receipt.get("wrapper")
-    if not (receipt.get("session") == session_id and receipt.get("profile") == profile
-            and receipt.get("state") == "launched" and isinstance(wrapper, dict)
-            and wrapper.get("child") == record.get("frontend") and wrapper.get("terminal") == record.get("terminal")):
-        raise ValueError("startup binding receipt does not prove this record")
+    if record.get("client_identity") != "managed-input":
+        raise ValueError("record is not an attributable managed frontend")
+    return {"schema_version": 1, "frontend": identity(
+        {"pid": record.get("pid"), "started_at": record.get("pid_started_at")}, "frontend",
+    )}
 
 
 def state_root() -> Path:
     return Path(os.environ.get("AGENT_STATE_DIRECTORY") or Path.home() / ".agents-state")
+
+
+def cli_capability_root(path: Path) -> Path:
+    resolved = path.resolve()
+    for root in (resolved.parent, *resolved.parents):
+        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
+        if not any(marker.exists() for marker in markers):
+            continue
+        identity = root / ".agents" / "cli" / "utility" / "close" / "scripts" / "process_identity.py"
+        if identity.is_file():
+            return root
+        break
+    raise ValueError("declared cli:close capability does not ship process_identity.py")
 
 
 def _transcript_records(path: Path) -> list[dict]:
@@ -126,7 +115,8 @@ def record_path(session_id: str) -> Path:
 
 def prepare(args: argparse.Namespace) -> int:
     record = read_object(args.record or record_path(args.session_id))
-    verified_receipt(record, args.session_id, args.profile)
+    if record.get("session_id") != args.session_id or record.get("profile") != args.profile:
+        raise ValueError("record does not match the requested session and profile")
     target = target_from_record(record)
     write_object(args.target, target)
     print(json.dumps({"status": "prepared", "target": str(args.target)}))
@@ -136,21 +126,18 @@ def prepare(args: argparse.Namespace) -> int:
 def arm(args: argparse.Namespace) -> int:
     record_path(args.session_id)  # Validate the state filename before creating lifecycle state.
     target = read_object(args.target)
-    # Validate before invoking the separately declared CLI capability.
-    target_from_record({"frontend": target.get("frontend"), "terminal": {
-        **(target.get("terminal") if isinstance(target.get("terminal"), dict) else {}),
-        "binding": target.get("wrapper"),
-    }})
+    if target.get("schema_version") != 1:
+        raise ValueError("target schema is unavailable")
+    frontend = identity(target.get("frontend"), "frontend")
+    record = read_object(args.record or record_path(args.session_id))
+    if record.get("session_id") != args.session_id or record.get("profile") != args.profile:
+        raise ValueError("record does not match the requested session and profile")
+    entry = dict(record)
+    if target_from_record(entry)["frontend"] != frontend:
+        raise ValueError("target does not match the attributable frontend")
+    shared = _session_close()
+    entry["expected_activity"] = shared.awaiting_input_activity(entry)
     token = args.completion_token or secrets.token_urlsafe(24)
-    command = [sys.executable, "-B", str(args.cli_close), "arm", "--target", str(args.target),
-               "--receipt", str(args.receipt), "--completion", str(args.completion),
-               "--completion-token", token, "--cancel", str(args.cancel)]
-    try:
-        completed = subprocess.run(command, text=True, encoding="utf-8", capture_output=True, check=False, timeout=20)
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError("cli close arm timed out") from error
-    if completed.returncode:
-        raise RuntimeError(completed.stderr.strip() or "cli close arm failed")
     state = {
         "host": args.host, "session_id": args.session_id, "turn_id": args.turn_id,
         "completion": str(args.completion), "cancel": str(args.cancel), "completion_token": token,
@@ -158,9 +145,50 @@ def arm(args: argparse.Namespace) -> int:
     if args.host == "claude":
         transcript = claude_transcript(args.session_id, args.transcript)
         state.update({"transcript": str(transcript), "claude_user_uuid": claude_turn(transcript)})
-    write_object(args.state or state_root() / "close-lifecycle" / f"{args.session_id}.json", state)
-    print(json.dumps({"status": "armed", "completion_token": token, "receipt": str(args.receipt)}))
+    state_path = args.state or state_root() / "close-lifecycle" / f"{args.session_id}.json"
+    if state_path.exists():
+        raise RuntimeError("a close request is already armed for this session")
+    write_object(state_path, state)
+    request = state_root() / "client-close" / (token + ".json")
+    result = state_root() / "client-close" / (token + ".result.json")
+    cli_root = cli_capability_root(args.cli_close)
+    write_object(request, {"entry": entry, "completion_token": token, "cli_root": str(cli_root)})
+    try:
+        watcher = shared.start_agent_watcher(
+            Path(shared.__file__).resolve().with_name("client_close_watcher.py"),
+            ["--request", str(request), "--completion", str(args.completion), "--cancel", str(args.cancel),
+             "--result", str(result)],
+        )
+    except Exception:
+        state_path.unlink(missing_ok=True)
+        request.unlink(missing_ok=True)
+        raise
+    print(json.dumps({"status": "armed", "completion_token": token, "watcher_pid": watcher,
+                      "result": str(result)}))
     return 0
+
+
+def _session_close():
+    import importlib.util
+
+    path = None
+    here = Path(__file__).resolve()
+    for root in (here.parent, *here.parents):
+        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
+        if any(marker.exists() for marker in markers):
+            candidate = root / ".agents" / "agent" / "utility" / "peer" / "scripts" / "session_close.py"
+            if candidate.is_file():
+                path = candidate
+            break
+    if path is None:
+        raise RuntimeError("Agent peer runtime is unavailable")
+    sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location("agent_close_session_close", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Agent peer runtime is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def signal(args: argparse.Namespace) -> int:
@@ -183,8 +211,9 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--turn-id")
     command.add_argument("--transcript", type=Path)
     command.add_argument("--target", type=Path, required=True)
+    command.add_argument("--profile", required=True)
+    command.add_argument("--record", type=Path)
     command.add_argument("--cli-close", type=Path, required=True)
-    command.add_argument("--receipt", type=Path, required=True)
     command.add_argument("--completion", type=Path, required=True)
     command.add_argument("--cancel", type=Path, required=True)
     command.add_argument("--completion-token")

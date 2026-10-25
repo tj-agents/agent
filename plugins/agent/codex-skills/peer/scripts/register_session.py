@@ -412,7 +412,7 @@ def _load_session_store():
         return None
 
 
-def _record_session_start(host, session_id, cwd, title, pid, pid_started_at):
+def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, preserve_turn=False):
     store = _load_session_store()
     if store is None:
         return
@@ -421,22 +421,29 @@ def _record_session_start(host, session_id, cwd, title, pid, pid_started_at):
     except Exception:
         return
     try:
-        store.start_session(connection, host, session_id, cwd, title=title, pid=pid, pid_started_at=pid_started_at)
+        handle = store.session_handle(host, session_id)
+        if preserve_turn and store.get_session(connection, handle) is not None:
+            store.attach_session_client(connection, handle, pid, pid_started_at, cwd)
+        else:
+            store.start_session(connection, host, session_id, cwd, title=title, pid=pid, pid_started_at=pid_started_at)
     except Exception:
         pass
     finally:
         connection.close()
 
 
-def record(data, lookup=None, host_names=None):
+def record(data, lookup=None, host_names=None, client=None):
     session = data.get("session_id") or data.get("sessionId")
     if not session:
         return None
-    pid, host, pid_started_at = resolve_recorded_pid(
-        os.getppid(), lookup=lookup, host_names=host_names,
-    )
+    if client is None:
+        pid, host, pid_started_at = resolve_recorded_pid(
+            os.getppid(), lookup=lookup, host_names=host_names,
+        )
+    else:
+        pid, host, pid_started_at = client["pid"], client["host"], client["pid_started_at"]
     cwd = data.get("cwd") or os.getcwd()
-    title = os.environ.get(TITLE_ENV) or None
+    title = (client.get("title") if client is not None else os.environ.get(TITLE_ENV)) or None
     entry = {
         "session_id": str(session),
         "title": title,
@@ -449,9 +456,15 @@ def record(data, lookup=None, host_names=None):
     if host is not None:
         entry["host"] = host
         entry["profile"] = profile_identity(host)
-    terminal = terminal_identity()
+    terminal = client.get("terminal") if client is not None else terminal_identity()
     if terminal is not None:
         entry["terminal"] = terminal
+    if client is not None:
+        entry["client_identity"] = client["client_identity"]
+        entry["launch_cwd"] = client.get("launch_cwd", cwd)
+        for key in ("client_message_id", "recording_path", "backend", "profile"):
+            if key in client:
+                entry[key] = client[key]
     destination = state_directory() / f"{session}.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
@@ -459,7 +472,8 @@ def record(data, lookup=None, host_names=None):
     os.replace(staging, destination)
     if host in ("claude", "codex"):
         try:
-            _record_session_start(host, str(session), cwd, title, pid, pid_started_at)
+            _record_session_start(host, str(session), cwd, title, pid, pid_started_at,
+                                  **({"preserve_turn": True} if client is not None else {}))
         except Exception:
             pass
     return entry
