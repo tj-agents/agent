@@ -22,9 +22,11 @@ HERE = Path(__file__).resolve().parent
 IN_USE = ".in_use"
 PROMPT = "Plugins were refreshed and this conversation resumed in a fresh process. Continue the requested work."
 WAIT_SECONDS = 960
-VARIADIC = {"--add-dir", "--mcp-config"}
+VARIADIC = {"--add-dir", "--mcp-config", "--tools", "--allowedTools", "--allowed-tools",
+            "--disallowedTools", "--disallowed-tools"}
 SINGLE = {"--settings", "--plugin-dir", "--setting-sources", "--permission-mode", "--model"}
-FLAGS = {"--strict-mcp-config", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}
+FLAGS = {"--strict-mcp-config", "--restricted", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}
+TOOL_RESTRICTIONS = {"--tools", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools"}
 
 
 def state_directory() -> Path:
@@ -70,6 +72,8 @@ def preserved_arguments(argv: list[str]) -> list[str]:
                 index += 1
             if values:
                 kept += [token, *values]
+            elif name in TOOL_RESTRICTIONS:
+                raise RuntimeError(f"Refusing recovery because {name} did not retain its tool restrictions")
     return kept
 
 
