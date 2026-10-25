@@ -339,7 +339,7 @@ def terminal_identity(environ=None):
     if os.name == "nt" and values.get("WT_SESSION"):
         identity = {"kind": "windows-terminal", "session": values["WT_SESSION"]}
         if values.get("AGENT_WINDOWS_TERMINAL_TAB_ID"):
-            identity["automation_id"] = values["AGENT_WINDOWS_TERMINAL_TAB_ID"]
+            identity["runtime_id"] = values["AGENT_WINDOWS_TERMINAL_TAB_ID"]
         return identity
     return None
 

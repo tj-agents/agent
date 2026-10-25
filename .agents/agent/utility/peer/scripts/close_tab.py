@@ -172,12 +172,12 @@ def windows_inventory():
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or "")
-        automation_id = nonempty_text(item.get("automationId"))
-        if not automation_id and not title:
+        runtime_id = nonempty_text(item.get("runtimeId"))
+        if not runtime_id and not title:
             continue
         identity = {"kind": "windows-terminal"}
-        if automation_id:
-            identity["automation_id"] = automation_id
+        if runtime_id:
+            identity["runtime_id"] = runtime_id
         else:
             identity["title"] = title
         targets.append({
@@ -194,9 +194,9 @@ def entry_terminal_identity(entry):
         return None
     if identity.get("kind") != "windows-terminal":
         return identity
-    automation_id = nonempty_text(identity.get("automation_id"))
-    if automation_id:
-        return {**identity, "automation_id": automation_id}
+    runtime_id = nonempty_text(identity.get("runtime_id"))
+    if runtime_id:
+        return {**identity, "runtime_id": runtime_id}
     title = entry.get("title")
     if not isinstance(title, str) or not title:
         return dict(identity)
@@ -243,7 +243,7 @@ def inventory_for_identity(identity):
 def require_closed(identity):
     fallback_title = None
     if identity.get("kind") == "windows-terminal" and not nonempty_text(
-            identity.get("automation_id")):
+            identity.get("runtime_id")):
         fallback_title = nonempty_text(identity.get("title"))
     for attempt in range(CLOSE_CONFIRM_ATTEMPTS):
         targets = inventory_for_identity(identity)
@@ -269,8 +269,8 @@ def same_target(left, right):
         return (left.get("pane_id") == right.get("pane_id")
                 and left.get("socket") == right.get("socket"))
     if kind == "windows-terminal":
-        left_id = nonempty_text(left.get("automation_id"))
-        right_id = nonempty_text(right.get("automation_id"))
+        left_id = nonempty_text(left.get("runtime_id"))
+        right_id = nonempty_text(right.get("runtime_id"))
         if left_id or right_id:
             return bool(left_id and right_id and left_id == right_id)
         left_title = nonempty_text(left.get("title"))
@@ -377,13 +377,13 @@ def close_actual(target, force=False, fallback_entry=None):
         adapter = Path(__file__).with_name("windows_terminal_uia.ps1")
         if not is_windows() or not adapter.is_file():
             raise TerminalUnavailable("Windows Terminal control is available only on Windows")
-        automation_id = nonempty_text(identity.get("automation_id"))
-        if automation_id:
-            selector = ["-TabId", automation_id]
+        runtime_id = nonempty_text(identity.get("runtime_id"))
+        if runtime_id:
+            selector = ["-TabId", runtime_id]
         else:
             title = nonempty_text(identity.get("title"))
             if not title:
-                raise TerminalRefusal("Windows Terminal target has no automation ID or title")
+                raise TerminalRefusal("Windows Terminal target has no runtime ID or title")
             selector = ["-Title", title]
         result = run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                       str(adapter), *selector])
@@ -409,7 +409,7 @@ def close_stale_entry(entry):
         targets = windows_inventory()
     else:
         raise TerminalRefusal("stale-tab close is unsupported for this terminal")
-    title_only = kind == "windows-terminal" and not nonempty_text(identity.get("automation_id"))
+    title_only = kind == "windows-terminal" and not nonempty_text(identity.get("runtime_id"))
     if title_only:
         registered = [item for _path, item in session_close.entries()
                       if item.get("title") == title]
@@ -470,10 +470,10 @@ def close_entry(entry, force=False):
             raise TerminalUnavailable("Windows Terminal control is available only on Windows")
         targets = windows_inventory()
         title = entry.get("title")
-        tab_id = nonempty_text(identity.get("automation_id"))
+        tab_id = nonempty_text(identity.get("runtime_id"))
         if tab_id:
             matches = [target for target in targets
-                       if target["identity"].get("automation_id") == tab_id]
+                       if target["identity"].get("runtime_id") == tab_id]
         else:
             registered = [item for _path, item in session_close.entries()
                           if item.get("title") == title]
@@ -514,12 +514,12 @@ def focus_entry(entry):
         adapter = Path(__file__).with_name("windows_terminal_uia.ps1")
         if not is_windows() or not adapter.is_file():
             raise TerminalUnavailable("Windows Terminal control is available only on Windows")
-        automation_id = nonempty_text(identity.get("automation_id"))
+        runtime_id = nonempty_text(identity.get("runtime_id"))
         title = nonempty_text(identity.get("title"))
-        if automation_id:
+        if runtime_id:
             matches = [target for target in windows_inventory()
-                       if target["identity"].get("automation_id") == automation_id]
-            selector = ["-TabId", automation_id]
+                       if target["identity"].get("runtime_id") == runtime_id]
+            selector = ["-TabId", runtime_id]
         elif title:
             registered = [item for _path, item in session_close.entries() if item.get("title") == title]
             if len(registered) != 1:
@@ -527,7 +527,7 @@ def focus_entry(entry):
             matches = [target for target in windows_inventory() if target["title"] == title]
             selector = ["-Title", title]
         else:
-            raise TerminalRefusal("Windows Terminal target has no automation ID or title")
+            raise TerminalRefusal("Windows Terminal target has no runtime ID or title")
         if len(matches) != 1:
             raise TerminalRefusal("Windows Terminal target is absent or ambiguous")
         result = run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",

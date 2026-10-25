@@ -2,6 +2,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -11,6 +12,41 @@ sys.path.insert(0, str(PATH.parent))
 spec = importlib.util.spec_from_file_location("peer_cli", PATH); peer_cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(peer_cli)
 
 class PeerCliTests(unittest.TestCase):
+    def test_windows_inventory_uses_runtime_ids_when_automation_ids_are_empty(self):
+        inventory = json.dumps([
+            {'title': 'same launch title', 'runtimeId': '42:11'},
+            {'title': 'same launch title', 'runtimeId': '42:12'},
+        ])
+        completed = subprocess.CompletedProcess([], 0, stdout=inventory, stderr='')
+        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
+                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed):
+            targets = peer_cli.close_tab.windows_inventory()
+
+        self.assertEqual(['42:11', '42:12'], [target['identity']['runtime_id'] for target in targets])
+        self.assertFalse(peer_cli.close_tab.same_target(targets[0]['identity'], targets[1]['identity']))
+        self.assertTrue(all('automation_id' not in target['identity'] for target in targets))
+        adapter = (PATH.parent / 'windows_terminal_uia.ps1').read_text(encoding='utf-8')
+        self.assertIn('$tab.GetRuntimeId()', adapter)
+        self.assertNotIn('$tab.Current.AutomationId', adapter)
+
+    def test_windows_close_selects_the_exact_runtime_id(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        calls = []
+
+        def run(arguments):
+            calls.append(arguments)
+            return completed
+
+        target = {'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
+        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
+                mock.patch.object(peer_cli.close_tab, 'target_liveness', return_value=False), \
+                mock.patch.object(peer_cli.close_tab, 'require_closed'), \
+                mock.patch.object(peer_cli.close_tab, 'run', side_effect=run):
+            peer_cli.close_tab.close_actual(target, force=True)
+
+        self.assertIn('-TabId', calls[0])
+        self.assertEqual('42:11', calls[0][calls[0].index('-TabId') + 1])
+
     def test_ambiguous_prefix_refuses(self):
         entries = [
             {"title": "one", "session_id": "a"},
