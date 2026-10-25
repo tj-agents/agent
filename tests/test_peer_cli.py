@@ -95,8 +95,10 @@ class PeerCliTests(unittest.TestCase):
         with mock.patch.object(peer_cli.session_close.os, 'getppid', return_value=10), \
                 mock.patch.object(peer_cli.session_close, 'process_info', return_value=host), \
                 mock.patch.object(peer_cli.session_close.register_session, 'read_host_names', return_value={'codex'}), \
-                mock.patch.object(peer_cli.session_close, 'entries', side_effect=lambda: iter([('own.json', own), ('peer.json', peer)])), \
-                mock.patch.object(peer_cli.session_close, 'verified_live', return_value=True), \
+                mock.patch.object(peer_cli.session_close, 'current_codex_client', side_effect=[
+                    (host, {'client_identity': 'managed-input'}), (host, {'client_identity': 'managed-input'}),
+                ]), \
+                mock.patch.object(peer_cli.session_close.register_session, 'record', side_effect=[own, peer]), \
                 mock.patch.dict(peer_cli.session_close.os.environ, {'CODEX_THREAD_ID': 'own'}, clear=False):
             self.assertEqual('own', peer_cli.session_close.own_host_and_entry(PATH.parents[4])['session_id'])
             self.assertEqual('peer', peer_cli.session_close.own_host_and_entry(PATH.parents[4], session_id='peer')['session_id'])
@@ -104,19 +106,17 @@ class PeerCliTests(unittest.TestCase):
         with mock.patch.object(peer_cli.session_close.os, 'getppid', return_value=10), \
                 mock.patch.object(peer_cli.session_close, 'process_info', return_value=host), \
                 mock.patch.object(peer_cli.session_close.register_session, 'read_host_names', return_value={'codex'}), \
-                mock.patch.object(peer_cli.session_close, 'entries', side_effect=lambda: iter([('own.json', own), ('peer.json', peer)])), \
-                mock.patch.object(peer_cli.session_close, 'verified_live', return_value=True), \
+                mock.patch.object(peer_cli.session_close, 'current_codex_client', side_effect=RuntimeError('unattributed')), \
                 mock.patch.dict(peer_cli.session_close.os.environ, {'CODEX_THREAD_ID': 'missing'}, clear=False):
-            with self.assertRaisesRegex(peer_cli.session_close.Refusal, 'cannot resolve'):
+            with self.assertRaisesRegex(peer_cli.session_close.Refusal, 'unattributed'):
                 peer_cli.session_close.own_host_and_entry(PATH.parents[4])
 
         with mock.patch.object(peer_cli.session_close.os, 'getppid', return_value=10), \
                 mock.patch.object(peer_cli.session_close, 'process_info', return_value=host), \
                 mock.patch.object(peer_cli.session_close.register_session, 'read_host_names', return_value={'codex'}), \
-                mock.patch.object(peer_cli.session_close, 'entries', side_effect=lambda: iter([('own.json', own), ('peer.json', peer)])), \
                 mock.patch.object(peer_cli.session_close, 'verified_live', return_value=True), \
-                mock.patch.dict(peer_cli.session_close.os.environ, {'CODEX_THREAD_ID': ''}, clear=False):
-            with self.assertRaisesRegex(peer_cli.session_close.Refusal, 'multiple verified'):
+                mock.patch.dict(peer_cli.session_close.os.environ, {'CODEX_THREAD_ID': '', 'CODEX_SESSION_ID': ''}, clear=False):
+            with self.assertRaisesRegex(peer_cli.session_close.Refusal, 'thread identity is unavailable'):
                 peer_cli.session_close.own_host_and_entry(PATH.parents[4])
 
     def test_ambiguous_prefix_refuses(self):
