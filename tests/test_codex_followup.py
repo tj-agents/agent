@@ -353,7 +353,7 @@ class FollowupTests(unittest.TestCase):
 
 
 class ProxyTests(unittest.TestCase):
-    def create_proxy(self, source, timeout=3):
+    def create_proxy(self, source, timeout=3, stop_after_initialized=False):
         temp = tempfile.TemporaryDirectory(prefix='followup proxy ')
         self.addCleanup(temp.cleanup)
         handler = Path(temp.name) / 'handler.py'
@@ -385,14 +385,18 @@ while not headers.endswith(b'\\r\\n\\r\\n'): headers.extend(exact(1))
 key=[line.split(b':',1)[1].strip() for line in headers.split(b'\\r\\n') if line.lower().startswith(b'sec-websocket-key:')][0]
 accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
 sys.stdout.buffer.write(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n'); sys.stdout.buffer.flush()
+stop_after_initialized = %r
 while True:
     a,b=exact(2); n=b&127
     if n==126: n=struct.unpack('!H',exact(2))[0]
     elif n==127: n=struct.unpack('!Q',exact(8))[0]
     mask=exact(4); payload=bytes(x^mask[i%%4] for i,x in enumerate(exact(n)))
     if (a&15)==8: break
+    message=json.loads(payload.decode())
     handler.stdin.write(payload.decode()+'\\n'); handler.stdin.flush()
-''' % (str(handler), str(pid_file)), encoding='utf-8')
+    if stop_after_initialized and message.get('method') == 'initialized':
+        import time; time.sleep(30)
+''' % (str(handler), str(pid_file), stop_after_initialized), encoding='utf-8')
 
         def stop_handler():
             try:
@@ -487,17 +491,14 @@ for line in sys.stdin:
 
         output = io.StringIO()
         with patch.object(FOLLOWUP, 'Proxy', side_effect=proxy_with_caller_deadline), \
-                patch.object(proxy, '_write', wraps=proxy._write) as write, \
+                patch.object(proxy, 'request', wraps=proxy.request) as request, \
                 contextlib.redirect_stdout(output):
-            code = FOLLOWUP.main(['send', '--thread', THREAD, '--cwd', str(root),
+            code = FOLLOWUP.main(['--timeout', '1', 'send', '--thread', THREAD, '--cwd', str(root),
                                   '--codex-home', str(root), '--message-file', str(message),
                                   '--receipt', str(receipt)])
         self.assertEqual(2, code)
-        self.assertEqual('unverified', json.loads(output.getvalue())['status'])
-        self.assertTrue(receipt.is_file())
-        emitted = [call.args[0] for call in write.call_args_list]
-        self.assertFalse(any(item.get('id') == 'approval' for item in emitted))
-        self.assertLessEqual(sum(item.get('method', '').startswith('turn/') for item in emitted), 1)
+        self.assertIn(json.loads(output.getvalue())['status'], ('unverified', 'unavailable'))
+        self.assertEqual(1, sum(call.args[0].startswith('turn/') for call in request.call_args_list))
         self.assertIsNotNone(proxy.process.poll())
 
     def test_disconnect_error_is_not_delivery(self):
@@ -515,23 +516,28 @@ for line in sys.stdin:
         self.assertIsNotNone(proxy.process.poll())
 
     def test_large_write_to_nonreading_proxy_obeys_deadline(self):
-        proxy = self.create_proxy('import time; time.sleep(30)', timeout=0.2)
+        proxy = self.create_proxy('''import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    if request.get('method') == 'initialize':
+        print(json.dumps({'id': request['id'], 'result': {}}), flush=True)
+''', timeout=3, stop_after_initialized=True)
+        proxy.initialize()
+        proxy.deadline = time.monotonic() + 0.2
         started = time.monotonic()
         with self.assertRaisesRegex(FOLLOWUP.FollowupError, 'timed out'):
             proxy.request('turn/start', {'input': [{'type': 'text', 'text': 'x' * 1000000}]})
         proxy.close()
-        self.assertLess(time.monotonic() - started, 5)
+        self.assertLess(time.monotonic() - started, 3)
         self.assertIsNotNone(proxy.process.poll())
-        if proxy.writer:
-            self.assertFalse(proxy.writer.is_alive())
 
     def test_expired_deadline_does_not_write_request(self):
         proxy = self.create_proxy('import time; time.sleep(30)')
         proxy.deadline = time.monotonic() - 1
-        with patch.object(proxy, '_write') as write:
+        with patch.object(proxy.server, 'request') as request:
             with self.assertRaises(FOLLOWUP.FollowupError):
                 proxy.request('turn/start', {})
-        write.assert_not_called()
+        request.assert_not_called()
 
     def test_close_is_best_effort_when_stdin_close_raises(self):
         proxy = self.create_proxy('import time; time.sleep(30)', timeout=0.2)

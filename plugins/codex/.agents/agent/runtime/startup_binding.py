@@ -96,7 +96,25 @@ def _windows_tab_binding(terminal: dict) -> dict | None:
     return None
 
 
-def _record_launch_binding(host: str, child_pid: int) -> None:
+def _prelaunch_terminal() -> dict | None:
+    """Snapshot terminal ownership before the native client can change its visible title."""
+    try:
+        terminal = register_session.terminal_identity()
+        if not isinstance(terminal, dict) or not terminal.get("kind"):
+            return None
+        terminal = dict(terminal)
+        wrapper = _finite_identity(register_session.build_process_lookup()(os.getpid()))
+        if wrapper is not None:
+            terminal["binding"] = wrapper
+        tab_binding = _windows_tab_binding(terminal)
+        if tab_binding is not None:
+            terminal["tab_binding"] = tab_binding
+        return terminal
+    except (OSError, ValueError, OverflowError):
+        return None
+
+
+def _record_launch_binding(host: str, child_pid: int, terminal: Mapping[str, object] | None = None) -> None:
     """Bind an acknowledged SessionStart to this wrapper's exact Popen child."""
     try:
         lookup = register_session.build_process_lookup()
@@ -104,13 +122,10 @@ def _record_launch_binding(host: str, child_pid: int) -> None:
         wrapper_identity, child_identity = _finite_identity(wrapper), _finite_identity(child)
         if not wrapper_identity or not child_identity or child.ppid != wrapper.pid:
             return
-        terminal = register_session.terminal_identity()
+        terminal = dict(terminal) if isinstance(terminal, Mapping) else register_session.terminal_identity()
         if not isinstance(terminal, dict) or not terminal.get("kind"):
             return
         terminal = {**terminal, "binding": wrapper_identity}
-        tab_binding = _windows_tab_binding(terminal)
-        if tab_binding is not None:
-            terminal["tab_binding"] = tab_binding
         matches = []
         for path in register_session.state_directory().glob("*.json"):
             try:
@@ -170,7 +185,8 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                 on_running: Callable[..., None] | None = None,
                 on_unconfirmed: Callable[..., None] | None = None,
                 require_session_start: bool = False,
-                on_phase: Callable[[str], None] | None = None) -> int:
+                on_phase: Callable[[str], None] | None = None,
+                terminal: Mapping[str, object] | None = None) -> int:
     phase = on_phase or (lambda _name: None)
     running = on_running or (lambda child_pid=None: None)
     environment = without_binding_state(os.environ)
@@ -196,7 +212,6 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                 while not _acknowledged(directory, token):
                     if process.poll() is not None:
                         return process.returncode
-                    _record_launch_binding(host, process.pid)
                     if not unconfirmed and time.monotonic() >= deadline:
                         if on_unconfirmed is not None:
                             on_unconfirmed(process.pid)
@@ -204,6 +219,7 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                               "leaving the session open; do not relaunch", file=sys.stderr, flush=True)
                         unconfirmed = True
                     time.sleep(0.05)
+                _record_launch_binding(host, process.pid, terminal)
             running(process.pid)
             return process.wait()
         except BaseException:
@@ -290,7 +306,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     try:
-        options = {"require_session_start": True} if parsed.require_session_start else {}
+        terminal = _prelaunch_terminal()
+        if terminal is not None:
+            status["terminal"] = terminal
+        options = {"require_session_start": True, "terminal": terminal} if parsed.require_session_start else {
+            "terminal": terminal,
+        }
         if parsed.status_file is not None:
             options["on_phase"] = phase
         returncode = run_session(parsed.host, parsed.target, parsed.project, arguments, **options,

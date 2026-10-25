@@ -51,24 +51,36 @@ class Proxy:
                 self.server = transport.AppServer(executable, Path.cwd(), environment=env,
                                                   timeout=max(0.1, deadline - time.monotonic()), existing=True)
                 self.process = self.server.process
-                self.writer = None
                 return
         raise FollowupError('The packaged Codex WebSocket transport was not found')
 
     def request(self, method, params):
-        if time.monotonic() >= self.deadline:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
             raise FollowupError('Timed out; delivery has not been verified')
+        completed = queue.Queue(maxsize=1)
+
+        def run_request():
+            try:
+                completed.put((True, self.server.request(method, params)))
+            except (BrokenPipeError, OSError, RuntimeError, ValueError) as error:
+                completed.put((False, error))
+
+        self.server.timeout = remaining
+        worker = threading.Thread(target=run_request, daemon=True)
+        worker.start()
         try:
-            result = self.server.request(method, params)
-        except RuntimeError as error:
-            raise FollowupError(str(error)) from error
+            succeeded, value = completed.get(timeout=remaining)
+        except queue.Empty as error:
+            self.close()
+            worker.join(timeout=0.1)
+            raise FollowupError('timed out; delivery has not been verified') from error
+        if not succeeded:
+            raise FollowupError(str(value)) from value
+        result = value
         if not isinstance(result, dict):
             raise FollowupError(f'{method} returned an unsupported response')
         return result
-
-    def _write(self, message):
-        """Compatibility inspection seam; AppServer owns framed request sequencing."""
-        self.server.send(message)
 
     def initialize(self):
         try:
