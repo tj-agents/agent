@@ -96,6 +96,26 @@ class HandoffStartupTests(unittest.TestCase):
                     self.assertIn('.agents', handler.parts)
                     self.assertTrue(handler.is_file())
 
+    def test_nested_plugin_missing_a_handler_refuses_without_loading_an_enclosing_checkout(self):
+        outer = self.directory / 'author-checkout'
+        (outer / '.git').mkdir(parents=True)
+        outer_handler = outer / '.agents/agent/resources/handoff/launch_claude.py'
+        outer_handler.parent.mkdir(parents=True)
+        outer_handler.write_text('def main(argv):\n    return 99\n', encoding='utf-8')
+        nested = outer / 'plugins/agent'
+        marker = nested / '.codex-plugin/plugin.json'
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{}', encoding='utf-8')
+        dispatcher_path = nested / 'skills/handoff/scripts/handoff.py'
+        dispatcher_path.parent.mkdir(parents=True)
+        dispatcher_path.write_text(
+            (ROOT / '.agents/agent/utility/handoff/scripts/handoff.py').read_text(encoding='utf-8'),
+            encoding='utf-8',
+        )
+        dispatcher = load('nested_missing_handoff_dispatcher', dispatcher_path)
+        with self.assertRaisesRegex(SystemExit, 'was not found under'):
+            dispatcher.main(['--host', 'claude', '--'])
+
     def test_native_exit_before_confirmation_is_failure_even_with_zero_exit(self):
         for host in ('codex', 'claude'):
             for returncode in (0, 2):
