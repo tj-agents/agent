@@ -18,7 +18,7 @@ foreach ($window in @($root.FindAll([System.Windows.Automation.TreeScope]::Child
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::TabItem)
     foreach ($tab in @($window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabType))) {
-        $tabs += [pscustomobject]@{ Title = $tab.Current.Name; AutomationId = $tab.Current.AutomationId; Element = $tab; Window = $window }
+        $tabs += [pscustomobject]@{ Title = $tab.Current.Name; RuntimeId = ($tab.GetRuntimeId() -join ':'); Element = $tab; Window = $window }
     }
 }
 if ($Json) {
@@ -27,7 +27,7 @@ if ($Json) {
     $items = @($tabs | ForEach-Object {
         ConvertTo-Json -InputObject ([pscustomobject]@{
             title = $_.Title
-            automationId = $_.AutomationId
+            runtimeId = $_.RuntimeId
         }) -Compress
     })
     Write-Output ('[' + ($items -join ',') + ']')
@@ -35,7 +35,7 @@ if ($Json) {
 }
 if (-not $TabId -and -not $Title) { throw 'Specify -TabId or -Title.' }
 $matches = @($tabs | Where-Object {
-    ($TabId -and $_.AutomationId -eq $TabId) -or ($Title -and $_.Title -eq $Title)
+    ($TabId -and $_.RuntimeId -eq $TabId) -or ($Title -and $_.Title -eq $Title)
 })
 if ($matches.Count -ne 1) { throw 'Windows Terminal target is absent or ambiguous.' }
 if ($Focus) {

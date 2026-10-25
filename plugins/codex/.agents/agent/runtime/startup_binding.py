@@ -86,10 +86,10 @@ def _windows_tab_binding(terminal: dict) -> dict | None:
             matches = [item for item in close_tab.windows_inventory() or [] if item.get("title") == title]
             if len(matches) != 1:
                 return None
-            automation_id = matches[0].get("identity", {}).get("automation_id")
-            if not isinstance(automation_id, str) or not automation_id:
+            runtime_id = matches[0].get("identity", {}).get("runtime_id")
+            if not isinstance(runtime_id, str) or not runtime_id:
                 return None
-            return {"automation_id": automation_id, "observed_title": title,
+            return {"runtime_id": runtime_id, "observed_title": title,
                     "evidence": "windows-uia-unique-title-at-launch"}
         except Exception:
             return None

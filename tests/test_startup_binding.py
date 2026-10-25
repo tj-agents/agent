@@ -39,7 +39,7 @@ class StartupBindingTests(unittest.TestCase):
     def test_prelaunch_snapshot_captures_tab_before_native_start(self):
         identity = SimpleNamespace(pid=71, started_at=8.0)
         terminal = {'kind': 'windows-terminal', 'session': 'terminal-session'}
-        tab = {'automation_id': 'uia-tab', 'observed_title': 'launch nonce',
+        tab = {'runtime_id': 'uia-tab', 'observed_title': 'launch nonce',
                'evidence': 'windows-uia-unique-title-at-launch'}
         captured = []
 
@@ -52,7 +52,7 @@ class StartupBindingTests(unittest.TestCase):
                 mock.patch.object(self.binding, '_windows_tab_binding', side_effect=capture):
             snapshot = self.binding._prelaunch_terminal()
 
-        self.assertEqual('uia-tab', snapshot['tab_binding']['automation_id'])
+        self.assertEqual('uia-tab', snapshot['tab_binding']['runtime_id'])
         self.assertEqual({'pid': 71, 'started_at': 8.0}, snapshot['binding'])
         self.assertEqual([{'kind': 'windows-terminal', 'session': 'terminal-session',
                            'binding': {'pid': 71, 'started_at': 8.0}}], captured)
@@ -62,7 +62,7 @@ class StartupBindingTests(unittest.TestCase):
         process.wait.return_value = 0
         terminal = {'kind': 'windows-terminal', 'session': 'terminal-session',
                     'binding': {'pid': 71, 'started_at': 8.0},
-                    'tab_binding': {'automation_id': 'uia-tab', 'observed_title': 'launch nonce',
+                    'tab_binding': {'runtime_id': 'uia-tab', 'observed_title': 'launch nonce',
                                     'evidence': 'windows-uia-unique-title-at-launch'}}
         with mock.patch.object(self.binding.subprocess, 'Popen', return_value=process), \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
@@ -79,7 +79,7 @@ class StartupBindingTests(unittest.TestCase):
         status_path = Path(directory.name) / 'status.json'
         terminal = {'kind': 'windows-terminal', 'session': 'terminal-session',
                     'binding': {'pid': 71, 'started_at': 8.0},
-                    'tab_binding': {'automation_id': 'uia-tab', 'observed_title': 'launch nonce',
+                    'tab_binding': {'runtime_id': 'uia-tab', 'observed_title': 'launch nonce',
                                     'evidence': 'windows-uia-unique-title-at-launch'}}
         calls = []
 
