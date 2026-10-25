@@ -24,7 +24,8 @@ python -B "<skill-directory>/scripts/agent_close.py" arm --host codex --session-
 `prepare` accepts only a separately recorded exact `frontend` identity and terminal identity with exact
 `binding`; a legacy host PID, including a shared daemon PID, is ineligible. Missing evidence reports
 `unavailable`. The target passed to CLI is exactly `{schema_version, frontend:{pid,started_at},
-terminal:{kind,...,binding:{pid,started_at}}}`. CLI owns rechecking native process/terminal state and its
+wrapper:{pid,started_at}, terminal:{kind,...}}`. CLI owns rechecking the frontend-under-wrapper and native
+terminal process chain and its
 durable receipt; Agent does not infer a target or treat arming as closure.
 
 Arm before producing the final reply. The native Stop adapter signals the returned completion token

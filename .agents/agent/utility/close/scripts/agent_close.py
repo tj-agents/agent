@@ -49,8 +49,9 @@ def target_from_record(record: dict) -> dict:
     terminal = record.get("terminal")
     if not isinstance(terminal, dict) or not isinstance(terminal.get("kind"), str):
         raise ValueError("terminal identity is unavailable")
-    binding = identity(terminal.get("binding"), "terminal binding")
-    target = {"schema_version": 1, "frontend": frontend, "terminal": {**terminal, "binding": binding}}
+    wrapper = identity(terminal.get("binding"), "launch wrapper")
+    terminal = {key: value for key, value in terminal.items() if key != "binding"}
+    target = {"schema_version": 1, "frontend": frontend, "wrapper": wrapper, "terminal": terminal}
     return target
 
 
@@ -136,7 +137,10 @@ def arm(args: argparse.Namespace) -> int:
     record_path(args.session_id)  # Validate the state filename before creating lifecycle state.
     target = read_object(args.target)
     # Validate before invoking the separately declared CLI capability.
-    target_from_record({"frontend": target.get("frontend"), "terminal": target.get("terminal")})
+    target_from_record({"frontend": target.get("frontend"), "terminal": {
+        **(target.get("terminal") if isinstance(target.get("terminal"), dict) else {}),
+        "binding": target.get("wrapper"),
+    }})
     token = args.completion_token or secrets.token_urlsafe(24)
     command = [sys.executable, "-B", str(args.cli_close), "arm", "--target", str(args.target),
                "--receipt", str(args.receipt), "--completion", str(args.completion),

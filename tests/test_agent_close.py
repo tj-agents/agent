@@ -35,15 +35,16 @@ class AgentCloseTests(unittest.TestCase):
         record.write_text(json.dumps({"session_id": "one", "profile": "profile", "provenance": {
             "source": "agent-startup-binding", "receipt": str(receipt)}, "frontend": frontend, "terminal": terminal}), encoding="utf-8")
         self.assertEqual(0, CLOSE.main(["prepare", "--session-id", "one", "--profile", "profile", "--record", str(record), "--target", str(target)]))
-        self.assertEqual({"schema_version": 1, "frontend": {"pid": 12, "started_at": 4.0}, "terminal": {
-            "kind": "tmux", "pane": "%1", "binding": {"pid": 11, "started_at": 3.0}}}, json.loads(target.read_text(encoding="utf-8")))
+        self.assertEqual({"schema_version": 1, "frontend": {"pid": 12, "started_at": 4.0},
+            "wrapper": {"pid": 11, "started_at": 3.0}, "terminal": {"kind": "tmux", "pane": "%1"}},
+            json.loads(target.read_text(encoding="utf-8")))
         record.write_text(json.dumps({"pid": 12, "pid_started_at": 4.0, "terminal": {"kind": "tmux"}}), encoding="utf-8")
         self.assertEqual(2, CLOSE.main(["prepare", "--session-id", "one", "--profile", "profile", "--record", str(record), "--target", str(target)]))
 
     def test_arm_passes_only_explicit_target_and_completion_contract_to_cli(self):
         target = self.root / "target.json"
-        target.write_text(json.dumps({"schema_version": 1, "frontend": {"pid": 12, "started_at": 4.0}, "terminal": {
-            "kind": "tmux", "pane": "%1", "binding": {"pid": 11, "started_at": 3.0}}}), encoding="utf-8")
+        target.write_text(json.dumps({"schema_version": 1, "frontend": {"pid": 12, "started_at": 4.0},
+            "wrapper": {"pid": 11, "started_at": 3.0}, "terminal": {"kind": "tmux", "pane": "%1"}}), encoding="utf-8")
         with mock.patch.object(CLOSE.subprocess, "run", return_value=mock.Mock(returncode=0, stderr="")) as run:
             self.assertEqual(0, CLOSE.main(["arm", "--host", "codex", "--session-id", "one", "--turn-id", "turn", "--target", str(target), "--cli-close", str(self.root / "cli-close.py"),
                                              "--receipt", str(self.root / "receipt.json"), "--completion", str(self.root / "complete.json"),

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -48,6 +49,36 @@ def _write_json(path: Path, value: dict) -> None:
     temporary.replace(path)
 
 
+def _windows_tab_binding(terminal: dict) -> dict | None:
+    """Capture a unique UIA tab id at launch; a title is never later used to close it."""
+    if os.name != "nt" or terminal.get("kind") != "windows-terminal":
+        return None
+    title = os.environ.get(register_session.TITLE_ENV)
+    if not isinstance(title, str) or not title:
+        return None
+    for root in Path(__file__).resolve().parents:
+        if not (root / ".agents" / "agent" / "runtime").is_dir():
+            continue
+        path = root / ".agents" / "agent" / "utility" / "peer" / "scripts" / "close_tab.py"
+        if not path.is_file():
+            return None
+        try:
+            spec = importlib.util.spec_from_file_location("agent_startup_close_tab", path)
+            close_tab = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(close_tab)
+            matches = [item for item in close_tab.windows_inventory() or [] if item.get("title") == title]
+            if len(matches) != 1:
+                return None
+            automation_id = matches[0].get("identity", {}).get("automation_id")
+            if not isinstance(automation_id, str) or not automation_id:
+                return None
+            return {"automation_id": automation_id, "observed_title": title,
+                    "evidence": "windows-uia-unique-title-at-launch"}
+        except Exception:
+            return None
+    return None
+
+
 def _record_launch_binding(host: str, child_pid: int) -> None:
     """Bind an acknowledged SessionStart to this wrapper's exact Popen child."""
     try:
@@ -60,6 +91,9 @@ def _record_launch_binding(host: str, child_pid: int) -> None:
         if not isinstance(terminal, dict) or not terminal.get("kind"):
             return
         terminal = {**terminal, "binding": wrapper_identity}
+        tab_binding = _windows_tab_binding(terminal)
+        if tab_binding is not None:
+            terminal["tab_binding"] = tab_binding
         matches = []
         for path in register_session.state_directory().glob("*.json"):
             try:
