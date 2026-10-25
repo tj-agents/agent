@@ -233,6 +233,18 @@ def require_update_check(result: str) -> None:
         )
 
 
+def prepare_launch(project, host, executable, arguments):
+    import required_plugins
+
+    try:
+        return required_plugins.check_launch(project, host, executable, arguments)
+    except required_plugins.MissingRequiredPluginsError as error:
+        import reload_plugins
+
+        reload_plugins.repair_missing(host, error.project, error.missing, executable)
+        return required_plugins.check_launch(project, host, executable, arguments)
+
+
 def ensure_hooks(project: Path, executable: str | None = None, *, running_session=False) -> None:
     import agent_cli
     import codex_hook_trust
@@ -272,9 +284,9 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             native_arguments = arguments.arguments[1:] if arguments.arguments[:1] == ["--"] else arguments.arguments
-            effective_project = required_plugins.check_launch(arguments.project.resolve(), arguments.host,
-                                                              arguments.target, native_arguments)
-        except required_plugins.RequiredPluginsError as error:
+            effective_project = prepare_launch(arguments.project.resolve(), arguments.host,
+                                               arguments.target, native_arguments)
+        except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
             print(f"plugins: {error}", file=sys.stderr)
             return 1
     try:

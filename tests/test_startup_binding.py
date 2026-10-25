@@ -66,6 +66,7 @@ class StartupBindingTests(unittest.TestCase):
                                     'evidence': 'windows-uia-unique-title-at-launch'}}
         with mock.patch.object(self.binding.subprocess, 'Popen', return_value=process), \
                 mock.patch.object(self.binding.cli_client, 'prepare', return_value=([], {}, None)), \
+                mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
                 mock.patch.object(self.binding, '_record_launch_binding') as record:
             result = self.binding.run_session('codex', 'native.exe', Path.cwd(), (),
