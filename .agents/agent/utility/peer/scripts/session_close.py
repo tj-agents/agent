@@ -368,7 +368,7 @@ def attached_to(cwd, entry):
                for root in (entry.get("cwd"), entry.get("launch_cwd")))
 
 
-def own_host_and_entry(cwd=None):
+def own_host_and_entry(cwd=None, session_id=None):
     cwd = Path(cwd or os.getcwd()).resolve()
     host_names = register_session.read_host_names()
     seen = set()
@@ -396,12 +396,15 @@ def own_host_and_entry(cwd=None):
                 and entry["pid_started_at"] == nearest.started_at
                 and verified_live(entry["pid"], entry["pid_started_at"])):
             matches.append(entry)
-    if matches:
-        latest = max(item["started_at"] for item in matches)
-        recent = [item for item in matches if item["started_at"] == latest]
-        if len(recent) == 1:
-            return recent[0]
-        raise Refusal("multiple equally recent verified registry attachments match this host")
+    requested = session_id
+    if requested is None and register_session.stem(nearest.name) == "codex":
+        requested = os.environ.get("CODEX_THREAD_ID") or None
+    if requested is not None:
+        matches = [entry for entry in matches if entry["session_id"] == requested]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise Refusal("multiple verified registry attachments match this host")
     raise Refusal(
         "cannot resolve a verified registry attachment for this host and current directory; "
         "do not force-close the host"
