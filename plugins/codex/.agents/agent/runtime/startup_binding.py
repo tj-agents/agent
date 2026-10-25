@@ -30,6 +30,23 @@ ACK_TOKEN_ENV = "TJ_AGENTS_STARTUP_ACK_TOKEN"
 STARTUP_TIMEOUT_SECONDS = 20
 
 
+def _peer_module(name: str):
+    for root in Path(__file__).resolve().parents:
+        if not (root / ".agents" / "agent" / "runtime").is_dir():
+            continue
+        path = root / ".agents" / "agent" / "utility" / "peer" / "scripts" / f"{name}.py"
+        if not path.is_file():
+            break
+        spec = importlib.util.spec_from_file_location(f"agent_startup_{name}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    raise StartupBindingError(f"packaged Agent peer helper {name}.py was not found")
+
+
+register_session = _peer_module("register_session")
+
+
 class StartupBindingError(RuntimeError):
     pass
 
@@ -208,7 +225,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     parsed = parser.parse_args(argv)
     arguments = parsed.arguments[1:] if parsed.arguments[:1] == ["--"] else parsed.arguments
-    status: dict[str, object] = {"pid": os.getpid()}
+    status: dict[str, object] = {"pid": os.getpid(), "terminal": register_session.terminal_identity(),
+                                 "title": os.environ.get(register_session.TITLE_ENV)}
     if parsed.host == "claude" and parsed.require_session_start and parsed.status_file is not None:
         if not any(value == "--debug-file" or value.startswith("--debug-file=") for value in arguments):
             debug_log = parsed.status_file.resolve().parent / "native-debug.log"

@@ -289,10 +289,13 @@ def report_launch_failure(exc, err=None):
 
 
 def _lanes_module():
-    from package_root import is_package_root
+    root_helper = HERE / "package_root.py"
+    spec = importlib.util.spec_from_file_location("agent_cli_package_root", root_helper)
+    package_root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_root)
     for root in HERE.parents:
         path = root / '.agents' / 'agent' / 'resources' / 'lanes' / 'resolve.py'
-        if path.is_file() and is_package_root(root):
+        if path.is_file() and package_root.is_package_root(root):
             break
     else:
         raise LaunchError(f'The packaged lane resolver was not found relative to {HERE}.')

@@ -32,9 +32,11 @@ MODULES = {}
 
 
 def _package_root():
-    from package_root import is_package_root
+    spec = importlib.util.spec_from_file_location("agent_recovery_package_root", HERE / "package_root.py")
+    package_root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_root)
     for root in HERE.parents:
-        if is_package_root(root):
+        if package_root.is_package_root(root):
             return root
     raise RuntimeError(f"The Agent package root was not found relative to {HERE}.")
 

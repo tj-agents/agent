@@ -12,6 +12,7 @@
   ],
   "dependencies": [
     "base@tj-agents",
-    "agent-store"
+    "agent-store",
+    "machine@tj-agents"
   ]
 }

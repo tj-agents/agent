@@ -20,10 +20,10 @@ Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; a skill's n
 
 - `inspect` — utility — core — `.agents/agent-store/utility/inspect/SKILL.md`
 
-## claude
+## cc
 
-- `handoff` — utility — core — `.agents/claude/utility/handoff/SKILL.md`
-- `open` — utility — core — `.agents/claude/utility/open/SKILL.md`
+- `handoff` — utility — core — `.agents/cc/utility/handoff/SKILL.md`
+- `open` — utility — core — `.agents/cc/utility/open/SKILL.md`
 
 ## codex
 
