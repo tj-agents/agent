@@ -1,0 +1,184 @@
+{
+  "repository": "tj-agents/marketplace",
+  "revision": "0190aaecab136bbe6e17bbb54e6814130277a20e",
+  "catalog": {
+    "name": "tj-agents",
+    "description": "Shared base, Agent Store, machine, workflow, engineering, C++, .NET, React, Neovim, Rust, Python, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
+    "owner": "Tommy Seery",
+    "plugins": [
+      {
+        "name": "base",
+        "repository": "core"
+      },
+      {
+        "name": "agent-store",
+        "repository": "core"
+      },
+      {
+        "name": "agent",
+        "repository": "core",
+        "requires": [
+          "base"
+        ]
+      },
+      {
+        "name": "machine",
+        "repository": "core",
+        "requires": [
+          "base",
+          "agent-store"
+        ]
+      },
+      {
+        "name": "workflow",
+        "repository": "core",
+        "requires": [
+          "base",
+          "agent-store",
+          "machine",
+          "agent"
+        ]
+      },
+      {
+        "name": "engineering",
+        "repository": "core",
+        "requires": [
+          "base",
+          "workflow",
+          "agent-store",
+          "machine",
+          "agent"
+        ]
+      },
+      {
+        "name": "cpp",
+        "repository": "cpp",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "gpp",
+        "repository": "cpp",
+        "requires": [
+          "cpp"
+        ]
+      },
+      {
+        "name": "msvc",
+        "repository": "cpp",
+        "requires": [
+          "cpp"
+        ]
+      },
+      {
+        "name": "win32",
+        "repository": "cpp",
+        "requires": [
+          "cpp"
+        ]
+      },
+      {
+        "name": "dotnet",
+        "repository": "dotnet",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "efcore",
+        "repository": "dotnet",
+        "requires": [
+          "dotnet"
+        ]
+      },
+      {
+        "name": "react",
+        "repository": "react",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "nvim",
+        "repository": "nvim",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "rust",
+        "repository": "rust",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "tauri",
+        "repository": "rust",
+        "requires": [
+          "rust"
+        ]
+      },
+      {
+        "name": "rust-sqlx",
+        "repository": "rust",
+        "requires": [
+          "rust"
+        ]
+      },
+      {
+        "name": "python",
+        "repository": "python",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "github-actions",
+        "repository": "github-actions",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "azure",
+        "repository": "azure",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "template",
+        "repository": "template",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "personal",
+        "repository": "personal",
+        "requires": [
+          "engineering",
+          "machine"
+        ]
+      },
+      {
+        "name": "work",
+        "repository": "work",
+        "requires": [
+          "engineering"
+        ]
+      },
+      {
+        "name": "infonetica",
+        "repository": "infonetica",
+        "requires": [
+          "work",
+          "base",
+          "engineering"
+        ]
+      }
+    ]
+  }
+}

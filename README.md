@@ -18,7 +18,7 @@ they consume.
 ## Skills
 
 - `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
-  `agent:recent`, `agent:recover`, `agent:refresh`, `agent:search`
+  `agent:recent`, `agent:recover`, `agent:refresh`, `agent:search`, `agent:close`
 - `agent-store:inspect`
 - `codex:handoff`, `codex:hooks`, `codex:memory`, `codex:open`
 - `claude:handoff`, `claude:open`
@@ -28,6 +28,12 @@ they consume.
 ```powershell
 pwsh .agents/sync-generated.ps1
 pwsh .agents/sync-generated.ps1 -Check
+python -B -m unittest discover -s .agents/tests -p "test_*.py"
 ```
+
+The runtime uses the standard library and retains Core's portable utility conventions. Use `python`
+on Windows and `python3` on Linux. The shared plugin CI discovers the migrated runtime suite through
+`.agents/tests`; generation is tooling, and these utilities do not introduce an application package or
+third-party runtime dependencies.
 
 The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).

@@ -1,0 +1,28 @@
+{
+  "plugin": "agent-store",
+  "dependencies": [
+    "tj-agents/base"
+  ],
+  "profiles": {
+    "core": [
+      "inspect"
+    ]
+  },
+  "compatibilitySkillAliases": {},
+  "skills": [
+    {
+      "name": "inspect",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python"
+      ],
+      "provenance": [
+        "house"
+      ]
+    }
+  ]
+}

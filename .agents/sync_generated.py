@@ -517,6 +517,8 @@ def resource_files(root: Path, source: str) -> list[Path]:
         )
     files: list[Path] = []
     for entry in sorted(path.rglob("*")):
+        if ignored(entry.relative_to(path)):
+            continue
         if is_link_or_junction(entry):
             raise ValueError(
                 ".agents/plugins/payloads.json: resource source "
@@ -1126,7 +1128,12 @@ def build(root: Path) -> dict[str, bytes]:
 
     def emit(relative: str, data: str | bytes) -> None:
         key = PurePosixPath(relative).as_posix()
-        if key in output:
+        if any(
+            key == existing
+            or key.startswith(existing + "/")
+            or existing.startswith(key + "/")
+            for existing in output
+        ):
             raise ValueError(f"Duplicate generated output: {key}")
         output[key] = data.encode("utf-8") if isinstance(data, str) else data
 

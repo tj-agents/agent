@@ -1,0 +1,21 @@
+{
+  "name": "agent",
+  "description": "Reusable agent sessions, coordination and native host operations.",
+  "author": {
+    "name": "Tommy Seery"
+  },
+  "repository": "https://github.com/tj-agents/agent",
+  "skills": "./codex-skills/",
+  "keywords": [
+    "agent"
+  ],
+  "interface": {
+    "displayName": "Agent",
+    "shortDescription": "Reusable agent sessions, coordination and native host operations.",
+    "longDescription": "Reusable agent sessions, coordination and native host operations. Follow the Template main branch and run template:update to refresh vendored files.",
+    "developerName": "Tommy Seery",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Apply the agent project policies."
+  }
+}

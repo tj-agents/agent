@@ -1,0 +1,14 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    uses: tj-agents/template/.github/workflows/plugin-ci.yml@main
+    with:
+      template_ref: main
+    secrets:
+      read_token: ${{ secrets.TJ_AGENTS_READ_TOKEN }}

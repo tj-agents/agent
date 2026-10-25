@@ -1,0 +1,23 @@
+{
+  "name": "codex",
+  "description": "Codex-specific agent session launch and control.",
+  "author": {
+    "name": "Tommy Seery"
+  },
+  "repository": "https://github.com/tj-agents/agent",
+  "skills": "./skills/",
+  "keywords": [
+    "agents",
+    "codex",
+    "sessions"
+  ],
+  "interface": {
+    "displayName": "Codex",
+    "shortDescription": "Codex-specific agent session launch and control.",
+    "longDescription": "Codex-specific agent session launch and control.",
+    "developerName": "Tommy Seery",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use the Codex session capability."
+  }
+}
