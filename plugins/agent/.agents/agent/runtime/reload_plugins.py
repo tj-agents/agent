@@ -488,11 +488,13 @@ def relaunch_session(project: Path, updated: set[str]) -> dict | None:
     if os.environ.get("CLAUDE_CODE_CHILD_SESSION"):
         return {"relaunch": "skipped", "stale": stale, "reason": "a child session cannot relaunch its parent; "
                                                               "run agent:refresh from the parent session"}
-    instruction = ("Plugin changes are installed, but this active Claude conversation cannot be relaunched "
-                   "until the declared CLI close capability provides a verified target. Finish this turn, then "
-                   "use agent:open to adopt the same conversation in a fresh native process.")
-    print("plugins: " + instruction, file=sys.stderr)
-    return {"relaunch": "manual", "stale": stale, "instruction": instruction}
+    try:
+        result = session_relaunch.relaunch(project, installed, host="claude")
+    except (OSError, RuntimeError, ValueError) as error:
+        return {"relaunch": "failed", "stale": stale, "error": str(error)}
+    if result.get("relaunch") != "armed":
+        return {"relaunch": "failed", "stale": stale, "error": "the owning Claude client restart was not armed"}
+    return {**result, "stale": stale, "adoption": "pending"}
 
 
 def relaunch_codex(project: Path, reason: str, allowed: bool) -> dict:

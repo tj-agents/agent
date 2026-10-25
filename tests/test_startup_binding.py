@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import sys
 from types import SimpleNamespace
 from unittest import mock
 
@@ -35,6 +36,43 @@ class StartupBindingTests(unittest.TestCase):
         arguments = calls[0][0]
         self.assertIn('--useApplicationTitle', arguments)
         self.assertNotIn('--suppressApplicationTitle', arguments)
+
+    def test_startup_receipts_cover_each_selected_dispatcher(self):
+        temporary = tempfile.TemporaryDirectory(prefix='startup manifests ')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        roots = {}
+        for name in ('agent', 'base'):
+            plugin = root / name
+            manifest = plugin / '.codex-plugin/plugin.json'
+            hooks = plugin / 'hooks.json'
+            manifest.parent.mkdir(parents=True)
+            hooks.write_text(json.dumps({'hooks': {'SessionStart': [{'hooks': [{'command': 'python hook_dispatch.py'}]}]}}), encoding='utf-8')
+            manifest.write_text(json.dumps({'hooks': ['hooks.json']}), encoding='utf-8')
+            roots[name + '@tj-agents'] = plugin
+        self.assertEqual(sorted(roots), self.binding.startup_participants('codex', roots))
+
+    def test_required_startup_failure_stops_the_owned_native_child(self):
+        temporary = tempfile.TemporaryDirectory(prefix='startup failure ')
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        script = root / 'failure.py'
+        survived = root / 'survived'
+        script.write_text("import os,time\nfrom pathlib import Path\n"
+                          "directory=Path(os.environ['TJ_AGENTS_STARTUP_ACK_DIRECTORY'])\n"
+                          "token=os.environ['TJ_AGENTS_STARTUP_ACK_TOKEN']\n"
+                          "(directory/(token+'.failed')).write_text('required fixture hook failed')\n"
+                          "time.sleep(3)\n"
+                          f"Path({str(survived)!r}).write_text('ordinary work')\n", encoding='utf-8')
+
+        def prepare(_host, argv, _project, environment, **_kwargs):
+            return argv, environment, None
+
+        with mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
+                mock.patch.object(self.binding.cli_client, 'prepare', side_effect=prepare):
+            with self.assertRaisesRegex(self.binding.StartupBindingError, 'fixture hook failed'):
+                self.binding.run_session('codex', sys.executable, root, [str(script)], require_session_start=True)
+        self.assertFalse(survived.exists())
 
     def test_prelaunch_snapshot_captures_tab_before_native_start(self):
         identity = SimpleNamespace(pid=71, started_at=8.0)

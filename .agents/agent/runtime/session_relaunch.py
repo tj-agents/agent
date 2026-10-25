@@ -206,21 +206,8 @@ def recovery_script(project: Path, installed: dict) -> Path:
     return HERE / "agent_recovery.py"
 
 
-def codex_close_capability(project: Path) -> Path:
-    executable, _ = agent_cli.resolve_codex_executable()
-    result = subprocess.run([executable, "plugin", "list", "--json"], cwd=project, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace",
-                            timeout=required_plugins.INVENTORY_TIMEOUT_SECONDS)
-    if result.returncode:
-        raise RuntimeError("Codex plugin inventory could not resolve the declared CLI close capability")
-    try:
-        roster = json.loads(result.stdout)
-    except ValueError as error:
-        raise RuntimeError("Codex plugin inventory returned invalid JSON") from error
-    entries = roster.get("installed") if isinstance(roster, dict) else None
-    if not isinstance(entries, list):
-        raise RuntimeError("Codex plugin inventory returned an invalid roster")
-    root = required_plugins.enabled_roots("codex", project, entries).get("cli@tj-agents")
+def cli_close_capability(project: Path, host: str, executable: str) -> Path:
+    root = (required_plugins.check(project, host, executable) or {}).get("cli@tj-agents")
     if root is None:
         raise RuntimeError("Automatic refresh requires enabled cli@tj-agents with its close capability")
     script = root / ".agents" / "cli" / "utility" / "close" / "scripts" / "process_identity.py"
@@ -229,19 +216,23 @@ def codex_close_capability(project: Path) -> Path:
     return script
 
 
-def arm_codex_close(project: Path, entry: dict, cli_close: Path, token: str) -> dict:
+def arm_client_close(project: Path, entry: dict, cli_close: Path, token: str, host: str) -> dict:
     close = utility_script("close", "agent_close.py")
     root = state_directory() / "refresh-close" / token
     target, completion, cancel = root / "target.json", root / "complete.json", root / "cancel.json"
+    environment = {**os.environ, **({"CLAUDE_CONFIG_DIR": entry["profile"]} if host == "claude" else {})}
     prepared = subprocess.run([sys.executable, "-B", str(close), "prepare", "--session-id", entry["session_id"],
                                "--profile", entry["profile"], "--target", str(target)], cwd=project,
-                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                              env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     if prepared.returncode:
         raise RuntimeError((prepared.stderr or prepared.stdout).strip() or "cannot prepare exact client close")
-    armed = subprocess.run([sys.executable, "-B", str(close), "arm", "--host", "codex",
-                             "--session-id", entry["session_id"], "--turn-id", entry["native_turn_id"],
+    command = [sys.executable, "-B", str(close), "arm", "--host", host,
+                             "--session-id", entry["session_id"],
                              "--target", str(target), "--profile", entry["profile"], "--cli-close", str(cli_close),
-                             "--completion", str(completion), "--cancel", str(cancel), "--completion-token", token],
+                             "--completion", str(completion), "--cancel", str(cancel), "--completion-token", token]
+    if host == "codex":
+        command += ["--turn-id", entry["native_turn_id"]]
+    armed = subprocess.run(command,
                             cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     if armed.returncode:
         raise RuntimeError((armed.stderr or armed.stdout).strip() or "cannot arm exact client close")
@@ -254,17 +245,25 @@ def arm_codex_close(project: Path, entry: dict, cli_close: Path, token: str) -> 
 
 
 def claim_record(record: Path, value: dict) -> None:
+    import plugin_autoupdate
+
     record.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(value, indent=2).encode("utf-8") + b"\n"
+    lock = None
+    deadline = time.monotonic() + 5
     try:
-        with record.open("xb") as stream:
-            stream.write(encoded)
-        return
-    except FileExistsError:
+        while lock is None and time.monotonic() < deadline:
+            lock = plugin_autoupdate.acquire_lock(record.with_name(record.name + ".claim.lock"))
+            if lock is None:
+                time.sleep(0.02)
+        if lock is None:
+            raise RuntimeError("the automatic refresh recovery record is busy")
         existing = read_json(record)
         if existing.get("state") == "waiting":
             raise RuntimeError("an automatic refresh recovery is already armed for this exact session")
-    write_json(record, value)
+        write_json(record, value)
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 def cancel_codex_close(close: dict, reason: str) -> None:
@@ -279,8 +278,6 @@ def cancel_codex_close(close: dict, reason: str) -> None:
 
 
 def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, host="claude") -> dict:
-    if close is None and host == "claude":
-        raise RuntimeError("session relaunch is unavailable until the declared CLI close capability supplies an exact target")
     shared = shared or load(utility_script("peer", "session_close.py"), "session_close")
     entry = shared.own_host_and_entry()
     if host not in {"claude", "codex"} or entry.get("host") != host:
@@ -289,12 +286,10 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         raise RuntimeError("the refresh checkout does not match this Codex client's checkout")
     session_id = entry["session_id"]
     native = (codex_arguments if host == "codex" else preserved_arguments)(arguments(entry["pid"]))
+    executable = agent_cli.resolve_codex_executable()[0] if host == "codex" else agent_cli.resolve_claude_executable()
     if host == "codex":
-        executable, _ = agent_cli.resolve_codex_executable()
         required_plugins.check_launch(project, "codex", executable, [*native, "resume", session_id, PROMPT])
-        cli_close = codex_close_capability(project)
-    else:
-        cli_close = None
+    cli_close = cli_close_capability(project, host, executable)
     token = secrets.token_hex(16)
     record = record_path(session_id)
     claim_record(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
@@ -311,18 +306,14 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         options += ["--profile", str(entry["profile"])]
     try:
         shared.start_detached(HERE / "relaunch_watcher.py", options)
-        if host == "codex":
-            armed = arm_codex_close(project, entry, cli_close, token)
-            write_json(record, {**read_json(record), "close": armed, "at": time.time()})
-        else:
-            armed = close.arm()
+        armed = arm_client_close(project, entry, cli_close, token, host)
+        write_json(record, {**read_json(record), "close": armed, "at": time.time()})
     except Exception as error:
-        if host == "codex" and armed is not None:
+        if armed is not None:
             cancel_codex_close(armed, "automatic refresh recovery was cancelled before relaunch")
         write_json(record, {**read_json(record), "state": "cancelled", "reason": str(error), "at": time.time()})
         raise RuntimeError(f"relaunch was not armed: {error}") from error
-    return {"relaunch": "armed", "session_id": session_id, "native_arguments": native,
-            "close": "armed" if host == "codex" else armed.get("status")}
+    return {"relaunch": "armed", "session_id": session_id, "native_arguments": native, "close": "armed"}
 
 
 def session_identity() -> tuple[str, int] | None:

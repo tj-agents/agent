@@ -64,34 +64,28 @@ def wait_for_exit(args, exited=session_close.verified_exited, clock=time.monoton
         record = read_record(args.record)
         if record.get("token") != args.token or record.get("state") != "waiting":
             return False
-        if args.host == "codex":
-            close = record.get("close")
-            if not isinstance(close, dict):
-                sleep(POLL_SECONDS)
-                continue
-            try:
-                request = Path(close["request"])
-                raw = request.read_bytes()
-                outcome = read_record(Path(close["result"]))
-            except (KeyError, OSError, TypeError):
-                settle(args, "cancelled", reason="the exact close request is unavailable")
-                return False
-            if hashlib.sha256(raw).hexdigest() != close.get("request_sha256"):
-                settle(args, "cancelled", reason="the exact close request changed")
-                return False
-            if outcome:
-                if outcome.get("status") != "closed" or outcome.get("session_id") != args.session_id:
-                    settle(args, "cancelled", reason="the exact close was cancelled or refused")
-                    return False
-                if not exited(args.pid, args.pid_started_at):
-                    sleep(POLL_SECONDS)
-                    continue
-                return True
+        close = record.get("close")
+        if not isinstance(close, dict):
             sleep(POLL_SECONDS)
             continue
-        if exited(args.pid, args.pid_started_at):
+        try:
+            request = Path(close["request"])
+            raw = request.read_bytes()
+            outcome = read_record(Path(close["result"]))
+        except (KeyError, OSError, TypeError):
+            settle(args, "cancelled", reason="the exact close request is unavailable")
+            return False
+        if hashlib.sha256(raw).hexdigest() != close.get("request_sha256"):
+            settle(args, "cancelled", reason="the exact close request changed")
+            return False
+        if outcome:
+            if outcome.get("status") != "closed" or outcome.get("session_id") != args.session_id:
+                settle(args, "cancelled", reason="the exact close was cancelled or refused")
+                return False
+            if not exited(args.pid, args.pid_started_at):
+                sleep(POLL_SECONDS)
+                continue
             return True
-        sleep(POLL_SECONDS)
     settle(args, "expired")
     return False
 
