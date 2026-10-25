@@ -215,16 +215,18 @@ def arm(args: argparse.Namespace) -> int:
 def _session_close():
     import importlib.util
 
-    path = None
     here = Path(__file__).resolve()
-    for root in (here.parent, *here.parents):
-        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        if any(marker.exists() for marker in markers):
-            candidate = root / ".agents" / "agent" / "utility" / "peer" / "scripts" / "session_close.py"
-            if candidate.is_file():
-                path = candidate
-            break
-    if path is None:
+    locator = next((root / ".agents" / "agent" / "runtime" / "package_root.py"
+                    for root in (here.parent, *here.parents)
+                    if (root / ".agents" / "agent" / "runtime" / "package_root.py").is_file()), None)
+    if locator is None:
+        raise RuntimeError("Agent peer runtime is unavailable")
+    spec = importlib.util.spec_from_file_location("agent_close_package_root", locator)
+    package_root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_root)
+    root = package_root.find_package_root(here)
+    path = root / ".agents" / "agent" / "utility" / "peer" / "scripts" / "session_close.py"
+    if not path.is_file():
         raise RuntimeError("Agent peer runtime is unavailable")
     sys.path.insert(0, str(path.parent))
     spec = importlib.util.spec_from_file_location("agent_close_session_close", path)

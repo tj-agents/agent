@@ -233,6 +233,18 @@ def require_update_check(result: str) -> None:
         )
 
 
+def prepare_launch(project, host, executable, arguments):
+    import required_plugins
+
+    try:
+        return required_plugins.check_launch(project, host, executable, arguments)
+    except required_plugins.MissingRequiredPluginsError as error:
+        import reload_plugins
+
+        reload_plugins.repair_missing(host, error.project, error.missing, executable)
+        return required_plugins.check_launch(project, host, executable, arguments)
+
+
 def ensure_hooks(project: Path, executable: str | None = None, *, running_session=False) -> None:
     import agent_cli
     import codex_hook_trust
@@ -263,7 +275,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--host", choices=HOSTS)
     parser.add_argument("--target")
-    parser.add_argument("--launch", action="store_true", help="Run the verified native client and retain its exact identity")
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     effective_project = arguments.project.resolve()
@@ -272,9 +283,9 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             native_arguments = arguments.arguments[1:] if arguments.arguments[:1] == ["--"] else arguments.arguments
-            effective_project = required_plugins.check_launch(arguments.project.resolve(), arguments.host,
-                                                              arguments.target, native_arguments)
-        except required_plugins.RequiredPluginsError as error:
+            effective_project = prepare_launch(arguments.project.resolve(), arguments.host,
+                                               arguments.target, native_arguments)
+        except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
             print(f"plugins: {error}", file=sys.stderr)
             return 1
     try:
@@ -295,35 +306,6 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as error:
             print(f"plugins: required hook readiness failed: {error}", file=sys.stderr)
             return 1
-    if arguments.launch:
-        import cli_client
-        import subprocess
-        from terminal_command import command_for_target
-
-        if arguments.host not in HOSTS or not arguments.target:
-            parser.error("--launch requires --host and --target")
-        try:
-            command = command_for_target(arguments.target, native_arguments)
-            prepared, environment, ticket = cli_client.prepare(
-                host, command[1:], effective_project or arguments.project, os.environ, executable=command[0],
-            )
-        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-            print(f"launch: native client preparation failed: {error}", file=sys.stderr)
-            return 1
-        process = None
-        try:
-            process = subprocess.Popen([command[0], *prepared], env=environment)
-            cli_client.attach(ticket, process.pid)
-            return process.wait()
-        finally:
-            if process is not None and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
-            cli_client.release(ticket)
     return 0
 
 

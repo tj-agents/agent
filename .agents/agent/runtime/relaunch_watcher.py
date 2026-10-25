@@ -34,6 +34,7 @@ def arguments(argv=None):
     parser.add_argument("--recovery", type=Path, required=True)
     parser.add_argument("--title", default="Claude")
     parser.add_argument("--prompt", required=True)
+    parser.add_argument("--expected-cwd", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=960.0)
     parser.add_argument("--native-argument", action="append", default=[])
     return parser.parse_args(argv)
@@ -96,10 +97,15 @@ def wait_for_exit(args, exited=session_close.verified_exited, clock=time.monoton
 
 
 def launch_command(args):
+    record = read_record(args.record)
+    cwd = record.get("cwd")
+    if not isinstance(cwd, str) or Path(cwd).resolve() != args.expected_cwd.resolve():
+        raise ValueError("the recorded refresh checkout changed before relaunch")
     profile = ([f"--{args.host}-history-root", str(args.profile / ("sessions" if args.host == "codex" else "projects"))]
                if args.profile else [])
     return [sys.executable, "-B", str(args.recovery), "open", "--host", args.host, "--id", args.session_id,
             "--title", args.title, "--prompt", args.prompt,
+            "--expected-cwd", cwd,
             *profile,
             *[f"--native-argument={value}" for value in args.native_argument]]
 
@@ -112,7 +118,7 @@ def launch(args, run=subprocess.run):
     try:
         result = run(launch_command(args), env=environment, cwd=str(args.recovery.parent), capture_output=True,
                      text=True, encoding="utf-8", errors="replace", timeout=LAUNCH_TIMEOUT_SECONDS, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         settle(args, "failed", error=str(error))
         return 1
     settle(args, "launched" if result.returncode == 0 else "unverified" if result.returncode == 3 else "failed", returncode=result.returncode,
