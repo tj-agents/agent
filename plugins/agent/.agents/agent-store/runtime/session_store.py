@@ -454,6 +454,14 @@ def ensure_session(connection, host, session_id, cwd=None):
     return handle
 
 
+def attach_session_client(connection, handle, pid, pid_started_at, cwd):
+    connection.execute(
+        "UPDATE sessions SET pid = ?, pid_started_at = ?, cwd = ? WHERE handle = ? AND ended_at IS NULL",
+        (pid, pid_started_at, str(cwd), handle),
+    )
+    connection.commit()
+
+
 def record_prompt(connection, handle):
     connection.execute(
         "UPDATE sessions SET turn_state = 'working', last_activity_at = ? WHERE handle = ?",

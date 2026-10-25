@@ -95,6 +95,7 @@ def _claude_finished(state: dict, data: dict) -> bool:
     if not users or users[-1] != token:
         return False
     after = False
+    finished = False
     for record in records:
         if _is_user(record) and record.get("uuid") == token:
             after = True
@@ -103,9 +104,8 @@ def _claude_finished(state: dict, data: dict) -> bool:
             return False
         if after and record.get("type") == "assistant":
             message = record.get("message")
-            if isinstance(message, dict) and message.get("stop_reason") == "end_turn":
-                return True
-    return False
+            finished = isinstance(message, dict) and message.get("stop_reason") == "end_turn"
+    return finished
 
 
 def run(event: str, host: str, data: dict) -> int:
@@ -118,27 +118,27 @@ def run(event: str, host: str, data: dict) -> int:
         # A fresh prompt invalidates a previously armed final-reply completion.
         if isinstance(state, dict) and state.get("host") == host and state.get("session_id") == session_id:
             _signal(state["cancel"], {"cancelled": True, "reason": "new prompt"})
-            path.unlink(missing_ok=True)
         return 0
     if event == "stop":
+        if (isinstance(state, dict) and state.get("host") == host and state.get("session_id") == session_id
+                and Path(state["completion"]).exists()):
+            _signal(state["cancel"], {"cancelled": True, "reason": "another stop"})
+            return 0
         # Stop is synchronous while the final reply's native turn is still identifiable.
         if host == "claude":
             if (isinstance(state, dict) and state.get("host") == host and state.get("session_id") == session_id
                     and _claude_finished(state, data)):
                 _signal(state["completion"], {"token": state["completion_token"]})
-                _write(path, {**state, "completion_signalled": True})
             return 0
         if not turn_id:
             return 0
         if _matches(state, host, session_id, turn_id):
             _signal(state["completion"], {"token": state["completion_token"]})
-            _write(path, {**state, "completion_signalled": True})
         return 0
     if event == "end":
         # Session end can never complete a later turn. Cancel this exact pending request instead.
         if isinstance(state, dict) and state.get("host") == host and state.get("session_id") == session_id:
             _signal(state.get("cancel", str(path) + ".cancel"), {"cancelled": True, "reason": "session ended"})
-            path.unlink(missing_ok=True)
         return 0
     raise ValueError("unknown lifecycle event")
 

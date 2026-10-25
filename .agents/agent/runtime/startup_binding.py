@@ -11,7 +11,6 @@ import math
 import os
 from pathlib import Path
 import secrets
-import signal
 import subprocess
 import sys
 import tempfile
@@ -22,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import launch_check
 import launch_status
+import cli_client
 import required_plugins
 from terminal_command import command_for_target, without_binding_state
 
@@ -161,21 +161,11 @@ def _acknowledged(directory: Path, token: str) -> bool:
 
 
 def _terminate(process: subprocess.Popen) -> None:
-    if os.name == "nt":
-        try:
-            subprocess.run(["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
-                           capture_output=True, timeout=10, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            process.kill()
-    else:
-        os.killpg(process.pid, signal.SIGTERM)
+    process.terminate()
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        if os.name == "nt":
-            process.kill()
-        else:
-            os.killpg(process.pid, signal.SIGKILL)
+        process.kill()
         process.wait(timeout=5)
 
 
@@ -200,11 +190,20 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
             environment[ACK_TOKEN_ENV] = token
         phase("starting-native")
         try:
-            process = subprocess.Popen(command_for_target(target, list(arguments)),
+            command = command_for_target(target, list(arguments))
+            arguments, environment, ticket = cli_client.prepare(
+                host, command[1:], project, environment, executable=command[0],
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            raise StartupBindingError(f"native {host} could not prepare: {error}") from error
+        process = None
+        try:
+            process = subprocess.Popen([command[0], *arguments],
                                        cwd=project, env=environment, start_new_session=os.name != "nt")
         except OSError as error:
             raise StartupBindingError(f"native {host} could not start: {error}") from error
         try:
+            cli_client.attach(ticket, process.pid)
             if require_session_start:
                 phase("waiting-session-start")
                 deadline = time.monotonic() + timeout
@@ -229,6 +228,8 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                 except (OSError, subprocess.SubprocessError) as error:
                     print(f"launch: native child cleanup failed: {error}", file=sys.stderr)
             raise
+        finally:
+            cli_client.release(ticket)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
