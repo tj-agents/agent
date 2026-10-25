@@ -10,13 +10,20 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
-def _handler_path(host):
+def _package_root():
     for root in HERE.parents:
         markers = (root / '.git', root / '.codex-plugin' / 'plugin.json', root / '.claude-plugin' / 'plugin.json')
-        path = root / '.agents' / 'agent' / 'resources' / 'handoff' / f'launch_{host}.py'
-        if path.is_file() and any(marker.exists() for marker in markers):
-            return path
-    raise SystemExit(f'The packaged {host} handoff launcher was not found relative to {HERE}.')
+        if any(marker.exists() for marker in markers):
+            return root
+    raise SystemExit(f'The package root was not found relative to {HERE}.')
+
+
+def _handler_path(host):
+    root = _package_root()
+    path = root / '.agents' / 'agent' / 'resources' / 'handoff' / f'launch_{host}.py'
+    if path.is_file():
+        return path
+    raise SystemExit(f'The packaged {host} handoff launcher was not found under {root}.')
 
 
 def _load_handler(host):
