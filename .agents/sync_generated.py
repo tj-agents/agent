@@ -965,7 +965,7 @@ def validate_file_references(
                         f"{label}: {target} does not resolve from generated "
                         f"{shipped_dir}"
                     )
-            if source_exists and not (root / source).exists():
+            if source_exists and not (root / source).exists() and not present(shipped):
                 raise ValueError(
                     f"{label}: {target} does not resolve from {source_dir}"
                 )
