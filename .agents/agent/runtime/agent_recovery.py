@@ -32,9 +32,9 @@ MODULES = {}
 
 
 def _package_root():
+    from package_root import is_package_root
     for root in HERE.parents:
-        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        if (root / ".agents" / "agent" / "runtime").is_dir() and any(marker.exists() for marker in markers):
+        if is_package_root(root):
             return root
     raise RuntimeError(f"The Agent package root was not found relative to {HERE}.")
 
@@ -496,7 +496,35 @@ def _wrapper_identity(status_path, process_lookup=None):
         if process is not None and started is None:
             return None
         identity[name] = {"pid": pid, "started_at": started}
-    return {**identity["wrapper"], **({"child": identity["child"]} if "child" in identity else {})}
+    terminal = status.get("terminal")
+    terminal = {**terminal, "binding": identity["wrapper"]} if isinstance(terminal, dict) and terminal.get("kind") else None
+    terminal = {**({"terminal": terminal} if terminal else {}),
+                **({"title": status["title"]} if isinstance(status.get("title"), str) else {})}
+    return {**identity["wrapper"], **({"child": identity["child"]} if "child" in identity else {}), **terminal}
+
+
+def _attach_launch_binding(host, session_id, profile, receipt_path, wrapper):
+    """Attach only the acknowledged launch receipt to its exact registry record."""
+    if not isinstance(wrapper, dict):
+        return
+    child, terminal = wrapper.get("child"), wrapper.get("terminal")
+    started = child.get("started_at") if isinstance(child, dict) else None
+    if not (isinstance(child, dict) and isinstance(terminal, dict)
+            and isinstance(child.get("pid"), int) and not isinstance(child["pid"], bool)
+            and isinstance(started, (int, float)) and not isinstance(started, bool) and math.isfinite(started)
+            and isinstance(terminal.get("binding"), dict)):
+        return
+    path = _registry_root() / f"{session_id}.json"
+    record = _registry(session_id)
+    if not (isinstance(record, dict) and record.get("session_id") == session_id and record.get("host") == host
+            and record.get("profile") == profile):
+        return
+    record.update({"frontend": {"pid": child["pid"], "started_at": child["started_at"]},
+                   "terminal": terminal,
+                   "provenance": {"source": "agent-startup-binding", "receipt": str(receipt_path)}})
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _launch_ended(previous, process_lookup=None):
@@ -749,6 +777,7 @@ def open_session(host, session_id, prompt="Continue the requested work.", title=
         status_path.unlink(missing_ok=True)
         try:
             _receipt_state(receipt, host, session_id, item["profile"], "launched", wrapper)
+            _attach_launch_binding(host, session_id, item["profile"], receipt, wrapper)
         except OSError:
             pass
         return {**item, "launch": "verified", "evidence": evidence}

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -28,6 +31,60 @@ STARTUP_TIMEOUT_SECONDS = 20
 
 class StartupBindingError(RuntimeError):
     pass
+
+
+def _finite_identity(info):
+    started = getattr(info, "started_at", None)
+    if (info is None or not isinstance(getattr(info, "pid", None), int) or isinstance(info.pid, bool)
+            or not isinstance(started, (int, float)) or isinstance(started, bool) or not math.isfinite(started)):
+        return None
+    return {"pid": info.pid, "started_at": started}
+
+
+def _write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _record_launch_binding(host: str, child_pid: int) -> None:
+    """Bind an acknowledged SessionStart to this wrapper's exact Popen child."""
+    try:
+        lookup = register_session.build_process_lookup()
+        wrapper, child = lookup(os.getpid()), lookup(child_pid)
+        wrapper_identity, child_identity = _finite_identity(wrapper), _finite_identity(child)
+        if not wrapper_identity or not child_identity or child.ppid != wrapper.pid:
+            return
+        terminal = register_session.terminal_identity()
+        if not isinstance(terminal, dict) or not terminal.get("kind"):
+            return
+        terminal = {**terminal, "binding": wrapper_identity}
+        matches = []
+        for path in register_session.state_directory().glob("*.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if (isinstance(record, dict) and record.get("host") == host and record.get("pid") == child_pid
+                    and record.get("pid_started_at") == child_identity["started_at"]
+                    and isinstance(record.get("session_id"), str) and isinstance(record.get("profile"), str)):
+                matches.append((path, record))
+        if len(matches) != 1:
+            return
+        path, record = matches[0]
+        namespace = hashlib.sha256(record["profile"].encode("utf-8")).hexdigest()[:16]
+        receipt = register_session.state_directory().parent / "recovery-launches" / (
+            f"{host}-{namespace}-{record['session_id']}.json")
+        _write_json(receipt, {"host": host, "session": record["session_id"], "profile": record["profile"],
+                              "state": "launched", "created_at": time.time(),
+                              "wrapper": {**wrapper_identity, "child": child_identity, "terminal": terminal,
+                                          "title": os.environ.get(register_session.TITLE_ENV)}})
+        record.update({"frontend": child_identity, "terminal": terminal,
+                       "provenance": {"source": "agent-startup-binding", "receipt": str(receipt)}})
+        _write_json(path, record)
+    except (OSError, ValueError, OverflowError):
+        return
 
 
 def _acknowledged(directory: Path, token: str) -> bool:
@@ -88,6 +145,7 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                 while not _acknowledged(directory, token):
                     if process.poll() is not None:
                         return process.returncode
+                    _record_launch_binding(host, process.pid)
                     if not unconfirmed and time.monotonic() >= deadline:
                         if on_unconfirmed is not None:
                             on_unconfirmed(process.pid)

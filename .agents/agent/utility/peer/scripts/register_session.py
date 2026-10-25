@@ -339,12 +339,31 @@ def terminal_identity(environ=None):
     return None
 
 
+def profile_identity(host):
+    if host == "codex":
+        return os.path.normcase(str(Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").resolve()))
+    if host == "claude":
+        return os.path.normcase(str(Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").resolve()))
+    return None
+
+
+def _staged_agent_root(root):
+    try:
+        receipt = json.loads((root / "source.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (isinstance(receipt, dict) and receipt.get("repository") == "tj-agents/agent"
+            and isinstance(receipt.get("revision"), str) and bool(receipt["revision"])
+            and isinstance(receipt.get("sha256"), str) and len(receipt["sha256"]) == 64
+            and isinstance(receipt.get("exports"), (list, dict)) and bool(receipt["exports"]))
+
+
 def session_store_path():
     for root in HERE.parents:
         markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
         runtime = root / ".agents" / "agent-store" / "runtime"
         path = runtime / "session_store.py"
-        if path.is_file() and any(marker.exists() for marker in markers):
+        if path.is_file() and (any(marker.exists() for marker in markers) or _staged_agent_root(root)):
             return path
     return None
 
@@ -398,6 +417,7 @@ def record(data, lookup=None, host_names=None):
         entry["pid_started_at"] = pid_started_at
     if host is not None:
         entry["host"] = host
+        entry["profile"] = profile_identity(host)
     terminal = terminal_identity()
     if terminal is not None:
         entry["terminal"] = terminal
