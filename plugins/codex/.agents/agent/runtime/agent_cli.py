@@ -523,7 +523,7 @@ def _launch_windows_terminal(directory, executable, title, arguments, cleared, f
     # useNew -- always a separate OS window. Do not simplify this away, and do not swap it for
     # --window new, which forces the opposite of what it looks like it asks for.
     terminal_arguments = ['--window', '0', 'new-tab', '--startingDirectory', str(directory), '--title', title,
-                           '--suppressApplicationTitle', executable, *arguments]
+                           '--useApplicationTitle', executable, *arguments]
     escaped = [terminal_argument(value) for value in terminal_arguments]
 
     # The tab process inherits the environment of this wt.exe invocation, so the changes travel through

@@ -12,6 +12,7 @@ Contract: exit 0 always. Bookkeeping must never stop a session starting.
 """
 
 import collections
+import hashlib
 import importlib.util
 import json
 import os
@@ -27,6 +28,10 @@ TITLE_ENV = "AGENT_CLI_TAB_TITLE"
 HOST_NAMES_ENV = "AGENT_CLI_HOST_NAMES"
 DEFAULT_HOST_NAMES = frozenset({"claude", "codex"})
 MAX_ANCESTOR_DEPTH = 10
+OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
+OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
+OBSERVER_STORE_VERSION = 1
+OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "repository_identity.py")
 
 FILETIME_EPOCH_DELTA = 11644473600
 FILETIME_TICKS_PER_SECOND = 10_000_000
@@ -358,7 +363,33 @@ def _staged_agent_root(root):
             and isinstance(receipt.get("exports"), (list, dict)) and bool(receipt["exports"]))
 
 
+def _observer_session_store_path():
+    receipt_path = HERE / OBSERVER_STORE_RECEIPT
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    files = receipt.get("files") if isinstance(receipt, dict) else None
+    if (not isinstance(receipt, dict) or receipt.get("kind") != OBSERVER_STORE_KIND
+            or receipt.get("version") != OBSERVER_STORE_VERSION
+            or not isinstance(files, dict) or set(files) != set(OBSERVER_STORE_FILES)):
+        return None
+    for name in OBSERVER_STORE_FILES:
+        digest = files.get(name)
+        path = HERE / name
+        try:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            return None
+        if (not isinstance(digest, str) or len(digest) != 64 or actual != digest):
+            return None
+    return HERE / "session_store.py"
+
+
 def session_store_path():
+    staged = _observer_session_store_path()
+    if staged is not None:
+        return staged
     for root in HERE.parents:
         markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
         runtime = root / ".agents" / "agent-store" / "runtime"

@@ -1,6 +1,7 @@
 """Shared verified-session and cleanup primitives for peer-cli (Python 3.9+)."""
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -37,6 +38,10 @@ FINAL_RESULT_STATUSES = frozenset({
 })
 TASK_SCHEDULER_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 SCHEDULER_DIAGNOSTIC_LIMIT = 1000
+OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
+OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
+OBSERVER_STORE_VERSION = 1
+OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "repository_identity.py")
 
 ET.register_namespace("", TASK_SCHEDULER_NAMESPACE)
 
@@ -497,6 +502,20 @@ def start_observer(arguments):
     return start_detached(Path(__file__).with_name("finish_reaper.py"), arguments)
 
 
+def _write_observer_store_receipt(staging):
+    files = {}
+    for name in OBSERVER_STORE_FILES:
+        path = staging / name
+        if not path.is_file():
+            return
+        files[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    receipt = staging / OBSERVER_STORE_RECEIPT
+    temporary = receipt.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"kind": OBSERVER_STORE_KIND, "version": OBSERVER_STORE_VERSION,
+                                     "files": files}, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, receipt)
+
+
 def start_detached(script, arguments, extra=()):
     """Run a staged script outside the host's process tree, so it outlives the host closing."""
     staging = state_directory() / "merge-cleanup" / "observers" / uuid.uuid4().hex
@@ -508,6 +527,7 @@ def start_detached(script, arguments, extra=()):
     if store is not None:
         for name in ("session_store.py", "repository_identity.py"):
             shutil.copy2(store.with_name(name), staging / name)
+        _write_observer_store_receipt(staging)
     command = [sys.executable, str(staging / Path(script).name), *arguments]
     kwargs = {"cwd": str(state_directory()), "stdin": subprocess.DEVNULL,
               "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
