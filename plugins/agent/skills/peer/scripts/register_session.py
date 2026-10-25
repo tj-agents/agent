@@ -394,8 +394,8 @@ def session_store_path():
         markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
         runtime = root / ".agents" / "agent-store" / "runtime"
         path = runtime / "session_store.py"
-        if path.is_file() and (any(marker.exists() for marker in markers) or _staged_agent_root(root)):
-            return path
+        if any(marker.exists() for marker in markers) or _staged_agent_root(root):
+            return path if path.is_file() else None
     return None
 
 
