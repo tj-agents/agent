@@ -116,6 +116,29 @@ class HandoffStartupTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'was not found under'):
             dispatcher.main(['--host', 'claude', '--'])
 
+    def test_private_handlers_refuse_missing_nearest_runtime_without_loading_enclosing_checkout(self):
+        outer = self.directory / 'author-checkout'
+        (outer / '.git').mkdir(parents=True)
+        outer_runtime = outer / '.agents/agent/runtime/agent_cli.py'
+        outer_runtime.parent.mkdir(parents=True)
+        outer_runtime.write_text("raise AssertionError('outer runtime loaded')\n", encoding='utf-8')
+        nested = outer / 'plugins/agent'
+        marker = nested / '.claude-plugin/plugin.json'
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{}', encoding='utf-8')
+        (nested / '.agents/agent/runtime').mkdir(parents=True)
+        for host in ('claude', 'codex'):
+            with self.subTest(host=host):
+                handler_path = nested / f'.agents/agent/resources/handoff/launch_{host}.py'
+                handler_path.parent.mkdir(parents=True, exist_ok=True)
+                handler_path.write_text(
+                    (ROOT / f'.agents/agent/resources/handoff/launch_{host}.py').read_text(encoding='utf-8'),
+                    encoding='utf-8',
+                )
+                handler = load(f'nested_missing_runtime_{host}', handler_path)
+                with self.assertRaisesRegex(SystemExit, 'was not found under'):
+                    handler._load_agent_cli()
+
     def test_native_exit_before_confirmation_is_failure_even_with_zero_exit(self):
         for host in ('codex', 'claude'):
             for returncode in (0, 2):

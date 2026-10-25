@@ -20,16 +20,23 @@ def is_haiku_model(model):
     return re.search(r'(^|[^a-z0-9])haiku($|[^a-z0-9])', model.lower()) is not None
 
 
-def _load_agent_cli():
+def _package_root():
     for root in HERE.parents:
         markers = (root / '.git', root / '.codex-plugin' / 'plugin.json', root / '.claude-plugin' / 'plugin.json')
-        path = root / '.agents' / 'agent' / 'runtime' / 'agent_cli.py'
-        if path.is_file() and any(marker.exists() for marker in markers):
-            spec = importlib.util.spec_from_file_location('agent_cli', path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            return module
-    raise SystemExit(f'The packaged agent_cli.py library was not found relative to {HERE}.')
+        if any(marker.exists() for marker in markers):
+            return root
+    raise SystemExit(f'The package root was not found relative to {HERE}.')
+
+
+def _load_agent_cli():
+    root = _package_root()
+    path = root / '.agents' / 'agent' / 'runtime' / 'agent_cli.py'
+    if not path.is_file():
+        raise SystemExit(f'The packaged agent_cli.py library was not found under {root}.')
+    spec = importlib.util.spec_from_file_location('agent_cli', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def parse_args(argv, agent_cli):
