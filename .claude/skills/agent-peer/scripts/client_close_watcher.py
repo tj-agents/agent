@@ -82,8 +82,9 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
     try:
         while clock() < deadline:
             require_current(request, path, digest)
+            completed = complete(request)
             row = session_close.session_activity(request["entry"])
-            if complete(request):
+            if completed:
                 if row["turn_state"] != "awaiting_input" or row["last_activity_at"] <= request["armed_at"]:
                     raise Cancelled("completed turn is no longer awaiting input")
                 if stopped is None:

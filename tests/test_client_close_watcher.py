@@ -21,6 +21,35 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.assertFalse(WATCHER.canonical_path(self.request).exists())
         self.assertGreaterEqual(self.server.request.call_count, 9)
 
+    def test_stop_between_activity_and_completion_reads_preserves_close(self):
+        self.arm()
+        original_complete = WATCHER.complete
+        completed = []
+        def stop_before_completion_read(request):
+            if not completed:
+                completed.append(True)
+                self.stop()
+            return original_complete(request)
+        with mock.patch.object(WATCHER, "complete", side_effect=stop_before_completion_read):
+            self.assertEqual(0, self.wait())
+        self.assertEqual("closed", self.outcome()["status"])
+        self.assertEqual("closed", self.row()["end_reason"])
+
+    def test_stop_store_transition_waits_for_completion_publication(self):
+        self.arm()
+        self.store.record_stop(self.connection, self.handle, self.root)
+        published = []
+        def publish_after_wait(_elapsed):
+            if not published:
+                self.assertFalse(WATCHER.complete(self.request))
+                self.assertIsNone(self.row()["ended_at"])
+                published.append(True)
+                LIFECYCLE.run("stop", "codex", {"session_id": "one", "turn_id": "turn-one"})
+        self.assertEqual(0, self.wait(publish_after_wait))
+        self.assertEqual([True], published)
+        self.assertEqual("closed", self.outcome()["status"])
+        self.assertEqual("closed", self.row()["end_reason"])
+
     def test_no_matching_stop_never_signals(self):
         self.arm()
         with mock.patch.object(session_close, "stop_cli_client") as stop:
