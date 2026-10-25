@@ -39,14 +39,12 @@ class RemovePluginTests(unittest.TestCase):
     def selected(self):
         return json.loads((self.root / ".agents" / "plugins.json").read_text(encoding="utf-8"))["plugins"]
 
-    def test_removal_updates_selection_and_both_native_configurations(self):
+    def test_removal_of_agent_cli_prerequisite_refuses_without_writing(self):
         self.write_selection(["agent@tj-agents", "base@tj-agents", "cli@tj-agents"])
-        changed = ADOPT.run(self.root, [], [], "write", removals=["cli"])
-        self.assertEqual([".agents/plugins.json", ".claude/settings.json", ".codex/config.toml"], changed)
-        self.assertEqual(["agent@tj-agents", "base@tj-agents"], self.selected())
-        claude = json.loads((self.root / ".claude" / "settings.json").read_text(encoding="utf-8"))
-        self.assertNotIn("cli@tj-agents", claude["enabledPlugins"])
-        self.assertNotIn('[plugins."cli@tj-agents"]', (self.root / ".codex" / "config.toml").read_text(encoding="utf-8"))
+        before = (self.root / ".agents" / "plugins.json").read_bytes()
+        with self.assertRaisesRegex(LockError, "prerequisite"):
+            ADOPT.run(self.root, [], [], "write", removals=["cli"])
+        self.assertEqual(before, (self.root / ".agents" / "plugins.json").read_bytes())
 
     def test_missing_removal_is_idempotent_and_does_not_restore_defaults(self):
         self.write_selection(["base@tj-agents", "cli@tj-agents"])
