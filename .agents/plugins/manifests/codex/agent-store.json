@@ -1,0 +1,9 @@
+{
+  "name": "agent-store",
+  "description": "Recorded agent executions, sessions, ownership and references.",
+  "author": {"name": "Tommy Seery"},
+  "repository": "https://github.com/tj-agents/agent",
+  "skills": "./skills/",
+  "keywords": ["agents", "sessions", "registry"],
+  "interface": {"displayName": "Agent Store", "shortDescription": "Recorded agent executions, sessions, ownership and references.", "longDescription": "Recorded agent executions, sessions, ownership and references.", "developerName": "Tommy Seery", "category": "Productivity", "capabilities": [], "defaultPrompt": "Inspect recorded agent state."}
+}
