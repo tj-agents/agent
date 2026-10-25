@@ -194,7 +194,10 @@ def entry_terminal_identity(entry):
         return None
     if identity.get("kind") != "windows-terminal":
         return identity
-    runtime_id = nonempty_text(identity.get("runtime_id"))
+    binding = identity.get("tab_binding")
+    runtime_id = nonempty_text(binding.get("runtime_id")) if isinstance(binding, dict) else None
+    if not runtime_id:
+        runtime_id = nonempty_text(identity.get("runtime_id"))
     if runtime_id:
         return {**identity, "runtime_id": runtime_id}
     title = entry.get("title")
@@ -427,8 +430,8 @@ def close_stale_entry(entry):
 
 
 def close_entry(entry, force=False):
-    identity = entry.get("terminal")
-    if not isinstance(identity, dict):
+    identity = entry_terminal_identity(entry)
+    if identity is None:
         raise TerminalRefusal("no native terminal identity was recorded")
     live = session_close.liveness(entry)
     if live is None:
