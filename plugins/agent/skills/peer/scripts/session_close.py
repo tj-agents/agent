@@ -2,6 +2,7 @@
 
 import csv
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -50,6 +51,137 @@ class Refusal(RuntimeError):
     pass
 
 
+def _package_root():
+    here = Path(__file__).resolve()
+    for root in (here.parent, *here.parents):
+        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
+        if any(path.exists() for path in markers):
+            return root
+    raise Refusal("the packaged Agent root is unavailable")
+
+
+def _agent_runtime(name):
+    root = _package_root()
+    path = root / ".agents" / "agent" / "runtime" / name
+    if path.is_file():
+        return path
+    raise Refusal("the packaged Agent runtime is unavailable")
+
+
+def _load_runtime(name, module_name):
+    path = _agent_runtime(name)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise Refusal("the packaged Agent runtime is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def client_runtime():
+    return _load_runtime("cli_client.py", "agent_session_close_cli_client")
+
+
+def process_identity_runtime(cli_root):
+    root = Path(cli_root).resolve()
+    markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
+    if not any(marker.exists() for marker in markers):
+        raise Refusal("the declared CLI capability root is unavailable")
+    path = root / ".agents" / "cli" / "utility" / "close" / "scripts" / "process_identity.py"
+    if not path.is_file():
+        raise Refusal("the declared CLI process-identity capability is unavailable")
+    spec = importlib.util.spec_from_file_location("agent_cli_process_identity", path)
+    if spec is None or spec.loader is None:
+        raise Refusal("the declared CLI process-identity capability is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not callable(getattr(module, "stop", None)):
+        raise Refusal("the declared CLI process-identity capability is unavailable")
+    return module
+
+
+def current_codex_client(session_id, nearest, *, project=None):
+    client = client_runtime()
+    info, record = client.recorded_client(session_id, nearest, process_info,
+                                          register_session.process_table(), project=project)
+    return info, {
+        "client_identity": "managed-input", "launch_cwd": record["launch_cwd"],
+        "title": record.get("title"), "client_message_id": record["client_message_id"],
+        "recording_path": record["recording_path"], "backend": record["backend"],
+        "profile": record["profile"],
+        "terminal": register_session.terminal_identity(record.get("terminal_environment", {})),
+    }
+
+
+CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile", "backend",
+                         "recording_path", "client_message_id", "client_identity", "launch_cwd")
+
+
+def revalidate_codex_client(entry):
+    backend = entry.get("backend")
+    nearest = process_info(backend["pid"] if isinstance(backend, dict) else entry["pid"])
+    if nearest is None or entry.get("client_identity") != "managed-input":
+        raise Refusal("the frozen native client binding is unavailable")
+    info, details = current_codex_client(entry["session_id"], nearest, project=entry.get("cwd"))
+    current = {**details, "host": "codex", "session_id": entry["session_id"],
+               "pid": info.pid, "pid_started_at": info.started_at}
+    if any(current.get(key) != entry.get(key) for key in CLIENT_BINDING_FIELDS):
+        raise Refusal("the native input or frontend binding changed before close")
+
+
+def verify_claude_receipt(entry):
+    provenance = entry.get("provenance")
+    if (entry.get("host") != "claude" or not isinstance(provenance, dict)
+            or provenance.get("source") != "agent-startup-binding"
+            or not isinstance(provenance.get("receipt"), str)):
+        raise Refusal("record is not the verified Claude startup binding")
+    path = Path(provenance["receipt"]).resolve()
+    if (state_directory() / "recovery-launches").resolve() not in path.parents:
+        raise Refusal("startup binding receipt is outside private runtime state")
+    receipt = read_json(path) or {}
+    wrapper = receipt.get("wrapper")
+    frontend = {"pid": entry.get("pid"), "started_at": entry.get("pid_started_at")}
+    if not (receipt.get("session") == entry.get("session_id")
+            and receipt.get("profile") == entry.get("profile") and receipt.get("state") == "launched"
+            and isinstance(wrapper, dict) and wrapper.get("child") == frontend
+            and entry.get("frontend") == frontend and wrapper.get("terminal") == entry.get("terminal")):
+        raise Refusal("startup binding receipt does not prove this Claude frontend")
+
+
+def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
+    info = process_info(entry.get("pid"))
+    if (info is None or register_session.stem(info.name) != entry.get("host")
+            or not verified_live(entry["pid"], entry["pid_started_at"])):
+        raise Refusal("CLI client identity is no longer live")
+    def guard():
+        if entry.get("host") == "codex":
+            revalidate_codex_client(entry)
+            client = client_runtime()
+            context = client.process_context(entry["pid"])
+            if (context.get(client.RECORD_PATH_ENV) != entry.get("recording_path")
+                    or context.get(client.RECORD_ENV) not in ("1", "true", "TRUE", "yes", "YES")
+                    or Path(context["profile"]) != Path(entry.get("profile"))
+                    or (entry.get("backend") is not None and client.daemon_identity(
+                        {"CODEX_HOME": entry["profile"]}, expected_pid=entry["backend"]["pid"],
+                    ) != entry["backend"])
+                    or client.latest_input(entry["recording_path"]) != entry.get("client_message_id")):
+                raise Refusal("the frontend input or backend binding changed before close")
+        elif entry.get("host") == "claude":
+            verify_claude_receipt(entry)
+        else:
+            raise Refusal("unsupported native host")
+        before_signal()
+
+    try:
+        process_identity_runtime(cli_root).stop(
+            {"pid": entry["pid"], "started_at": entry["pid_started_at"]}, before_signal=guard,
+        )
+    except Refusal:
+        raise
+    except Exception as error:
+        raise Refusal(str(error)) from error
+
+
 def _update_own_end(entry, operation, reason):
     try:
         store = register_session._load_session_store()
@@ -86,7 +218,7 @@ def _reopen_own_end(entry, reason):
     _update_own_end(entry, "reopen_session", reason)
 
 
-def awaiting_input_activity(entry, expected_activity=None):
+def session_activity(entry):
     if not valid_entry(entry) or not verified_live(entry["pid"], entry["pid_started_at"]):
         raise Refusal("registered host identity is not live")
     try:
@@ -114,11 +246,24 @@ def awaiting_input_activity(entry, expected_activity=None):
         raise Refusal("session turn state does not match this attachment")
     if row.get("ended_at") is not None:
         raise Refusal("session is already ended")
-    if row.get("turn_state") != "awaiting_input":
-        raise Refusal("session is not awaiting input")
     activity = row.get("last_activity_at")
     if not finite_positive(activity):
         raise Refusal("session activity state is invalid")
+    return row
+
+
+def active_turn_activity(entry):
+    row = session_activity(entry)
+    if row.get("turn_state") != "working":
+        raise Refusal("session has no active turn to close after")
+    return row["last_activity_at"]
+
+
+def awaiting_input_activity(entry, expected_activity=None):
+    row = session_activity(entry)
+    if row.get("turn_state") != "awaiting_input":
+        raise Refusal("session is not awaiting input")
+    activity = row["last_activity_at"]
     if expected_activity is not None and activity != expected_activity:
         raise Refusal("session activity changed before close")
     return activity
@@ -387,6 +532,19 @@ def own_host_and_entry(cwd=None, session_id=None):
         current = info.ppid
     if nearest is None:
         raise Refusal("current process is not attached to a recognized registered host")
+    if register_session.stem(nearest.name) == "codex" and not session_id:
+        session_id = os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX_SESSION_ID")
+        if not session_id:
+            raise Refusal("native Codex thread identity is unavailable; preserve the frontend and backend")
+    if session_id and register_session.stem(nearest.name) == "codex":
+        try:
+            client, details = current_codex_client(session_id, nearest)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            raise Refusal(str(error)) from error
+        return register_session.record(
+            {"session_id": session_id, "cwd": str(cwd)},
+            client={"pid": client.pid, "host": "codex", "pid_started_at": client.started_at, **details},
+        )
     matches = []
     for _path, entry in entries():
         if not valid_entry(entry) or not attached_to(cwd, entry):
@@ -397,8 +555,6 @@ def own_host_and_entry(cwd=None, session_id=None):
                 and verified_live(entry["pid"], entry["pid_started_at"])):
             matches.append(entry)
     requested = session_id
-    if requested is None and register_session.stem(nearest.name) == "codex":
-        requested = os.environ.get("CODEX_THREAD_ID") or None
     if requested is not None:
         matches = [entry for entry in matches if entry["session_id"] == requested]
     if len(matches) == 1:
@@ -519,19 +675,22 @@ def _write_observer_store_receipt(staging):
     os.replace(temporary, receipt)
 
 
-def start_detached(script, arguments, extra=()):
+def start_detached(script, arguments, extra=(), stage=True):
     """Run a staged script outside the host's process tree, so it outlives the host closing."""
-    staging = state_directory() / "merge-cleanup" / "observers" / uuid.uuid4().hex
-    staging.mkdir(parents=True, exist_ok=False)
     here = Path(__file__)
-    for path in (Path(script), here, here.with_name("register_session.py"), *map(Path, extra)):
-        shutil.copy2(path, staging / path.name)
-    store = register_session.session_store_path()
-    if store is not None:
-        for name in ("session_store.py", "repository_identity.py"):
-            shutil.copy2(store.with_name(name), staging / name)
-        _write_observer_store_receipt(staging)
-    command = [sys.executable, str(staging / Path(script).name), *arguments]
+    if stage:
+        staging = state_directory() / "merge-cleanup" / "observers" / uuid.uuid4().hex
+        staging.mkdir(parents=True, exist_ok=False)
+        for path in (Path(script), here, here.with_name("register_session.py"), *map(Path, extra)):
+            shutil.copy2(path, staging / path.name)
+        store = register_session.session_store_path()
+        if store is not None:
+            for name in ("session_store.py", "repository_identity.py"):
+                shutil.copy2(store.with_name(name), staging / name)
+            _write_observer_store_receipt(staging)
+        command = [sys.executable, str(staging / Path(script).name), *arguments]
+    else:
+        command = [sys.executable, str(Path(script).resolve()), *arguments]
     kwargs = {"cwd": str(state_directory()), "stdin": subprocess.DEVNULL,
               "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     timeout = bounded_timeout("AGENT_FINISH_SPAWN_TIMEOUT_SECONDS")
@@ -582,6 +741,11 @@ def start_detached(script, arguments, extra=()):
                     pass
         return None
     return subprocess.Popen(command, start_new_session=True, **kwargs).pid
+
+
+def start_agent_watcher(script, arguments):
+    """Run the installed Agent watcher so it can resolve declared capabilities locally."""
+    return start_detached(script, arguments, stage=False)
 
 
 def wait_for_record(path, timeout):

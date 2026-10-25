@@ -1,0 +1,169 @@
+"""Managed Codex frontend attribution and Agent-side attachment tests."""
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / ".agents/agent/runtime"))
+import codex_hook_trust
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+CLIENT = load("agent_cli_client_tests", ROOT / ".agents/agent/runtime/cli_client.py")
+sys.path.insert(0, str(ROOT / ".agents/agent/utility/peer/scripts"))
+import session_close
+import register_session
+
+
+def events(identity):
+    return [
+        {"dir": "meta", "kind": "session_start"},
+        {"dir": "from_tui", "kind": "op", "payload": {"UserTurn": {"client_user_message_id": identity}}},
+    ]
+
+
+class ClientAttributionTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.profile = self.root / "profile"
+        self.backend = {"pid": 1, "process_start_time": "native-start"}
+        self.infos = {}
+        self.contexts = {}
+        self.commands = {1: ["codex", "app-server"]}
+        self.patchers = [
+            mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(self.root), "CODEX_HOME": str(self.profile)}),
+            mock.patch.object(CLIENT.subprocess, "run", return_value=SimpleNamespace(returncode=0, stderr="")),
+            mock.patch.object(CLIENT, "daemon_identity", return_value=self.backend),
+            mock.patch.object(CLIENT, "process_context", side_effect=lambda pid: self.contexts.get(pid, {})),
+            mock.patch.object(CLIENT, "process_arguments", side_effect=lambda pid: self.commands[pid]),
+            mock.patch.object(CLIENT, "current_input", return_value="own-input"),
+            mock.patch.object(codex_hook_trust, "AppServer"),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def bind(self, pid=123, identity="own-input"):
+        prepared, environment, ticket = CLIENT.prepare("codex", ["resume", "thread"], self.root, os.environ,
+                                                        executable="codex")
+        CLIENT.attach(ticket, pid)
+        Path(ticket["recording_path"]).write_text(
+            "".join(json.dumps(value) + "\n" for value in events(identity)), encoding="utf-8",
+        )
+        self.infos[pid] = SimpleNamespace(pid=pid, name="codex.exe", started_at=ticket["created_at"])
+        self.contexts[pid] = {"profile": str(self.profile.resolve()), CLIENT.RECORD_ENV: "1",
+                              CLIENT.RECORD_PATH_ENV: ticket["recording_path"]}
+        self.commands[pid] = ["codex", *prepared]
+        return ticket, environment
+
+    def resolve(self):
+        nearest = SimpleNamespace(pid=1, name="codex.exe")
+        return CLIENT.recorded_client("thread", nearest, self.infos.get, self.infos)
+
+    def test_recorder_sanitizes_daemon_and_selects_only_matching_frontend(self):
+        ticket, environment = self.bind()
+        daemon_environment = CLIENT.subprocess.run.call_args.kwargs["env"]
+        self.assertNotIn(CLIENT.RECORD_ENV, daemon_environment)
+        self.assertEqual("1", environment[CLIENT.RECORD_ENV])
+        info, record = self.resolve()
+        self.assertEqual(123, info.pid)
+        self.assertEqual("own-input", record["client_message_id"])
+        CLIENT.release(ticket)
+
+    def test_newer_unattributed_input_refuses_the_old_frontend(self):
+        ticket, _environment = self.bind()
+        with Path(ticket["recording_path"]).open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(events("new-input")[1]) + "\n")
+        with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
+            self.resolve()
+
+    def test_ambiguous_matching_frontends_refuse(self):
+        first, _environment = self.bind()
+        self.bind(pid=456)
+        with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
+            self.resolve()
+        CLIENT.release(first)
+
+    def test_incomplete_or_duplicate_recording_refuses(self):
+        ticket, _environment = self.bind()
+        path = Path(ticket["recording_path"])
+        path.write_text(json.dumps(events("own-input")[0]), encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "incomplete or oversized"):
+            self.resolve()
+        path.write_text("".join(json.dumps(value) + "\n" for value in [*events("own-input"), *events("other")]),
+                        encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "no unique startup header"):
+            self.resolve()
+
+    def test_new_input_in_final_guard_sends_no_signal(self):
+        entry = {
+            "host": "codex", "pid": 123, "pid_started_at": 10.0,
+            "client_identity": "managed-input", "recording_path": "events.jsonl",
+            "client_message_id": "old-input", "profile": str(self.profile), "backend": self.backend,
+        }
+        stopped = []
+
+        class Primitive:
+            @staticmethod
+            def stop(_identity, *, before_signal):
+                before_signal()
+                stopped.append(True)
+
+        with mock.patch.object(session_close, "process_info", return_value=SimpleNamespace(name="codex.exe")), \
+                mock.patch.object(session_close, "verified_live", return_value=True), \
+                mock.patch.object(session_close, "revalidate_codex_client"), \
+                mock.patch.object(session_close, "client_runtime", return_value=CLIENT), \
+                mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive), \
+                mock.patch.object(CLIENT, "process_arguments", return_value=["codex"]), \
+                mock.patch.object(CLIENT, "process_context", return_value={
+                    "profile": str(self.profile), CLIENT.RECORD_ENV: "1", CLIENT.RECORD_PATH_ENV: "events.jsonl",
+                }), \
+                mock.patch.object(CLIENT, "daemon_identity", return_value=self.backend), \
+                mock.patch.object(CLIENT, "latest_input", return_value="new-input"):
+            with self.assertRaisesRegex(session_close.Refusal, "binding changed"):
+                session_close.stop_cli_client(entry)
+        self.assertEqual([], stopped)
+
+
+class SessionStoreAttachmentTests(unittest.TestCase):
+    def test_frontend_attachment_preserves_turn_state_siblings_and_end_state(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}):
+            store = register_session._load_session_store()
+            connection = store.connect()
+            try:
+                own = store.start_session(connection, "codex", "own", directory, pid=10, pid_started_at=1.0)
+                peer = store.start_session(connection, "codex", "peer", directory, pid=10, pid_started_at=1.0)
+                store.record_stop(connection, own, directory)
+                before = store.get_session(connection, own)
+                store.attach_session_client(connection, own, 20, 2.0, directory)
+                after = store.get_session(connection, own)
+                self.assertEqual("awaiting_input", after["turn_state"])
+                self.assertEqual(before["last_activity_at"], after["last_activity_at"])
+                self.assertEqual(20, after["pid"])
+                self.assertEqual(10, store.get_session(connection, peer)["pid"])
+                store.end_session(connection, own, "closed")
+                store.attach_session_client(connection, own, 30, 3.0, directory)
+                self.assertEqual(20, store.get_session(connection, own)["pid"])
+            finally:
+                connection.close()
+
+
+if __name__ == "__main__":
+    unittest.main()
