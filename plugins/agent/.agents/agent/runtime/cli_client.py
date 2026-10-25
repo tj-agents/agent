@@ -204,10 +204,13 @@ def current_input(server, session_id):
     turns = server.request('thread/turns/list', {'threadId': session_id, 'limit': 5,
                                                'sortDirection': 'desc', 'itemsView': 'notLoaded'})['data']
     for turn in turns:
+        turn_id = turn.get('id')
+        if not isinstance(turn_id, str) or not turn_id:
+            raise RuntimeError('The latest native input has no attributable turn identity')
         cursor = None
         seen = set()
         for _ in range(128):
-            params = {'threadId': session_id, 'turnId': turn['id'], 'limit': 100, 'sortDirection': 'desc'}
+            params = {'threadId': session_id, 'turnId': turn_id, 'limit': 100, 'sortDirection': 'desc'}
             if cursor is not None:
                 params['cursor'] = cursor
             page = server.request('thread/items/list', params)
@@ -217,7 +220,7 @@ def current_input(server, session_id):
                     identity = item.get('clientId')
                     if not isinstance(identity, str) or not identity:
                         raise RuntimeError('The latest native input has no attributable frontend identity')
-                    return identity
+                    return {'turn_id': turn_id, 'client_message_id': identity}
             cursor = page.get('nextCursor')
             if cursor is None:
                 break
@@ -241,7 +244,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
     executable = arguments[0]
     with codex_hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
                                    existing=not private, timeout=15) as server:
-        identity = current_input(server, session_id)
+        submitted = current_input(server, session_id)
     state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
     matches = []
     for path in (state / 'cli-clients').glob('*/client.json'):
@@ -268,7 +271,8 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
                 continue
             arguments = process_arguments(info.pid)
             if (not arguments or not is_session(arguments[1:])
-                    or ('--no-daemon' in arguments) != private or latest_input(event_path) != identity):
+                    or ('--no-daemon' in arguments) != private
+                    or latest_input(event_path) != submitted['client_message_id']):
                 continue
             for other in table.values():
                 if other.pid == info.pid or Path(other.name).stem.casefold() != 'codex':
@@ -289,7 +293,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
         raise RuntimeError('Cannot attribute this input to one managed Codex frontend; preserve the shared backend. '
                            'Resume this conversation from a fresh managed terminal: ' + command)
     info, record = matches[0]
-    return info, {**record, 'client_message_id': identity}
+    return info, {**record, **submitted}
 
 
 def process_arguments(pid):
