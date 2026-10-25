@@ -20,10 +20,10 @@ def load(name, path):
 
 class RuntimeReceiptUpdateTests(unittest.TestCase):
     def setUp(self):
-        self.runtime = load("runtime_receipt_update", ROOT / ".agents/agent/runtime/plugin_autoupdate.py")
         runtime_directory = str(ROOT / ".agents/agent/runtime")
         sys.path.insert(0, runtime_directory)
         self.addCleanup(lambda: sys.path.remove(runtime_directory))
+        self.runtime = load("runtime_receipt_update", ROOT / ".agents/agent/runtime/plugin_autoupdate.py")
         self.events = load("runtime_receipt_events", ROOT / ".agents/agent/runtime/machine_events.py")
         temporary = tempfile.TemporaryDirectory(prefix="agent-receipt-update-")
         self.addCleanup(temporary.cleanup)
@@ -39,9 +39,10 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         resource.write_bytes(resource_body)
         exports = [".agents/agent/runtime", ".agents/agent/resources"]
         digest = self.runtime._digest(self.runtime._closure(root, exports))
+        files = {key: hashlib.sha256(value).hexdigest() for key, value in self.runtime._closure(root, exports).items()}
         (root / "source.json").write_text(json.dumps({
             "repository": "tj-agents/agent", "revision": name,
-            "exports": exports, "sha256": digest,
+            "exports": exports, "sha256": digest, "files": files,
         }), encoding="utf-8")
         return root
 
