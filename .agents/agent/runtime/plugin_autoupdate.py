@@ -695,9 +695,17 @@ def _receipt_root(current: Path) -> Path | None:
     return None
 
 
+def _native_agent_source(root: Path) -> bool:
+    for name in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json"):
+        manifest = read_json(root / name)
+        if manifest.get("name") == "agent" and manifest.get("repository") == "https://github.com/tj-agents/agent":
+            return (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).is_file()
+    return False
+
+
 def packaged_copies(codex_config: dict) -> list[Path]:
     return [root for root in installed_plugin_roots("agent", claude_home(), codex_config)
-            if _receipt(root) and (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).is_file()]
+            if _native_agent_source(root)]
 
 
 def self_update(current: Path, codex_config: dict) -> bool:
@@ -707,11 +715,13 @@ def self_update(current: Path, codex_config: dict) -> bool:
     candidates = [root for root in packaged_copies(codex_config) if root.resolve() != target.resolve()]
     if not candidates:
         return False
-    source = max(candidates, key=lambda root: (root / "source.json").stat().st_mtime)
-    receipt = _receipt(source)
+    source = max(candidates, key=lambda root: (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).stat().st_mtime)
+    receipt = _receipt(target)
     try:
         contents = _closure(source, receipt["exports"])
-        if _digest(contents) != receipt["sha256"]:
+        digest = _digest(contents)
+        target_contents = _closure(target, receipt["exports"])
+        if digest == receipt["sha256"] and _digest(target_contents) == receipt["sha256"]:
             return False
         changed = False
         for name, body in contents.items():
@@ -723,8 +733,10 @@ def self_update(current: Path, codex_config: dict) -> bool:
             temporary.write_bytes(body)
             os.replace(temporary, destination)
             changed = True
-        source_receipt = (source / "source.json").read_bytes()
-        if not (target / "source.json").is_file() or (target / "source.json").read_bytes() != source_receipt:
+        updated_receipt = {"repository": "tj-agents/agent", "revision": "native:" + digest,
+                           "exports": receipt["exports"], "sha256": digest}
+        source_receipt = (json.dumps(updated_receipt, indent=2) + "\n").encode("utf-8")
+        if (target / "source.json").read_bytes() != source_receipt:
             temporary = target / "source.json.next"
             temporary.write_bytes(source_receipt)
             os.replace(temporary, target / "source.json")

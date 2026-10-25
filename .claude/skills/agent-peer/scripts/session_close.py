@@ -53,11 +53,18 @@ class Refusal(RuntimeError):
 
 def _package_root():
     here = Path(__file__).resolve()
-    for root in (here.parent, *here.parents):
-        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        if any(path.exists() for path in markers):
-            return root
-    raise Refusal("the packaged Agent root is unavailable")
+    locator = next((root / ".agents" / "agent" / "runtime" / "package_root.py"
+                    for root in (here.parent, *here.parents)
+                    if (root / ".agents" / "agent" / "runtime" / "package_root.py").is_file()), None)
+    if locator is None:
+        raise Refusal("the packaged Agent root is unavailable")
+    spec = importlib.util.spec_from_file_location("session_close_package_root", locator)
+    package_root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_root)
+    try:
+        return package_root.find_package_root(here)
+    except RuntimeError as error:
+        raise Refusal("the packaged Agent root is unavailable") from error
 
 
 def _agent_runtime(name):

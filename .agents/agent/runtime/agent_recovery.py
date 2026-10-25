@@ -706,8 +706,11 @@ def await_pickup(host, session_id, status_path, since, history_path=None, timeou
 
 
 def open_session(host, session_id, prompt="Continue the requested work.", title=None, roots=None, confirm_closed=False,
-                 prompt_path=None, model=None, dangerously_skip_permissions=False, cli=None, native_arguments=()):
+                 prompt_path=None, model=None, dangerously_skip_permissions=False, cli=None, native_arguments=(),
+                 expected_cwd=None):
     item = find(host, session_id, roots)
+    if expected_cwd is not None and Path(item["cwd"]).resolve() != Path(expected_cwd).resolve():
+        raise ValueError("The exact session does not match the expected refresh checkout.")
     if item["status"] == "live":
         raise ValueError("That exact session is verified live; refusing to create a duplicate writer.")
     if item["status"] == "unknown" and not confirm_closed:
@@ -934,12 +937,9 @@ def main(argv=None):
             return 0
         if len(hosts) != 1 or not args.id:
             raise ValueError("open requires one --host and an exact --id.")
-        if args.expected_cwd is not None:
-            item = find(hosts[0], args.id, roots)
-            if Path(item["cwd"]).resolve() != args.expected_cwd.resolve():
-                raise ValueError("The exact session does not match the expected refresh checkout.")
         item = open_session(hosts[0], args.id, args.prompt if args.prompt_path else args.prompt or "Continue the requested work.", args.title, roots, args.confirm_closed,
-                            args.prompt_path, args.model, native_arguments=args.native_argument)
+                            args.prompt_path, args.model, native_arguments=args.native_argument,
+                            expected_cwd=args.expected_cwd)
         print(json.dumps(item, indent=2))
         return 0
     except LaunchUnverified as exc:
