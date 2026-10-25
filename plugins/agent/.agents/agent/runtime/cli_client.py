@@ -229,7 +229,7 @@ def current_input(server, session_id):
     raise RuntimeError('This native thread has no attributable frontend input')
 
 
-def recorded_client(session_id, nearest, lookup, table):
+def recorded_client(session_id, nearest, lookup, table, *, project=None):
     if sys.version_info < (3, 11):
         raise RuntimeError('Codex frontend attribution requires Python 3.11 or newer')
     arguments = process_arguments(nearest.pid)
@@ -239,7 +239,8 @@ def recorded_client(session_id, nearest, lookup, table):
     import codex_hook_trust
 
     executable = arguments[0]
-    with codex_hook_trust.AppServer(executable, Path.cwd(), existing=not private, timeout=15) as server:
+    with codex_hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
+                                   existing=not private, timeout=15) as server:
         identity = current_input(server, session_id)
     state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
     matches = []

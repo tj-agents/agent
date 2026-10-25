@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import secrets
 import sys
+import re
+import time
 
 
 TRANSCRIPT_TAIL_BYTES = 256 * 1024
@@ -42,11 +45,9 @@ def identity(value: object, label: str) -> dict:
 
 
 def target_from_record(record: dict) -> dict:
-    if record.get("client_identity") != "managed-input":
-        raise ValueError("record is not an attributable managed frontend")
     return {"schema_version": 1, "frontend": identity(
         {"pid": record.get("pid"), "started_at": record.get("pid_started_at")}, "frontend",
-    )}
+    ), "entry": record}
 
 
 def state_root() -> Path:
@@ -55,6 +56,8 @@ def state_root() -> Path:
 
 def cli_capability_root(path: Path) -> Path:
     resolved = path.resolve()
+    if not resolved.is_file():
+        raise ValueError("declared cli:close capability path is unavailable")
     for root in (resolved.parent, *resolved.parents):
         markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
         if not any(marker.exists() for marker in markers):
@@ -108,60 +111,101 @@ def claude_transcript(session_id: str, supplied: Path | None) -> Path:
 
 
 def record_path(session_id: str) -> Path:
-    if not session_id or any(character in session_id for character in "\\/"):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
         raise ValueError("session id must be one registry filename component")
     return state_root() / "cli-sessions" / f"{session_id}.json"
 
 
 def prepare(args: argparse.Namespace) -> int:
+    record_path(args.session_id)
     record = read_object(args.record or record_path(args.session_id))
-    if record.get("session_id") != args.session_id or record.get("profile") != args.profile:
+    shared = _session_close()
+    if record.get("host") == "codex":
+        record = shared.own_host_and_entry(session_id=args.session_id)
+    elif record.get("host") == "claude":
+        shared.verify_claude_receipt(record)
+    else:
+        raise ValueError("record has no supported native host")
+    if (record.get("session_id") != args.session_id
+            or shared.path_key(record.get("profile", "")) != shared.path_key(args.profile)):
         raise ValueError("record does not match the requested session and profile")
     target = target_from_record(record)
+    if record["host"] == "claude":
+        transcript = claude_transcript(args.session_id, args.transcript)
+        target.update({"transcript": str(transcript), "claude_user_uuid": claude_turn(transcript)})
     write_object(args.target, target)
     print(json.dumps({"status": "prepared", "target": str(args.target)}))
     return 0
 
 
 def arm(args: argparse.Namespace) -> int:
-    record_path(args.session_id)  # Validate the state filename before creating lifecycle state.
+    registry = record_path(args.session_id)
+    token = args.completion_token or secrets.token_urlsafe(24)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", token):
+        raise ValueError("completion token must be one safe filename component")
+    state_path = state_root() / "close-lifecycle" / f"{args.session_id}.json"
+    if args.state is not None and args.state.resolve() != state_path.resolve():
+        raise ValueError("close state must use the canonical session path")
+    if state_path.exists():
+        raise RuntimeError("a close request is already armed for this session")
+    cli_root = cli_capability_root(args.cli_close)
+    shared = _session_close()
+    shared.process_identity_runtime(cli_root)
     target = read_object(args.target)
     if target.get("schema_version") != 1:
         raise ValueError("target schema is unavailable")
     frontend = identity(target.get("frontend"), "frontend")
-    record = read_object(args.record or record_path(args.session_id))
-    if record.get("session_id") != args.session_id or record.get("profile") != args.profile:
+    entry = target.get("entry")
+    if (not isinstance(entry, dict) or entry.get("session_id") != args.session_id
+            or entry.get("host") != args.host
+            or shared.path_key(entry.get("profile", "")) != shared.path_key(args.profile)):
         raise ValueError("record does not match the requested session and profile")
-    entry = dict(record)
     if target_from_record(entry)["frontend"] != frontend:
         raise ValueError("target does not match the attributable frontend")
-    shared = _session_close()
-    entry["expected_activity"] = shared.awaiting_input_activity(entry)
-    token = args.completion_token or secrets.token_urlsafe(24)
-    state = {
-        "host": args.host, "session_id": args.session_id, "turn_id": args.turn_id,
-        "completion": str(args.completion), "cancel": str(args.cancel), "completion_token": token,
-    }
-    if args.host == "claude":
-        transcript = claude_transcript(args.session_id, args.transcript)
-        state.update({"transcript": str(transcript), "claude_user_uuid": claude_turn(transcript)})
-    state_path = args.state or state_root() / "close-lifecycle" / f"{args.session_id}.json"
-    if state_path.exists():
-        raise RuntimeError("a close request is already armed for this session")
-    write_object(state_path, state)
+    if read_object(args.record or registry) != entry:
+        raise ValueError("prepared session registration changed before arming")
+    if args.host == "codex":
+        if not args.turn_id:
+            raise ValueError("Codex arming requires the current native turn")
+        shared.revalidate_codex_client(entry)
+    else:
+        shared.verify_claude_receipt(entry)
+    activity = shared.active_turn_activity(entry)
     request = state_root() / "client-close" / (token + ".json")
     result = state_root() / "client-close" / (token + ".result.json")
-    cli_root = cli_capability_root(args.cli_close)
-    write_object(request, {"entry": entry, "completion_token": token, "cli_root": str(cli_root)})
+    completion, cancel = args.completion.resolve(), args.cancel.resolve()
+    paths = [request.resolve(), result.resolve(), state_path.resolve(), completion, cancel]
+    if len(set(paths)) != len(paths) or any(path.exists() for path in paths):
+        raise ValueError("close request paths must be distinct and unused")
+    state = {
+        "mode": "close", "entry": entry, "cli_root": str(cli_root), "armed_at": time.time(),
+        "working_activity": activity, "registry": str((args.record or registry).resolve()),
+        "host": args.host, "session_id": args.session_id, "turn_id": args.turn_id,
+        "completion": str(completion), "cancel": str(cancel), "completion_token": token,
+        "result": str(result.resolve()),
+    }
+    if args.host == "claude":
+        transcript = claude_transcript(args.session_id, args.transcript or Path(target["transcript"]))
+        if str(transcript) != target.get("transcript") or claude_turn(transcript) != target.get("claude_user_uuid"):
+            raise ValueError("Claude transcript or user changed after preparation")
+        state.update({"transcript": str(transcript), "claude_user_uuid": target["claude_user_uuid"]})
+    raw = json.dumps(state, sort_keys=True).encode("utf-8") + b"\n"
+    digest = hashlib.sha256(raw).hexdigest()
+    published = []
     try:
+        for path in (request, state_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("xb") as stream:
+                published.append((path, os.fstat(stream.fileno()).st_ino))
+                stream.write(raw)
         watcher = shared.start_agent_watcher(
             Path(shared.__file__).resolve().with_name("client_close_watcher.py"),
-            ["--request", str(request), "--completion", str(args.completion), "--cancel", str(args.cancel),
-             "--result", str(result)],
+            ["--request", str(request.resolve()), "--request-sha256", digest],
         )
     except Exception:
-        state_path.unlink(missing_ok=True)
-        request.unlink(missing_ok=True)
+        for path, inode in reversed(published):
+            if path.exists() and path.stat().st_ino == inode:
+                path.unlink()
         raise
     print(json.dumps({"status": "armed", "completion_token": token, "watcher_pid": watcher,
                       "result": str(result)}))
@@ -205,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--profile", required=True)
     command.add_argument("--record", type=Path)
     command.add_argument("--target", type=Path, required=True)
+    command.add_argument("--transcript", type=Path)
     command = commands.add_parser("arm")
     command.add_argument("--host", choices=("claude", "codex"), required=True)
     command.add_argument("--session-id", required=True)
