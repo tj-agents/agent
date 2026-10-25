@@ -15,6 +15,10 @@ The generated packages have no dependency on a Core checkout. Shared runtime is 
 `.agents/agent/runtime` and `.agents/agent-store/runtime`; generated payloads embed the canonical paths
 they consume.
 
+Maintainers refresh the offline Marketplace selection snapshot only with
+`.agents/agent/utility/plugins/scripts/update_marketplace_catalog.py --source <marketplace-checkout>`;
+the adjacent `marketplace_catalog.lock.json` is the canonical producer snapshot.
+
 ## Skills
 
 - `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,

@@ -6,7 +6,7 @@
     "claude": ["claude"]
   },
   "dependencies": {
-    "agent": ["tj-agents/base", "agent-store"],
+    "agent": ["tj-agents/base", "agent-store", "tj-agents/machine"],
     "codex": ["agent"],
     "claude": ["agent"]
   },

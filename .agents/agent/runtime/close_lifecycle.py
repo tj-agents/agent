@@ -126,13 +126,13 @@ def run(event: str, host: str, data: dict) -> int:
             if (isinstance(state, dict) and state.get("host") == host and state.get("session_id") == session_id
                     and _claude_finished(state, data)):
                 _signal(state["completion"], {"token": state["completion_token"]})
-                path.unlink(missing_ok=True)
+                _write(path, {**state, "completion_signalled": True})
             return 0
         if not turn_id:
             return 0
         if _matches(state, host, session_id, turn_id):
             _signal(state["completion"], {"token": state["completion_token"]})
-            path.unlink(missing_ok=True)
+            _write(path, {**state, "completion_signalled": True})
         return 0
     if event == "end":
         # Session end can never complete a later turn. Cancel this exact pending request instead.
