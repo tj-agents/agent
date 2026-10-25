@@ -1,5 +1,5 @@
 {
-  "name": "claude",
+  "name": "cc",
   "description": "Claude-specific agent session launch and control.",
   "author": {"name": "Tommy Seery"},
   "repository": "https://github.com/tj-agents/agent",
@@ -7,3 +7,4 @@
   "keywords": ["agents", "claude", "sessions"],
   "interface": {"displayName": "Claude", "shortDescription": "Claude-specific agent session launch and control.", "longDescription": "Claude-specific agent session launch and control.", "developerName": "Tommy Seery", "category": "Productivity", "capabilities": [], "defaultPrompt": "Use the Claude session capability."}
 }
+
