@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import importlib.util
 import json
 import ntpath
 import os
@@ -37,113 +38,39 @@ def path_key(value):
 class Proxy:
     def __init__(self, executable, profile, deadline):
         self.deadline = deadline
-        self.responses = queue.Queue()
-        self.sequence = 0
-        self.writer = None
         env = dict(os.environ, CODEX_HOME=str(profile))
-        self.process = subprocess.Popen(
-            [executable, 'app-server', 'proxy'], env=env,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, encoding='utf-8',
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-        )
-        self.reader = threading.Thread(target=self._read, daemon=True)
-        self.reader.start()
-
-    def _read(self):
-        try:
-            for line in self.process.stdout:
-                message = json.loads(line)
-                if not isinstance(message, dict):
-                    raise ValueError('Expected a JSON object from Codex proxy')
-                if 'id' in message:
-                    self.responses.put(message)
-        except (ValueError, OSError) as error:
-            self.responses.put(FollowupError(str(error)))
-        finally:
-            self.responses.put(FollowupError(
-                'Existing Codex app-server proxy is unavailable or disconnected. '
-                'No daemon or replacement session was started.'
-            ))
-
-    def _write(self, message):
-        payload = json.dumps(message) + '\n'
-        completed = queue.Queue(maxsize=1)
-
-        def write():
-            try:
-                self.process.stdin.write(payload)
-                self.process.stdin.flush()
-            except (BrokenPipeError, OSError, ValueError) as error:
-                completed.put(error)
-            else:
-                completed.put(None)
-
-        remaining = self.deadline - time.monotonic()
-        if remaining <= 0:
-            raise FollowupError('Timed out; delivery has not been verified')
-        self.writer = threading.Thread(target=write, daemon=True)
-        self.writer.start()
-        try:
-            error = completed.get(timeout=remaining)
-        except queue.Empty as error:
-            raise FollowupError('Timed out writing to Codex; delivery has not been verified') from error
-        self.writer.join()
-        if error:
-            raise FollowupError('Codex proxy disconnected') from error
+        for root in Path(__file__).resolve().parents:
+            path = root / '.agents' / 'agent' / 'runtime' / 'codex_hook_trust.py'
+            if path.is_file():
+                if str(path.parent) not in sys.path:
+                    sys.path.insert(0, str(path.parent))
+                spec = importlib.util.spec_from_file_location('codex_followup_transport', path)
+                transport = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(transport)
+                self.server = transport.AppServer(executable, Path.cwd(), environment=env,
+                                                  timeout=max(0.1, deadline - time.monotonic()), existing=True)
+                return
+        raise FollowupError('The packaged Codex WebSocket transport was not found')
 
     def request(self, method, params):
         if time.monotonic() >= self.deadline:
             raise FollowupError('Timed out; delivery has not been verified')
-        self.sequence += 1
-        request_id = self.sequence
-        self._write({'id': request_id, 'method': method, 'params': params})
-        while True:
-            remaining = self.deadline - time.monotonic()
-            if remaining <= 0:
-                raise FollowupError('Timed out; delivery has not been verified')
-            try:
-                response = self.responses.get(timeout=remaining)
-            except queue.Empty as error:
-                raise FollowupError('Timed out; delivery has not been verified') from error
-            if isinstance(response, Exception):
-                raise response
-            if 'method' in response:
-                raise FollowupError(
-                    'Recipient requires a server request handled by its owning UI; '
-                    'closing this helper without answering it'
-                )
-            if response['id'] != request_id:
-                continue
-            if 'error' in response:
-                raise Rejected(f"{method} rejected: {response['error']}")
-            if not isinstance(response.get('result'), dict):
-                raise FollowupError(f'{method} returned an unsupported response')
-            return response['result']
+        try:
+            result = self.server.request(method, params)
+        except RuntimeError as error:
+            raise FollowupError(str(error)) from error
+        if not isinstance(result, dict):
+            raise FollowupError(f'{method} returned an unsupported response')
+        return result
 
     def initialize(self):
-        self.request('initialize', {
-            'clientInfo': {'name': 'verified_codex_followup', 'version': '1.0.0'},
-            'capabilities': {'experimentalApi': True},
-        })
-        self._write({'method': 'initialized', 'params': {}})
+        try:
+            self.server.__enter__()
+        except RuntimeError as error:
+            raise FollowupError(str(error)) from error
 
     def close(self):
-        if self.process.poll() is None:
-            self.process.terminate()
-        try:
-            self.process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=3)
-        self.reader.join(timeout=3)
-        if self.writer:
-            self.writer.join(timeout=3)
-        for stream in (self.process.stdin, self.process.stdout):
-            try:
-                stream.close()
-            except (OSError, ValueError, RuntimeError):
-                pass
+        self.server.close()
 
 
 def pages(proxy, method, params):

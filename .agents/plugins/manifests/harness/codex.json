@@ -2,5 +2,5 @@
   "schema_version": 1,
   "plugin": "tj-agents/codex",
   "source_roots": [".agents/codex"],
-  "requires": {"marketplaces": [{"id": "tj-agents", "repository": "tj-agents/marketplace"}], "plugins": ["tj-agents/codex", "tj-agents/agent"], "hooks": [], "permissions": {"claude_allow": [], "codex_prefix_rules": []}}
+  "requires": {"marketplaces": [{"id": "tj-agents", "repository": "tj-agents/marketplace"}], "plugins": ["tj-agents/codex", "tj-agents/agent", "tj-agents/machine"], "hooks": [], "permissions": {"claude_allow": [], "codex_prefix_rules": []}}
 }

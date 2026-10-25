@@ -64,6 +64,9 @@ class CloseLifecycleTests(unittest.TestCase):
         self.assertTrue(LIFECYCLE._state_path("session").exists())
         self.assertEqual(0, LIFECYCLE.run("stop", "codex", {"session_id": "session", "turn_id": "later"}))
         self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
+        self.assertTrue(LIFECYCLE._state_path("session").exists())
+        self.assertEqual(0, LIFECYCLE.run("prompt", "codex", {"session_id": "session", "turn_id": "next"}))
+        self.assertFalse(LIFECYCLE._state_path("session").exists())
 
     def test_claude_stop_requires_terminal_assistant_after_bound_user(self):
         transcript = self.state / "session.jsonl"
