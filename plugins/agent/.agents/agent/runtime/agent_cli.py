@@ -293,11 +293,13 @@ def _lanes_module():
     package_root = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package_root)
     for root in HERE.parents:
-        path = root / '.agents' / 'agent' / 'resources' / 'lanes' / 'resolve.py'
-        if path.is_file() and package_root.is_package_root(root):
-            break
+        if package_root.is_package_root(root):
+            path = root / '.agents' / 'agent' / 'resources' / 'lanes' / 'resolve.py'
+            if path.is_file():
+                break
+            raise LaunchError(f'The packaged lane resolver was not found under {root}.')
     else:
-        raise LaunchError(f'The packaged lane resolver was not found relative to {HERE}.')
+        raise LaunchError(f'The package root was not found relative to {HERE}.')
     spec = importlib.util.spec_from_file_location('agent_cli_lanes', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
