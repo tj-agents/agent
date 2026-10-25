@@ -9,7 +9,7 @@ Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 - `agent-store`: recorded sessions and execution state.
 - `agent`: host-neutral coordination, recovery, history, lanes and refresh.
 - `codex`: Codex-specific handoff, opening, hooks and memory.
-- `claude`: Claude-specific handoff and opening.
+- `cc`: Claude-specific handoff and opening.
 
 The generated packages have no dependency on a Core checkout. Shared runtime is authored beneath
 `.agents/agent/runtime` and `.agents/agent-store/runtime`; generated payloads embed the canonical paths
