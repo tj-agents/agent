@@ -1,0 +1,185 @@
+{
+  "plugin": "agent",
+  "dependencies": [
+    "tj-agents/base",
+    "agent-store"
+  ],
+  "profiles": {
+    "core": [
+      "close",
+      "lanes",
+      "listen",
+      "message",
+      "open",
+      "peer",
+      "plugins",
+      "recent",
+      "recover",
+      "refresh",
+      "search"
+    ]
+  },
+  "compatibilitySkillAliases": {},
+  "skills": [
+    {
+      "name": "close",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "cli close capability"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "lanes",
+      "kind": "policy",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "listen",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "message",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python",
+        "codex app-server"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "open",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python",
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "peer",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python",
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "plugins",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "repositories adopting plugins"
+      ],
+      "requires": [
+        "python",
+        "git"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "recent",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "recover",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python",
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "refresh",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "native host sessions"
+      ],
+      "requires": [
+        "python",
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "search",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python"
+      ],
+      "provenance": [
+        "house"
+      ]
+    }
+  ]
+}

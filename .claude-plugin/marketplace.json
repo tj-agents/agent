@@ -1,0 +1,51 @@
+{
+  "name": "tj-agents",
+  "description": "Reusable agent sessions, coordination and native host operations.",
+  "owner": {
+    "name": "Tommy Seery"
+  },
+  "plugins": [
+    {
+      "name": "agent",
+      "source": "./plugins/agent",
+      "description": "Reusable agent sessions, coordination and native host operations.",
+      "category": "Productivity",
+      "keywords": [
+        "agent"
+      ]
+    },
+    {
+      "name": "agent-store",
+      "source": "./plugins/agent-store",
+      "description": "Recorded agent executions, sessions, ownership and references.",
+      "category": "Productivity",
+      "keywords": [
+        "agents",
+        "sessions",
+        "registry"
+      ]
+    },
+    {
+      "name": "claude",
+      "source": "./plugins/claude",
+      "description": "Claude-specific agent session launch and control.",
+      "category": "Productivity",
+      "keywords": [
+        "agents",
+        "claude",
+        "sessions"
+      ]
+    },
+    {
+      "name": "codex",
+      "source": "./plugins/codex",
+      "description": "Codex-specific agent session launch and control.",
+      "category": "Productivity",
+      "keywords": [
+        "agents",
+        "codex",
+        "sessions"
+      ]
+    }
+  ]
+}

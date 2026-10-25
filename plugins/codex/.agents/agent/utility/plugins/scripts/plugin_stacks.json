@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "stacks": {
+    "dotnet": [
+      "dotnet"
+    ],
+    "azure": [
+      "dotnet",
+      "azure"
+    ],
+    "react": [
+      "react"
+    ],
+    "cpp-gcc": [
+      "cpp",
+      "gpp"
+    ],
+    "cpp-msvc": [
+      "cpp",
+      "msvc"
+    ],
+    "win32": [
+      "cpp",
+      "msvc",
+      "win32"
+    ],
+    "neovim": [
+      "nvim"
+    ],
+    "rust": [
+      "rust"
+    ],
+    "python": [
+      "python"
+    ],
+    "github-actions": [
+      "github-actions"
+    ],
+    "plugin-repository": [
+      "template",
+      "python"
+    ]
+  }
+}

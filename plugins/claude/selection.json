@@ -1,0 +1,46 @@
+{
+  "plugin": "claude",
+  "dependencies": [
+    "tj-agents/base",
+    "agent"
+  ],
+  "profiles": {
+    "core": [
+      "handoff",
+      "open"
+    ]
+  },
+  "compatibilitySkillAliases": {},
+  "skills": [
+    {
+      "name": "handoff",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "claude sessions"
+      ],
+      "requires": [
+        "python",
+        "claude"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "open",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "claude sessions"
+      ],
+      "requires": [
+        "python",
+        "claude"
+      ],
+      "provenance": [
+        "house"
+      ]
+    }
+  ]
+}

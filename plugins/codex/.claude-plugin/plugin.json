@@ -1,0 +1,19 @@
+{
+  "name": "codex",
+  "description": "Codex-specific agent session launch and control.",
+  "author": {
+    "name": "Tommy Seery"
+  },
+  "repository": "https://github.com/tj-agents/agent",
+  "skills": "./skills/",
+  "keywords": [
+    "agents",
+    "codex",
+    "sessions"
+  ],
+  "displayName": "Codex",
+  "dependencies": [
+    "base@tj-agents",
+    "agent"
+  ]
+}

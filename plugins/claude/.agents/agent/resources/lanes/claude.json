@@ -1,0 +1,71 @@
+{
+  "_": "Claude's rung of the lane ladder. A lane is an ordinal capability/price rung; a skill, an agent or a workflow stage declares a lane and NEVER a model. This file and its Codex sibling are the only two places in the repo a model name may appear, so repricing a rung or adopting a new model is a one-file change per harness. Rungs are ordered L1 (most capable) to L7 (cheapest) and mean the same thing on both harnesses -- see .agents/lanes/codex.json for the paired values and .agents/skills/lanes/SKILL.md for how a lane is chosen.",
+
+  "host": "claude",
+  "effort_key": "effort",
+  "skill_supports_effort": true,
+  "model_key": "model",
+
+  "lanes": {
+    "L1": {
+      "summary": "Routes critical design or a large complex plan to Codex L1.",
+      "model": "claude-sonnet-5",
+      "effort": "low",
+      "context_ceiling": 1000000,
+      "why": "A cheap routing proxy, not a local L1 worker. It returns a required Codex L1 handoff for a critical design decision or a big, complex plan with substantial interacting decisions. A plan label, architecture, data model, contract, or mechanism choice alone does not select it. Never implementation, review or delivery.",
+      "handoff": {
+        "host": "codex",
+        "lane": "L1"
+      }
+    },
+    "L2": {
+      "summary": "High-stakes judgement that is not design, where a wrong call is costly or hard to undo.",
+      "model": "claude-opus-5-5",
+      "effort": "xhigh",
+      "context_ceiling": 1000000,
+      "why": "top general family at the setting above `high`. Judgement with a lot riding on it that designs nothing: a diagnosis of a production failure, a security or migration review. Delivering a change never selects it; merge, push and publish are governed by the delivery gates."
+    },
+    "L3": {
+      "summary": "Open investigation or bounded uncertain design with unresolved alternatives.",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "context_ceiling": 1000000,
+      "why": "top general family at its default setting. Open investigation or bounded uncertain design with unresolved alternatives, including a diagnosis with no known answer or evidence a test cannot settle."
+    },
+    "L4": {
+      "summary": "Specified implementation, ordinary review, and small local testable choices.",
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "context_ceiling": 1000000,
+      "why": "the workhorse. Specified implementation and ordinary review, including a small local mechanism choice inside a testable fix. Features, bugfixes and review lenses whose mistakes a compiler or a test suite will catch. Delivery never selects this rung."
+    },
+    "L5": {
+      "summary": "Mechanical work whose shape is already decided.",
+      "model": "claude-sonnet-5",
+      "effort": "medium",
+      "context_ceiling": 1000000,
+      "why": "the workhorse at reduced spend. Mechanical work whose shape is already decided: scripted edits, docs, ledger upkeep."
+    },
+    "L6": {
+      "summary": "Bulk clerical work whose input is too large for the cheapest rung.",
+      "model": "claude-sonnet-5",
+      "effort": "low",
+      "context_ceiling": 1000000,
+      "why": "the workhorse at its lowest setting, kept for the full context window. Clerical loops and bulk passes -- a monitor, a long transcript, a big diff -- that L7's window or capability cannot hold."
+    },
+    "L7": {
+      "summary": "Clerical work with a small input and no judgement to make.",
+      "model": "claude-haiku-4-5",
+      "context_ceiling": 200000,
+      "why": "in-session clerical work with a small input: commit, push, pull, sync, one poll. Carries NO effort key -- Haiku 4.5 rejects `effort` outright, which is also why this rung is a capability step and not just a price step. Handoff launchers reject this rung.",
+      "no_effort_reason": "claude-haiku-4-5 does not accept the effort parameter"
+    }
+  },
+
+  "frontier": {
+    "summary": "Frontier deliberation above the ladder, priced by provenance rather than by task shape.",
+    "model": "claude-fable-5",
+    "effort": "max",
+    "why": "valid only when the user explicitly asks for this tier or its model by name. Deliberately not a rung: the four lane questions grade task shape, and no answer to them may select this spend. No Claude lane selects the frontier model; tests enforce that model invariant regardless of effort."
+  }
+}

@@ -11,6 +11,11 @@ Change them in Template, then run `template:update` to refresh the exact vendore
 `pwsh .agents/sync-generated.ps1` after authored changes and require `pwsh .agents/sync-generated.ps1 -Check`
 before delivery.
 
+Runtime scripts use Python's standard library on Windows and Linux, retaining the source utility
+conventions in [Core's CODE_CONVENTIONS.md](https://github.com/tj-agents/core/blob/main/CODE_CONVENTIONS.md).
+Run `python -B -m unittest discover -s .agents/tests -p "test_*.py"` on Windows or `python3` on Linux.
+Keep native application packaging and dependencies out of this plugin publisher unless the work needs them.
+
 ```powershell
 pwsh .agents/sync-generated.ps1
 pwsh .agents/sync-generated.ps1 -Check
@@ -18,7 +23,7 @@ pwsh .agents/sync-generated.ps1 -Check
 
 For skill creation, splitting, renaming or consolidation, load `template:new-skill` before the native creator.
 The project selects Template in `.agents/plugins.json`; after Git initialization, use Core's
-`machine:plugin-selection` to generate both hosts and complete native admission and installation.
+`agent:plugins` to generate both hosts and complete native admission and installation.
 
 Follow `engineering:docs` when adding or changing a skill or standard. Keep a convention's required `Owns …`
 opening, then use a concrete fenced example before additional explanatory prose to settle ambiguous terminology. A

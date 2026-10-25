@@ -1,0 +1,77 @@
+{
+  "plugin": "codex",
+  "dependencies": [
+    "tj-agents/base",
+    "agent"
+  ],
+  "profiles": {
+    "core": [
+      "handoff",
+      "hooks",
+      "memory",
+      "open"
+    ]
+  },
+  "compatibilitySkillAliases": {},
+  "skills": [
+    {
+      "name": "handoff",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "codex sessions"
+      ],
+      "requires": [
+        "python",
+        "codex"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "hooks",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "codex sessions"
+      ],
+      "requires": [
+        "python",
+        "codex"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "memory",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "codex sessions"
+      ],
+      "requires": [
+        "python"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "open",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "codex sessions"
+      ],
+      "requires": [
+        "python",
+        "codex"
+      ],
+      "provenance": [
+        "house"
+      ]
+    }
+  ]
+}
