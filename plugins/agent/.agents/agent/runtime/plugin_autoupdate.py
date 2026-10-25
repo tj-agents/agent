@@ -22,6 +22,8 @@ import sys
 import tempfile
 import time
 
+import runtime_delivery
+
 GIT_TIMEOUT_SECONDS = 30
 SWEEP_TIMEOUT_SECONDS = 1800
 SCRIPT_NAME = "plugin_autoupdate.py"
@@ -716,33 +718,13 @@ def self_update(current: Path, codex_config: dict) -> bool:
     if not candidates:
         return False
     source = max(candidates, key=lambda root: (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).stat().st_mtime)
-    receipt = _receipt(target)
     try:
-        contents = _closure(source, receipt["exports"])
-        digest = _digest(contents)
-        target_contents = _closure(target, receipt["exports"])
-        if digest == receipt["sha256"] and _digest(target_contents) == receipt["sha256"]:
+        receipt = runtime_delivery.validate_receipt(json.loads((target / "source.json").read_text(encoding="utf-8")))
+        desired = runtime_delivery.native_receipt(receipt, source)
+        if desired == receipt and not runtime_delivery.check(target, target, receipt):
             return False
-        changed = False
-        for name, body in contents.items():
-            destination = _receipt_path(target, name)
-            if destination.is_file() and destination.read_bytes() == body:
-                continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            temporary = destination.with_name(destination.name + ".next")
-            temporary.write_bytes(body)
-            os.replace(temporary, destination)
-            changed = True
-        updated_receipt = {"repository": "tj-agents/agent", "revision": "native:" + digest,
-                           "exports": receipt["exports"], "sha256": digest}
-        source_receipt = (json.dumps(updated_receipt, indent=2) + "\n").encode("utf-8")
-        if (target / "source.json").read_bytes() != source_receipt:
-            temporary = target / "source.json.next"
-            temporary.write_bytes(source_receipt)
-            os.replace(temporary, target / "source.json")
-            changed = True
-        return changed
-    except (OSError, ValueError):
+        return not runtime_delivery.apply(target, source, desired)
+    except (OSError, ValueError, runtime_delivery.DeliveryError):
         return False
 
 
