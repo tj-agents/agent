@@ -27,6 +27,7 @@ from terminal_command import command_for_target, without_binding_state
 
 ACK_DIRECTORY_ENV = "TJ_AGENTS_STARTUP_ACK_DIRECTORY"
 ACK_TOKEN_ENV = "TJ_AGENTS_STARTUP_ACK_TOKEN"
+REQUIRED_HOOKS_ENV = "TJ_AGENTS_STARTUP_REQUIRED_HOOKS"
 STARTUP_TIMEOUT_SECONDS = 20
 
 
@@ -160,6 +161,23 @@ def _acknowledged(directory: Path, token: str) -> bool:
         return False
 
 
+def startup_participants(host: str, roots) -> list[str]:
+    participants = []
+    for identity, root in (roots or {}).items():
+        manifest = json.loads((root / f".{host}-plugin/plugin.json").read_text(encoding="utf-8-sig"))
+        sources = manifest.get("hooks", [])
+        if not isinstance(sources, list):
+            sources = [sources]
+        for source in sources:
+            document = json.loads((root / source).read_text(encoding="utf-8-sig")) if isinstance(source, str) else source
+            groups = document.get("hooks", document).get("SessionStart", [])
+            if any("hook_dispatch.py" in json.dumps(handler)
+                   for group in groups for handler in group.get("hooks", [])):
+                participants.append(identity)
+                break
+    return sorted(participants)
+
+
 def _terminate(process: subprocess.Popen) -> None:
     process.terminate()
     try:
@@ -175,6 +193,7 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                 on_running: Callable[..., None] | None = None,
                 on_unconfirmed: Callable[..., None] | None = None,
                 require_session_start: bool = False,
+                hook_project: Path | None = None,
                 on_phase: Callable[[str], None] | None = None,
                 terminal: Mapping[str, object] | None = None) -> int:
     phase = on_phase or (lambda _name: None)
@@ -182,12 +201,17 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
     environment = without_binding_state(os.environ)
     if extra_environment:
         environment.update(without_binding_state(extra_environment))
+    interpreter = launch_check.state_directory() / "bin" / "python"
+    if os.name != "nt" and interpreter.is_file():
+        environment["PATH"] = str(interpreter.parent) + os.pathsep + environment.get("PATH", "")
     with tempfile.TemporaryDirectory(prefix="tj-agents-launch-") as temporary:
         directory = Path(temporary)
         token = secrets.token_urlsafe(32)
         if require_session_start:
             environment[ACK_DIRECTORY_ENV] = str(directory)
             environment[ACK_TOKEN_ENV] = token
+            roots = required_plugins.check(hook_project or project, host, target)
+            environment[REQUIRED_HOOKS_ENV] = json.dumps(startup_participants(host, roots))
         phase("starting-native")
         try:
             command = command_for_target(target, list(arguments))
@@ -209,6 +233,9 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                 deadline = time.monotonic() + timeout
                 unconfirmed = False
                 while not _acknowledged(directory, token):
+                    failure = directory / (token + ".failed")
+                    if failure.is_file():
+                        raise StartupBindingError(failure.read_text(encoding="utf-8"))
                     if process.poll() is not None:
                         return process.returncode
                     if not unconfirmed and time.monotonic() >= deadline:
@@ -275,8 +302,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     phase("checking-plugins")
     try:
-        effective_project = required_plugins.check_launch(parsed.project.resolve(), parsed.host, parsed.target, arguments)
-    except required_plugins.RequiredPluginsError as error:
+        effective_project = launch_check.prepare_launch(parsed.project.resolve(), parsed.host, parsed.target, arguments)
+    except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
         message = f"launch: {error}"
         print(message, file=sys.stderr)
         report("failed", error=message)
@@ -310,7 +337,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         terminal = _prelaunch_terminal()
         if terminal is not None:
             status["terminal"] = terminal
-        options = {"require_session_start": True, "terminal": terminal} if parsed.require_session_start else {
+        options = {"require_session_start": True, "hook_project": effective_project, "terminal": terminal} if parsed.require_session_start else {
             "terminal": terminal,
         }
         if parsed.status_file is not None:
@@ -318,7 +345,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         returncode = run_session(parsed.host, parsed.target, parsed.project, arguments, **options,
                                  on_unconfirmed=lambda child_pid: report("unconfirmed", child_pid=child_pid),
                                  on_running=lambda child_pid=None: report("running", running_at=time.time(), child_pid=child_pid))
-    except StartupBindingError as error:
+    except (StartupBindingError, required_plugins.RequiredPluginsError, OSError, ValueError) as error:
         message = f"launch: {parsed.host} launch failed: {error}"
         print(message, file=sys.stderr)
         report("failed", error=message)
