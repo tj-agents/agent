@@ -358,9 +358,11 @@ class ProxyTests(unittest.TestCase):
         handler = Path(temp.name) / 'handler.py'
         handler.write_text(source, encoding='utf-8')
         script = Path(temp.name) / 'proxy.py'
+        pid_file = Path(temp.name) / 'handler.pid'
         script.write_text('''import base64, hashlib, json, struct, subprocess, sys, threading
 handler = subprocess.Popen([sys.executable, '-u', %r], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                            text=True, encoding='utf-8')
+open(%r, 'w').write(str(handler.pid))
 def exact(n):
     b = bytearray()
     while len(b) < n:
@@ -389,7 +391,22 @@ while True:
     mask=exact(4); payload=bytes(x^mask[i%%4] for i,x in enumerate(exact(n)))
     if (a&15)==8: break
     handler.stdin.write(payload.decode()+'\\n'); handler.stdin.flush()
-''' % str(handler), encoding='utf-8')
+''' % (str(handler), str(pid_file)), encoding='utf-8')
+
+        def stop_handler():
+            try:
+                pid = int(pid_file.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                return
+            if os.name == 'nt':
+                subprocess.run(['taskkill.exe', '/PID', str(pid), '/T', '/F'], capture_output=True, check=False)
+            else:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+        self.addCleanup(stop_handler)
         original = subprocess.Popen
         calls = []
 
@@ -399,6 +416,21 @@ while True:
 
         with patch.object(FOLLOWUP.subprocess, 'Popen', side_effect=launch):
             proxy = FOLLOWUP.Proxy('codex-native', temp.name, time.monotonic() + timeout)
+
+        def stop_proxy():
+            process = proxy.process
+            if process.poll() is None:
+                if os.name == 'nt':
+                    subprocess.run(['taskkill.exe', '/PID', str(process.pid), '/T', '/F'], capture_output=True, check=False)
+                else:
+                    process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=3)
+
+        self.addCleanup(stop_proxy)
         self.addCleanup(proxy.close)
         self.assertEqual(['codex-native', 'app-server', 'proxy'], calls[0][0])
         self.assertEqual(temp.name, calls[0][1]['CODEX_HOME'])
