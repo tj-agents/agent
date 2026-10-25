@@ -88,6 +88,19 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
             self.assertFalse(self.runtime.self_update(current, {}))
         self.assertEqual(original, (target / "source.json").read_bytes())
 
+    def test_matching_native_payload_repairs_modified_and_deleted_owned_files(self):
+        target = self.receipt_root("core", b"same runtime", b"same resource")
+        source = self.native_root("native", b"same runtime", b"same resource")
+        current = target / ".agents/agent/runtime/plugin_autoupdate.py"
+        resource = target / ".agents/agent/resources/utility-peer.txt"
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[source]):
+            current.write_bytes(b"modified")
+            self.assertTrue(self.runtime.self_update(current, {}))
+            self.assertEqual(b"same runtime", current.read_bytes())
+            resource.unlink()
+            self.assertTrue(self.runtime.self_update(current, {}))
+        self.assertEqual(b"same resource", resource.read_bytes())
+
     def test_exact_enabled_identity_not_manifest_claim_selects_native_source(self):
         source = self.native_root("source", b"runtime", b"resource")
         claude = self.root / "claude"

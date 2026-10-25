@@ -78,14 +78,16 @@ def wait_for_exit(args, exited=session_close.verified_exited, clock=time.monoton
         if hashlib.sha256(raw).hexdigest() != close.get("request_sha256"):
             settle(args, "cancelled", reason="the exact close request changed")
             return False
-        if outcome:
-            if outcome.get("status") != "closed" or outcome.get("session_id") != args.session_id:
-                settle(args, "cancelled", reason="the exact close was cancelled or refused")
-                return False
-            if not exited(args.pid, args.pid_started_at):
-                sleep(POLL_SECONDS)
-                continue
-            return True
+        if not outcome:
+            sleep(POLL_SECONDS)
+            continue
+        if outcome.get("status") != "closed" or outcome.get("session_id") != args.session_id:
+            settle(args, "cancelled", reason="the exact close was cancelled or refused")
+            return False
+        if not exited(args.pid, args.pid_started_at):
+            sleep(POLL_SECONDS)
+            continue
+        return True
     settle(args, "expired")
     return False
 

@@ -765,7 +765,7 @@ def self_update(current: Path, codex_config: dict) -> bool:
         if receipt.get("pending"):
             raise delivery.DeliveryError("managed runtime delivery is incomplete")
         desired = delivery.native_receipt(receipt, source)
-        if desired == receipt and not delivery.check(target, target, receipt):
+        if desired == receipt and not delivery.check(target, source, receipt):
             return False
         errors = delivery.apply(target, source, desired)
         if errors:

@@ -94,6 +94,23 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
                                                    clock=lambda: 0, sleep=lambda _: None))
         self.assertEqual([(17, 3.0)], calls)
 
+    def test_watcher_sleeps_while_the_exact_close_is_still_pending(self):
+        request = self.root / "request.json"
+        raw = b'{"exact": true}'
+        request.write_bytes(raw)
+        record = self.root / "record.json"
+        import hashlib
+        record.write_text(json.dumps({"state": "waiting", "token": "token", "close": {
+            "request": str(request), "request_sha256": hashlib.sha256(raw).hexdigest(),
+            "result": str(self.root / "not-yet.json"),
+        }}), encoding="utf-8")
+        args = self.args(record)
+        args.timeout = 0.1
+        ticks = iter((0.0, 0.0, 1.0))
+        sleeps = []
+        self.assertFalse(self.watcher.wait_for_exit(args, clock=lambda: next(ticks), sleep=sleeps.append))
+        self.assertEqual([self.watcher.POLL_SECONDS], sleeps)
+
     def test_existing_waiting_generation_is_refused_without_overwrite(self):
         record = self.root / "record.json"
         original = {"state": "waiting", "token": "first"}
@@ -173,6 +190,23 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         with mock.patch.object(self.relaunch.required_plugins, "check", side_effect=AssertionError("selection filter used")), \
                 mock.patch.object(self.relaunch.required_plugins, "inventory_roots", return_value={"cli@tj-agents": cli}):
             self.assertEqual(process_identity, self.relaunch.cli_close_capability(self.root, "codex", "codex"))
+
+    def test_claude_tool_restrictions_and_aliases_survive_recovery(self):
+        self.assertEqual([
+            "--tools", "Read", "--disallowedTools", "Bash,Write", "--allowed-tools=Read,Edit",
+            "--restricted", "--dangerously-skip-permissions",
+        ], self.relaunch.preserved_arguments([
+            "initial prompt", "--tools", "Read", "--disallowedTools", "Bash,Write",
+            "--allowed-tools=Read,Edit", "--restricted", "--dangerously-skip-permissions",
+        ]))
+        entry = {"host": "claude", "session_id": "thread", "pid": 17, "pid_started_at": 3.0,
+                 "profile": str(self.root / "profile"), "title": "Claude"}
+        shared = mock.Mock()
+        shared.own_host_and_entry.return_value = entry
+        with self.assertRaisesRegex(RuntimeError, "tool restrictions"):
+            self.relaunch.relaunch(self.root, {}, shared=shared, host="claude", arguments=lambda _: ["--tools"])
+        shared.start_detached.assert_not_called()
+        self.assertFalse(self.relaunch.record_path("thread").exists())
 
     def run_refresh(self, failure=None, extra=(), setup_errors=()):
         output = io.StringIO()
