@@ -55,7 +55,7 @@ class CloseLifecycleTests(unittest.TestCase):
         _completion, cancel = self.arm()
         self.assertEqual(0, LIFECYCLE.run("prompt", "codex", {"session_id": "session", "turn_id": "next-turn"}))
         self.assertEqual({"cancelled": True, "reason": "new prompt"}, json.loads(cancel.read_text(encoding="utf-8")))
-        self.assertFalse(LIFECYCLE._state_path("session").exists())
+        self.assertTrue(LIFECYCLE._state_path("session").exists())
 
     def test_stale_stop_cannot_close_a_later_turn(self):
         completion, _cancel = self.arm("later")
@@ -66,7 +66,7 @@ class CloseLifecycleTests(unittest.TestCase):
         self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
         self.assertTrue(LIFECYCLE._state_path("session").exists())
         self.assertEqual(0, LIFECYCLE.run("prompt", "codex", {"session_id": "session", "turn_id": "next"}))
-        self.assertFalse(LIFECYCLE._state_path("session").exists())
+        self.assertTrue(LIFECYCLE._state_path("session").exists())
 
     def test_claude_stop_requires_terminal_assistant_after_bound_user(self):
         transcript = self.state / "session.jsonl"

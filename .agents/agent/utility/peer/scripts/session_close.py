@@ -100,10 +100,10 @@ def process_identity_runtime(cli_root):
     return module
 
 
-def current_codex_client(session_id, nearest):
+def current_codex_client(session_id, nearest, *, project=None):
     client = client_runtime()
     info, record = client.recorded_client(session_id, nearest, process_info,
-                                          register_session.process_table())
+                                          register_session.process_table(), project=project)
     return info, {
         "client_identity": "managed-input", "launch_cwd": record["launch_cwd"],
         "title": record.get("title"), "client_message_id": record["client_message_id"],
@@ -113,26 +113,63 @@ def current_codex_client(session_id, nearest):
     }
 
 
+CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile", "backend",
+                         "recording_path", "client_message_id", "client_identity", "launch_cwd")
+
+
+def revalidate_codex_client(entry):
+    backend = entry.get("backend")
+    nearest = process_info(backend["pid"] if isinstance(backend, dict) else entry["pid"])
+    if nearest is None or entry.get("client_identity") != "managed-input":
+        raise Refusal("the frozen native client binding is unavailable")
+    info, details = current_codex_client(entry["session_id"], nearest, project=entry.get("cwd"))
+    current = {**details, "host": "codex", "session_id": entry["session_id"],
+               "pid": info.pid, "pid_started_at": info.started_at}
+    if any(current.get(key) != entry.get(key) for key in CLIENT_BINDING_FIELDS):
+        raise Refusal("the native input or frontend binding changed before close")
+
+
+def verify_claude_receipt(entry):
+    provenance = entry.get("provenance")
+    if (entry.get("host") != "claude" or not isinstance(provenance, dict)
+            or provenance.get("source") != "agent-startup-binding"
+            or not isinstance(provenance.get("receipt"), str)):
+        raise Refusal("record is not the verified Claude startup binding")
+    path = Path(provenance["receipt"]).resolve()
+    if (state_directory() / "recovery-launches").resolve() not in path.parents:
+        raise Refusal("startup binding receipt is outside private runtime state")
+    receipt = read_json(path) or {}
+    wrapper = receipt.get("wrapper")
+    frontend = {"pid": entry.get("pid"), "started_at": entry.get("pid_started_at")}
+    if not (receipt.get("session") == entry.get("session_id")
+            and receipt.get("profile") == entry.get("profile") and receipt.get("state") == "launched"
+            and isinstance(wrapper, dict) and wrapper.get("child") == frontend
+            and entry.get("frontend") == frontend and wrapper.get("terminal") == entry.get("terminal")):
+        raise Refusal("startup binding receipt does not prove this Claude frontend")
+
+
 def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
     info = process_info(entry.get("pid"))
     if (info is None or register_session.stem(info.name) != entry.get("host")
             or not verified_live(entry["pid"], entry["pid_started_at"])):
         raise Refusal("CLI client identity is no longer live")
-    client = client_runtime()
-    arguments = client.process_arguments(entry["pid"])
-    if not arguments or client.command_name(arguments[1:]) in client.OTHER_COMMANDS:
-        raise Refusal("the registered Codex process is a backend or maintenance process, not a CLI client")
-
     def guard():
-        if entry.get("client_identity") == "managed-input":
+        if entry.get("host") == "codex":
+            revalidate_codex_client(entry)
+            client = client_runtime()
             context = client.process_context(entry["pid"])
             if (context.get(client.RECORD_PATH_ENV) != entry.get("recording_path")
+                    or context.get(client.RECORD_ENV) not in ("1", "true", "TRUE", "yes", "YES")
                     or Path(context["profile"]) != Path(entry.get("profile"))
                     or (entry.get("backend") is not None and client.daemon_identity(
                         {"CODEX_HOME": entry["profile"]}, expected_pid=entry["backend"]["pid"],
                     ) != entry["backend"])
                     or client.latest_input(entry["recording_path"]) != entry.get("client_message_id")):
                 raise Refusal("the frontend input or backend binding changed before close")
+        elif entry.get("host") == "claude":
+            verify_claude_receipt(entry)
+        else:
+            raise Refusal("unsupported native host")
         before_signal()
 
     try:
@@ -181,7 +218,7 @@ def _reopen_own_end(entry, reason):
     _update_own_end(entry, "reopen_session", reason)
 
 
-def awaiting_input_activity(entry, expected_activity=None):
+def session_activity(entry):
     if not valid_entry(entry) or not verified_live(entry["pid"], entry["pid_started_at"]):
         raise Refusal("registered host identity is not live")
     try:
@@ -209,11 +246,24 @@ def awaiting_input_activity(entry, expected_activity=None):
         raise Refusal("session turn state does not match this attachment")
     if row.get("ended_at") is not None:
         raise Refusal("session is already ended")
-    if row.get("turn_state") != "awaiting_input":
-        raise Refusal("session is not awaiting input")
     activity = row.get("last_activity_at")
     if not finite_positive(activity):
         raise Refusal("session activity state is invalid")
+    return row
+
+
+def active_turn_activity(entry):
+    row = session_activity(entry)
+    if row.get("turn_state") != "working":
+        raise Refusal("session has no active turn to close after")
+    return row["last_activity_at"]
+
+
+def awaiting_input_activity(entry, expected_activity=None):
+    row = session_activity(entry)
+    if row.get("turn_state") != "awaiting_input":
+        raise Refusal("session is not awaiting input")
+    activity = row["last_activity_at"]
     if expected_activity is not None and activity != expected_activity:
         raise Refusal("session activity changed before close")
     return activity

@@ -1,28 +1,68 @@
-"""Wait for one Agent close request then stop its frozen frontend (Python 3.9+)."""
+"""Settle one completed Agent turn, then authorize its exact frontend close."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
+import re
 import time
 
 import session_close
 
 
-def _read(path):
-    return session_close.read_json(path)
+class Cancelled(session_close.Refusal):
+    pass
 
 
-def _write(path, value):
-    session_close.write_json(path, value)
+def canonical_path(request):
+    session = request.get("session_id")
+    if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session):
+        raise session_close.Refusal("invalid close session identity")
+    return session_close.state_directory() / "close-lifecycle" / (session + ".json")
 
 
-def _cancelled(path):
-    return _read(path) is not None
+def load_request(path, digest):
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != digest:
+        raise session_close.Refusal("the frozen close request changed")
+    request = json.loads(raw)
+    if (not isinstance(request, dict) or request.get("mode") != "close"
+            or not isinstance(request.get("entry"), dict)
+            or not isinstance(request.get("completion_token"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request["completion_token"])):
+        raise session_close.Refusal("invalid close request")
+    expected = session_close.state_directory() / "client-close" / (request["completion_token"] + ".json")
+    if path.resolve() != expected.resolve():
+        raise session_close.Refusal("close request is outside canonical state")
+    return request
 
 
-def _complete(path, token):
-    value = _read(path)
-    return isinstance(value, dict) and value.get("token") == token
+def require_current(request, path, digest):
+    if load_request(path, digest) != request or session_close.read_json(canonical_path(request)) != request:
+        raise Cancelled("close request generation changed")
+    if Path(request["cancel"]).exists():
+        raise Cancelled("close request was cancelled")
+
+
+def complete(request):
+    value = session_close.read_json(request["completion"])
+    return isinstance(value, dict) and value.get("token") == request["completion_token"]
+
+
+def final_local_guard(request, path, digest, activity):
+    require_current(request, path, digest)
+    if not complete(request):
+        raise Cancelled("completion changed before close")
+    entry = request["entry"]
+    current = session_close.read_json(request["registry"])
+    fields = (*session_close.CLIENT_BINDING_FIELDS, "cwd", "frontend", "provenance", "terminal")
+    if not isinstance(current, dict) or any(current.get(key) != entry.get(key) for key in fields):
+        raise Cancelled("session registration changed before close")
+    if request["host"] == "claude":
+        lifecycle = session_close._load_runtime("close_lifecycle.py", "agent_close_lifecycle")
+        if not lifecycle._claude_finished(request, {"transcript_path": request["transcript"]}):
+            raise Cancelled("Claude input or final response changed before close")
+    session_close.awaiting_input_activity(entry, activity)
 
 
 def _record_end(entry):
@@ -36,47 +76,57 @@ def _record_end(entry):
         connection.close()
 
 
-def wait(entry, completion, cancel, token, result, timeout, cli_root):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if _cancelled(cancel):
-            _write(result, {"status": "cancelled"})
-            return 0
-        if _complete(completion, token):
-            def guard():
-                if _cancelled(cancel) or not _complete(completion, token):
-                    raise session_close.Refusal("close request was cancelled before the frontend signal")
-                session_close.awaiting_input_activity(entry, entry["expected_activity"])
+def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, sleep=time.sleep):
+    deadline = clock() + timeout
+    stopped = since = None
+    try:
+        while clock() < deadline:
+            require_current(request, path, digest)
+            row = session_close.session_activity(request["entry"])
+            if complete(request):
+                if row["turn_state"] != "awaiting_input" or row["last_activity_at"] <= request["armed_at"]:
+                    raise Cancelled("completed turn is no longer awaiting input")
+                if stopped is None:
+                    stopped, since = row["last_activity_at"], clock()
+                elif row["last_activity_at"] != stopped:
+                    raise Cancelled("a later turn replaced the completed turn")
+                if clock() - since >= idle:
+                    def guard():
+                        final_local_guard(request, path, digest, stopped)
 
-            try:
-                session_close.stop_cli_client(entry, guard, cli_root)
-                _record_end(entry)
-            except session_close.Refusal as error:
-                _write(result, {"status": "refused", "reason": str(error)})
-                return 2
-            _write(result, {"status": "closed", "session_id": entry["session_id"]})
-            return 0
-        time.sleep(0.05)
-    _write(result, {"status": "timeout"})
-    return 2
+                    session_close.stop_cli_client(request["entry"], guard, request["cli_root"])
+                    _record_end(request["entry"])
+                    status, reason = "closed", None
+                    break
+            elif row["last_activity_at"] != request["working_activity"]:
+                # Store's Stop runs before the completion hook. Only this transient idle row may wait.
+                if row["turn_state"] != "awaiting_input":
+                    raise Cancelled("the armed working turn changed")
+            sleep(0.05)
+        else:
+            status, reason = "timeout", "the armed turn did not settle before timeout"
+    except Cancelled as error:
+        status, reason = "cancelled", str(error)
+    except (OSError, ValueError, RuntimeError) as error:
+        status, reason = "refused", str(error)
+    session_close.write_json(request["result"], {"status": status, "reason": reason,
+                              "session_id": request["session_id"], "at": time.time()})
+    state = canonical_path(request)
+    if session_close.read_json(state) == request:
+        state.unlink(missing_ok=True)
+    return 0 if status in ("closed", "cancelled") else 2
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request", type=Path, required=True)
-    parser.add_argument("--completion", type=Path, required=True)
-    parser.add_argument("--cancel", type=Path, required=True)
-    parser.add_argument("--result", type=Path, required=True)
-    parser.add_argument("--timeout", type=float, default=600.0)
+    parser.add_argument("--request-sha256", required=True)
     args = parser.parse_args(argv)
-    request = _read(args.request)
-    if not isinstance(request, dict):
+    try:
+        request = load_request(args.request, args.request_sha256)
+        return wait(request, args.request, args.request_sha256)
+    except (OSError, ValueError, RuntimeError):
         return 2
-    entry, token, cli_root = request.get("entry"), request.get("completion_token"), request.get("cli_root")
-    if not isinstance(entry, dict) or not isinstance(token, str) or not token or not isinstance(cli_root, str):
-        return 2
-    timeout = args.timeout if session_close.finite_positive(args.timeout) else 600.0
-    return wait(entry, args.completion, args.cancel, token, args.result, timeout, cli_root)
 
 
 if __name__ == "__main__":

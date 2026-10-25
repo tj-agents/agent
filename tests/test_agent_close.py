@@ -1,75 +1,109 @@
-import importlib.util
+"""Preparation and arming use fresh native proof and leave no failed arm."""
+
 import json
-import os
 from pathlib import Path
-import tempfile
 import unittest
 from unittest import mock
 
-
-ROOT = Path(__file__).resolve().parents[1]
-CLI_CLOSE = ROOT.parent / "cli/.worktrees/Feature-CliOperations/.agents/cli/utility/close/scripts/close_session.py"
-PATH = ROOT / ".agents" / "agent" / "utility" / "close" / "scripts" / "agent_close.py"
-spec = importlib.util.spec_from_file_location("agent_close", PATH)
-CLOSE = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(CLOSE)
+from close_fixtures import CLOSE, CloseFixture, session_close
 
 
-class AgentCloseTests(unittest.TestCase):
+class AgentCloseTests(CloseFixture, unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        environment = mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(self.root)})
-        environment.start()
-        self.addCleanup(environment.stop)
+        self.setup_close()
 
-    def test_prepare_requires_an_attributable_frontend_record(self):
-        record = self.root / "record.json"
-        target = self.root / "target.json"
-        receipt = self.root / "recovery-launches" / "receipt.json"
-        receipt.parent.mkdir()
-        frontend = {"pid": 12, "started_at": 4.0}
-        record.write_text(json.dumps({"session_id": "one", "profile": "profile", "host": "codex",
-            "client_identity": "managed-input", "pid": frontend["pid"], "pid_started_at": frontend["started_at"]}), encoding="utf-8")
-        self.assertEqual(0, CLOSE.main(["prepare", "--session-id", "one", "--profile", "profile", "--record", str(record), "--target", str(target)]))
-        self.assertEqual({"schema_version": 1, "frontend": {"pid": 12, "started_at": 4.0}},
-            json.loads(target.read_text(encoding="utf-8")))
-        record.write_text(json.dumps({"pid": 12, "pid_started_at": 4.0}), encoding="utf-8")
-        self.assertEqual(2, CLOSE.main(["prepare", "--session-id", "one", "--profile", "profile", "--record", str(record), "--target", str(target)]))
+    def test_new_codex_registration_is_attributed_before_active_turn_arm(self):
+        before = self.row()
+        self.assertNotIn("client_identity", json.loads(self.registry.read_text(encoding="utf-8")))
+        self.arm()
+        self.assertEqual("managed-input", self.request["entry"]["client_identity"])
+        self.assertEqual(20, self.row()["pid"])
+        self.assertEqual(before["last_activity_at"], self.row()["last_activity_at"])
+        self.assertEqual("working", self.row()["turn_state"])
+        self.assertEqual(self.row()["last_activity_at"], self.request["working_activity"])
+        self.assertEqual("close", self.request["mode"])
+        self.assertEqual(2, CLOSE.main(self.arm_args()))
+        self.spawn.assert_called_once()
 
-    def test_arm_starts_one_agent_watcher_with_a_frozen_frontend(self):
-        target = self.root / "target.json"
-        record = self.root / "record.json"
-        target.write_text(json.dumps({"schema_version": 1, "frontend": {"pid": 12, "started_at": 4.0}}), encoding="utf-8")
-        record.write_text(json.dumps({"session_id": "one", "profile": "profile", "host": "codex",
-            "client_identity": "managed-input", "pid": 12, "pid_started_at": 4.0,
-            "recording_path": "events", "client_message_id": "input", "backend": None}), encoding="utf-8")
-        shared = mock.Mock()
-        shared.__file__ = str(ROOT / ".agents/agent/utility/peer/scripts/session_close.py")
-        shared.awaiting_input_activity.return_value = 7.0
-        shared.start_agent_watcher.return_value = 99
-        arguments = ["arm", "--host", "codex", "--session-id", "one", "--turn-id", "turn", "--profile", "profile", "--record", str(record), "--target", str(target),
-                     "--cli-close", str(CLI_CLOSE), "--completion", str(self.root / "complete.json"), "--cancel", str(self.root / "cancel.json"), "--completion-token", "token"]
-        with mock.patch.object(CLOSE, "_session_close", return_value=shared):
-            self.assertEqual(0, CLOSE.main(arguments))
-            self.assertEqual(2, CLOSE.main(arguments))
-        request = json.loads((self.root / "client-close" / "token.json").read_text(encoding="utf-8"))
-        self.assertEqual(7.0, request["entry"]["expected_activity"])
-        self.assertEqual(str(CLI_CLOSE.parents[5]), request["cli_root"])
-        self.assertEqual(["--request", str(self.root / "client-close" / "token.json"), "--completion", str(self.root / "complete.json"), "--cancel", str(self.root / "cancel.json"), "--result", str(self.root / "client-close" / "token.result.json")],
-                         shared.start_agent_watcher.call_args.args[1])
-        shared.start_agent_watcher.assert_called_once()
+    def test_missing_or_unsupported_cli_leaves_no_arm_and_corrected_retry_succeeds(self):
+        self.assertEqual(0, self.prepare())
+        original = self.capability
+        self.capability = self.root / "missing.py"
+        self.assertEqual(2, CLOSE.main(self.arm_args()))
+        self.assertFalse((self.root / "close-lifecycle/one.json").exists())
+        self.capability = original
+        primitive = original.with_name("process_identity.py")
+        source = primitive.read_text(encoding="utf-8")
+        primitive.write_text("# unsupported capability\n", encoding="utf-8")
+        self.assertEqual(2, CLOSE.main(self.arm_args()))
+        self.assertFalse((self.root / "close-lifecycle/one.json").exists())
+        primitive.write_text(source, encoding="utf-8")
+        self.assertEqual(0, CLOSE.main(self.arm_args()))
 
-    def test_prepare_rejects_non_finite_process_identity(self):
-        record = self.root / "record.json"
-        target = self.root / "target.json"
-        receipt = self.root / "recovery-launches" / "receipt.json"
-        receipt.parent.mkdir()
-        frontend = {"pid": 12, "started_at": float("inf")}
-        record.write_text(json.dumps({"session_id": "one", "profile": "profile", "client_identity": "managed-input",
-            "pid": frontend["pid"], "pid_started_at": frontend["started_at"]}), encoding="utf-8")
-        self.assertEqual(2, CLOSE.main(["prepare", "--session-id", "one", "--profile", "profile", "--record", str(record), "--target", str(target)]))
+    def test_spawn_failure_cleans_publication_and_preserves_original_explicit_arm(self):
+        self.assertEqual(0, self.prepare())
+        self.spawn.side_effect = RuntimeError("spawn failed")
+        self.assertEqual(2, CLOSE.main(self.arm_args()))
+        self.assertFalse((self.root / "close-lifecycle/one.json").exists())
+        self.assertFalse((self.root / "client-close/token.json").exists())
+        self.spawn.side_effect = None
+        self.assertEqual(0, CLOSE.main(self.arm_args()))
+        canonical = self.root / "close-lifecycle/one.json"
+        original = canonical.read_bytes()
+        self.assertEqual(2, CLOSE.main(self.arm_args("new-token")))
+        self.assertEqual(original, canonical.read_bytes())
+
+    def test_input_change_between_prepare_and_arm_never_retargets(self):
+        self.assertEqual(0, self.prepare())
+        self.native_input = "other-input"
+        self.assertEqual(2, CLOSE.main(self.arm_args()))
+        self.spawn.assert_not_called()
+
+    def test_failed_canonical_publication_removes_request_and_allows_retry(self):
+        self.assertEqual(0, self.prepare())
+        canonical = self.root / "close-lifecycle/one.json"
+        original_open = Path.open
+        def fail_state(path, mode="r", *args, **kwargs):
+            if path == canonical and mode == "xb":
+                raise OSError("publication failed")
+            return original_open(path, mode, *args, **kwargs)
+        with mock.patch.object(Path, "open", fail_state):
+            self.assertEqual(2, CLOSE.main(self.arm_args()))
+        self.assertFalse(canonical.exists())
+        self.assertFalse((self.root / "client-close/token.json").exists())
+        self.assertEqual(0, CLOSE.main(self.arm_args()))
+
+    def test_token_paths_and_nested_capability_boundary_refuse(self):
+        self.assertEqual(0, self.prepare())
+        for token in ("../escape", "..", "a/b", "a\\b", "bad:stream"):
+            with self.subTest(token=token):
+                self.assertEqual(2, CLOSE.main(self.arm_args(token)))
+        nested = self.cli / "nested"
+        (nested / ".git").mkdir(parents=True)
+        self.capability = nested / "close.py"
+        self.capability.touch()
+        self.assertEqual(2, CLOSE.main(self.arm_args()))
+        self.spawn.assert_not_called()
+
+
+class ClaudePreparationTests(CloseFixture, unittest.TestCase):
+    def setUp(self):
+        self.setup_close("claude")
+
+    def test_verified_startup_receipt_and_bound_user_prepare_and_arm(self):
+        self.arm()
+        self.assertEqual("user-one", self.request["claude_user_uuid"])
+        self.assertNotIn("client_identity", self.request["entry"])
+        self.server.request.assert_not_called()
+
+    def test_changed_receipt_or_new_user_refuses(self):
+        self.assertEqual(0, self.prepare())
+        self.append({"type": "user", "uuid": "later", "message": {"content": "continue"}})
+        self.assertEqual(2, CLOSE.main(self.arm_args()))
+        entry = json.loads(self.registry.read_text(encoding="utf-8"))
+        Path(entry["provenance"]["receipt"]).unlink()
+        self.assertEqual(2, self.prepare())
+        self.spawn.assert_not_called()
 
 
 if __name__ == "__main__":

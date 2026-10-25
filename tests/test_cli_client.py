@@ -128,11 +128,12 @@ class ClientAttributionTests(unittest.TestCase):
 
         with mock.patch.object(session_close, "process_info", return_value=SimpleNamespace(name="codex.exe")), \
                 mock.patch.object(session_close, "verified_live", return_value=True), \
+                mock.patch.object(session_close, "revalidate_codex_client"), \
                 mock.patch.object(session_close, "client_runtime", return_value=CLIENT), \
                 mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive), \
                 mock.patch.object(CLIENT, "process_arguments", return_value=["codex"]), \
                 mock.patch.object(CLIENT, "process_context", return_value={
-                    "profile": str(self.profile), CLIENT.RECORD_PATH_ENV: "events.jsonl",
+                    "profile": str(self.profile), CLIENT.RECORD_ENV: "1", CLIENT.RECORD_PATH_ENV: "events.jsonl",
                 }), \
                 mock.patch.object(CLIENT, "daemon_identity", return_value=self.backend), \
                 mock.patch.object(CLIENT, "latest_input", return_value="new-input"):
