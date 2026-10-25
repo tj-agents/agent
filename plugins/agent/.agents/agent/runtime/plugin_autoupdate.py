@@ -654,11 +654,13 @@ def _receipt(root: Path) -> dict | None:
     except (OSError, ValueError):
         return None
     exports, digest, revision = (value.get(name) for name in ("exports", "sha256", "revision")) if isinstance(value, dict) else (None, None, None)
-    if (not isinstance(value, dict) or value.get("repository") != "tj-agents/agent"
-            or not isinstance(exports, list) or not exports or len(exports) != len(set(exports))
+    files = value.get("files") if isinstance(value, dict) else None
+    if (not isinstance(value, dict) or value.get("repository") != "tj-agents/agent" or value.get("pending") is not None
+            or not isinstance(exports, list) or not exports
             or not all(isinstance(item, str) and item.startswith(".agents/") for item in exports)
+            or len(exports) != len(set(exports))
             or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
-            or not isinstance(revision, str) or not revision):
+            or not isinstance(revision, str) or not revision or not isinstance(files, dict) or not files):
         return None
     return value
 
@@ -699,8 +701,11 @@ def _digest(contents: dict[str, bytes]) -> str:
 
 def _receipt_root(current: Path) -> Path | None:
     for root in (current.parent, *current.parents):
-        if current.resolve() == (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).resolve() and _receipt(root):
-            return root
+        if current.resolve() == (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).resolve():
+            if _receipt(root):
+                return root
+            if (root / "source.json").exists():
+                raise RuntimeError("managed Agent runtime receipt is incomplete or malformed")
     return None
 
 
@@ -712,9 +717,38 @@ def _native_agent_source(root: Path) -> bool:
     return False
 
 
+def native_agent_roots(codex_config: dict) -> list[Path]:
+    """Resolve only the native inventory entry enabled as agent@tj-agents.
+
+    A package manifest is producer metadata, not proof that the host enabled
+    this identity. Do not reuse the prefix-based generic discovery here.
+    """
+    identity, roots = "agent@tj-agents", []
+    claude = claude_home()
+    settings = read_json(claude / "settings.json").get("enabledPlugins")
+    installed = read_json(claude / "plugins" / "installed_plugins.json").get("plugins")
+    if isinstance(settings, dict) and settings.get(identity) is True and isinstance(installed, dict):
+        entries = installed.get(identity)
+        if isinstance(entries, list):
+            roots.extend(Path(entry["installPath"]) for entry in entries
+                         if isinstance(entry, dict) and isinstance(entry.get("installPath"), str))
+    plugins = codex_config.get("plugins")
+    if isinstance(plugins, dict) and isinstance(plugins.get(identity), dict) and plugins[identity].get("enabled") is True:
+        roots.append(codex_home() / "plugins" / "cache" / "tj-agents" / "agent" / "local")
+    result, seen = [], set()
+    for root in roots:
+        try:
+            key = str(root.resolve()).casefold()
+        except OSError:
+            continue
+        if key not in seen and _native_agent_source(root):
+            seen.add(key)
+            result.append(root)
+    return result
+
+
 def packaged_copies(codex_config: dict) -> list[Path]:
-    return [root for root in installed_plugin_roots("agent", claude_home(), codex_config)
-            if _native_agent_source(root)]
+    return [root for root in native_agent_roots(codex_config) if _native_agent_source(root)]
 
 
 def self_update(current: Path, codex_config: dict) -> bool:
@@ -725,15 +759,20 @@ def self_update(current: Path, codex_config: dict) -> bool:
     if not candidates:
         return False
     source = max(candidates, key=lambda root: (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).stat().st_mtime)
+    delivery = delivery_runtime()
     try:
-        delivery = delivery_runtime()
         receipt = delivery.validate_receipt(json.loads((target / "source.json").read_text(encoding="utf-8")))
+        if receipt.get("pending"):
+            raise delivery.DeliveryError("managed runtime delivery is incomplete")
         desired = delivery.native_receipt(receipt, source)
         if desired == receipt and not delivery.check(target, target, receipt):
             return False
-        return not delivery.apply(target, source, desired)
-    except (OSError, ValueError, DeliveryError):
-        return False
+        errors = delivery.apply(target, source, desired)
+        if errors:
+            raise delivery.DeliveryError("; ".join(errors))
+        return True
+    except (OSError, ValueError, delivery.DeliveryError) as error:
+        raise RuntimeError(f"managed Agent runtime self-update failed: {error}") from error
 
 
 def acquire_lock(path: Path):
@@ -788,12 +827,17 @@ def main(argv: list[str] | None = None) -> int:
         sweep = "skipped" if arguments.no_sweep else sweep_worktrees(config)
         write_json(state_file, {"revisions": recorded, "project_only": outcomes.get("project_only", previous),
                                 "last_run": time.time(), "outcomes": outcomes, "worktree_sweep": sweep})
+        update_error = None
         if not arguments.no_self_update:
-            self_update(Path(__file__), load_codex_config())
+            try:
+                self_update(Path(__file__), load_codex_config())
+            except RuntimeError as error:
+                update_error = str(error)
+                print(update_error, file=sys.stderr)
     finally:
         lock.close()
     results = outcomes.get("marketplaces", {})
-    return int(any(str(value).startswith(("failed", "unreachable")) for value in results.values()))
+    return int(bool(update_error) or any(str(value).startswith(("failed", "unreachable")) for value in results.values()))
 
 
 if __name__ == "__main__":

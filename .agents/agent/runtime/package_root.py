@@ -18,10 +18,13 @@ def _staged_agent_source(root: Path) -> bool:
         return False
     if not isinstance(receipt, dict) or receipt.get("repository") != "tj-agents/agent":
         return False
-    revision, digest, exports = receipt.get("revision"), receipt.get("sha256"), receipt.get("exports")
+    revision, digest, exports, files = (receipt.get("revision"), receipt.get("sha256"), receipt.get("exports"),
+                                        receipt.get("files"))
     return (isinstance(revision, str) and bool(revision)
             and isinstance(digest, str) and bool(_SHA256.fullmatch(digest))
-            and isinstance(exports, (list, dict)) and bool(exports))
+            and isinstance(exports, list) and bool(exports) and "pending" not in receipt
+            and all(isinstance(item, str) and item.startswith(".agents/") for item in exports)
+            and isinstance(files, dict) and bool(files))
 
 
 def is_package_root(root: Path) -> bool:

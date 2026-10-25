@@ -207,7 +207,7 @@ def recovery_script(project: Path, installed: dict) -> Path:
 
 
 def cli_close_capability(project: Path, host: str, executable: str) -> Path:
-    root = (required_plugins.check(project, host, executable) or {}).get("cli@tj-agents")
+    root = required_plugins.inventory_roots(project, host, executable).get("cli@tj-agents")
     if root is None:
         raise RuntimeError("Automatic refresh requires enabled cli@tj-agents with its close capability")
     script = root / ".agents" / "cli" / "utility" / "close" / "scripts" / "process_identity.py"

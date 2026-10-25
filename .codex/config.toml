@@ -16,6 +16,9 @@ enabled = true
 [plugins."base@tj-agents"]
 enabled = true
 
+[plugins."cli@tj-agents"]
+enabled = true
+
 [plugins."engineering@tj-agents"]
 enabled = true
 

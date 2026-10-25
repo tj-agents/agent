@@ -165,6 +165,15 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         self.assertEqual("claude", arm.call_args.args[-1])
         self.assertEqual(close, self.relaunch.read_json(self.relaunch.record_path("thread"))["close"])
 
+    def test_cli_close_uses_enabled_native_inventory_not_repository_selection(self):
+        cli = self.root / "cli"
+        process_identity = cli / ".agents/cli/utility/close/scripts/process_identity.py"
+        process_identity.parent.mkdir(parents=True)
+        process_identity.write_text("# capability\n", encoding="utf-8")
+        with mock.patch.object(self.relaunch.required_plugins, "check", side_effect=AssertionError("selection filter used")), \
+                mock.patch.object(self.relaunch.required_plugins, "inventory_roots", return_value={"cli@tj-agents": cli}):
+            self.assertEqual(process_identity, self.relaunch.cli_close_capability(self.root, "codex", "codex"))
+
     def run_refresh(self, failure=None, extra=(), setup_errors=()):
         output = io.StringIO()
         failure = failure or self.refresh.codex_hook_trust.RestartRequired("unloaded daemon")
@@ -242,6 +251,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         (staged / "source.json").write_text(json.dumps({
             "repository": "tj-agents/agent", "revision": "native:fixture",
             "exports": [".agents/agent/runtime", ".agents/agent/utility/peer/scripts"], "sha256": "0" * 64,
+            "files": {".agents/agent/runtime/package_root.py": "0" * 64},
         }), encoding="utf-8")
         with mock.patch.object(session_close, "__file__", str(peer)):
             self.assertEqual(staged, session_close._package_root())

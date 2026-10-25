@@ -191,6 +191,21 @@ def check(project: Path, host: str, executable: str | None = None,
                     "configuration for plugin, profile and feature settings, then relaunch. "
                     "Model and reasoning overrides remain available."
                 )
+    roots = inventory_roots(launch_directory, host, executable, inventory_options)
+    missing = sorted(set(required) - roots.keys())
+    if missing:
+        raise MissingRequiredPluginsError(
+            f"Required standards unavailable for {host} in {project}: {', '.join(missing)}. "
+            "Repair repository selection/native installation, then start a fresh session. "
+            "Cached files from another host do not establish activation.", project, missing,
+        )
+    return {identity: roots[identity] for identity in required}
+
+
+def inventory_roots(project: Path, host: str, executable: str | None = None,
+                    inventory_options: tuple[str, ...] = ()) -> dict[str, Path]:
+    """Return the host's enabled, verified inventory without project selection filtering."""
+    launch_directory = project.resolve()
     binary = executable or shutil.which(host)
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
@@ -216,15 +231,7 @@ def check(project: Path, host: str, executable: str | None = None,
     entries = data.get("installed") if host == "codex" and isinstance(data, dict) else data
     if not isinstance(entries, list):
         raise RequiredPluginsError(f"Required {host} plugin inventory returned an invalid roster")
-    roots = enabled_roots(host, launch_directory, entries)
-    missing = sorted(set(required) - roots.keys())
-    if missing:
-        raise MissingRequiredPluginsError(
-            f"Required standards unavailable for {host} in {project}: {', '.join(missing)}. "
-            "Repair repository selection/native installation, then start a fresh session. "
-            "Cached files from another host do not establish activation.", project, missing,
-        )
-    return {identity: roots[identity] for identity in required}
+    return enabled_roots(host, launch_directory, entries)
 
 
 CHECK_TIMEOUT_SECONDS = 90
