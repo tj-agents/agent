@@ -22,7 +22,6 @@ import sys
 import tempfile
 import time
 
-import runtime_delivery
 
 GIT_TIMEOUT_SECONDS = 30
 SWEEP_TIMEOUT_SECONDS = 1800
@@ -40,6 +39,14 @@ CONTENTS_WAIT_SECONDS = 10
 SNAPSHOT_FIRST = "(Path(s) if s else d/'hook-snapshots')/k/"
 MARKETPLACE_NAME = "tj-agents"
 MARKETPLACE_REPOSITORY = "tj-agents/marketplace"
+
+
+def delivery_runtime():
+    path = Path(__file__).resolve().with_name("runtime_delivery.py")
+    spec = importlib.util.spec_from_file_location("agent_runtime_delivery", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def producer_repository(repository: object) -> bool:
@@ -719,12 +726,13 @@ def self_update(current: Path, codex_config: dict) -> bool:
         return False
     source = max(candidates, key=lambda root: (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).stat().st_mtime)
     try:
-        receipt = runtime_delivery.validate_receipt(json.loads((target / "source.json").read_text(encoding="utf-8")))
-        desired = runtime_delivery.native_receipt(receipt, source)
-        if desired == receipt and not runtime_delivery.check(target, target, receipt):
+        delivery = delivery_runtime()
+        receipt = delivery.validate_receipt(json.loads((target / "source.json").read_text(encoding="utf-8")))
+        desired = delivery.native_receipt(receipt, source)
+        if desired == receipt and not delivery.check(target, target, receipt):
             return False
-        return not runtime_delivery.apply(target, source, desired)
-    except (OSError, ValueError, runtime_delivery.DeliveryError):
+        return not delivery.apply(target, source, desired)
+    except (OSError, ValueError, DeliveryError):
         return False
 
 
