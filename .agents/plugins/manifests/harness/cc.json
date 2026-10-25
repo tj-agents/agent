@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "plugin": "tj-agents/cc",
+  "source_roots": [".agents/cc"],
+  "requires": {"marketplaces": [{"id": "tj-agents", "repository": "tj-agents/marketplace"}], "plugins": ["tj-agents/cc", "tj-agents/agent", "tj-agents/machine"], "hooks": [], "permissions": {"claude_allow": [], "codex_prefix_rules": []}}
+}
+

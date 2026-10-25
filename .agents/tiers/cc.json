@@ -1,0 +1,2 @@
+{"schema_version": 1, "tier": "cc", "stack": "Agent", "applies": "always", "owner_repository": ["tj-agents/agent"]}
+

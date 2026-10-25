@@ -25,7 +25,7 @@ the adjacent `marketplace_catalog.lock.json` is the canonical producer snapshot.
   `agent:recent`, `agent:recover`, `agent:refresh`, `agent:search`, `agent:close`
 - `agent-store:inspect`
 - `codex:handoff`, `codex:hooks`, `codex:memory`, `codex:open`
-- `claude:handoff`, `claude:open`
+- `cc:handoff`, `cc:open`
 
 ## Authoring and verification
 
@@ -41,3 +41,4 @@ on Windows and `python3` on Linux. The shared plugin CI discovers the migrated r
 third-party runtime dependencies.
 
 The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).
+

@@ -50,6 +50,8 @@ class Proxy:
                 spec.loader.exec_module(transport)
                 self.server = transport.AppServer(executable, Path.cwd(), environment=env,
                                                   timeout=max(0.1, deadline - time.monotonic()), existing=True)
+                self.process = self.server.process
+                self.writer = None
                 return
         raise FollowupError('The packaged Codex WebSocket transport was not found')
 
@@ -64,6 +66,10 @@ class Proxy:
             raise FollowupError(f'{method} returned an unsupported response')
         return result
 
+    def _write(self, message):
+        """Compatibility inspection seam; AppServer owns framed request sequencing."""
+        self.server.send(message)
+
     def initialize(self):
         try:
             self.server.__enter__()
@@ -71,7 +77,10 @@ class Proxy:
             raise FollowupError(str(error)) from error
 
     def close(self):
-        self.server.close()
+        try:
+            self.server.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
 
 
 def pages(proxy, method, params):
