@@ -29,8 +29,7 @@ class HandoffStartupTests(unittest.TestCase):
         self.prompt.write_text('Continue the authorized source task.', encoding='utf-8')
 
     def run_launch(self, host, status, terminal_timeout=False):
-        plugin = 'codex' if host == 'codex' else 'cc'
-        launcher = load(f'handoff_startup_{host}', ROOT / f'.agents/{plugin}/utility/handoff/scripts/launch_{host}.py')
+        launcher = load(f'handoff_startup_{host}', ROOT / f'.agents/agent/resources/handoff/launch_{host}.py')
         cli = load(f'handoff_cli_{host}', ROOT / '.agents/agent/runtime/agent_cli.py')
         cli.resolve_codex_executable = mock.Mock(return_value=launcher_test_support.CODEX_EXECUTABLE)
         cli.resolve_claude_executable = mock.Mock(return_value='/bin/claude')
@@ -66,6 +65,36 @@ class HandoffStartupTests(unittest.TestCase):
                 self.assertIn(str(receipt), error)
                 self.assertNotIn('Launched', output)
                 self.assertNotIn('"startup": "verified"', output)
+
+    def test_dispatcher_requires_host_and_forwards_only_the_host_arguments(self):
+        dispatcher = load('handoff_dispatcher', ROOT / '.agents/agent/utility/handoff/scripts/handoff.py')
+        handler = mock.Mock()
+        handler.main.return_value = 7
+        with mock.patch.object(dispatcher, '_load_handler', return_value=handler) as loader:
+            self.assertEqual(7, dispatcher.main(['--host', 'claude', '--', '--lane', 'L4', '--title', 'exact']))
+        loader.assert_called_once_with('claude')
+        handler.main.assert_called_once_with(['--lane', 'L4', '--title', 'exact'])
+
+    def test_dispatcher_refuses_unseparated_or_unsupported_host_before_loading(self):
+        dispatcher = load('handoff_dispatcher_refusal', ROOT / '.agents/agent/utility/handoff/scripts/handoff.py')
+        with mock.patch.object(dispatcher, '_load_handler') as loader:
+            with self.assertRaises(SystemExit):
+                dispatcher.main(['--host', 'claude', '--lane', 'L4'])
+            with self.assertRaises(SystemExit):
+                dispatcher.main(['--host', 'unknown', '--', '--lane', 'L4'])
+        loader.assert_not_called()
+
+    def test_authored_and_packaged_dispatchers_find_only_packaged_private_handlers(self):
+        copies = [ROOT / '.agents/agent/utility/handoff/scripts/handoff.py',
+                  ROOT / 'plugins/agent/skills/handoff/scripts/handoff.py']
+        for copy in copies:
+            with self.subTest(copy=str(copy.relative_to(ROOT))):
+                dispatcher = load(f'handoff_dispatcher_{abs(hash(copy))}', copy)
+                for host in ('claude', 'codex'):
+                    handler = dispatcher._handler_path(host)
+                    self.assertEqual(f'launch_{host}.py', handler.name)
+                    self.assertIn('.agents', handler.parts)
+                    self.assertTrue(handler.is_file())
 
     def test_native_exit_before_confirmation_is_failure_even_with_zero_exit(self):
         for host in ('codex', 'claude'):

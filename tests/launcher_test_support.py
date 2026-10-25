@@ -1,4 +1,4 @@
-"""Shared test fixtures for launch_claude.py, launch_codex.py and open_claude.py.
+"""Shared test fixtures for Agent's private Claude and Codex handoff launchers.
 
 Loads the real agent_cli.py with only the functions that would otherwise touch a real executable or
 terminal replaced, so resolve_tab_directory, prompt_file_argument, open_claude_tab and resolve_lane_model

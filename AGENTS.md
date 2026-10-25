@@ -32,7 +32,7 @@ because the guidance-example check rejects it.
 
 This profile applies in projects that explicitly select it. Policies live under `policy/`; supporting conventions, workflows and utilities stay beside their owning skills. Declare mandatory host hooks in the shipped harness manifest and verify their delivery on each supported host.
 
-Agent Store is the leaf package. Agent may depend on Base and Agent Store; Codex and Claude may depend on
+Agent Store is the leaf package. Agent may depend on Base, Agent Store, Machine and CLI; Codex may depend on
 Agent. Keep this graph acyclic. Resolve packaged runtime only from the nearest repository or plugin root,
 using the package-local `.agents/agent/runtime` or `.agents/agent-store/runtime` path; never fall back to
 an author checkout, a global cache, or a sibling installation.

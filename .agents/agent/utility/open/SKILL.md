@@ -14,9 +14,8 @@ route: infer
 # Open a CLI session
 
 The caller names the session, never the host. `agent_recovery.py reopen` searches Claude and Codex history,
-picks the one session, then either focuses its live tab or reopens it with the host's own launcher. The
-host capabilities `claude:open` and `codex:open` remain
-the launch primitives it calls; do not use them to answer a user request that names a session.
+picks the one session, then either focuses its live tab or reopens it with the native launcher. Do not
+select a host-specific skill for a user request that names a session.
 
 Run with `python` on Windows or `python3` on Linux/macOS:
 

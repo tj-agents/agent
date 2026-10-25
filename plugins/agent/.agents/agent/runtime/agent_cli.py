@@ -1,7 +1,7 @@
 """Shared launch primitives for the native agent CLIs, on Windows and POSIX.
 
-Imported by open-claude, handoff-claude and handoff-codex so the environment scrub, executable discovery,
-lane lookup and terminal argument escaping have one owner. Not runnable on its own.
+Imported by Agent's private handoff launchers and session recovery so the environment scrub, executable
+discovery, lane lookup and terminal argument escaping have one owner. Not runnable on its own.
 """
 
 import glob
@@ -245,8 +245,7 @@ def prompt_file_argument(path):
     """(sentence, resolved_path) for a prepared prompt file: the 'Read the file at ...' sentence and the
     same resolved Path, so a caller never re-resolves it for its own messages.
 
-    Shared by open-claude's `--prompt-path` and handoff-claude's `--prompt-path` so the wording and the
-    file check have one owner.
+    Shared by the Agent launch and recovery paths so the wording and file check have one owner.
     """
     resolved = Path(path).resolve()
     if not resolved.is_file():

@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / '.agents/cc/utility/handoff/scripts/launch_claude.py'
+SCRIPT = ROOT / '.agents/agent/resources/handoff/launch_claude.py'
 CLAUDE_LANES = json.loads((ROOT / '.agents/agent/resources/lanes/claude.json').read_text(encoding='utf-8'))
 
 _TESTS_DIR = Path(__file__).resolve().parent
@@ -187,7 +187,7 @@ class LaunchClaudeTests(unittest.TestCase):
         code, _, err = self.run_main('--lane', 'L1')
         self.assertEqual(code, 1)
         self.assertIn('routes to Codex L1', err)
-        self.assertIn('use codex:handoff, or omit --lane for an explicit user-named model.', err)
+        self.assertIn('use agent:handoff --host codex, or omit --lane for an explicit user-named model.', err)
         self.assertNotIn('workflow:handoff', err)
         self.agent_cli.launch_tab.assert_not_called()
 
@@ -477,7 +477,7 @@ class InstalledLayoutTests(unittest.TestCase):
     LAYOUTS = ('skills',)
 
     def test_the_authored_and_every_packaged_copy_loads_agent_cli(self):
-        copies = [SCRIPT] + [ROOT / 'plugins/cc' / layout / 'handoff/scripts/launch_claude.py'
+        copies = [SCRIPT] + [ROOT / 'plugins/agent' / '.agents/agent/resources/handoff/launch_claude.py'
                              for layout in self.LAYOUTS]
         for copy in copies:
             with self.subTest(copy=str(copy.relative_to(ROOT))):

@@ -13,6 +13,7 @@
   "dependencies": [
     "base@tj-agents",
     "agent-store",
-    "machine@tj-agents"
+    "machine@tj-agents",
+    "cli@tj-agents"
   ]
 }

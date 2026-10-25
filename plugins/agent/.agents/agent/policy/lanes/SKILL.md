@@ -128,12 +128,12 @@ for critical design; delegate substantial implementation or review rather than r
   live under the workflow contract's version rather than being re-resolved at dispatch. They are derived
   from the ladder and a test asserts they still agree with it, so a rung and its stage cannot drift apart
   — but the pin is the value the runtime reads.
-- **A handoff launcher** takes a lane (or frontier) flag per dispatch: both `claude:handoff` and
-  `codex:handoff`'s Python launchers take `--lane` (or `--frontier`), and `codex:handoff` also
+- **A handoff launcher** takes a lane (or frontier) flag per dispatch: `agent:handoff --host claude|codex`
+  takes `--lane` (or `--frontier`), and the Codex handler also
   takes `--reasoning-effort` for a Codex model named outright. Either way the calling agent judges the
   lane by the four questions and the launcher only prices it, never inferring one from the prompt.
 
-L7 is in-session clerical work only. Both handoff launchers reject it before opening a tab. Claude handoff
+L7 is in-session clerical work only. Both host handlers reject it before opening a tab. The Claude handler
 also requires an explicit L1–L6 lane, frontier tier, or non-Haiku model, because an unchecked CLI default
 could otherwise select Haiku.
 

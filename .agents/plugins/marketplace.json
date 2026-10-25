@@ -29,18 +29,6 @@
       "category": "Productivity"
     },
     {
-      "name": "cc",
-      "source": {
-        "source": "local",
-        "path": "./plugins/cc"
-      },
-      "policy": {
-        "installation": "INSTALLED_BY_DEFAULT",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    },
-    {
       "name": "codex",
       "source": {
         "source": "local",

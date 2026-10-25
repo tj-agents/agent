@@ -63,7 +63,7 @@ Report the returned status accurately:
 - `unavailable` or `rejected` (exit 2): report the reason. When the helper confirms no send was attempted
   and no receipt exists, first assess whether the already authorized task permits supported coordination
   with the exact owner. Verify the native id, cwd, and selected profile. Follow the shared
-  task recovery context, then use `codex:open` only for the
+  task recovery context, then use `agent:open` only for the
   verified exact owner. A verified live owner cannot be resumed. Reconcile an unknown owner independently before
   `--confirm-closed`, and never treat that flag as source release. A successful reopen is launch evidence, not delivered follow-up, restored
   transport, or acknowledgment. Retain the current task. Only when all supported automated coordination
