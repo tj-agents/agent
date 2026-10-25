@@ -13,6 +13,9 @@ route: infer
 
 # Plugin selection
 
+Maintainers regenerate the adjacent Marketplace snapshot with
+`scripts/update_marketplace_catalog.py --source <marketplace-checkout>`; do not edit the lock by hand.
+
 The commands below show Windows paths and use `python` in Windows PowerShell. On Linux/macOS, use
 `python3` with POSIX paths and the same script arguments.
 

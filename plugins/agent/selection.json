@@ -2,7 +2,8 @@
   "plugin": "agent",
   "dependencies": [
     "tj-agents/base",
-    "agent-store"
+    "agent-store",
+    "tj-agents/machine"
   ],
   "profiles": {
     "core": [

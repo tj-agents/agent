@@ -14,9 +14,39 @@
     "plugins": [
       "tj-agents/agent",
       "tj-agents/base",
-      "tj-agents/agent-store"
+      "tj-agents/agent-store",
+      "tj-agents/machine"
     ],
-    "hooks": [],
+    "hooks": [
+      {
+        "path": ".agents/agent-store/runtime/session_store.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/runtime/close_lifecycle.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/runtime/reap_orphans.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/utility/peer/scripts/register_session.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      }
+    ],
     "permissions": {
       "claude_allow": [],
       "codex_prefix_rules": []
