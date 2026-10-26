@@ -591,20 +591,28 @@ def main(argv: list[str] | None = None) -> int:
         executables = {host: None for host in hosts}
         return required_plugins.check_setup(project, hosts, executables) if arguments.verify_only \
             else required_plugins.converge_setup(project, hosts, executables, arguments.onboard)
-    check_claude_adoption = "claude" in hosts and not arguments.verify_only
+    admission_errors = []
     if not (arguments.all or arguments.verify or arguments.verify_only):
-        try:
-            for host in hosts:
+        admitted = []
+        for host in hosts:
+            try:
                 prepare_required(project, host, updated=updated)
-        except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
-            print(f"plugins: {error}", file=sys.stderr)
+            except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
+                admission_errors.append({"host": host, "problems": [str(error)]})
+            else:
+                admitted.append(host)
+        hosts = tuple(admitted)
+        if not hosts:
+            print(json.dumps(admission_errors, indent=2))
             return 1
         result = launch_check.check(project, update=lambda host, repositories, root:
                                     launch_check.update_host(host, repositories, root, updated),
                                     reconcile=lambda root: launch_check.reconcile_installs(root, updated),
-                                    host=None if arguments.host == "both" else arguments.host)
+                                    host=None if len(hosts) == 2 else hosts[0])
         if result != "unconfigured":
             summary = {"check": result}
+            if admission_errors:
+                summary["admission_errors"] = admission_errors
             restart_reason = None
             if "codex" in hosts and result in {"current", "updated", "offline"}:
                 try:
@@ -623,14 +631,14 @@ def main(argv: list[str] | None = None) -> int:
                 except (OSError, ValueError, RuntimeError) as error:
                     summary["hook_readiness_error"] = str(error)
                     result = "failed"
-            relaunched = relaunch_session(project, updated, not arguments.no_relaunch) if check_claude_adoption and result != "failed" and not setup_errors else None
+            relaunched = relaunch_session(project, updated, not arguments.no_relaunch) if "claude" in hosts and result != "failed" and not setup_errors else None
             if relaunched:
                 summary["claude"] = relaunched
             print(json.dumps(summary, indent=2))
             if result == "updated":
                 print(ADOPTION, file=sys.stderr)
             failed = bool(relaunched and relaunched["relaunch"] == "failed")
-            return int(result in {"failed", "offline", "busy"} or failed or bool(setup_errors))
+            return int(result in {"failed", "offline", "busy"} or failed or bool(setup_errors) or bool(admission_errors))
     reports = []
     relaunched = None
     restart_reason = None
@@ -663,11 +671,12 @@ def main(argv: list[str] | None = None) -> int:
             reports.append({"host": "codex restart", "plugins": [], "problems": [str(error)]})
         else:
             reports.append({"host": "codex restart", **result, "problems": []})
-    if check_claude_adoption and not any(report["problems"] for report in reports):
+    if "claude" in hosts and not arguments.verify_only and not any(report["problems"] for report in reports):
         relaunched = relaunch_session(project, updated, not arguments.no_relaunch)
         if relaunched:
             reports.append({"host": "claude relaunch", "plugins": [], "problems":
                             [] if relaunched["relaunch"] != "failed" else ["relaunch failed: " + relaunched["error"]]})
+    reports = admission_errors + reports
     print(json.dumps(reports, indent=2))
     for report in reports:
         for problem in report["problems"]:
