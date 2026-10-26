@@ -35,7 +35,7 @@ class CloseFixture:
     def setup_close(self, host="codex"):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.host = host
         self.profile = self.root / "profile"
         self.rollout = self.profile / "sessions" / "rollout.jsonl"
