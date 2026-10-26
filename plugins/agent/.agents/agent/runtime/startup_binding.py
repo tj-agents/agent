@@ -339,6 +339,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             report("failed", error=message)
             return 1
 
+    if parsed.require_session_start:
+        try:
+            _fresh_project, hook_roots = launch_check.prepare_launch_roots(
+                parsed.project.resolve(), parsed.host, parsed.target, arguments,
+            )
+        except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
+            message = f"launch: {error}"
+            print(message, file=sys.stderr)
+            report("failed", error=message)
+            return 1
+
     try:
         terminal = _prelaunch_terminal()
         if terminal is not None:
