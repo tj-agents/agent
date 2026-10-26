@@ -2,7 +2,7 @@
 
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sys
 import tempfile
 import unittest
@@ -99,6 +99,12 @@ class NativeCompletionTests(unittest.TestCase):
         self.rollout.write_bytes(self.rollout.read_bytes().replace(b'"thread"', b'"other"'))
         with self.assertRaisesRegex(RuntimeError, 'does not belong'):
             cli_client.NativeCompletion(self.entry).poll()
+
+    def test_equivalent_windows_rollout_spellings_compare_as_one_path(self):
+        self.assertEqual(PureWindowsPath('C:/profiles/codex/sessions/rollout.jsonl'),
+                         cli_client.comparable_path(PureWindowsPath('//?/C:/profiles/codex/sessions/rollout.jsonl')))
+        self.assertEqual(PureWindowsPath('//server/share/sessions/rollout.jsonl'),
+                         cli_client.comparable_path(PureWindowsPath('//?/UNC/server/share/sessions/rollout.jsonl')))
 
     def test_partial_record_defers_completion_until_it_is_complete(self):
         guard = cli_client.NativeCompletion(self.entry)
