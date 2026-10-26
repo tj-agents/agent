@@ -71,6 +71,9 @@ class FakeClaude:
 
 class RefreshCliTests(unittest.TestCase):
     def setUp(self):
+        admission = mock.patch.object(REFRESH, "prepare_required", return_value=None)
+        self.admission = admission.start()
+        self.addCleanup(admission.stop)
         readiness = mock.patch.object(REFRESH.launch_check, "ensure_hooks")
         self.readiness = readiness.start()
         self.addCleanup(readiness.stop)
@@ -79,6 +82,26 @@ class RefreshCliTests(unittest.TestCase):
             patcher = mock.patch.object(REFRESH.required_plugins, method, return_value=[])
             patcher.start()
             self.addCleanup(patcher.stop)
+
+    def test_full_refresh_still_attempts_codex_after_claude_admission_fails(self):
+        self.admission.side_effect = [REFRESH.RefreshError("claude install failed"), None]
+        with mock.patch.object(REFRESH, "executable_for", return_value="native"), \
+                mock.patch.object(REFRESH, "selection", return_value=({}, [])), \
+                mock.patch.object(REFRESH, "refresh", return_value=[]) as refresh, \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            self.assertEqual(1, REFRESH.main(["--all"]))
+        self.assertEqual(["claude", "codex"], [call.args[1] for call in self.admission.call_args_list])
+        refresh.assert_called_once_with("codex", "native", Path.cwd().resolve(), {}, [])
+
+    def test_verify_only_never_repairs_missing_installations(self):
+        with mock.patch.object(REFRESH, "executable_for", return_value="native"), \
+                mock.patch.object(REFRESH, "selection", return_value=({}, [])), \
+                mock.patch.object(REFRESH, "verify", return_value={"host": "codex", "problems": []}), \
+                mock.patch.object(REFRESH, "refresh") as refresh, \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            self.assertEqual(0, REFRESH.main(["--host", "codex", "--verify-only"]))
+        self.admission.assert_not_called()
+        refresh.assert_not_called()
 
     def test_current_plugins_still_require_live_hook_reload(self):
         with mock.patch.object(REFRESH.launch_check, "check", return_value="current"), \

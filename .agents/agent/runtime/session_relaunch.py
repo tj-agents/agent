@@ -292,6 +292,13 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         if (not isinstance(native_cwd, str) or not Path(native_cwd).is_absolute()
                 or Path(native_cwd).resolve() != project.resolve()):
             raise RuntimeError("the refresh checkout does not match this Codex thread's native checkout")
+    if host == "claude":
+        identity = session_identity()
+        if identity is not None and (identity[0] != entry["session_id"] or identity[1] and identity[1] != entry["pid"]):
+            raise RuntimeError("the calling Claude session does not match its registered client")
+        transcript = os.environ.get("CLAUDE_CODE_SESSION_LOG", "")
+        if "subagents" in Path(transcript).parts:
+            raise RuntimeError("a subagent cannot relaunch its parent client")
     session_id = entry["session_id"]
     native = (codex_arguments if host == "codex" else preserved_arguments)(arguments(entry["pid"]))
     executable = agent_cli.resolve_codex_executable()[0] if host == "codex" else agent_cli.resolve_claude_executable()
