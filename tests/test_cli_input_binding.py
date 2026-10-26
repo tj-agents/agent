@@ -70,7 +70,13 @@ class InputBindingTests(unittest.TestCase):
         return ticket, environment, arguments
 
     def resolve(self):
-        return client.recorded_client('current-thread', self.infos[123], self.infos.get, self.infos)
+        return client.recorded_client(
+            'current-thread', self.infos[123], self.infos.get, self.infos, peer_state=self.peer_state,
+        )
+
+    def peer_state(self, pid):
+        info = self.infos.get(pid)
+        return ('present', info) if info is not None else ('absent', None)
 
     def test_launcher_starts_a_sanitized_daemon_and_keeps_each_frontend_private_record(self):
         ticket, environment, arguments = self.bind()
