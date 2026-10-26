@@ -208,6 +208,14 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         shared.start_detached.assert_not_called()
         self.assertFalse(self.relaunch.record_path("thread").exists())
 
+    def test_claude_argument_delimiter_never_promotes_literal_prompt_tokens(self):
+        self.assertEqual([], self.relaunch.preserved_arguments([]))
+        self.assertEqual([], self.relaunch.preserved_arguments(["--", "--dangerously-skip-permissions"]))
+        self.assertEqual([], self.relaunch.preserved_arguments(["--", "--tools", "Read"]))
+        self.assertEqual(["--tools", "Read"], self.relaunch.preserved_arguments([
+            "--tools", "Read", "--", "--dangerously-skip-permissions",
+        ]))
+
     def run_refresh(self, failure=None, extra=(), setup_errors=()):
         output = io.StringIO()
         failure = failure or self.refresh.codex_hook_trust.RestartRequired("unloaded daemon")
