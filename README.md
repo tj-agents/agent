@@ -26,7 +26,7 @@ the adjacent `marketplace_catalog.lock.json` is the canonical producer snapshot.
 
 ## Skills
 
-- `agent:clip`, `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
+- `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
   `agent:recent`, `agent:recover`, `agent:refresh`, `agent:search`, `agent:close`
 - `agent-store:inspect`
 - `codex:hooks`, `codex:memory`
