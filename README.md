@@ -14,6 +14,12 @@ The generated packages have no dependency on a Core checkout. Shared runtime is 
 `.agents/agent/runtime` and `.agents/agent-store/runtime`; generated payloads embed the canonical paths
 they consume.
 
+Managed launches and refresh recover unconfigured setup or failed synchronization by fetching canonical
+`tj-agents/core` main into `~/.agents-state/sources/core`, running its supported setup entrypoint and
+`--check`, and retrying readiness once. Recovery preserves credential enrollment controls and needs no
+pre-existing Core checkout. Claude installs missing transitive dependencies before dependents and verifies
+their persisted native registrations; startup still requires successful native admission and hooks.
+
 Maintainers refresh the offline Marketplace selection snapshot only with
 `.agents/agent/utility/plugins/scripts/update_marketplace_catalog.py --source <marketplace-checkout>`;
 the adjacent `marketplace_catalog.lock.json` is the canonical producer snapshot.
