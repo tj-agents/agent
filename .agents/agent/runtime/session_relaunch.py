@@ -56,6 +56,8 @@ def preserved_arguments(argv: list[str]) -> list[str]:
     kept, index = [], 0
     while index < len(argv):
         token = argv[index]
+        if token == "--":
+            break
         name, equals, _ = token.partition("=")
         index += 1
         if name in FLAGS and not equals:
