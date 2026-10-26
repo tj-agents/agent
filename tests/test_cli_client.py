@@ -1,5 +1,6 @@
 """Managed Codex frontend attribution and Agent-side attachment tests."""
 
+import errno
 import importlib.util
 import json
 import os
@@ -140,6 +141,39 @@ class ClientAttributionTests(unittest.TestCase):
         self.bind(pid=456)
         self.assertEqual(123, self.resolve()[0].pid)
         CLIENT.release(first)
+
+    def test_disappeared_peer_does_not_discard_a_verified_frontend(self):
+        self.bind()
+        peer = SimpleNamespace(pid=456, name="codex.exe", started_at=11.0)
+        self.infos[456] = peer
+
+        for error in (FileNotFoundError(), OSError(errno.ESRCH, "process exited")):
+            with self.subTest(error=type(error).__name__):
+                table = dict(self.infos)
+
+                def context(pid):
+                    if pid == 456:
+                        self.infos.pop(456, None)
+                        raise error
+                    return self.contexts.get(pid, {})
+
+                with mock.patch.object(CLIENT, "process_context", side_effect=context):
+                    self.assertEqual(123, CLIENT.recorded_client(
+                        "thread", self.infos[123], self.infos.get, table)[0].pid)
+                self.infos[456] = peer
+
+    def test_live_uninspectable_peer_refuses_the_frontend(self):
+        self.bind()
+        self.infos[456] = SimpleNamespace(pid=456, name="codex.exe", started_at=11.0)
+
+        def context(pid):
+            if pid == 456:
+                raise PermissionError("permission denied")
+            return self.contexts.get(pid, {})
+
+        with mock.patch.object(CLIENT, "process_context", side_effect=context), \
+                self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
+            CLIENT.recorded_client("thread", self.infos[123], self.infos.get, dict(self.infos))
 
     def test_incomplete_or_duplicate_recording_refuses(self):
         ticket, _environment = self.bind()
