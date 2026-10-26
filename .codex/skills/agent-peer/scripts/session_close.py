@@ -117,6 +117,7 @@ def current_codex_client(session_id, nearest, *, project=None):
         "title": record.get("title"), "client_message_id": record["client_message_id"],
         "native_turn_id": record["turn_id"],
         "native_rollout": record["native_rollout"],
+        "native_cwd": record.get("native_cwd"),
         "recording_path": record["recording_path"], "backend": record["backend"],
         "profile": record["profile"],
         "terminal": register_session.terminal_identity(record.get("terminal_environment", {})),
@@ -124,7 +125,7 @@ def current_codex_client(session_id, nearest, *, project=None):
 
 
 CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile", "backend",
-                         "recording_path", "client_message_id", "native_turn_id", "native_rollout",
+                         "recording_path", "client_message_id", "native_turn_id", "native_rollout", "native_cwd",
                          "client_identity", "launch_cwd")
 
 
