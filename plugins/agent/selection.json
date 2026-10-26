@@ -18,7 +18,7 @@
       "plugins",
       "recent",
       "recover",
-      "refresh",
+      "refresh-plugins",
       "search"
     ]
   },
@@ -185,7 +185,7 @@
       ]
     },
     {
-      "name": "refresh",
+      "name": "refresh-plugins",
       "kind": "utility",
       "profile": "core",
       "applicability": [

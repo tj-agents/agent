@@ -20,8 +20,8 @@
   "host_adapters": [
     {"skill": "agent:listen", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/listen.md"},
     {"skill": "agent:listen", "host": "claude", "source": ".agents/plugins/adapters/claude/agent/listen.md"},
-    {"skill": "agent:refresh", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/refresh.md"},
-    {"skill": "agent:refresh", "host": "claude", "source": ".agents/plugins/adapters/claude/agent/refresh.md"}
+    {"skill": "agent:refresh-plugins", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/refresh-plugins.md"},
+    {"skill": "agent:refresh-plugins", "host": "claude", "source": ".agents/plugins/adapters/claude/agent/refresh-plugins.md"}
   ]
 }
 

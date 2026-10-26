@@ -135,6 +135,24 @@ class ArmTests(State):
         self.assertEqual("waiting", record["state"])
         self.assertEqual(record["token"], options[options.index("--token") + 1])
 
+    def test_a_different_session_or_pid_never_closes_the_registered_client(self):
+        for session, pid in (("different-session", "4242"), (SESSION, "9999")):
+            events = []
+            with self.subTest(session=session, pid=pid), mock.patch.dict(os.environ, {
+                    "CLAUDE_CODE_SESSION_ID": session, "CLAUDE_PID": pid}):
+                with self.assertRaisesRegex(RuntimeError, "does not match"):
+                    RELAUNCH.relaunch(self.root, {}, shared=Shared(events), arguments=lambda _: [])
+            self.assertEqual([], events)
+            self.assertFalse(RELAUNCH.record_path(SESSION).exists())
+
+    def test_a_subagent_transcript_cannot_close_the_parent_client(self):
+        events = []
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_LOG": str(self.root / "subagents/agent-child.jsonl")}):
+            with self.assertRaisesRegex(RuntimeError, "subagent cannot"):
+                RELAUNCH.relaunch(self.root, {}, shared=Shared(events), arguments=lambda _: [])
+        self.assertEqual([], events)
+        self.assertFalse(RELAUNCH.record_path(SESSION).exists())
+
     def test_a_refused_close_cancels_the_watcher(self):
         self.arm(RuntimeError("tab ownership could not be verified"))
         with self.assertRaisesRegex(RuntimeError, "tab ownership"):
@@ -199,7 +217,7 @@ class WatcherTests(State):
 
 
 class SyncTests(State):
-    def run_sync(self, result="updated", stale=("machine@tj-agents",), child=False, relaunch=None):
+    def run_sync(self, result="updated", stale=("machine@tj-agents",), child=False, relaunch=None, no_relaunch=False):
         environment = {"CLAUDE_CODE_SESSION_ID": SESSION, "CLAUDE_PID": "4242"}
         if child:
             environment["CLAUDE_CODE_CHILD_SESSION"] = "1"
@@ -211,7 +229,7 @@ class SyncTests(State):
                 mock.patch.object(RELAUNCH, "relaunch", relaunched), \
                 mock.patch.dict(sys.modules, {"session_relaunch": RELAUNCH}), \
                 mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
-            code = REFRESH.main(["--project", str(self.root)])
+            code = REFRESH.main(["--project", str(self.root)] + (["--no-relaunch"] if no_relaunch else []))
         output = "".join(call.args[0] for call in stdout.write.call_args_list)
         return code, json.loads(output), relaunched
 
@@ -227,9 +245,17 @@ class SyncTests(State):
         self.assertEqual((0, {"check": "current", "plugin setup": []}), (code, summary))
         relaunched.assert_not_called()
 
-    def test_a_child_session_never_relaunches_its_parent(self):
+    def test_a_tool_subprocess_marker_does_not_reject_the_owning_session(self):
         code, summary, relaunched = self.run_sync(child=True)
-        self.assertEqual("skipped", summary["claude"]["relaunch"])
+        self.assertEqual(0, code)
+        self.assertEqual("armed", summary["claude"]["relaunch"])
+        relaunched.assert_called_once()
+
+    def test_disabling_relaunch_reports_incomplete_adoption(self):
+        code, summary, relaunched = self.run_sync(result="current", no_relaunch=True)
+        self.assertEqual(1, code)
+        self.assertEqual("failed", summary["claude"]["relaunch"])
+        self.assertIn("--no-relaunch", summary["claude"]["error"])
         relaunched.assert_not_called()
 
     def test_a_failed_relaunch_is_reported_as_a_failure(self):
