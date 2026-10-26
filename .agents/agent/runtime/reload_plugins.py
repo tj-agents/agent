@@ -605,14 +605,13 @@ def main(argv: list[str] | None = None) -> int:
         if not hosts:
             print(json.dumps(admission_errors, indent=2))
             return 1
-        result = launch_check.check(project, update=lambda host, repositories, root:
-                                    launch_check.update_host(host, repositories, root, updated),
-                                    reconcile=lambda root: launch_check.reconcile_installs(root, updated),
-                                    host=None if len(hosts) == 2 else hosts[0], update_hosts=hosts)
+        result = ("unconfigured" if admission_errors else
+                  launch_check.check(project, update=lambda host, repositories, root:
+                                     launch_check.update_host(host, repositories, root, updated),
+                                     reconcile=lambda root: launch_check.reconcile_installs(root, updated),
+                                     host=None if len(hosts) == 2 else hosts[0]))
         if result != "unconfigured":
             summary = {"check": result}
-            if admission_errors:
-                summary["admission_errors"] = admission_errors
             restart_reason = None
             if "codex" in hosts and result in {"current", "updated", "offline"}:
                 try:
@@ -638,7 +637,7 @@ def main(argv: list[str] | None = None) -> int:
             if result == "updated":
                 print(ADOPTION, file=sys.stderr)
             failed = bool(relaunched and relaunched["relaunch"] == "failed")
-            return int(result in {"failed", "offline", "busy"} or failed or bool(setup_errors) or bool(admission_errors))
+            return int(result in {"failed", "offline", "busy"} or failed or bool(setup_errors))
     reports = []
     relaunched = None
     restart_reason = None

@@ -122,7 +122,7 @@ def update_host(host: str, repositories: set[str] | None, project: Path, updated
 
 
 def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update, now: float,
-         expired: bool = False, update_hosts: tuple[str, ...] = HOSTS) -> str:
+         expired: bool = False) -> str:
     import machine_events
     import plugin_autoupdate
 
@@ -134,7 +134,7 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
         last = identifiers[-1] if identifiers else cursor.get("since", "all")
         hosts = cursor.get("hosts") if isinstance(cursor.get("hosts"), dict) else {}
         work: dict[str, set[str] | None] = {}
-        for host in update_hosts:
+        for host in HOSTS:
             state = hosts.get(host) if isinstance(hosts.get(host), dict) else {}
             applied = state.get("applied")
             start = identifiers.index(applied) + 1 if applied in identifiers else 0
@@ -152,7 +152,7 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
             for host, succeeded in results.items():
                 previous = hosts.get(host) if isinstance(hosts.get(host), dict) else {}
                 hosts[host] = {"applied": last} if succeeded else {"applied": previous.get("applied")}
-        if set(update_hosts) == set(HOSTS) and all(hosts[host].get("applied") == last for host in HOSTS):
+        if all(hosts[host].get("applied") == last for host in HOSTS):
             plugin_autoupdate.write_json(path, {"since": last, "since_at": now})
         else:
             saved = {"since": cursor.get("since", "all"), "hosts": hosts}
@@ -204,13 +204,13 @@ def settle(project: Path, reconcile=None) -> str:
 
 
 def check(project: Path, fetch=https_get, update=update_host, now: float | None = None, reconcile=None,
-          host: str | None = None, *, recover: bool = True, update_hosts: tuple[str, ...] = HOSTS) -> str:
+          host: str | None = None, *, recover: bool = True) -> str:
     directory = state_directory()
     topic = read_json(directory / "machine-events.json").get("topic")
     if not isinstance(topic, str) or not TOPIC.fullmatch(topic):
         if recover and not os.environ.get(INSTALL_RECOVERY):
             recover_install(project, "event channel and publishers")
-            return check(project, fetch, update, now, reconcile, host, recover=False, update_hosts=update_hosts)
+            return check(project, fetch, update, now, reconcile, host, recover=False)
         return "unconfigured"
     path = directory / "machine-events-cursor.json"
     cursor = read_json(path)
@@ -225,11 +225,11 @@ def check(project: Path, fetch=https_get, update=update_host, now: float | None 
     except (OSError, ValueError) as error:
         print(f"plugins: update check skipped ({type(error).__name__})", file=sys.stderr)
         return "offline"
-    result = apply(envelopes, cursor, path, project, update, now, expired, update_hosts) if envelopes or expired else "current"
+    result = apply(envelopes, cursor, path, project, update, now, expired) if envelopes or expired else "current"
     result = settle(project, reconcile) if result == "current" and host != "codex" else result
     if result == "failed" and recover and not os.environ.get(INSTALL_RECOVERY):
         recover_install(project, "plugin and merge-policy catch-up")
-        return check(project, fetch, update, now, reconcile, host, recover=False, update_hosts=update_hosts)
+        return check(project, fetch, update, now, reconcile, host, recover=False)
     return result
 
 
