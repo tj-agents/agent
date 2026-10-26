@@ -81,10 +81,11 @@ class NativeCompletionTests(unittest.TestCase):
         original = self.rollout.read_bytes()
         replacement = self.rollout.with_name('replacement.jsonl')
         replacement.write_bytes(original)
-        with self.rollout.open('rb'):
-            os.replace(replacement, self.rollout)
-            with self.assertRaisesRegex(RuntimeError, 'replaced or truncated'):
-                cli_client.NativeCompletion(self.entry, pin)
+        retired = self.rollout.with_name('retired.jsonl')
+        os.replace(self.rollout, retired)
+        os.replace(replacement, self.rollout)
+        with self.assertRaisesRegex(RuntimeError, 'replaced or truncated'):
+            cli_client.NativeCompletion(self.entry, pin)
         self.rollout.unlink()
         self.rollout.write_bytes(original[:10])
         with self.assertRaisesRegex(RuntimeError, 'replaced or truncated'):
