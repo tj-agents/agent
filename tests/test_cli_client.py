@@ -175,6 +175,53 @@ class ClientAttributionTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
             CLIENT.recorded_client("thread", self.infos[123], self.infos.get, dict(self.infos))
 
+    def test_unknown_peer_state_does_not_mean_the_peer_exited(self):
+        self.bind()
+        peer = SimpleNamespace(pid=456, name="codex.exe", started_at=11.0)
+        self.infos[456] = peer
+
+        def context(pid):
+            if pid == 456:
+                raise FileNotFoundError()
+            return self.contexts.get(pid, {})
+
+        for state in (("unknown", None), ("present", peer), ("present", None)):
+            with self.subTest(state=state[0], current=state[1] is not None), \
+                    mock.patch.object(CLIENT, "process_context", side_effect=context), \
+                    self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
+                CLIENT.recorded_client("thread", self.infos[123], self.infos.get, dict(self.infos),
+                                       peer_state=lambda _pid, result=state: result)
+
+    def test_absent_or_reused_peer_state_skips_a_disappeared_peer(self):
+        self.bind()
+        peer = SimpleNamespace(pid=456, name="codex.exe", started_at=11.0)
+        self.infos[456] = peer
+
+        def context(pid):
+            if pid == 456:
+                raise FileNotFoundError()
+            return self.contexts.get(pid, {})
+
+        for state in (("absent", None), ("present", SimpleNamespace(pid=456, started_at=12.0))):
+            with self.subTest(state=state[0]):
+                with mock.patch.object(CLIENT, "process_context", side_effect=context):
+                    self.assertEqual(123, CLIENT.recorded_client(
+                        "thread", self.infos[123], self.infos.get, dict(self.infos),
+                        peer_state=lambda _pid, result=state: result)[0].pid)
+
+    def test_canonical_caller_passes_the_fresh_peer_state(self):
+        runtime = mock.Mock()
+        runtime.recorded_client.return_value = (SimpleNamespace(pid=123), {
+            "launch_cwd": str(self.root), "client_message_id": "input", "turn_id": "turn",
+            "recording_path": "events.jsonl", "backend": self.backend, "profile": str(self.profile),
+        })
+        nearest = SimpleNamespace(pid=123)
+        table = {123: nearest}
+        with mock.patch.object(session_close, "client_runtime", return_value=runtime), \
+                mock.patch.object(session_close.register_session, "process_table", return_value=table):
+            session_close.current_codex_client("thread", nearest)
+        self.assertIs(session_close.process_state, runtime.recorded_client.call_args.kwargs["peer_state"])
+
     def test_incomplete_or_duplicate_recording_refuses(self):
         ticket, _environment = self.bind()
         path = Path(ticket["recording_path"])

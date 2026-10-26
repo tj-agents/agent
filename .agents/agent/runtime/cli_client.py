@@ -233,7 +233,7 @@ def current_input(server, session_id):
     raise RuntimeError('This native thread has no attributable frontend input')
 
 
-def peer_recording_path(peer, lookup):
+def peer_recording_path(peer, lookup, peer_state=None):
     try:
         return process_context(peer.pid).get(RECORD_PATH_ENV)
     except FileNotFoundError as error:
@@ -242,13 +242,22 @@ def peer_recording_path(peer, lookup):
         if error.errno != errno.ESRCH:
             raise
         disappearance = error
-    current = lookup(peer.pid)
-    if current is None or getattr(current, 'started_at', None) != getattr(peer, 'started_at', None):
+    if peer_state is None:
+        current = lookup(peer.pid)
+        absent = current is None
+    else:
+        state, current = peer_state(peer.pid)
+        absent = state == 'absent'
+        if state not in ('absent', 'present'):
+            raise disappearance
+    if absent:
+        return None
+    if current is not None and getattr(current, 'started_at', None) != getattr(peer, 'started_at', None):
         return None
     raise disappearance
 
 
-def recorded_client(session_id, nearest, lookup, table, *, project=None):
+def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_state=None):
     if sys.version_info < (3, 11):
         raise RuntimeError('Codex frontend attribution requires Python 3.11 or newer')
     arguments = process_arguments(nearest.pid)
@@ -294,7 +303,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
             for other in table.values():
                 if other.pid == info.pid or Path(other.name).stem.casefold() != 'codex':
                     continue
-                if peer_recording_path(other, lookup) == event_path:
+                if peer_recording_path(other, lookup, peer_state) == event_path:
                     raise RuntimeError('Multiple native processes share a frontend recording; preserving every client')
             if (info.pid != nearest.pid
                     and (private or nearest.pid != backend['pid'])):

@@ -110,7 +110,8 @@ def process_identity_runtime(cli_root):
 def current_codex_client(session_id, nearest, *, project=None):
     client = client_runtime()
     info, record = client.recorded_client(session_id, nearest, process_info,
-                                          register_session.process_table(), project=project)
+                                          register_session.process_table(), project=project,
+                                          peer_state=process_state)
     return info, {
         "client_identity": "managed-input", "launch_cwd": record["launch_cwd"],
         "title": record.get("title"), "client_message_id": record["client_message_id"],
