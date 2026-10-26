@@ -5,14 +5,17 @@
     "codex": ["codex"]
   },
   "dependencies": {
-    "agent": ["tj-agents/base", "agent-store", "tj-agents/machine", "tj-agents/cli"],
+    "agent": ["tj-agents/base", "agent-store", "tj-agents/cli"],
     "codex": ["agent"]
   },
   "resources": [
     {"plugin": "agent-store", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
     {"plugin": "agent", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
     {"plugin": "agent", "source": ".agents/agent/runtime", "destination": ".agents/agent/runtime"},
-    {"plugin": "agent", "source": ".agents/agent/resources", "destination": ".agents/agent/resources"}
+    {"plugin": "agent", "source": ".agents/agent/resources", "destination": ".agents/agent/resources"},
+    {"plugin": "agent", "source": ".agents/hooks/hook_dispatch.py", "destination": "hooks/hook_dispatch.py"},
+    {"plugin": "agent", "source": ".claude/hooks/agent.json", "destination": "hooks/claude.json"},
+    {"plugin": "agent", "source": ".codex/hooks/agent.json", "destination": "hooks/codex.json"}
   ],
   "host_adapters": [
     {"skill": "agent:listen", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/listen.md"},
