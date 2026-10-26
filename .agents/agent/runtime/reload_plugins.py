@@ -98,13 +98,6 @@ def resolved(path: object) -> Path:
     return Path(path).resolve()
 
 
-def applies(entry: dict, project: Path) -> bool:
-    if entry.get("scope") in {"user", "managed"}:
-        return True
-    owner = entry.get("projectPath")
-    return bool(owner) and resolved(project).is_relative_to(resolved(owner))
-
-
 def path_key(path: object) -> str:
     return os.path.normcase(str(resolved(path)))
 
@@ -114,24 +107,18 @@ def declared_scopes(identity: str, project: Path) -> list[str]:
             if read_json(project / ".claude" / name).get("enabledPlugins", {}).get(identity) is True]
 
 
-def shadowed(installations: list, identity: str, scope: str, owner: Path) -> bool:
-    own = entry_for(installations, identity, scope, owner) if scope != "user" else None
-    first = next((entry for entry in installations if entry.get("id") == identity and entry.get("scope") == scope
-                  and entry.get("projectPath") and resolved(entry["projectPath"]).is_relative_to(resolved(owner))),
-                 None) if own is not None else None
-    return first is not own
-
-
 def update_targets(identity: str, project: Path, installations: list) -> list[tuple[str, Path]]:
     declared = declared_scopes(identity, project)
-    targets = {(scope, path_key(project)): (scope, project) for scope in declared or ["user"]}
-    for entry in installations:
+    targets = {}
+    for entry in required_plugins.claude_installations(project, installations):
         scope = entry.get("scope")
-        if entry.get("id") != identity or scope not in {"user", "project", "local"} or not applies(entry, project):
+        if entry.get("id") != identity or scope not in {"user", "project", "local"}:
             continue
         owner = project if scope == "user" else Path(entry["projectPath"])
-        targets.setdefault((scope, path_key(owner)), (scope, owner))
-    return [targets[key] for key in sorted(targets) if not shadowed(installations, identity, *targets[key])]
+        targets.setdefault(scope, (scope, owner))
+    for scope in declared or ["user"]:
+        targets.setdefault(scope, (scope, project))
+    return [targets[key] for key in sorted(targets)]
 
 
 def update_result(output: str, identity: str, scope: str) -> dict:
@@ -151,8 +138,9 @@ def update_result(output: str, identity: str, scope: str) -> dict:
 
 
 def plugin_errors(installations: list, project: Path) -> list[str]:
-    return [f"{entry.get('id')} ({entry.get('scope')}): {error}" for entry in installations
-            if entry.get("enabled") is True and applies(entry, project) for error in entry.get("errors") or []]
+    return [f"{entry.get('id')} ({entry.get('scope')}): {error}"
+            for entry in required_plugins.claude_installations(project, installations)
+            if entry.get("enabled") is True for error in entry.get("errors") or []]
 
 
 def entry_for(installations: list, identity: str, scope: str, owner: Path) -> dict | None:
@@ -188,7 +176,8 @@ def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]]
     after = json.loads(run([executable, "plugin", "list", "--json"], project))
     problems = persistence_problems(expected, after) + plugin_errors(after, project)
     for identity, scope in installs:
-        entry = entry_for(after, identity, scope, project)
+        entry = next((entry for entry in required_plugins.claude_installations(project, after)
+                      if entry.get('id') == identity and entry.get('scope') == scope), None)
         if entry is None or entry.get("enabled") is not True:
             problems.append(f"{identity} ({scope}): native installation did not persist enabled")
     if problems:
@@ -198,7 +187,9 @@ def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]]
 
 def refresh_claude(executable: str, project: Path, plugins: list[str]) -> list[str]:
     installations = json.loads(run([executable, "plugin", "list", "--json"], project))
-    installs = [(identity, scope) for identity in plugins for scope in declared_scopes(identity, project)]
+    effective = required_plugins.claude_installations(project, installations)
+    installs = [(identity, scope) for identity in plugins for scope in declared_scopes(identity, project)
+                if not any(entry.get('id') == identity and entry.get('scope') == scope for entry in effective)]
     updates = [(identity, scope, owner) for identity in plugins
                for scope, owner in update_targets(identity, project, installations)]
     return apply_claude(executable, project, installs, updates)
@@ -312,6 +303,7 @@ def reconcile_claude(project: Path, event: bool = False, repositories: set[str] 
                      fresh: frozenset[str] = frozenset()) -> list[str]:
     marketplaces, plugins = selection("claude", "", project)
     installations = installed_entries()
+    effective = required_plugins.claude_installations(project, installations)
     contents = plugin_autoupdate.read_contents()
     publishers = catalog_publishers(tj_agents_marketplaces())
     installs, updates, attempts = [], [], {}
@@ -321,7 +313,7 @@ def reconcile_claude(project: Path, event: bool = False, repositories: set[str] 
         head = contents["heads"].get(key) if key else None
         forced = event and key is None and (repositories is None or marketplaces.get(name) in repositories)
         installs += [(identity, scope) for scope in declared_scopes(identity, project) or ["user"]
-                     if entry_for(installations, identity, scope, project) is None]
+                     if not any(entry.get('id') == identity and entry.get('scope') == scope for entry in effective)]
         for scope, owner in update_targets(identity, project, installations):
             entry = entry_for(installations, identity, scope, owner)
             if entry is None:
@@ -417,7 +409,7 @@ def verify_packages(host: str, executable: str, project: Path, marketplaces: dic
     inventory = json.loads(run([executable, "plugin", "list", "--json"], project))
     entries = inventory if host == "claude" else inventory.get("installed", [])
     if host == "claude":
-        entries = [entry for entry in entries if applies(entry, project)]
+        entries = required_plugins.claude_installations(project, entries)
     installed = {entry.get("id", entry.get("pluginId")) for entry in entries if entry.get("enabled") is True}
     problems = [f"Missing enabled native installation: {identity}" for identity in plugins if identity not in installed]
     if host == "claude":
@@ -459,10 +451,6 @@ def verify_packages(host: str, executable: str, project: Path, marketplaces: dic
             for entry in entries:
                 if entry.get("id", entry.get("pluginId")) != identity:
                     continue
-                owner = entry.get("projectPath")
-                if host == "claude" and entry.get("scope") in {"project", "local"}:
-                    if not owner or not project.resolve().is_relative_to(Path(owner).resolve()):
-                        continue
                 install = (Path(entry["installPath"]) if host == "claude" else configuration_root(host)
                            / "plugins/cache" / name / plugin / (entry.get("version") or "local"))
                 if package_tree(install) != expected:
