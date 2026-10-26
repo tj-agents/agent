@@ -160,6 +160,15 @@ def persistence_problems(expected: list[tuple[str, str, Path, str]], installatio
     return problems
 
 
+def dependency_problems(expected: list[tuple[str, str, Path]], installations: list) -> list[str]:
+    problems = []
+    for identity, scope, owner in expected:
+        entry = entry_for(required_plugins.claude_installations(owner, installations), identity, scope, owner)
+        if entry is None or entry.get("enabled") is not True:
+            problems.append(f"{identity} ({scope}): native installation did not persist enabled")
+    return problems
+
+
 def dependency_identity(dependency: object, marketplace: str) -> str | None:
     if isinstance(dependency, dict):
         name, marketplace = dependency.get("name"), dependency.get("marketplace") or marketplace
@@ -224,7 +233,8 @@ def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]]
         if result["updateOutcome"] == "updated" and identity not in updated:
             updated.append(identity)
     after = json.loads(run([executable, "plugin", "list", "--json"], project))
-    problems = persistence_problems(expected, after) + plugin_errors(after, project)
+    problems = persistence_problems(expected, after) + dependency_problems(dependencies, after) \
+               + plugin_errors(after, project)
     for identity, scope in installs:
         entry = next((entry for entry in required_plugins.claude_installations(project, after)
                       if entry.get('id') == identity and entry.get('scope') == scope), None)
