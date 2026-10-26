@@ -121,7 +121,7 @@ class InstallRecoveryTests(unittest.TestCase):
 
     def test_missing_required_plugins_repair_the_plugin_setup_step(self):
         missing = required_plugins.MissingRequiredPluginsError("missing", self.project, ["agent@tj-agents"])
-        with mock.patch.object(required_plugins, "check_launch_roots", side_effect=[missing, (self.project, {})]), \
+        with mock.patch.object(required_plugins, "check", side_effect=[missing, {}]), \
                 mock.patch.object(reload_plugins, "repair_missing", side_effect=RuntimeError("native install failed")), \
                 mock.patch.object(install, "repair", return_value=[]) as repair:
             self.assertEqual((self.project, {}), CHECK.prepare_launch_roots(self.project, "claude", "native", []))
@@ -158,6 +158,28 @@ class DependencyInstallationIntegration(unittest.TestCase):
             [sys.executable, str(FIXTURES / "plugin_cli.py"), *command[1:]], project))
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_shared_admission_installs_and_reads_back_a_new_project_declaration(self):
+        identity = "agent@tj-agents"
+        for directory in (".agents", ".claude"):
+            (self.root / directory).mkdir()
+        (self.root / ".agents/plugins.json").write_text(
+            json.dumps({"schema_version": 1, "plugins": [identity]}), encoding="utf-8")
+        (self.root / ".claude/settings.json").write_text(
+            json.dumps({"enabledPlugins": {identity: True}}), encoding="utf-8")
+
+        def inventory(_binary, _host, project, _options, _marketplace=None, **_kwargs):
+            return json.loads(REFRESH.run(["fixture", "plugin", "list", "--json"], project))
+
+        updated = set()
+        with mock.patch.object(required_plugins, "inventory", side_effect=inventory):
+            roots = REFRESH.prepare_required(self.root, "claude", "fixture", updated=updated)
+        self.assertEqual({identity: self.home / "payloads/agent"}, roots)
+        self.assertEqual({identity}, updated)
+        self.assertEqual([["install", "base@tj-agents"], ["install", identity]],
+                         [json.loads(line) for line in (self.home / "operations.jsonl").read_text(encoding="utf-8").splitlines()])
+        records = json.loads((self.home / "plugins/installed_plugins.json").read_text(encoding="utf-8"))
+        self.assertEqual("project", records["plugins"][identity][0]["scope"])
 
     def test_fresh_dependencies_persist_before_installing_the_dependent(self):
         REFRESH.apply_claude("fixture", self.root, [("personal@tj-agents", "project")], [])

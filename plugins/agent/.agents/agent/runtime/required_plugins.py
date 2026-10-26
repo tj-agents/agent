@@ -12,10 +12,12 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 
 IDENTITY = re.compile(r"[a-z][a-z0-9-]*@[a-z][a-z0-9-]*\Z")
-INVENTORY_TIMEOUT_SECONDS = 5
+INVENTORY_TIMEOUT_SECONDS = 20
+GIT_TIMEOUT_SECONDS = 5
 MAINTENANCE_COMMANDS = {
     "codex": frozenset({"plugin", "login", "logout", "doctor", "help", "completion", "update", "mcp", "features"}),
     "claude": frozenset({"plugin", "plugins", "auth", "doctor", "install", "setup-token", "update", "upgrade", "mcp"}),
@@ -154,7 +156,7 @@ def git_common_directory(project: Path) -> str | None:
     try:
         result = subprocess.run(['git', '-C', str(project), 'rev-parse', '--git-common-dir'],
                                 capture_output=True, text=True, encoding='utf-8', errors='replace',
-                                timeout=INVENTORY_TIMEOUT_SECONDS)
+                                timeout=GIT_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError) as error:
         raise RequiredPluginsError(f'Cannot resolve the native Claude repository for {project}: {error}') from error
     if result.returncode or not result.stdout.strip():
@@ -253,14 +255,18 @@ def check(project: Path, host: str, executable: str | None = None,
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
     marketplaces = sorted({identity.rsplit("@", 1)[1] for identity in required}) if host == "codex" else (None,)
     entries = []
+    deadline = time.monotonic() + INVENTORY_TIMEOUT_SECONDS
     for marketplace in marketplaces:
-        entries.extend(inventory(binary, host, launch_directory, inventory_options, marketplace))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RequiredPluginsError(f"Required {host} plugin inventory exceeded its {INVENTORY_TIMEOUT_SECONDS}-second budget")
+        entries.extend(inventory(binary, host, launch_directory, inventory_options, marketplace, timeout=remaining))
     roots = enabled_roots(host, launch_directory, entries)
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(
             f"Required standards unavailable for {host} in {project}: {', '.join(missing)}. "
-            "Repair repository selection/native installation, then start a fresh session. "
+            f"Invoke agent:refresh-plugins for {host} in this project; it installs and adopts required plugins automatically. "
             "Cached files from another host do not establish activation.", project, missing,
         )
     return {identity: roots[identity] for identity in required}
@@ -277,7 +283,7 @@ def inventory_roots(project: Path, host: str, executable: str | None = None,
 
 
 def inventory(binary: str, host: str, launch_directory: Path, inventory_options: tuple[str, ...],
-              marketplace: str | None = None) -> list:
+              marketplace: str | None = None, *, timeout: float | None = None) -> list:
     command = [binary, *inventory_options, "plugin", "list"]
     if marketplace is not None:
         command.extend(("--marketplace", marketplace))
@@ -287,7 +293,8 @@ def inventory(binary: str, host: str, launch_directory: Path, inventory_options:
             command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", *command]
         result = subprocess.run(
             command, cwd=launch_directory, capture_output=True,
-            text=True, encoding="utf-8", errors="replace", timeout=INVENTORY_TIMEOUT_SECONDS,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=INVENTORY_TIMEOUT_SECONDS if timeout is None else timeout,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except (OSError, subprocess.SubprocessError) as error:
@@ -411,14 +418,11 @@ def declaration(root: Path, identity: str, document: dict | None = None) -> Targ
 
 
 def targets(project: Path, host: str, executable: str | None, *, repair=False) -> list[Target]:
-    try:
-        roots = check(project, host, executable)
-    except MissingRequiredPluginsError as error:
-        if not repair:
-            raise
+    if repair:
         import reload_plugins
 
-        reload_plugins.repair_missing(host, error.project, error.missing, executable)
+        roots = reload_plugins.prepare_required(project, host, executable)
+    else:
         roots = check(project, host, executable)
     if roots is None:
         return []

@@ -277,6 +277,18 @@ def refresh(host: str, executable: str, project: Path, marketplaces: dict, plugi
     return []
 
 
+def prepare_required(project: Path, host: str, executable: str | None = None,
+                     inventory_options: tuple[str, ...] = (), updated: set[str] | None = None):
+    try:
+        return required_plugins.check(project, host, executable, inventory_options)
+    except required_plugins.MissingRequiredPluginsError as error:
+        repair_missing(host, error.project, error.missing, executable)
+        roots = required_plugins.check(project, host, executable, inventory_options)
+        if updated is not None:
+            updated.update(error.missing)
+        return roots
+
+
 def repair_missing(host: str, project: Path, missing, executable: str | None = None) -> None:
     executable = (executable_for(host) if not executable or Path(executable).suffix.casefold() in {".cmd", ".ps1", ".bat"}
                   else executable)
@@ -300,7 +312,6 @@ def repair_missing(host: str, project: Path, missing, executable: str | None = N
         for identity in missing:
             run([executable, "plugin", "add", identity], project)
         plugin_autoupdate.remove_user_plugins(user_config, set(missing) - user_enabled)
-    required_plugins.check(project, host, executable)
 
 
 def installed_entries() -> list[dict]:
@@ -526,7 +537,7 @@ def executable_for(host: str) -> str:
     return agent_cli.resolve_claude_executable() if host == "claude" else agent_cli.resolve_codex_executable()[0]
 
 
-def relaunch_session(project: Path, updated: set[str]) -> dict | None:
+def relaunch_session(project: Path, updated: set[str], allowed: bool = True) -> dict | None:
     import session_relaunch
 
     identity = session_relaunch.session_identity()
@@ -537,9 +548,8 @@ def relaunch_session(project: Path, updated: set[str]) -> dict | None:
     stale = session_relaunch.stale_plugins(identity[1], project, plugins, installed, updated)
     if not stale:
         return None
-    if os.environ.get("CLAUDE_CODE_CHILD_SESSION"):
-        return {"relaunch": "skipped", "stale": stale, "reason": "a child session cannot relaunch its parent; "
-                                                              "run agent:refresh from the parent session"}
+    if not allowed:
+        return {"relaunch": "failed", "stale": stale, "error": "--no-relaunch prevents this session adopting the installed plugins"}
     try:
         result = session_relaunch.relaunch(project, installed, host="claude")
     except (OSError, RuntimeError, ValueError) as error:
@@ -576,12 +586,19 @@ def main(argv: list[str] | None = None) -> int:
     project = arguments.project.resolve()
     hosts = ("claude", "codex") if arguments.host == "both" else (arguments.host,)
     updated: set[str] = set()
+
     def converge_plugin_setup() -> list[str]:
         executables = {host: None for host in hosts}
         return required_plugins.check_setup(project, hosts, executables) if arguments.verify_only \
             else required_plugins.converge_setup(project, hosts, executables, arguments.onboard)
-    relaunch_allowed = "claude" in hosts and not arguments.no_relaunch and not arguments.verify_only
+    check_claude_adoption = "claude" in hosts and not arguments.verify_only
     if not (arguments.all or arguments.verify or arguments.verify_only):
+        try:
+            for host in hosts:
+                prepare_required(project, host, updated=updated)
+        except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
+            print(f"plugins: {error}", file=sys.stderr)
+            return 1
         result = launch_check.check(project, update=lambda host, repositories, root:
                                     launch_check.update_host(host, repositories, root, updated),
                                     reconcile=lambda root: launch_check.reconcile_installs(root, updated),
@@ -606,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
                 except (OSError, ValueError, RuntimeError) as error:
                     summary["hook_readiness_error"] = str(error)
                     result = "failed"
-            relaunched = relaunch_session(project, updated) if relaunch_allowed and result != "failed" and not setup_errors else None
+            relaunched = relaunch_session(project, updated, not arguments.no_relaunch) if check_claude_adoption and result != "failed" and not setup_errors else None
             if relaunched:
                 summary["claude"] = relaunched
             print(json.dumps(summary, indent=2))
@@ -615,9 +632,12 @@ def main(argv: list[str] | None = None) -> int:
             failed = bool(relaunched and relaunched["relaunch"] == "failed")
             return int(result in {"failed", "offline", "busy"} or failed or bool(setup_errors))
     reports = []
+    relaunched = None
     restart_reason = None
     for host in hosts:
         try:
+            if not arguments.verify_only:
+                prepare_required(project, host, updated=updated)
             executable = executable_for(host)
             marketplaces, plugins = selection(host, executable, project)
             changed = [] if arguments.verify_only else refresh(host, executable, project, marketplaces, plugins)
@@ -643,8 +663,8 @@ def main(argv: list[str] | None = None) -> int:
             reports.append({"host": "codex restart", "plugins": [], "problems": [str(error)]})
         else:
             reports.append({"host": "codex restart", **result, "problems": []})
-    if "claude" in hosts and relaunch_allowed and not any(report["problems"] for report in reports):
-        relaunched = relaunch_session(project, updated)
+    if check_claude_adoption and not any(report["problems"] for report in reports):
+        relaunched = relaunch_session(project, updated, not arguments.no_relaunch)
         if relaunched:
             reports.append({"host": "claude relaunch", "plugins": [], "problems":
                             [] if relaunched["relaunch"] != "failed" else ["relaunch failed: " + relaunched["error"]]})

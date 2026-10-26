@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Run the refresh utility shipped in this machine package (Python 3.9+)."""
 
 from pathlib import Path
 import runpy
