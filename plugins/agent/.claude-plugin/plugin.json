@@ -7,13 +7,13 @@
   },
   "repository": "https://github.com/tj-agents/agent",
   "skills": "./skills/",
+  "hooks": "./hooks/claude.json",
   "keywords": [
     "agent"
   ],
   "dependencies": [
     "base@tj-agents",
     "agent-store",
-    "machine@tj-agents",
     "cli@tj-agents"
   ]
 }

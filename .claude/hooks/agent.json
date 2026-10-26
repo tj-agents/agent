@@ -1,0 +1,108 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/hook_dispatch.py",
+              "--deadline",
+              "8",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py"
+            ]
+          },
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/reap_orphans.py",
+              "--notice"
+            ]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/hook_dispatch.py",
+              "--deadline",
+              "12",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py",
+              "hook",
+              "prompt",
+              "--host",
+              "claude",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
+              "prompt",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/hook_dispatch.py",
+              "--deadline",
+              "55",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py",
+              "hook",
+              "stop",
+              "--host",
+              "claude",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
+              "stop",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py",
+              "hook",
+              "session-end",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
