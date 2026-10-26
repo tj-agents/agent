@@ -160,13 +160,12 @@ def host_arguments(pid: int) -> list[str]:
 
 
 def effective_installation(entries: list, project: Path) -> dict | None:
-    resolved = project.resolve()
     ranked = []
-    for entry in entries:
+    for entry in required_plugins.claude_installations(project, entries):
         if not isinstance(entry, dict) or not isinstance(entry.get("installPath"), str):
             continue
         scope, owner = entry.get("scope"), entry.get("projectPath")
-        if scope in {"local", "project"} and owner and resolved.is_relative_to(Path(owner).resolve()):
+        if scope in {"local", "project"} and owner:
             ranked.append(((0 if scope == "local" else 1), -len(Path(owner).resolve().parts), entry))
         elif scope in {"user", "managed"}:
             ranked.append((2 if scope == "user" else 3, 0, entry))
