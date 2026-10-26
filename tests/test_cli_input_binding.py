@@ -216,7 +216,8 @@ class RecorderTests(unittest.TestCase):
             return {'data': [{'item': {'type': 'userMessage', 'clientId': 'steering-input'}},
                              {'item': {'type': 'userMessage', 'clientId': 'first-input'}}], 'nextCursor': None}
         server.request.side_effect = request
-        self.assertEqual({'turn_id': 'turn', 'client_message_id': 'steering-input'}, client.current_input(server, 'thread'))
+        self.assertEqual({'turn_id': 'turn', 'client_message_id': 'steering-input', 'native_rollout': None},
+                         client.current_input(server, 'thread'))
         self.assertEqual('desc', server.request.call_args.args[1]['sortDirection'])
 
     def test_background_thread_with_copied_parent_input_never_owns_a_frontend(self):

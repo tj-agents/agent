@@ -165,12 +165,15 @@ def arm(args: argparse.Namespace) -> int:
     if read_object(args.record or registry) != entry:
         raise ValueError("prepared session registration changed before arming")
     if args.host == "codex":
-        if not args.turn_id:
+        if args.turn_id != entry.get("native_turn_id"):
             raise ValueError("Codex arming requires the current native turn")
         shared.revalidate_codex_client(entry)
+        native_completion = shared.client_runtime().NativeCompletion(entry)
+        native_completion.poll()
     else:
         shared.verify_claude_receipt(entry)
-    activity = shared.active_turn_activity(entry)
+        native_completion = None
+    activity = None if args.host == "codex" else shared.active_turn_activity(entry)
     request = state_root() / "client-close" / (token + ".json")
     result = state_root() / "client-close" / (token + ".result.json")
     completion, cancel = args.completion.resolve(), args.cancel.resolve()
@@ -184,6 +187,8 @@ def arm(args: argparse.Namespace) -> int:
         "completion": str(completion), "cancel": str(cancel), "completion_token": token,
         "result": str(result.resolve()),
     }
+    if native_completion is not None:
+        state["native_completion"] = native_completion.pin()
     if args.host == "claude":
         transcript = claude_transcript(args.session_id, args.transcript or Path(target["transcript"]))
         if str(transcript) != target.get("transcript") or claude_turn(transcript) != target.get("claude_user_uuid"):

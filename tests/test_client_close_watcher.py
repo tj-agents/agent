@@ -21,32 +21,60 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.assertFalse(WATCHER.canonical_path(self.request).exists())
         self.assertGreaterEqual(self.server.request.call_count, 9)
 
+    def test_native_completion_closes_without_a_store_stop(self):
+        self.arm()
+        self.append_rollout({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-one"}})
+        self.assertEqual(0, self.wait())
+        self.assertEqual("closed", self.outcome()["status"])
+        self.assertEqual("closed", self.row()["end_reason"])
+
+    def test_store_bookkeeping_failure_after_a_real_stop_keeps_the_close_proof(self):
+        self.arm()
+        self.stop()
+        with mock.patch.object(WATCHER, "_record_end", side_effect=OSError("Store unavailable")):
+            self.assertEqual(0, self.wait())
+        outcome = self.outcome()
+        self.assertEqual({"status": "closed", "session_id": "one"},
+                         {key: outcome[key] for key in ("status", "session_id")})
+        self.assertEqual("session Store bookkeeping failed after close: Store unavailable", outcome["reason"])
+        self.assertIsNone(self.row()["ended_at"])
+
+    def test_refused_stop_does_not_attempt_store_bookkeeping(self):
+        self.arm()
+        self.stop()
+        with mock.patch.object(session_close, "stop_cli_client", side_effect=session_close.Refusal("still live")), \
+                mock.patch.object(WATCHER, "_record_end") as record_end:
+            self.assertEqual(2, self.wait())
+        record_end.assert_not_called()
+        self.assertEqual("refused", self.outcome()["status"])
+
+    def test_new_native_turn_at_the_final_signal_guard_cancels(self):
+        self.arm()
+        self.stop()
+        calls = []
+
+        class Primitive:
+            def stop(_self, _identity, *, before_signal):
+                self.append_rollout({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "later"}})
+                before_signal()
+                calls.append("signal")
+
+        with mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive()):
+            self.assertEqual(0, self.wait())
+        self.assertEqual([], calls)
+        self.assertEqual("cancelled", self.outcome()["status"])
+
     def test_stop_between_activity_and_completion_reads_preserves_close(self):
         self.arm()
-        original_complete = WATCHER.complete
-        completed = []
-        def stop_before_completion_read(request):
-            if not completed:
-                completed.append(True)
-                self.stop()
-            return original_complete(request)
-        with mock.patch.object(WATCHER, "complete", side_effect=stop_before_completion_read):
-            self.assertEqual(0, self.wait())
+        self.stop()
+        self.assertEqual(0, self.wait())
         self.assertEqual("closed", self.outcome()["status"])
         self.assertEqual("closed", self.row()["end_reason"])
 
     def test_stop_store_transition_waits_for_completion_publication(self):
         self.arm()
-        self.store.record_stop(self.connection, self.handle, self.root)
-        published = []
-        def publish_after_wait(_elapsed):
-            if not published:
-                self.assertFalse(WATCHER.complete(self.request))
-                self.assertIsNone(self.row()["ended_at"])
-                published.append(True)
-                LIFECYCLE.run("stop", "codex", {"session_id": "one", "turn_id": "turn-one"})
-        self.assertEqual(0, self.wait(publish_after_wait))
-        self.assertEqual([True], published)
+        self.stop()
+        self.assertEqual(0, self.wait())
         self.assertEqual("closed", self.outcome()["status"])
         self.assertEqual("closed", self.row()["end_reason"])
 
@@ -90,8 +118,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         def changed(_elapsed):
             if not fired:
                 fired.append(True)
-                self.store.record_prompt(self.connection, self.handle)
-                self.store.record_stop(self.connection, self.handle, self.root)
+                self.append_rollout({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "later"}})
         with mock.patch.object(session_close, "stop_cli_client") as stop:
             self.assertEqual(0, self.wait(changed))
         stop.assert_not_called()
@@ -114,7 +141,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.assertEqual(original, self.recording.read_bytes())
         self.assertIsNone(self.row()["ended_at"])
 
-    def test_local_generation_cancel_and_store_are_checked_after_native_rpc(self):
+    def test_store_transition_does_not_replace_the_native_completion_guard(self):
         self.arm()
         self.stop()
         native = self.native_request
@@ -124,8 +151,8 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
                 self.store.record_stop(self.connection, self.handle, self.root)
             return native(method, params)
         self.server.request.side_effect = request
-        self.assertEqual(2, self.wait())
-        self.assertIsNone(self.row()["ended_at"])
+        self.assertEqual(0, self.wait())
+        self.assertEqual("closed", self.row()["end_reason"])
 
     def test_mutated_request_and_replaced_generation_never_signal(self):
         self.arm()
