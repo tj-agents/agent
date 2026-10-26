@@ -26,6 +26,7 @@ EXPIRY_SECONDS = 11 * 60 * 60
 HOSTS = ("claude", "codex")
 HOST_VARIABLE = "TJ_AGENTS_LAUNCH_HOST"
 SETUP_RECOVERY = "TJ_AGENTS_SETUP_RECOVERY"
+SETUP_SOURCE = "https://github.com/tj-agents/core.git"
 TOPIC = re.compile(r"[A-Za-z0-9_-]{32,128}")
 MESSAGE_ID = re.compile(r"[A-Za-z0-9]{1,64}")
 
@@ -45,6 +46,8 @@ def bootstrap_setup(project: Path) -> None:
     checkout = directory / "sources" / "core"
 
     def run(arguments: list[str], cwd: Path = project) -> str:
+        if arguments[0] == "git":
+            arguments = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *arguments[1:]]
         result = subprocess.run(arguments, cwd=cwd, env=environment, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=1800, check=False)
         if result.returncode:
@@ -56,12 +59,15 @@ def bootstrap_setup(project: Path) -> None:
         for path in (directory, directory / "sources", checkout):
             if path.is_symlink() or (path.exists() and getattr(path.lstat(), "st_file_attributes", 0) & 0x400):
                 raise RuntimeError(f"Automatic setup refuses a linked source directory: {path}")
-        if not checkout.exists():
+        if run(["git", "ls-remote", "--get-url", SETUP_SOURCE]) != SETUP_SOURCE:
+            raise RuntimeError("Automatic setup refuses a rewritten canonical source URL")
+        created = not checkout.exists()
+        if created:
             checkout.parent.mkdir(parents=True, exist_ok=True)
-            run(["git", "clone", "--depth=1", "--branch", "main", "https://github.com/tj-agents/core.git", str(checkout)])
-        if run(["git", "config", "--get", "remote.origin.url"], checkout) != "https://github.com/tj-agents/core.git":
+            run(["git", "clone", "--no-checkout", "--template=", "--depth=1", "--branch", "main", SETUP_SOURCE, str(checkout)])
+        if run(["git", "remote", "get-url", "origin"], checkout) != SETUP_SOURCE:
             raise RuntimeError("Automatic setup source is not the canonical tj-agents/core repository")
-        if run(["git", "status", "--porcelain"], checkout):
+        if not created and run(["git", "status", "--porcelain"], checkout):
             raise RuntimeError(f"Automatic setup source has local changes: {checkout}")
         run(["git", "fetch", "--depth=1", "origin", "refs/heads/main"], checkout)
         run(["git", "checkout", "--detach", "FETCH_HEAD"], checkout)
@@ -285,14 +291,11 @@ def prepare_launch_roots(project, host, executable, arguments):
 
     try:
         return required_plugins.check_launch_roots(project, host, executable, arguments)
-    except required_plugins.RequiredPluginsError as error:
+    except required_plugins.MissingRequiredPluginsError as error:
         try:
-            if isinstance(error, required_plugins.MissingRequiredPluginsError):
-                import reload_plugins
+            import reload_plugins
 
-                reload_plugins.repair_missing(host, error.project, error.missing, executable)
-            else:
-                raise error
+            reload_plugins.repair_missing(host, error.project, error.missing, executable)
         except (required_plugins.RequiredPluginsError, RuntimeError, OSError):
             if os.environ.get(SETUP_RECOVERY):
                 raise
