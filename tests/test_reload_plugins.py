@@ -93,66 +93,39 @@ class RefreshCliTests(unittest.TestCase):
         self.assertEqual(["claude", "codex"], [call.args[1] for call in self.admission.call_args_list])
         refresh.assert_called_once_with("codex", "native", Path.cwd().resolve(), {}, [])
 
-    def test_default_refresh_completes_the_other_host_after_admission_failure(self):
-        for failed_host, healthy_host in (("claude", "codex"), ("codex", "claude")):
-            for result in ("current", "unconfigured"):
-                def admit(project, host, **kwargs):
-                    if host == failed_host:
-                        raise REFRESH.RefreshError(f"{host} install failed")
-
-                self.admission.reset_mock()
-                self.admission.side_effect = admit
-                self.readiness.reset_mock()
-                with self.subTest(failed_host=failed_host, result=result), \
-                        mock.patch.object(REFRESH.launch_check, "check", return_value=result) as check, \
-                        mock.patch.object(REFRESH, "executable_for", return_value="native"), \
-                        mock.patch.object(REFRESH, "selection", return_value=({}, [])), \
-                        mock.patch.object(REFRESH, "refresh", return_value=[]) as refresh, \
-                        mock.patch.object(REFRESH.required_plugins, "converge_setup", return_value=[]) as setup, \
-                        mock.patch.object(REFRESH, "relaunch_session", return_value=None) as relaunch, \
-                        mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
-                    self.assertEqual(1, REFRESH.main([]))
-                    self.assertEqual(["claude", "codex"],
-                                     [call.args[1] for call in self.admission.call_args_list[:2]])
-                    self.assertEqual(healthy_host, check.call_args.kwargs["host"])
-                    self.assertEqual((healthy_host,), setup.call_args.args[1])
-                    self.assertEqual(healthy_host == "codex", self.readiness.called)
-                    self.assertEqual(healthy_host == "claude", relaunch.called)
-                    self.assertEqual(result == "unconfigured", refresh.called)
-                    if refresh.called:
-                        self.assertEqual(healthy_host, refresh.call_args.args[0])
-                    self.assertIn(f"{failed_host} install failed",
-                                  "".join(call.args[0] for call in stdout.write.call_args_list))
-
-    def test_default_refresh_isolates_expired_event_updates_after_admission_failure(self):
+    def test_partial_admission_refreshes_the_healthy_host_without_consuming_events(self):
         for failed_host, healthy_host in (("claude", "codex"), ("codex", "claude")):
             def admit(project, host, **kwargs):
                 if host == failed_host:
                     raise REFRESH.RefreshError(f"{host} install failed")
 
+            self.admission.reset_mock()
             self.admission.side_effect = admit
             self.readiness.reset_mock()
             with self.subTest(failed_host=failed_host), tempfile.TemporaryDirectory() as temporary:
                 state = Path(temporary)
-                (state / "machine-events.json").write_text(json.dumps({"topic": "t" * 40}), encoding="utf-8")
                 cursor = state / "machine-events-cursor.json"
-                cursor.write_text(json.dumps({"since": "old", "since_at": 0}), encoding="utf-8")
+                saved = json.dumps({"since": "old", "since_at": 0})
+                cursor.write_text(saved, encoding="utf-8")
                 with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(state)}), \
-                        mock.patch.object(REFRESH.launch_check, "poll", return_value=[]), \
-                        mock.patch.object(REFRESH.launch_check, "update_host",
-                                          side_effect=lambda host, *args: host == healthy_host) as update, \
+                        mock.patch.object(REFRESH.launch_check, "check", side_effect=AssertionError("event update")) as check, \
+                        mock.patch.object(REFRESH, "executable_for", return_value="native"), \
+                        mock.patch.object(REFRESH, "selection", return_value=({}, ["base@tj-agents"])), \
+                        mock.patch.object(REFRESH, "refresh", return_value=[]) as refresh, \
                         mock.patch.object(REFRESH.required_plugins, "converge_setup", return_value=[]) as setup, \
                         mock.patch.object(REFRESH, "relaunch_session", return_value=None) as relaunch, \
-                        mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                        mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
                     self.assertEqual(1, REFRESH.main([]))
-                self.assertEqual([healthy_host], [call.args[0] for call in update.call_args_list])
+                self.assertEqual(["claude", "codex"],
+                                 [call.args[1] for call in self.admission.call_args_list[:2]])
+                refresh.assert_called_once_with(healthy_host, "native", Path.cwd().resolve(), {}, ["base@tj-agents"])
                 self.assertEqual((healthy_host,), setup.call_args.args[1])
                 self.assertEqual(healthy_host == "codex", self.readiness.called)
                 self.assertEqual(healthy_host == "claude", relaunch.called)
-                saved = json.loads(cursor.read_text(encoding="utf-8"))
-                self.assertEqual("old", saved["since"])
-                self.assertEqual(0, saved["since_at"])
-                self.assertEqual({healthy_host: {"applied": "old"}}, saved["hosts"])
+                self.assertIn(f"{failed_host} install failed",
+                              "".join(call.args[0] for call in stdout.write.call_args_list))
+                check.assert_not_called()
+                self.assertEqual(saved, cursor.read_text(encoding="utf-8"))
 
     def test_default_refresh_stops_when_neither_host_is_admitted(self):
         self.admission.side_effect = REFRESH.RefreshError("inventory failed")
