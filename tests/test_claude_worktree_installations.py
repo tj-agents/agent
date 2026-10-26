@@ -134,7 +134,11 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
 
     def test_update_first_installs_newly_declared_dependencies(self):
         dependency = ('base@tj-agents', 'project', self.primary)
-        after = [self.entry(self.primary, 'new')]
+        after = [
+            {'id': 'base@tj-agents', 'scope': 'project', 'projectPath': str(self.primary),
+             'version': 'dependency', 'enabled': True},
+            self.entry(self.primary, 'new'),
+        ]
         calls = []
 
         def run(command, cwd):
@@ -154,6 +158,23 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
             ['plugin', 'update', IDENTITY, '--scope', 'project', '--json'],
         ], [command[1:] for command, _ in calls[:2]])
         self.assertEqual([self.primary], [cwd for command, cwd in calls if command[2] == 'install'])
+
+    def test_dependency_install_requires_an_enabled_effective_owner_scope(self):
+        dependency = ('base@tj-agents', 'project', self.primary)
+        for row in (None, {'id': 'base@tj-agents', 'scope': 'project', 'projectPath': str(self.primary),
+                           'version': 'dependency', 'enabled': False}):
+            with self.subTest(row=row):
+                rows = [] if row is None else [row]
+
+                def run(command, cwd):
+                    if command[1:3] == ['plugin', 'list']:
+                        return json.dumps(rows)
+                    return ''
+
+                with mock.patch.object(REFRESH, 'run', side_effect=run):
+                    with self.assertRaisesRegex(REFRESH.RefreshError,
+                                                r'base@tj-agents \(project\): native installation did not persist enabled'):
+                        REFRESH.apply_claude('claude', self.primary, [], [], dependencies=[dependency])
 
     def test_current_plugin_still_installs_a_catalog_dependency(self):
         dependency = ('base@tj-agents', 'project', self.primary)
