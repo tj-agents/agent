@@ -71,9 +71,21 @@ def bootstrap_setup(project: Path) -> None:
                 os.replace(staged, checkout)
         if run(["git", "remote", "get-url", "origin"], checkout) != SETUP_SOURCE:
             raise RuntimeError("Automatic setup source is not the canonical tj-agents/core repository")
-        if run(["git", "status", "--porcelain"], checkout):
-            raise RuntimeError(f"Automatic setup source has local changes: {checkout}")
         run(["git", "fetch", "--depth=1", "origin", "refs/heads/main"], checkout)
+        changes = run(["git", "status", "--porcelain"], checkout)
+        if changes:
+            declared_settings = False
+            if changes == "M .claude/settings.json":
+                try:
+                    current = json.loads((checkout / ".claude/settings.json").read_text(encoding="utf-8"))
+                    published = json.loads(run(["git", "show", "FETCH_HEAD:.claude/settings.json"], checkout))
+                    declared_settings = (isinstance(current, dict) and isinstance(published, dict)
+                                         and json.dumps(current, sort_keys=True) == json.dumps(published, sort_keys=True))
+                except (OSError, ValueError, RuntimeError):
+                    pass
+            if not declared_settings:
+                raise RuntimeError(f"Automatic setup source has local changes: {checkout}")
+            run(["git", "restore", "--source=FETCH_HEAD", "--staged", "--worktree", "--", ".claude/settings.json"], checkout)
         run(["git", "checkout", "--detach", "FETCH_HEAD"], checkout)
         command = (["powershell.exe", "-NoProfile", "-File", str(checkout / "setup.ps1")] if os.name == "nt"
                    else ["bash", str(checkout / "setup.sh")])
