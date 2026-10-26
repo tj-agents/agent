@@ -160,16 +160,6 @@ def persistence_problems(expected: list[tuple[str, str, Path, str]], installatio
     return problems
 
 
-def dependency_problems(expected: list[tuple[str, str, Path]], installations: list) -> list[str]:
-    problems = []
-    for identity, scope, owner in expected:
-        entry = next((entry for entry in required_plugins.claude_installations(owner, installations)
-                      if entry.get("id") == identity and entry.get("scope") == scope), None)
-        if entry is None or entry.get("enabled") is not True:
-            problems.append(f"{identity} ({scope}): native installation did not persist enabled")
-    return problems
-
-
 def dependency_identity(dependency: object, marketplace: str) -> str | None:
     if isinstance(dependency, dict):
         name, marketplace = dependency.get("name"), dependency.get("marketplace") or marketplace
@@ -192,14 +182,18 @@ def catalog_dependencies() -> dict[str, list[str]]:
 
 def missing_dependencies(identity: str, scope: str, owner: Path, dependencies: dict[str, list[str]],
                          installations: list) -> list[str]:
-    order, seen = [], set()
+    order, seen, visiting = [], set(), set()
 
     def visit(plugin: str) -> None:
+        if plugin in visiting:
+            raise RefreshError(f"Cyclic plugin dependency: {plugin}")
+        visiting.add(plugin)
         for dependency in dependencies.get(plugin, []):
             if dependency not in seen:
-                seen.add(dependency)
                 visit(dependency)
+                seen.add(dependency)
                 order.append(dependency)
+        visiting.remove(plugin)
     visit(identity)
     if not order:
         return []
@@ -223,11 +217,13 @@ def dependency_installs(dependents: list[tuple[str, str, Path]]) -> list[tuple[s
 
 def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]],
                  updates: list[tuple[str, str, Path]], starting=None, dependencies=None) -> list[str]:
-    for identity, scope in installs:
-        run([executable, "plugin", "install", identity, "--scope", scope], project)
-    dependencies = dependency_installs(updates) if dependencies is None else dependencies
+    dependents = [(identity, scope, project) for identity, scope in installs] + updates
+    dependencies = list(dict.fromkeys((dependencies or []) + dependency_installs(dependents)))
     for dependency, scope, owner in dependencies:
         run([executable, "plugin", "install", dependency, "--scope", scope], owner)
+    for identity, scope in installs:
+        if (identity, scope, project) not in dependencies:
+            run([executable, "plugin", "install", identity, "--scope", scope], project)
     expected, updated = [], list(dict.fromkeys([identity for identity, _ in installs]
                                                + [dependency for dependency, _, _ in dependencies]))
     for identity, scope, owner in updates:
@@ -239,10 +235,10 @@ def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]]
         if result["updateOutcome"] == "updated" and identity not in updated:
             updated.append(identity)
     after = json.loads(run([executable, "plugin", "list", "--json"], project))
-    problems = persistence_problems(expected, after) + dependency_problems(dependencies, after) \
-               + plugin_errors(after, project)
-    for identity, scope in installs:
-        entry = next((entry for entry in required_plugins.claude_installations(project, after)
+    problems = persistence_problems(expected, after) + plugin_errors(after, project)
+    for identity, scope, owner in list(dict.fromkeys(dependencies + [(identity, scope, project) for identity, scope in installs])):
+        inventory = after if owner == project else json.loads(run([executable, "plugin", "list", "--json"], owner))
+        entry = next((entry for entry in required_plugins.claude_installations(owner, inventory)
                       if entry.get('id') == identity and entry.get('scope') == scope), None)
         if entry is None or entry.get("enabled") is not True:
             problems.append(f"{identity} ({scope}): native installation did not persist enabled")

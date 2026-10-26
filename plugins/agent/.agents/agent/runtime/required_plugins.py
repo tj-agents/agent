@@ -149,7 +149,7 @@ def selected(project: Path) -> tuple[str, ...]:
 
 @functools.lru_cache(maxsize=None)
 def git_common_directory(project: Path) -> str | None:
-    if not project.is_dir() or not any((directory / '.git').exists() for directory in (project, *project.parents)):
+    if not project.is_dir() or not any((directory / ".git").exists() for directory in (project, *project.parents)):
         return None
     try:
         result = subprocess.run(['git', '-C', str(project), 'rev-parse', '--git-common-dir'],

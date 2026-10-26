@@ -24,6 +24,7 @@ def load(name):
 REFRESH = load('reload_plugins')
 RELAUNCH = load('session_relaunch')
 IDENTITY = 'agent@tj-agents'
+DEPENDENCY = 'agent-store@tj-agents'
 
 
 class ClaudeWorktreeInstallations(unittest.TestCase):
@@ -250,6 +251,11 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
             report = REFRESH.verify_packages('claude', 'claude', self.nested,
                                             {'tj-agents': 'tj-agents/marketplace'}, [IDENTITY], self.root)
             self.assertTrue(any('bytes differ' in problem for problem in report['problems']))
+
+    def test_dependency_cycle_is_rejected(self):
+        dependencies = {IDENTITY: [DEPENDENCY], DEPENDENCY: [IDENTITY]}
+        with self.assertRaisesRegex(REFRESH.RefreshError, 'Cyclic plugin dependency'):
+            REFRESH.missing_dependencies(IDENTITY, 'project', self.primary, dependencies, [])
 
 
 if __name__ == '__main__':
