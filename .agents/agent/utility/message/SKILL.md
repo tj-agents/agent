@@ -27,7 +27,9 @@ Missing/older capabilities fail explicitly. Verified against the local 0.157.1 p
 fixture validation is not proof that a particular live session is reachable.
 
 1. Bind the exact thread UUID, expected working directory and Codex profile from the prior launch result
-   or user-authorized session inspection. Never guess the newest conversation, a PID, or a window title.
+   or user-authorized session inspection. Resolve the recipient's execution key and concrete reason for
+   delivery. Never guess the newest conversation, a PID, or a window title. The helper admits ordinary
+   sends only to one unended Agent Store owner or bounded responsibility for that execution.
 2. Write the exact authorized message to a UTF-8 file. Choose a new receipt path outside version control
    and reuse it for this message. Do not put private message/history data into repository fixtures.
 3. Invoke the shipped helper with properly quoted shell arguments. `--codex` accepts a native executable
@@ -35,8 +37,12 @@ fixture validation is not proof that a particular live session is reachable.
    Use `python` on Windows or `python3` on Linux/macOS for both helper commands below.
 
 ```text
-python -B "<skill-directory>/scripts/codex_followup.py" --codex "<codex-executable>" --timeout 20 send --thread <exact-uuid> --cwd "<expected-directory>" --codex-home "<selected-profile>" --message-file "<message-file>" --receipt "<receipt-file>"
+python -B "<skill-directory>/scripts/codex_followup.py" --codex "<codex-executable>" --timeout 20 send --thread <exact-uuid> --cwd "<expected-directory>" --codex-home "<selected-profile>" --message-file "<message-file>" --receipt "<receipt-file>" --execution-key "<verified-execution-key>" --reason "<decision or action this information supports>"
 ```
+
+For a correction to an earlier mistaken delivery, use `--corrects <original-receipt>` instead of
+`--execution-key`. The original delivery must be observable in the same recipient history; a correction
+does not create responsibility for the repair.
 
 The helper checks the server's thread identity, cwd, loaded membership and direct-input capability.
 It steers the identified active turn using `expectedTurnId`, or starts a turn on the same loaded idle

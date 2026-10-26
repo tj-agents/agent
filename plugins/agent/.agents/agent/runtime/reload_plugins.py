@@ -17,6 +17,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agent_cli
+import codex_hook_trust
 from codex_hook_trust import AppServer, github_repository
 import launch_check
 import plugin_autoupdate
@@ -24,7 +25,7 @@ import required_plugins
 
 TIMEOUT = 300
 IN_USE = ".in_use"
-ADOPTION = "Updated instruction text may require resuming the same Codex conversation; daemon hook reload is checked during sync."
+ADOPTION = "Client adoption is separate from installed package verification; an armed restart resumes this same conversation automatically."
 
 
 class RefreshError(RuntimeError):
@@ -175,7 +176,7 @@ def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]]
                  updates: list[tuple[str, str, Path]], starting=None) -> list[str]:
     for identity, scope in installs:
         run([executable, "plugin", "install", identity, "--scope", scope], project)
-    expected, updated = [], []
+    expected, updated = [], list(dict.fromkeys(identity for identity, _ in installs))
     for identity, scope, owner in updates:
         if starting is not None:
             starting(identity, scope, owner)
@@ -186,6 +187,10 @@ def apply_claude(executable: str, project: Path, installs: list[tuple[str, str]]
             updated.append(identity)
     after = json.loads(run([executable, "plugin", "list", "--json"], project))
     problems = persistence_problems(expected, after) + plugin_errors(after, project)
+    for identity, scope in installs:
+        entry = entry_for(after, identity, scope, project)
+        if entry is None or entry.get("enabled") is not True:
+            problems.append(f"{identity} ({scope}): native installation did not persist enabled")
     if problems:
         raise RefreshError("; ".join(problems))
     return updated
@@ -217,6 +222,32 @@ def refresh(host: str, executable: str, project: Path, marketplaces: dict, plugi
         run([executable, "plugin", "add", identity], project)
     plugin_autoupdate.remove_user_plugins(user_config, set(plugins) - user_enabled)
     return []
+
+
+def repair_missing(host: str, project: Path, missing, executable: str | None = None) -> None:
+    executable = (executable_for(host) if not executable or Path(executable).suffix.casefold() in {".cmd", ".ps1", ".bat"}
+                  else executable)
+    if not executable:
+        raise RefreshError(f"Cannot repair required {host} plugins: executable is unavailable")
+    marketplaces, enabled = selection(host, executable, project)
+    undeclared = sorted(set(missing) - set(enabled))
+    if undeclared:
+        raise RefreshError("Required plugins are not enabled in this host's configuration: "
+                           + ", ".join(undeclared) + ". Repair repository selection; no setting was enabled.")
+    marketplaces = {name: source for name, source in marketplaces.items()
+                    if any(identity.endswith("@" + name) for identity in missing)}
+    refresh_marketplaces(host, executable, project, marketplaces)
+    if host == "claude":
+        installs = [(identity, scope) for identity in missing
+                    for scope in declared_scopes(identity, project) or ["user"]]
+        apply_claude(executable, project, installs, [])
+    else:
+        user_config = configuration_root(host) / "config.toml"
+        user_enabled = plugin_autoupdate.enabled_identities(plugin_autoupdate.load_toml(user_config))
+        for identity in missing:
+            run([executable, "plugin", "add", identity], project)
+        plugin_autoupdate.remove_user_plugins(user_config, set(missing) - user_enabled)
+    required_plugins.check(project, host, executable)
 
 
 def installed_entries() -> list[dict]:
@@ -289,9 +320,8 @@ def reconcile_claude(project: Path, event: bool = False, repositories: set[str] 
         key, path = publishers.get(name, {}).get(plugin, (None, None))
         head = contents["heads"].get(key) if key else None
         forced = event and key is None and (repositories is None or marketplaces.get(name) in repositories)
-        if event:
-            installs += [(identity, scope) for scope in declared_scopes(identity, project)
-                         if entry_for(installations, identity, scope, project) is None]
+        installs += [(identity, scope) for scope in declared_scopes(identity, project) or ["user"]
+                     if entry_for(installations, identity, scope, project) is None]
         for scope, owner in update_targets(identity, project, installations):
             entry = entry_for(installations, identity, scope, owner)
             if entry is None:
@@ -458,18 +488,31 @@ def relaunch_session(project: Path, updated: set[str]) -> dict | None:
     if os.environ.get("CLAUDE_CODE_CHILD_SESSION"):
         return {"relaunch": "skipped", "stale": stale, "reason": "a child session cannot relaunch its parent; "
                                                               "run agent:refresh from the parent session"}
-    instruction = ("Plugin changes are installed, but this active Claude conversation cannot be relaunched "
-                   "until the declared CLI close capability provides a verified target. Finish this turn, then "
-                   "use agent:open to adopt the same conversation in a fresh native process.")
-    print("plugins: " + instruction, file=sys.stderr)
-    return {"relaunch": "manual", "stale": stale, "instruction": instruction}
+    try:
+        result = session_relaunch.relaunch(project, installed, host="claude")
+    except (OSError, RuntimeError, ValueError) as error:
+        return {"relaunch": "failed", "stale": stale, "error": str(error)}
+    if result.get("relaunch") != "armed":
+        return {"relaunch": "failed", "stale": stale, "error": "the owning Claude client restart was not armed"}
+    return {**result, "stale": stale, "adoption": "pending"}
+
+
+def relaunch_codex(project: Path, reason: str, allowed: bool) -> dict:
+    import session_relaunch
+
+    if not allowed:
+        raise RefreshError("Codex requires client restart, but --no-relaunch forbids it: " + reason)
+    result = session_relaunch.relaunch(project, {}, host="codex")
+    if result.get("relaunch") != "armed":
+        raise RefreshError("The owning Codex client restart was not armed")
+    return {**result, "reason": reason, "adoption": "pending"}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", choices=("claude", "codex", "both"), default="both")
     parser.add_argument("--project", type=Path, default=Path.cwd())
-    parser.add_argument("--no-relaunch", action="store_true", help="Never relaunch the calling Claude session")
+    parser.add_argument("--no-relaunch", action="store_true", help="Never relaunch the calling CLI session")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--all", action="store_true", help="Refresh every selected plugin, not only published changes")
     modes.add_argument("--verify", action="store_true", help="Refresh, then inspect native installations and remote main revisions")
@@ -493,15 +536,24 @@ def main(argv: list[str] | None = None) -> int:
                                     host=None if arguments.host == "both" else arguments.host)
         if result != "unconfigured":
             summary = {"check": result}
+            restart_reason = None
             if "codex" in hosts and result in {"current", "updated", "offline"}:
                 try:
                     launch_check.ensure_hooks(project, running_session=True)
+                except codex_hook_trust.RestartRequired as error:
+                    restart_reason = str(error)
                 except Exception as error:
                     summary["hook_readiness_error"] = str(error)
                     result = "failed"
             setup_errors = (converge_plugin_setup() if result not in {"failed", "busy"}
                             else [f"skipped because launch check is {result}"])
             summary["plugin setup"] = setup_errors
+            if restart_reason and result not in {"failed", "busy", "offline"} and not setup_errors:
+                try:
+                    summary["codex"] = relaunch_codex(project, restart_reason, not arguments.no_relaunch)
+                except (OSError, ValueError, RuntimeError) as error:
+                    summary["hook_readiness_error"] = str(error)
+                    result = "failed"
             relaunched = relaunch_session(project, updated) if relaunch_allowed and result != "failed" and not setup_errors else None
             if relaunched:
                 summary["claude"] = relaunched
@@ -511,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
             failed = bool(relaunched and relaunched["relaunch"] == "failed")
             return int(result in {"failed", "offline", "busy"} or failed or bool(setup_errors))
     reports = []
+    restart_reason = None
     for host in hosts:
         try:
             executable = executable_for(host)
@@ -520,7 +573,10 @@ def main(argv: list[str] | None = None) -> int:
             report = (verify(host, executable, project, marketplaces, plugins)
                       if arguments.verify or arguments.verify_only else {"host": host, "plugins": plugins, "problems": []})
             if host == "codex" and not arguments.verify_only and not report["problems"]:
-                launch_check.ensure_hooks(project, executable, running_session=True)
+                try:
+                    launch_check.ensure_hooks(project, executable, running_session=True)
+                except codex_hook_trust.RestartRequired as error:
+                    restart_reason = str(error)
         except (RefreshError, agent_cli.LaunchError, OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
             report = {"host": host, "problems": [str(error)]}
         reports.append(report)
@@ -528,6 +584,13 @@ def main(argv: list[str] | None = None) -> int:
                     else ["skipped because plugin refresh or verification failed"])
     if setup_errors:
         reports.append({"host": "plugin setup", "plugins": [], "problems": setup_errors})
+    if restart_reason and not any(report["problems"] for report in reports):
+        try:
+            result = relaunch_codex(project, restart_reason, not arguments.no_relaunch)
+        except (OSError, ValueError, RuntimeError) as error:
+            reports.append({"host": "codex restart", "plugins": [], "problems": [str(error)]})
+        else:
+            reports.append({"host": "codex restart", **result, "problems": []})
     if "claude" in hosts and relaunch_allowed and not any(report["problems"] for report in reports):
         relaunched = relaunch_session(project, updated)
         if relaunched:

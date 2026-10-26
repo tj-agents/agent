@@ -22,11 +22,10 @@ import sys
 import tempfile
 import time
 
+
 GIT_TIMEOUT_SECONDS = 30
 SWEEP_TIMEOUT_SECONDS = 1800
 SCRIPT_NAME = "plugin_autoupdate.py"
-RUNTIME = ("plugin_autoupdate.py", "machine_events.py", "launch_check.py", "reload_plugins.py", "agent_cli.py",
-           "codex_hook_trust.py", "codex_websocket.py", "required_plugins.py", "cli_client.py", "terminal_command.py")
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 CLI_TIMEOUT_SECONDS = 60
 STILL_ACTIVE = 259
@@ -40,6 +39,14 @@ CONTENTS_WAIT_SECONDS = 10
 SNAPSHOT_FIRST = "(Path(s) if s else d/'hook-snapshots')/k/"
 MARKETPLACE_NAME = "tj-agents"
 MARKETPLACE_REPOSITORY = "tj-agents/marketplace"
+
+
+def delivery_runtime():
+    path = Path(__file__).resolve().with_name("runtime_delivery.py")
+    spec = importlib.util.spec_from_file_location("agent_runtime_delivery", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def producer_repository(repository: object) -> bool:
@@ -641,30 +648,131 @@ def sweep_worktrees(codex_config: dict) -> str:
     return "ran" if result.returncode == 0 else f"failed with exit code {result.returncode}"
 
 
+def _receipt(root: Path) -> dict | None:
+    try:
+        value = json.loads((root / "source.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    exports, digest, revision = (value.get(name) for name in ("exports", "sha256", "revision")) if isinstance(value, dict) else (None, None, None)
+    files = value.get("files") if isinstance(value, dict) else None
+    if (not isinstance(value, dict) or value.get("repository") != "tj-agents/agent" or value.get("pending") is not None
+            or not isinstance(exports, list) or not exports
+            or not all(isinstance(item, str) and item.startswith(".agents/") for item in exports)
+            or len(exports) != len(set(exports))
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or not isinstance(revision, str) or not revision or not isinstance(files, dict) or not files):
+        return None
+    return value
+
+
+def _receipt_path(root: Path, relative: str) -> Path:
+    item = PurePosixPath(relative)
+    if item.is_absolute() or ".." in item.parts or "\\" in relative or ":" in relative:
+        raise ValueError("unsafe receipted runtime path")
+    candidate = root.joinpath(*item.parts)
+    if not candidate.resolve().is_relative_to(root.resolve()):
+        raise ValueError("receipted runtime path escapes its root")
+    return candidate
+
+
+def _closure(root: Path, exports: list[str]) -> dict[str, bytes]:
+    result = {}
+    for relative in exports:
+        target = _receipt_path(root, relative)
+        if not target.exists():
+            raise ValueError("receipted runtime export is unavailable")
+        paths = target.rglob("*") if target.is_dir() else (target,)
+        for path in sorted(paths):
+            if path.is_symlink() or not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
+            name = path.relative_to(root).as_posix()
+            if name in result:
+                raise ValueError("receipted runtime exports overlap")
+            result[name] = path.read_bytes()
+    return result
+
+
+def _digest(contents: dict[str, bytes]) -> str:
+    value = hashlib.sha256()
+    for name, body in sorted(contents.items()):
+        value.update(name.encode("utf-8") + b"\0" + str(len(body)).encode("ascii") + b"\0" + body)
+    return value.hexdigest()
+
+
+def _receipt_root(current: Path) -> Path | None:
+    for root in (current.parent, *current.parents):
+        if current.resolve() == (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).resolve():
+            if _receipt(root):
+                return root
+            if (root / "source.json").exists():
+                raise RuntimeError("managed Agent runtime receipt is incomplete or malformed")
+    return None
+
+
+def _native_agent_source(root: Path) -> bool:
+    for name in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json"):
+        manifest = read_json(root / name)
+        if manifest.get("name") == "agent" and manifest.get("repository") == "https://github.com/tj-agents/agent":
+            return (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).is_file()
+    return False
+
+
+def native_agent_roots(codex_config: dict) -> list[Path]:
+    """Resolve only the native inventory entry enabled as agent@tj-agents.
+
+    A package manifest is producer metadata, not proof that the host enabled
+    this identity. Do not reuse the prefix-based generic discovery here.
+    """
+    identity, roots = "agent@tj-agents", []
+    claude = claude_home()
+    settings = read_json(claude / "settings.json").get("enabledPlugins")
+    installed = read_json(claude / "plugins" / "installed_plugins.json").get("plugins")
+    if isinstance(settings, dict) and settings.get(identity) is True and isinstance(installed, dict):
+        entries = installed.get(identity)
+        if isinstance(entries, list):
+            roots.extend(Path(entry["installPath"]) for entry in entries
+                         if isinstance(entry, dict) and isinstance(entry.get("installPath"), str))
+    plugins = codex_config.get("plugins")
+    if isinstance(plugins, dict) and isinstance(plugins.get(identity), dict) and plugins[identity].get("enabled") is True:
+        roots.append(codex_home() / "plugins" / "cache" / "tj-agents" / "agent" / "local")
+    result, seen = [], set()
+    for root in roots:
+        try:
+            key = str(root.resolve()).casefold()
+        except OSError:
+            continue
+        if key not in seen and _native_agent_source(root):
+            seen.add(key)
+            result.append(root)
+    return result
+
+
 def packaged_copies(codex_config: dict) -> list[Path]:
-    relative = Path("resources", "machine", "scripts", SCRIPT_NAME)
-    return [root / relative for root in installed_plugin_roots("machine", claude_home(), codex_config)
-            if (root / relative).is_file()]
+    return [root for root in native_agent_roots(codex_config) if _native_agent_source(root)]
 
 
 def self_update(current: Path, codex_config: dict) -> bool:
-    candidates = [path for path in packaged_copies(codex_config) if path.resolve() != current.resolve()
-                  and all(path.with_name(name).is_file() for name in RUNTIME)]
+    target = _receipt_root(current)
+    if target is None:
+        return False
+    candidates = [root for root in packaged_copies(codex_config) if root.resolve() != target.resolve()]
     if not candidates:
         return False
-    newest = max(candidates, key=lambda path: path.stat().st_mtime)
+    source = max(candidates, key=lambda root: (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).stat().st_mtime)
+    delivery = delivery_runtime()
     try:
-        changed = False
-        for name in RUNTIME:
-            source, target = newest.with_name(name), current.with_name(name)
-            if target.is_file() and source.read_bytes() == target.read_bytes():
-                continue
-            shutil.copyfile(source, target.with_name(target.name + ".next"))
-            os.replace(target.with_name(target.name + ".next"), target)
-            changed = True
-    except OSError:
-        return False
-    return changed
+        receipt = delivery.validate_receipt(json.loads((target / "source.json").read_text(encoding="utf-8")))
+        if receipt.get("pending"):
+            raise delivery.DeliveryError("managed runtime delivery is incomplete")
+        desired = delivery.native_receipt(receipt, source)
+        if desired == receipt and not delivery.check(target, source, receipt):
+            return False
+        errors = delivery.apply(target, source, desired)
+        if errors:
+            raise delivery.DeliveryError("; ".join(errors))
+        return True
+    except (OSError, ValueError, delivery.DeliveryError) as error:
+        raise RuntimeError(f"managed Agent runtime self-update failed: {error}") from error
 
 
 def acquire_lock(path: Path):
@@ -719,12 +827,17 @@ def main(argv: list[str] | None = None) -> int:
         sweep = "skipped" if arguments.no_sweep else sweep_worktrees(config)
         write_json(state_file, {"revisions": recorded, "project_only": outcomes.get("project_only", previous),
                                 "last_run": time.time(), "outcomes": outcomes, "worktree_sweep": sweep})
+        update_error = None
         if not arguments.no_self_update:
-            self_update(Path(__file__), load_codex_config())
+            try:
+                self_update(Path(__file__), load_codex_config())
+            except RuntimeError as error:
+                update_error = str(error)
+                print(update_error, file=sys.stderr)
     finally:
         lock.close()
     results = outcomes.get("marketplaces", {})
-    return int(any(str(value).startswith(("failed", "unreachable")) for value in results.values()))
+    return int(bool(update_error) or any(str(value).startswith(("failed", "unreachable")) for value in results.values()))
 
 
 if __name__ == "__main__":

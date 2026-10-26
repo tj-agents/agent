@@ -47,7 +47,9 @@ class InputBindingTests(unittest.TestCase):
         ):
             patch.start()
             self.addCleanup(patch.stop)
-        self.native_input = mock.patch.object(client, 'current_input', return_value='own-input')
+        self.native_input = mock.patch.object(
+            client, 'current_input', return_value={'turn_id': 'turn', 'client_message_id': 'own-input'}
+        )
         self.input = self.native_input.start()
         self.addCleanup(self.native_input.stop)
         self.nearest = SimpleNamespace(pid=1, name='codex.exe')
@@ -68,7 +70,13 @@ class InputBindingTests(unittest.TestCase):
         return ticket, environment, arguments
 
     def resolve(self):
-        return client.recorded_client('current-thread', self.nearest, self.infos.get, self.infos)
+        return client.recorded_client(
+            'current-thread', self.infos[123], self.infos.get, self.infos, peer_state=self.peer_state,
+        )
+
+    def peer_state(self, pid):
+        info = self.infos.get(pid)
+        return ('present', info) if info is not None else ('absent', None)
 
     def test_launcher_starts_a_sanitized_daemon_and_keeps_each_frontend_private_record(self):
         ticket, environment, arguments = self.bind()
@@ -82,6 +90,7 @@ class InputBindingTests(unittest.TestCase):
         info, record = self.resolve()
         self.assertEqual(123, info.pid)
         self.assertEqual('own-input', record['client_message_id'])
+        self.assertEqual('turn', record['turn_id'])
         client.release(ticket)
         self.assertFalse(client.binding_path(ticket['token']).parent.exists())
 
@@ -123,11 +132,10 @@ class InputBindingTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.resolve()
 
-    def test_ambiguous_live_writers_and_two_matching_frontends_refuse(self):
+    def test_nearest_frontend_selects_its_own_shared_daemon_recording(self):
         first, _, _ = self.bind()
         self.bind(pid=456)
-        with self.assertRaisesRegex(RuntimeError, 'Cannot attribute'):
-            self.resolve()
+        self.assertEqual(123, self.resolve()[0].pid)
         client.release(first)
         self.contexts[123][client.RECORD_PATH_ENV] = self.contexts[456][client.RECORD_PATH_ENV]
         with self.assertRaisesRegex(RuntimeError, 'Multiple native processes'):
@@ -170,7 +178,7 @@ class InputBindingTests(unittest.TestCase):
         self.nearest = self.infos[123]
         with self.assertRaisesRegex(RuntimeError, 'Cannot attribute'):
             self.resolve()
-        self.input.return_value = 'displayed-thread-input'
+        self.input.return_value = {'turn_id': 'turn', 'client_message_id': 'displayed-thread-input'}
         self.assertEqual(123, self.resolve()[0].pid)
         self.assertFalse(codex_hook_trust.AppServer.call_args.kwargs['existing'])
 
@@ -208,7 +216,7 @@ class RecorderTests(unittest.TestCase):
             return {'data': [{'item': {'type': 'userMessage', 'clientId': 'steering-input'}},
                              {'item': {'type': 'userMessage', 'clientId': 'first-input'}}], 'nextCursor': None}
         server.request.side_effect = request
-        self.assertEqual('steering-input', client.current_input(server, 'thread'))
+        self.assertEqual({'turn_id': 'turn', 'client_message_id': 'steering-input'}, client.current_input(server, 'thread'))
         self.assertEqual('desc', server.request.call_args.args[1]['sortDirection'])
 
     def test_background_thread_with_copied_parent_input_never_owns_a_frontend(self):
@@ -229,6 +237,15 @@ class RecorderTests(unittest.TestCase):
                 ]
                 with self.assertRaisesRegex(RuntimeError, 'latest native input'):
                     client.current_input(server, 'thread')
+
+    def test_missing_latest_turn_identity_refuses_before_selecting_input(self):
+        server = mock.Mock()
+        server.request.side_effect = [
+            {'thread': {'source': 'cli'}},
+            {'data': [{'id': None}]},
+        ]
+        with self.assertRaisesRegex(RuntimeError, 'turn identity'):
+            client.current_input(server, 'thread')
 
     def test_exhausted_latest_turn_scan_cannot_select_an_older_turn(self):
         server = mock.Mock()

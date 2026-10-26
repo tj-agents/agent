@@ -706,8 +706,11 @@ def await_pickup(host, session_id, status_path, since, history_path=None, timeou
 
 
 def open_session(host, session_id, prompt="Continue the requested work.", title=None, roots=None, confirm_closed=False,
-                 prompt_path=None, model=None, dangerously_skip_permissions=False, cli=None, native_arguments=()):
+                 prompt_path=None, model=None, dangerously_skip_permissions=False, cli=None, native_arguments=(),
+                 expected_cwd=None):
     item = find(host, session_id, roots)
+    if expected_cwd is not None and Path(item["cwd"]).resolve() != Path(expected_cwd).resolve():
+        raise ValueError("The exact session does not match the expected refresh checkout.")
     if item["status"] == "live":
         raise ValueError("That exact session is verified live; refusing to create a duplicate writer.")
     if item["status"] == "unknown" and not confirm_closed:
@@ -750,7 +753,7 @@ def open_session(host, session_id, prompt="Continue the requested work.", title=
             _verify_codex_resume(executable)
             old_profile = os.environ.get("CODEX_HOME")
             os.environ["CODEX_HOME"] = item["profile"]
-            arguments = ["resume", session_id]
+            arguments = [*native_arguments, "resume", session_id]
             if model:
                 arguments += ["-m", model]
             arguments.append(instruction)
@@ -866,6 +869,7 @@ def main(argv=None):
     parser.add_argument("--latest", action="store_true")
     parser.add_argument("--topic")
     parser.add_argument("--checkout")
+    parser.add_argument("--expected-cwd", type=Path)
     parser.add_argument("--count", type=int, default=10)
     parser.add_argument("--include-history", action="store_true")
     parser.add_argument("--prompt")
@@ -933,10 +937,9 @@ def main(argv=None):
             return 0
         if len(hosts) != 1 or not args.id:
             raise ValueError("open requires one --host and an exact --id.")
-        if args.native_argument and hosts[0] != "claude":
-            raise ValueError("--native-argument is supported only for Claude sessions.")
         item = open_session(hosts[0], args.id, args.prompt if args.prompt_path else args.prompt or "Continue the requested work.", args.title, roots, args.confirm_closed,
-                            args.prompt_path, args.model, native_arguments=args.native_argument)
+                            args.prompt_path, args.model, native_arguments=args.native_argument,
+                            expected_cwd=args.expected_cwd)
         print(json.dumps(item, indent=2))
         return 0
     except LaunchUnverified as exc:
