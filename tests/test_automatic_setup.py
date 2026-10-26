@@ -39,14 +39,15 @@ class AutomaticSetupIntegration(unittest.TestCase):
         self.project.mkdir()
         self.remote = self.root / "publisher"
         self.remote.mkdir()
-        environment = {**os.environ, "AGENT_STATE_DIRECTORY": str(self.state), "GIT_CONFIG_COUNT": "1",
-                       "GIT_CONFIG_KEY_0": "url." + self.remote.as_uri() + ".insteadOf",
-                       "GIT_CONFIG_VALUE_0": "https://github.com/tj-agents/core.git"}
+        environment = {**os.environ, "AGENT_STATE_DIRECTORY": str(self.state), "GIT_CONFIG_COUNT": "0"}
         for name in (CHECK.SETUP_RECOVERY, "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"):
             environment.pop(name, None)
         patcher = mock.patch.dict(os.environ, environment, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
+        source = mock.patch.object(CHECK, "SETUP_SOURCE", self.remote.as_uri())
+        source.start()
+        self.addCleanup(source.stop)
         self.git("init", "--initial-branch=main")
         self.git("config", "user.name", "Fixture")
         self.git("config", "user.email", "fixture@example.test")
@@ -107,6 +108,38 @@ class AutomaticSetupIntegration(unittest.TestCase):
         (self.state / "sources/core/revision").write_text("local changes", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "local changes"):
             CHECK.bootstrap_setup(self.project)
+
+    def test_rewritten_canonical_source_is_rejected_before_clone_or_execution(self):
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.file:///untrusted.insteadOf",
+                                          "GIT_CONFIG_VALUE_0": CHECK.SETUP_SOURCE}), \
+                self.assertRaisesRegex(RuntimeError, "rewritten canonical source"):
+            self.check()
+        self.assertFalse((self.state / "sources/core").exists())
+        self.assertFalse((self.state / "installed-version").exists())
+
+    def test_inherited_checkout_hooks_do_not_run(self):
+        hooks = self.root / "untrusted-hooks"
+        hooks.mkdir()
+        marker = self.root / "hook-ran"
+        hook = hooks / "post-checkout"
+        hook.write_text("#!/bin/sh\necho ran > " + shlex.quote(marker.as_posix()) + "\n", encoding="utf-8")
+        hook.chmod(0o755)
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.hooksPath",
+                                          "GIT_CONFIG_VALUE_0": str(hooks)}):
+            self.assertEqual("current", self.check())
+        self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows native script policy; shared setup refusal is covered on Linux")
+    def test_native_script_policy_is_preserved_when_setup_is_refused(self):
+        with mock.patch.dict(os.environ, {"PSExecutionPolicyPreference": "Restricted"}), self.assertRaises(RuntimeError):
+            self.check()
+        self.assertFalse((self.state / "installed-version").exists())
+
+    def test_invalid_launch_input_never_runs_machine_setup(self):
+        with mock.patch.object(CHECK, "bootstrap_setup") as setup:
+            with self.assertRaises(REFRESH.required_plugins.RequiredPluginsError):
+                CHECK.prepare_launch_roots(self.project, "codex", "native", ["--config"])
+        setup.assert_not_called()
 
 
 class DependencyInstallationIntegration(unittest.TestCase):
