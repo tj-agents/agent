@@ -128,7 +128,7 @@ class StartupBindingTests(unittest.TestCase):
             kwargs['on_running'](72)
             return 0
 
-        with mock.patch.object(self.binding.required_plugins, 'check_launch', return_value=None), \
+        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(None, None)), \
                 mock.patch.object(self.binding.launch_check, 'check', return_value='not-applicable'), \
                 mock.patch.object(self.binding, '_prelaunch_terminal', side_effect=lambda: calls.append(('capture', terminal)) or terminal), \
                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
@@ -140,6 +140,34 @@ class StartupBindingTests(unittest.TestCase):
         status = json.loads(status_path.read_text(encoding='utf-8'))
         self.assertEqual('exited', status['state'])
         self.assertEqual(terminal, status['terminal'])
+
+    def test_claude_override_roster_is_passed_from_preflight_to_startup(self):
+        directory = tempfile.TemporaryDirectory(prefix='startup claude override ')
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        roots = {'agent@tj-agents': root / 'override-agent'}
+        calls = []
+
+        def run_session(*_args, **kwargs):
+            calls.append(kwargs)
+            kwargs['on_running'](72)
+            return 0
+
+        arguments = [
+            '--settings', 'override.json', '--setting-sources=project,local',
+            '--plugin-dir', 'plugins', '--plugin-url=https://example.test/plugin', '--', '--settings', 'literal prompt',
+        ]
+        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(root, roots)) as prepare, \
+                mock.patch.object(self.binding.launch_check, 'check', return_value='current'), \
+                mock.patch.object(self.binding, 'run_session', side_effect=run_session):
+            result = self.binding.main([
+                '--host', 'claude', '--project', directory.name, '--target', 'native-claude',
+                '--require-session-start', '--', *arguments,
+            ])
+
+        self.assertEqual(0, result)
+        prepare.assert_called_once_with(root.resolve(), 'claude', 'native-claude', arguments)
+        self.assertIs(roots, calls[0]['hook_roots'])
 
 
 if __name__ == '__main__':

@@ -44,7 +44,7 @@ def project_root(project: Path) -> Path:
     return project
 
 
-def check_launch(project: Path, host: str, executable: str | None, arguments) -> Path | None:
+def launch_context(project: Path, host: str, arguments) -> tuple[Path | None, tuple[str, ...]]:
     original_project = project
     value_options = {
         "-C", "--cd", "-c", "--config", "-m", "--model", "-p", "--profile",
@@ -69,9 +69,9 @@ def check_launch(project: Path, host: str, executable: str | None, arguments) ->
         if argument == "--":
             break
         if argument in ("--help", "-h", "--version", "-V" if host == "codex" else "-v"):
-            return None
+            return None, ()
         if not command_seen and argument in MAINTENANCE_COMMANDS[host]:
-            return None
+            return None, ()
         option, separator, value = argument.partition("=")
         if host == "codex" and len(argument) > 2 and argument[:2] in value_options:
             option, separator, value = argument[:2], "=", argument[2:].removeprefix("=")
@@ -88,11 +88,18 @@ def check_launch(project: Path, host: str, executable: str | None, arguments) ->
         elif argument not in flag_options:
             command_seen = True
         index += 1
-    if inventory_options:
-        check(project, host, executable, inventory_options=tuple(inventory_options))
-    else:
-        check(project, host, executable)
-    return project.resolve()
+    return project.resolve(), tuple(inventory_options)
+
+
+def check_launch_roots(project: Path, host: str, executable: str | None, arguments) -> tuple[Path | None, dict[str, Path] | None]:
+    effective_project, inventory_options = launch_context(project, host, arguments)
+    if effective_project is None:
+        return None, None
+    return effective_project, check(effective_project, host, executable, inventory_options=inventory_options)
+
+
+def check_launch(project: Path, host: str, executable: str | None, arguments) -> Path | None:
+    return check_launch_roots(project, host, executable, arguments)[0]
 
 
 def readable_payload(path: Path, host: str, name: str) -> bool:
