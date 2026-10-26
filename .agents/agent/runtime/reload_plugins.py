@@ -608,7 +608,7 @@ def main(argv: list[str] | None = None) -> int:
         result = launch_check.check(project, update=lambda host, repositories, root:
                                     launch_check.update_host(host, repositories, root, updated),
                                     reconcile=lambda root: launch_check.reconcile_installs(root, updated),
-                                    host=None if len(hosts) == 2 else hosts[0])
+                                    host=None if len(hosts) == 2 else hosts[0], update_hosts=hosts)
         if result != "unconfigured":
             summary = {"check": result}
             if admission_errors:

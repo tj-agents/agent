@@ -124,6 +124,36 @@ class RefreshCliTests(unittest.TestCase):
                     self.assertIn(f"{failed_host} install failed",
                                   "".join(call.args[0] for call in stdout.write.call_args_list))
 
+    def test_default_refresh_isolates_expired_event_updates_after_admission_failure(self):
+        for failed_host, healthy_host in (("claude", "codex"), ("codex", "claude")):
+            def admit(project, host, **kwargs):
+                if host == failed_host:
+                    raise REFRESH.RefreshError(f"{host} install failed")
+
+            self.admission.side_effect = admit
+            self.readiness.reset_mock()
+            with self.subTest(failed_host=failed_host), tempfile.TemporaryDirectory() as temporary:
+                state = Path(temporary)
+                (state / "machine-events.json").write_text(json.dumps({"topic": "t" * 40}), encoding="utf-8")
+                cursor = state / "machine-events-cursor.json"
+                cursor.write_text(json.dumps({"since": "old", "since_at": 0}), encoding="utf-8")
+                with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(state)}), \
+                        mock.patch.object(REFRESH.launch_check, "poll", return_value=[]), \
+                        mock.patch.object(REFRESH.launch_check, "update_host",
+                                          side_effect=lambda host, *args: host == healthy_host) as update, \
+                        mock.patch.object(REFRESH.required_plugins, "converge_setup", return_value=[]) as setup, \
+                        mock.patch.object(REFRESH, "relaunch_session", return_value=None) as relaunch, \
+                        mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+                    self.assertEqual(1, REFRESH.main([]))
+                self.assertEqual([healthy_host], [call.args[0] for call in update.call_args_list])
+                self.assertEqual((healthy_host,), setup.call_args.args[1])
+                self.assertEqual(healthy_host == "codex", self.readiness.called)
+                self.assertEqual(healthy_host == "claude", relaunch.called)
+                saved = json.loads(cursor.read_text(encoding="utf-8"))
+                self.assertEqual("old", saved["since"])
+                self.assertEqual(0, saved["since_at"])
+                self.assertEqual({healthy_host: {"applied": "old"}}, saved["hosts"])
+
     def test_default_refresh_stops_when_neither_host_is_admitted(self):
         self.admission.side_effect = REFRESH.RefreshError("inventory failed")
         with mock.patch.object(REFRESH.launch_check, "check") as check, \
