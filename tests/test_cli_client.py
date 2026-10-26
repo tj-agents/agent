@@ -221,14 +221,16 @@ class ClientAttributionTests(unittest.TestCase):
         runtime.recorded_client.return_value = (SimpleNamespace(pid=123), {
             "launch_cwd": str(self.root), "client_message_id": "input", "turn_id": "turn",
             "native_rollout": str(self.root / "profile/sessions/rollout.jsonl"),
+            "native_cwd": str(self.root),
             "recording_path": "events.jsonl", "backend": self.backend, "profile": str(self.profile),
         })
         nearest = SimpleNamespace(pid=123)
         table = {123: nearest}
         with mock.patch.object(session_close, "client_runtime", return_value=runtime), \
                 mock.patch.object(session_close.register_session, "process_table", return_value=table):
-            session_close.current_codex_client("thread", nearest)
+            _info, record = session_close.current_codex_client("thread", nearest)
         self.assertIs(session_close.process_state, runtime.recorded_client.call_args.kwargs["peer_state"])
+        self.assertEqual(str(self.root), record["native_cwd"])
 
     def test_incomplete_or_duplicate_recording_refuses(self):
         ticket, _environment = self.bind()

@@ -182,6 +182,32 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         self.assertEqual("claude", arm.call_args.args[-1])
         self.assertEqual(close, self.relaunch.read_json(self.relaunch.record_path("thread"))["close"])
 
+    def test_codex_relaunch_uses_native_checkout_not_the_launch_directory(self):
+        entry = {"host": "codex", "session_id": "thread", "pid": 17, "pid_started_at": 3.0,
+                 "launch_cwd": str(self.root / "original"), "native_cwd": str(self.root),
+                 "profile": str(self.root / "profile"), "title": "Codex"}
+        shared = mock.Mock()
+        shared.own_host_and_entry.return_value = entry
+        close = {"request": str(self.root / "request"), "request_sha256": "a" * 64,
+                 "result": str(self.root / "result"), "cancel": str(self.root / "cancel")}
+        with mock.patch.object(self.relaunch.agent_cli, "resolve_codex_executable", return_value=("codex", [])), \
+                mock.patch.object(self.relaunch.required_plugins, "check_launch"), \
+                mock.patch.object(self.relaunch, "cli_close_capability", return_value=self.root / "close.py"), \
+                mock.patch.object(self.relaunch, "arm_client_close", return_value=close):
+            result = self.relaunch.relaunch(self.root, {}, shared=shared, host="codex", arguments=lambda _: [])
+        self.assertEqual("armed", result["relaunch"])
+
+    def test_codex_relaunch_refuses_missing_or_different_native_checkout(self):
+        for native_cwd in (None, "", "relative", str(self.root / "other")):
+            with self.subTest(native_cwd=native_cwd):
+                entry = {"host": "codex", "session_id": "thread", "pid": 17, "pid_started_at": 3.0,
+                         "launch_cwd": str(self.root), "native_cwd": native_cwd}
+                shared = mock.Mock()
+                shared.own_host_and_entry.return_value = entry
+                with self.assertRaisesRegex(RuntimeError, "checkout"):
+                    self.relaunch.relaunch(self.root, {}, shared=shared, host="codex", arguments=lambda _: [])
+                shared.start_detached.assert_not_called()
+
     def test_cli_close_uses_enabled_native_inventory_not_repository_selection(self):
         cli = self.root / "cli"
         process_identity = cli / ".agents/cli/utility/close/scripts/process_identity.py"
