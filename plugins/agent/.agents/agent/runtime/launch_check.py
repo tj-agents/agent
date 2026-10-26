@@ -12,7 +12,9 @@ import os
 from pathlib import Path
 import re
 import socket
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -24,12 +26,61 @@ MAX_RESPONSE = 1 << 20
 EXPIRY_SECONDS = 11 * 60 * 60
 HOSTS = ("claude", "codex")
 HOST_VARIABLE = "TJ_AGENTS_LAUNCH_HOST"
+SETUP_RECOVERY = "TJ_AGENTS_SETUP_RECOVERY"
+SETUP_SOURCE = "https://github.com/tj-agents/core.git"
 TOPIC = re.compile(r"[A-Za-z0-9_-]{32,128}")
 MESSAGE_ID = re.compile(r"[A-Za-z0-9]{1,64}")
 
 
 def state_directory() -> Path:
     return Path(os.environ.get("AGENT_STATE_DIRECTORY") or Path.home() / ".agents-state")
+
+
+def bootstrap_setup(project: Path) -> None:
+    import plugin_autoupdate
+
+    directory = state_directory()
+    lock = plugin_autoupdate.acquire_lock(directory / "setup-recovery.lock")
+    if lock is None:
+        raise RuntimeError("Automatic machine setup is already running; retry after it finishes")
+    environment = {**os.environ, SETUP_RECOVERY: "1", "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+    checkout = directory / "sources" / "core"
+
+    def run(arguments: list[str], cwd: Path = project) -> str:
+        if arguments[0] == "git":
+            arguments = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *arguments[1:]]
+        result = subprocess.run(arguments, cwd=cwd, env=environment, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=1800, check=False)
+        if result.returncode:
+            raise RuntimeError(f"Automatic machine setup failed: {(result.stderr or result.stdout).strip()[-6000:]}")
+        return result.stdout.strip()
+
+    try:
+        print("plugins: recovering machine setup from tj-agents/core main", file=sys.stderr, flush=True)
+        for path in (directory, directory / "sources", checkout):
+            if path.is_symlink() or (path.exists() and getattr(path.lstat(), "st_file_attributes", 0) & 0x400):
+                raise RuntimeError(f"Automatic setup refuses a linked source directory: {path}")
+        if run(["git", "ls-remote", "--get-url", SETUP_SOURCE]) != SETUP_SOURCE:
+            raise RuntimeError("Automatic setup refuses a rewritten canonical source URL")
+        if not checkout.exists():
+            checkout.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="core-bootstrap-", dir=checkout.parent) as temporary:
+                staged = Path(temporary) / "core"
+                run(["git", "clone", "--no-checkout", "--template=", "--depth=1", "--branch", "main", SETUP_SOURCE, str(staged)])
+                run(["git", "checkout", "--detach", "HEAD"], staged)
+                os.replace(staged, checkout)
+        if run(["git", "remote", "get-url", "origin"], checkout) != SETUP_SOURCE:
+            raise RuntimeError("Automatic setup source is not the canonical tj-agents/core repository")
+        if run(["git", "status", "--porcelain"], checkout):
+            raise RuntimeError(f"Automatic setup source has local changes: {checkout}")
+        run(["git", "fetch", "--depth=1", "origin", "refs/heads/main"], checkout)
+        run(["git", "checkout", "--detach", "FETCH_HEAD"], checkout)
+        command = (["powershell.exe", "-NoProfile", "-File", str(checkout / "setup.ps1")] if os.name == "nt"
+                   else ["bash", str(checkout / "setup.sh")])
+        run(command, checkout)
+        run([*command, "--check"], checkout)
+    finally:
+        lock.close()
 
 
 def read_json(path: Path) -> dict:
@@ -186,10 +237,13 @@ def settle(project: Path, reconcile=None) -> str:
 
 
 def check(project: Path, fetch=https_get, update=update_host, now: float | None = None, reconcile=None,
-          host: str | None = None) -> str:
+          host: str | None = None, *, recover: bool = True) -> str:
     directory = state_directory()
     topic = read_json(directory / "machine-events.json").get("topic")
     if not isinstance(topic, str) or not TOPIC.fullmatch(topic):
+        if recover and not os.environ.get(SETUP_RECOVERY):
+            bootstrap_setup(project)
+            return check(project, fetch, update, now, reconcile, host, recover=False)
         return "unconfigured"
     path = directory / "machine-events-cursor.json"
     cursor = read_json(path)
@@ -205,7 +259,11 @@ def check(project: Path, fetch=https_get, update=update_host, now: float | None 
         print(f"plugins: update check skipped ({type(error).__name__})", file=sys.stderr)
         return "offline"
     result = apply(envelopes, cursor, path, project, update, now, expired) if envelopes or expired else "current"
-    return settle(project, reconcile) if result == "current" and host != "codex" else result
+    result = settle(project, reconcile) if result == "current" and host != "codex" else result
+    if result == "failed" and recover and not os.environ.get(SETUP_RECOVERY):
+        bootstrap_setup(project)
+        return check(project, fetch, update, now, reconcile, host, recover=False)
+    return result
 
 
 def mark_current(fetch=https_get, now: float | None = None) -> bool:
@@ -227,9 +285,8 @@ def require_update_check(result: str) -> None:
         raise RuntimeError("Another plugin update is still running. Wait for it to finish, then retry the launch.")
     if result not in {"current", "updated", "offline"}:
         raise RuntimeError(
-            f"Automatic plugin update check is {result}. Run Core's full setup.ps1 on Windows or "
-            "setup.sh on Linux, then the same command with --check; verify the fresh-terminal "
-            "launch check before continuing ordinary work. A scoped permissions-only setup is incomplete."
+            f"Automatic plugin update check is {result} after setup recovery. "
+            "Launch readiness is unverified; the setup or native plugin diagnostic identifies the failed prerequisite."
         )
 
 
@@ -239,9 +296,14 @@ def prepare_launch_roots(project, host, executable, arguments):
     try:
         return required_plugins.check_launch_roots(project, host, executable, arguments)
     except required_plugins.MissingRequiredPluginsError as error:
-        import reload_plugins
+        try:
+            import reload_plugins
 
-        reload_plugins.repair_missing(host, error.project, error.missing, executable)
+            reload_plugins.repair_missing(host, error.project, error.missing, executable)
+        except (required_plugins.RequiredPluginsError, RuntimeError, OSError):
+            if os.environ.get(SETUP_RECOVERY):
+                raise
+            bootstrap_setup(project)
         return required_plugins.check_launch_roots(project, host, executable, arguments)
 
 
