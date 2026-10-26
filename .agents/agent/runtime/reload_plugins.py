@@ -98,13 +98,6 @@ def resolved(path: object) -> Path:
     return Path(path).resolve()
 
 
-def applies(entry: dict, project: Path) -> bool:
-    if entry.get("scope") in {"user", "managed"}:
-        return True
-    owner = entry.get("projectPath")
-    return bool(owner) and resolved(project).is_relative_to(resolved(owner))
-
-
 def path_key(path: object) -> str:
     return os.path.normcase(str(resolved(path)))
 
@@ -202,10 +195,12 @@ def missing_dependencies(identity: str, scope: str, owner: Path, dependencies: d
                 order.append(dependency)
         visiting.remove(plugin)
     visit(identity)
+    if not order:
+        return []
     effective = required_plugins.claude_installations(owner, installations)
     return [dependency for dependency in order if not any(
         entry.get("id") == dependency and (entry.get("scope") in {"user", "managed"}
-                                           or scope != "user")
+                                           or scope != "user" and entry.get("scope") in {"project", "local"})
         for entry in effective)]
 
 
