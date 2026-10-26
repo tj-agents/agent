@@ -113,7 +113,7 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
         return "busy"
     try:
         identifiers = [envelope["id"] for envelope in envelopes]
-        last = identifiers[-1]
+        last = identifiers[-1] if identifiers else cursor.get("since", "all")
         hosts = cursor.get("hosts") if isinstance(cursor.get("hosts"), dict) else {}
         work: dict[str, set[str] | None] = {}
         for host in HOSTS:
@@ -204,7 +204,7 @@ def check(project: Path, fetch=https_get, update=update_host, now: float | None 
     except (OSError, ValueError) as error:
         print(f"plugins: update check skipped ({type(error).__name__})", file=sys.stderr)
         return "offline"
-    result = apply(envelopes, cursor, path, project, update, now, expired) if envelopes else "current"
+    result = apply(envelopes, cursor, path, project, update, now, expired) if envelopes or expired else "current"
     return settle(project, reconcile) if result == "current" and host != "codex" else result
 
 
