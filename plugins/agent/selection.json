@@ -7,7 +7,6 @@
   ],
   "profiles": {
     "core": [
-      "clip",
       "close",
       "handoff",
       "lanes",
@@ -24,20 +23,6 @@
   },
   "compatibilitySkillAliases": {},
   "skills": [
-    {
-      "name": "clip",
-      "kind": "utility",
-      "profile": "core",
-      "applicability": [
-        "agent sessions"
-      ],
-      "requires": [
-        "python"
-      ],
-      "provenance": [
-        "house"
-      ]
-    },
     {
       "name": "close",
       "kind": "utility",
