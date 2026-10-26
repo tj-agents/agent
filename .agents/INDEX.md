@@ -5,6 +5,7 @@ Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; a skill's n
 ## agent
 
 - `lanes` — policy — core — `.agents/agent/policy/lanes/SKILL.md`
+- `clip` — utility — core — `.agents/agent/utility/clip/SKILL.md`
 - `close` — utility — core — `.agents/agent/utility/close/SKILL.md`
 - `handoff` — utility — core — `.agents/agent/utility/handoff/SKILL.md`
 - `listen` — utility — core — `.agents/agent/utility/listen/SKILL.md`

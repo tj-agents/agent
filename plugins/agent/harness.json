@@ -15,7 +15,6 @@
       "tj-agents/agent",
       "tj-agents/base",
       "tj-agents/agent-store",
-      "tj-agents/machine",
       "tj-agents/cli"
     ],
     "hooks": [
