@@ -386,6 +386,8 @@ class NativeCompletion:
                     elif self.started and kind == 'item_completed':
                         item = payload.get('item', {})
                         if item.get('type') == 'UserMessage':
+                            if turn != self.entry['native_turn_id']:
+                                raise RuntimeError('Native input did not belong to the bound turn')
                             identity = item.get('client_id')
                             if self.input_seen or not isinstance(identity, str) or not identity:
                                 raise RuntimeError('New or unattributed native input invalidated closure')

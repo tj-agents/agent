@@ -80,6 +80,16 @@ def _record_end(entry):
         connection.close()
 
 
+def closed_after_stop(entry, guard, cli_root):
+    """Return a secondary Store diagnostic only after a verified client stop."""
+    session_close.stop_cli_client(entry, guard, cli_root)
+    try:
+        _record_end(entry)
+    except Exception as error:  # Store bookkeeping cannot undo a verified client exit.
+        return f"session Store bookkeeping failed after close: {error}"
+    return None
+
+
 def native_completion(request):
     pin = request.get("native_completion")
     if not isinstance(pin, dict):
@@ -109,9 +119,8 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
                             except RuntimeError as error:
                                 raise Cancelled(str(error)) from error
 
-                        session_close.stop_cli_client(request["entry"], native_guard, request["cli_root"])
-                        _record_end(request["entry"])
-                        status, reason = "closed", None
+                        reason = closed_after_stop(request["entry"], native_guard, request["cli_root"])
+                        status = "closed"
                         break
                 else:
                     since = None
@@ -130,9 +139,8 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
                     def guard():
                         final_local_guard(request, path, digest, stopped)
 
-                    session_close.stop_cli_client(request["entry"], guard, request["cli_root"])
-                    _record_end(request["entry"])
-                    status, reason = "closed", None
+                    reason = closed_after_stop(request["entry"], guard, request["cli_root"])
+                    status = "closed"
                     break
             elif row["last_activity_at"] != request["working_activity"]:
                 # Store's Stop runs before the completion hook. Only this transient idle row may wait.
