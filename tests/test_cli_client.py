@@ -93,8 +93,30 @@ class ClientAttributionTests(unittest.TestCase):
         CLIENT.daemon_identity.reset_mock()
         self.assertEqual(123, self.resolve()[0].pid)
         CLIENT.daemon_identity.assert_called_once_with()
+        self.assertEqual(123, CLIENT.recorded_client(
+            "thread", SimpleNamespace(pid=1, name="codex.exe"), self.infos.get, self.infos)[0].pid)
+
+    def test_shared_backend_ancestor_selects_only_its_verified_frontend(self):
+        self.bind()
+        backend = SimpleNamespace(pid=1, name="codex.exe", started_at=9.0)
+        self.infos[1] = backend
+        self.contexts[1] = {"profile": str(self.profile.resolve())}
+        self.assertEqual(123, CLIENT.recorded_client("thread", backend, self.infos.get, self.infos)[0].pid)
+
+        CLIENT.daemon_identity.return_value = {"pid": 1, "process_start_time": "reused-daemon"}
         with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
-            CLIENT.recorded_client("thread", SimpleNamespace(pid=1, name="codex.exe"), self.infos.get, self.infos)
+            CLIENT.recorded_client("thread", backend, self.infos.get, self.infos)
+
+        CLIENT.daemon_identity.side_effect = RuntimeError("Native Codex daemon metadata could not be verified")
+        with self.assertRaisesRegex(RuntimeError, "daemon metadata"):
+            CLIENT.recorded_client("thread", backend, self.infos.get, self.infos)
+
+        CLIENT.daemon_identity.side_effect = None
+        CLIENT.daemon_identity.return_value = self.backend
+        self.commands[999] = ["codex", "app-server"]
+        with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
+            CLIENT.recorded_client("thread", SimpleNamespace(pid=999, name="codex.exe", started_at=9.0),
+                                   self.infos.get, self.infos)
 
     def test_revalidation_rechecks_the_bound_frontend_not_the_shared_daemon(self):
         frontend = SimpleNamespace(pid=123, name="codex.exe", started_at=10.0)

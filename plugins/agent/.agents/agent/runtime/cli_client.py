@@ -280,7 +280,8 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
                     continue
                 if process_context(other.pid).get(RECORD_PATH_ENV) == event_path:
                     raise RuntimeError('Multiple native processes share a frontend recording; preserving every client')
-            if info.pid != nearest.pid:
+            if (info.pid != nearest.pid
+                    and (private or nearest.pid != backend['pid'])):
                 continue
             matches.append((info, record))
         except (OSError, ValueError, TypeError, KeyError):
