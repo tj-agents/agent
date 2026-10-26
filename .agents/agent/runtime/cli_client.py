@@ -1,5 +1,6 @@
 """Bind managed Codex launches to their frontend process (Python 3.9+)."""
 
+import errno
 import json
 import math
 import os
@@ -232,6 +233,21 @@ def current_input(server, session_id):
     raise RuntimeError('This native thread has no attributable frontend input')
 
 
+def peer_recording_path(peer, lookup):
+    try:
+        return process_context(peer.pid).get(RECORD_PATH_ENV)
+    except FileNotFoundError as error:
+        disappearance = error
+    except OSError as error:
+        if error.errno != errno.ESRCH:
+            raise
+        disappearance = error
+    current = lookup(peer.pid)
+    if current is None or getattr(current, 'started_at', None) != getattr(peer, 'started_at', None):
+        return None
+    raise disappearance
+
+
 def recorded_client(session_id, nearest, lookup, table, *, project=None):
     if sys.version_info < (3, 11):
         raise RuntimeError('Codex frontend attribution requires Python 3.11 or newer')
@@ -278,7 +294,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
             for other in table.values():
                 if other.pid == info.pid or Path(other.name).stem.casefold() != 'codex':
                     continue
-                if process_context(other.pid).get(RECORD_PATH_ENV) == event_path:
+                if peer_recording_path(other, lookup) == event_path:
                     raise RuntimeError('Multiple native processes share a frontend recording; preserving every client')
             if (info.pid != nearest.pid
                     and (private or nearest.pid != backend['pid'])):
