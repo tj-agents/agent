@@ -208,7 +208,7 @@ class RecorderTests(unittest.TestCase):
         server = mock.Mock()
         def request(method, params):
             if method == 'thread/read':
-                return {'thread': {'source': 'cli'}}
+                return {'thread': {'source': 'cli', 'cwd': str(ROOT)}}
             if method == 'thread/turns/list':
                 return {'data': [{'id': 'turn'}]}
             if 'cursor' not in params:
@@ -216,7 +216,8 @@ class RecorderTests(unittest.TestCase):
             return {'data': [{'item': {'type': 'userMessage', 'clientId': 'steering-input'}},
                              {'item': {'type': 'userMessage', 'clientId': 'first-input'}}], 'nextCursor': None}
         server.request.side_effect = request
-        self.assertEqual({'turn_id': 'turn', 'client_message_id': 'steering-input', 'native_rollout': None},
+        self.assertEqual({'turn_id': 'turn', 'client_message_id': 'steering-input', 'native_rollout': None,
+                          'native_cwd': str(ROOT)},
                          client.current_input(server, 'thread'))
         self.assertEqual('desc', server.request.call_args.args[1]['sortDirection'])
 
