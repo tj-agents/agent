@@ -682,13 +682,24 @@ def _write_observer_store_receipt(staging):
     os.replace(temporary, receipt)
 
 
+def detached_command(script, arguments, launcher):
+    """Build a scheduler-safe command that restores only the owned context."""
+    command = [sys.executable, "-I", "-B", str(launcher), "--state-directory", str(state_directory().resolve())]
+    for option, key in (("--codex-home", "CODEX_HOME"), ("--claude-config-dir", "CLAUDE_CONFIG_DIR")):
+        value = os.environ.get(key)
+        if value:
+            command += [option, str(Path(value).resolve())]
+    return [*command, "--", str(Path(script).resolve()), *arguments]
+
+
 def start_detached(script, arguments, extra=(), stage=True):
     """Run a staged script outside the host's process tree, so it outlives the host closing."""
     here = Path(__file__)
     if stage:
         staging = state_directory() / "merge-cleanup" / "observers" / uuid.uuid4().hex
         staging.mkdir(parents=True, exist_ok=False)
-        for path in (Path(script), here, here.with_name("register_session.py"), *map(Path, extra)):
+        for path in (Path(script), here, here.with_name("register_session.py"), here.with_name("detached_launch.py"),
+                     *map(Path, extra)):
             shutil.copy2(path, staging / path.name)
         store = register_session.session_store_path()
         if store is not None:
@@ -702,6 +713,8 @@ def start_detached(script, arguments, extra=(), stage=True):
               "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     timeout = bounded_timeout("AGENT_FINISH_SPAWN_TIMEOUT_SECONDS")
     if os.name == "nt":
+        launcher = (staging / "detached_launch.py") if stage else here.with_name("detached_launch.py")
+        command = detached_command(script if not stage else staging / Path(script).name, arguments, launcher)
         task = "agent-finish-reaper-" + uuid.uuid4().hex
         scheduler_kwargs = {
             "cwd": str(state_directory()), "stdin": subprocess.DEVNULL,
