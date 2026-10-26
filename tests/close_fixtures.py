@@ -60,7 +60,7 @@ class CloseFixture:
         self.patch(mock.patch.object(session_close, "process_info", side_effect=self.infos.get))
         self.patch(mock.patch.object(register_session, "build_process_lookup", return_value=self.infos.get))
         self.patch(mock.patch.object(register_session, "process_table", side_effect=lambda: self.infos))
-        self.patch(mock.patch.object(session_close.os, "getppid", return_value=10 if host == "codex" else 20))
+        self.patch(mock.patch.object(session_close.os, "getppid", return_value=20))
         self.patch(mock.patch.object(session_close.os, "getcwd", return_value=str(self.root)))
         self.patch(mock.patch.object(register_session, "read_host_names", return_value={"codex", "claude"}))
         self.patch(mock.patch.object(session_close, "client_runtime", return_value=cli_client))
