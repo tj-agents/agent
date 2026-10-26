@@ -13,8 +13,7 @@ route: infer
 # Sync plugins
 
 Every `claude`, `codex`, handoff and open launch already applies plugin updates published since the last
-check. This runs the same check for a running session; `./sync.ps1` or `./sync.sh` at the core checkout
-root runs it from a terminal. Run it on your own judgement; never ask first. On Windows:
+check. This runs the same check for a running session. Run it on your own judgement; never ask first. On Windows:
 
 ```powershell
 python -B '<skill-directory>/scripts/sync_plugins.py' --project '<absolute-checkout>'

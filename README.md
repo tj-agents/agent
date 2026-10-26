@@ -1,6 +1,9 @@
 # agent
 
-Reusable agent sessions, coordination and native host operations.
+Agent owns behavior that acts on an agent session: session registration, recovery, handoff, refresh, peers,
+lanes, the session store and machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS
+mechanics with no agent judgement, such as closing a terminal or the clipboard, belong in `tj-agents/cli`;
+common behavior and the engineering and workflow process belong in `tj-agents/core`.
 
 Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 
