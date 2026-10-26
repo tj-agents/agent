@@ -233,7 +233,7 @@ def current_input(server, session_id):
     raise RuntimeError('This native thread has no attributable frontend input')
 
 
-def peer_recording_path(peer, lookup, peer_state=None):
+def peer_recording_path(peer, peer_state):
     try:
         return process_context(peer.pid).get(RECORD_PATH_ENV)
     except FileNotFoundError as error:
@@ -242,14 +242,10 @@ def peer_recording_path(peer, lookup, peer_state=None):
         if error.errno != errno.ESRCH:
             raise
         disappearance = error
-    if peer_state is None:
-        current = lookup(peer.pid)
-        absent = current is None
-    else:
-        state, current = peer_state(peer.pid)
-        absent = state == 'absent'
-        if state not in ('absent', 'present'):
-            raise disappearance
+    state, current = peer_state(peer.pid)
+    absent = state == 'absent'
+    if state not in ('absent', 'present'):
+        raise disappearance
     if absent:
         return None
     if current is not None and getattr(current, 'started_at', None) != getattr(peer, 'started_at', None):
@@ -257,7 +253,7 @@ def peer_recording_path(peer, lookup, peer_state=None):
     raise disappearance
 
 
-def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_state=None):
+def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_state):
     if sys.version_info < (3, 11):
         raise RuntimeError('Codex frontend attribution requires Python 3.11 or newer')
     arguments = process_arguments(nearest.pid)
@@ -303,7 +299,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
             for other in table.values():
                 if other.pid == info.pid or Path(other.name).stem.casefold() != 'codex':
                     continue
-                if peer_recording_path(other, lookup, peer_state) == event_path:
+                if peer_recording_path(other, peer_state) == event_path:
                     raise RuntimeError('Multiple native processes share a frontend recording; preserving every client')
             if (info.pid != nearest.pid
                     and (private or nearest.pid != backend['pid'])):
