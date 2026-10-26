@@ -160,13 +160,12 @@ def host_arguments(pid: int) -> list[str]:
 
 
 def effective_installation(entries: list, project: Path) -> dict | None:
-    resolved = project.resolve()
     ranked = []
-    for entry in entries:
+    for entry in required_plugins.claude_installations(project, entries):
         if not isinstance(entry, dict) or not isinstance(entry.get("installPath"), str):
             continue
         scope, owner = entry.get("scope"), entry.get("projectPath")
-        if scope in {"local", "project"} and owner and resolved.is_relative_to(Path(owner).resolve()):
+        if scope in {"local", "project"} and owner:
             ranked.append(((0 if scope == "local" else 1), -len(Path(owner).resolve().parts), entry))
         elif scope in {"user", "managed"}:
             ranked.append((2 if scope == "user" else 3, 0, entry))
@@ -288,8 +287,11 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
     entry = shared.own_host_and_entry()
     if host not in {"claude", "codex"} or entry.get("host") != host:
         raise RuntimeError("the calling session is not the expected registered CLI")
-    if host == "codex" and Path(entry.get("launch_cwd", "")).resolve() != project.resolve():
-        raise RuntimeError("the refresh checkout does not match this Codex client's checkout")
+    if host == "codex":
+        native_cwd = entry.get("native_cwd")
+        if (not isinstance(native_cwd, str) or not Path(native_cwd).is_absolute()
+                or Path(native_cwd).resolve() != project.resolve()):
+            raise RuntimeError("the refresh checkout does not match this Codex thread's native checkout")
     session_id = entry["session_id"]
     native = (codex_arguments if host == "codex" else preserved_arguments)(arguments(entry["pid"]))
     executable = agent_cli.resolve_codex_executable()[0] if host == "codex" else agent_cli.resolve_claude_executable()
