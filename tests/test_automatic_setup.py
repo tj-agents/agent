@@ -109,6 +109,55 @@ class AutomaticSetupIntegration(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "local changes"):
             CHECK.bootstrap_setup(self.project)
 
+    def test_native_dependency_setting_converges_when_published_declaration_matches(self):
+        settings = self.remote / ".claude/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"enabledPlugins": {"agent@tj-agents": True}}), encoding="utf-8")
+        self.publish("before native install")
+        self.check()
+        managed = self.state / "sources/core/.claude/settings.json"
+        native = {"enabledPlugins": {"agent@tj-agents": True, "cli@tj-agents": True}}
+        managed.write_text(json.dumps(native, indent=4), encoding="utf-8")
+        settings.write_text(json.dumps(native, indent=2, sort_keys=True), encoding="utf-8")
+        self.publish("declared dependency")
+        CHECK.bootstrap_setup(self.project)
+        source = self.state / "sources/core"
+        result = subprocess.run(["git", "-C", str(source), "status", "--porcelain"], check=True,
+                                capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual("", result.stdout)
+        before = (self.state / "installed-version").stat().st_mtime_ns
+        CHECK.bootstrap_setup(self.project)
+        self.assertEqual(before, (self.state / "installed-version").stat().st_mtime_ns)
+
+    def test_changed_native_configuration_is_preserved_when_it_differs_from_published(self):
+        settings = self.remote / ".claude/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"enabledPlugins": {"cli@tj-agents": True}}), encoding="utf-8")
+        self.publish("configuration")
+        self.check()
+        managed = self.state / "sources/core/.claude/settings.json"
+        for document in ({"enabledPlugins": {"cli@tj-agents": 1}},
+                         {"enabledPlugins": {"cli@tj-agents": True}, "permissions": {"defaultMode": "bypassPermissions"}}):
+            with self.subTest(document=document):
+                original = json.dumps(document)
+                managed.write_text(original, encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "local changes"):
+                    CHECK.bootstrap_setup(self.project)
+                self.assertEqual(original, managed.read_text(encoding="utf-8"))
+
+    def test_staged_native_configuration_is_not_reset(self):
+        settings = self.remote / ".claude/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"enabledPlugins": {"cli@tj-agents": True}}), encoding="utf-8")
+        self.publish("configuration")
+        self.check()
+        source = self.state / "sources/core"
+        managed = source / ".claude/settings.json"
+        managed.write_text(json.dumps({"enabledPlugins": {"cli@tj-agents": True}}, indent=4), encoding="utf-8")
+        subprocess.run(["git", "-C", str(source), "add", ".claude/settings.json"], check=True, timeout=30)
+        with self.assertRaisesRegex(RuntimeError, "local changes"):
+            CHECK.bootstrap_setup(self.project)
+
     def test_rewritten_canonical_source_is_rejected_before_clone_or_execution(self):
         with mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.file:///untrusted.insteadOf",
                                           "GIT_CONFIG_VALUE_0": CHECK.SETUP_SOURCE}), \
