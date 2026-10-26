@@ -1,6 +1,7 @@
 # agent package capabilities
 
 - `lanes` — policy — core
+- `clip` — utility — core
 - `close` — utility — core
 - `handoff` — utility — core
 - `listen` — utility — core

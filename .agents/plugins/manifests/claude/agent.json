@@ -7,5 +7,6 @@
   },
   "repository": "https://github.com/tj-agents/agent",
   "skills": "./skills/",
+  "hooks": "./hooks/claude.json",
   "keywords": ["agent"]
 }

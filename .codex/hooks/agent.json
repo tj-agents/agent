@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\" --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/reap_orphans.py\" --notice",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\" --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/reap_orphans.py\" --notice",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15,
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py\" hook prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py\" hook prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py\" hook stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py\" hook stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex"
+          }
+        ]
+      }
+    ]
+  }
+}

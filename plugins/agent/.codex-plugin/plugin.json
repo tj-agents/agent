@@ -6,6 +6,7 @@
   },
   "repository": "https://github.com/tj-agents/agent",
   "skills": "./codex-skills/",
+  "hooks": "./hooks/codex.json",
   "keywords": [
     "agent"
   ],
