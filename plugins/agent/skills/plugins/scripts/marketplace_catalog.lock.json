@@ -1,6 +1,6 @@
 {
   "repository": "tj-agents/marketplace",
-  "revision": "67282d959b46c561bb0fbb31d3d500a884c6f3d1",
+  "revision": "5ec3d776612e07a6c55d57f0748cbd6b2d3303f6",
   "catalog": {
     "name": "tj-agents",
     "description": "Shared base, Agent Store, machine, workflow, engineering, C++, .NET, React, Neovim, Rust, Python, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
@@ -180,7 +180,7 @@
         "repository": "personal",
         "requires": [
           "engineering",
-          "machine"
+          "agent"
         ]
       },
       {
