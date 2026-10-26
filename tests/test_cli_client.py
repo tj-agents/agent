@@ -220,6 +220,7 @@ class ClientAttributionTests(unittest.TestCase):
         runtime = mock.Mock()
         runtime.recorded_client.return_value = (SimpleNamespace(pid=123), {
             "launch_cwd": str(self.root), "client_message_id": "input", "turn_id": "turn",
+            "native_rollout": str(self.root / "profile/sessions/rollout.jsonl"),
             "recording_path": "events.jsonl", "backend": self.backend, "profile": str(self.profile),
         })
         nearest = SimpleNamespace(pid=123)

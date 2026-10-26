@@ -35,9 +35,11 @@ class CloseFixture:
     def setup_close(self, host="codex"):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.host = host
         self.profile = self.root / "profile"
+        self.rollout = self.profile / "sessions" / "rollout.jsonl"
+        self.rollout.parent.mkdir(parents=True)
         self.patch(mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(self.root),
             "CODEX_HOME": str(self.profile), "CLAUDE_CONFIG_DIR": str(self.profile)}))
         self.patch(mock.patch.object(CLOSE, "_session_close", return_value=session_close))
@@ -75,6 +77,12 @@ class CloseFixture:
         self.recording.write_text(json.dumps({"dir": "meta", "kind": "session_start"}) + "\n" +
             json.dumps({"dir": "from_tui", "kind": "op", "payload": {
                 "UserTurn": {"client_user_message_id": "input-one"}}}) + "\n", encoding="utf-8")
+        self.append_rollout({"type": "session_meta", "payload": {"id": "one", "source": "cli"}})
+        self.append_rollout({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-one"}})
+        self.append_rollout({"type": "event_msg", "payload": {
+            "type": "item_completed", "turn_id": "turn-one",
+            "item": {"type": "UserMessage", "client_id": "input-one"},
+        }})
         self.write(self.recording.with_name("client.json"), {"token": "a" * 64, "pid": 20,
             "profile": str(self.profile.resolve()), "backend": self.backend, "created_at": 20.0,
             "recorded_at": 21.0, "recording_path": str(self.recording), "launch_cwd": str(self.root)})
@@ -109,7 +117,7 @@ class CloseFixture:
 
     def native_request(self, method, params):
         if method == "thread/read":
-            return {"thread": {"source": "cli"}}
+            return {"thread": {"source": "cli", "path": str(self.rollout)}}
         if method == "thread/turns/list":
             return {"data": [{"id": "turn-one"}]}
         return {"data": [{"item": {"type": "userMessage", "clientId": self.native_input}}]}
@@ -120,6 +128,10 @@ class CloseFixture:
 
     def append(self, record):
         with self.transcript.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record) + "\n")
+
+    def append_rollout(self, record):
+        with self.rollout.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record) + "\n")
 
     def prepare(self):
@@ -143,6 +155,8 @@ class CloseFixture:
         if self.host == "claude":
             self.append({"type": "assistant", "message": {"stop_reason": "end_turn"}})
         self.store.record_stop(self.connection, self.handle, self.root)
+        if self.host == "codex":
+            self.append_rollout({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-one"}})
         LIFECYCLE.run("stop", self.host, {"session_id": "one", "turn_id": "turn-one",
                                            "transcript_path": str(self.transcript)})
 
