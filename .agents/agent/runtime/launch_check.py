@@ -259,19 +259,21 @@ def require_update_check(result: str) -> None:
 
 def prepare_launch_roots(project, host, executable, arguments):
     import required_plugins
+    import reload_plugins
 
+    effective_project, options = required_plugins.launch_context(project, host, arguments)
+    if effective_project is None:
+        return None, None
     try:
-        return required_plugins.check_launch_roots(project, host, executable, arguments)
-    except required_plugins.MissingRequiredPluginsError as error:
-        try:
-            import reload_plugins
-
-            reload_plugins.repair_missing(host, error.project, error.missing, executable)
-        except (required_plugins.RequiredPluginsError, RuntimeError, OSError):
-            if os.environ.get(INSTALL_RECOVERY):
-                raise
-            recover_install(project, "plugin setup")
-        return required_plugins.check_launch_roots(project, host, executable, arguments)
+        roots = reload_plugins.prepare_required(effective_project, host, executable, options)
+    except required_plugins.RequiredPluginsError:
+        raise
+    except (RuntimeError, OSError):
+        if os.environ.get(INSTALL_RECOVERY):
+            raise
+        recover_install(effective_project, "plugin setup")
+        roots = reload_plugins.prepare_required(effective_project, host, executable, options)
+    return effective_project, roots
 
 
 def prepare_launch(project, host, executable, arguments):

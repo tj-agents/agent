@@ -52,6 +52,26 @@ class RequiredPluginInventoryTests(unittest.TestCase):
             ["native-codex", "plugin", "list", "--marketplace", "tj-agents", "--json"],
         ], [call.args[0] for call in run.call_args_list])
 
+    def test_native_inventory_can_finish_after_the_old_five_second_limit(self):
+        script = self.root / "slow inventory.py"
+        script.write_text("import time\ntime.sleep(5.2)\nprint('[]')\n", encoding="utf-8")
+        native_run = subprocess.run
+
+        def run(_command, **options):
+            return native_run([sys.executable, str(script)], **options)
+
+        with mock.patch.object(REQUIRED.subprocess, "run", side_effect=run):
+            self.assertEqual([], REQUIRED.inventory("native-claude", "claude", self.project, ()))
+
+    def test_multiple_marketplaces_share_one_inventory_deadline(self):
+        self.select("agent@a", "agent@b", "agent@c")
+        clock = iter((0.0, 0.0, 12.0, 21.0))
+        with mock.patch.object(REQUIRED.time, "monotonic", side_effect=lambda: next(clock)), \
+                mock.patch.object(REQUIRED, "inventory", return_value=[]) as inventory:
+            with self.assertRaisesRegex(REQUIRED.RequiredPluginsError, "20-second budget"):
+                REQUIRED.check(self.project, "codex", "native-codex")
+        self.assertEqual([20.0, 8.0], [call.kwargs["timeout"] for call in inventory.call_args_list])
+
     def test_explicit_native_inventory_remains_unfiltered_for_cli_capability(self):
         entry = self.entry("cli@tj-agents")
         with mock.patch.object(REQUIRED.subprocess, "run", return_value=subprocess.CompletedProcess(
