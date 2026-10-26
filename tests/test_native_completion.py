@@ -58,6 +58,22 @@ class NativeCompletionTests(unittest.TestCase):
                     guard.poll()
                 self.rollout.write_bytes(saved)
 
+    def test_matching_input_is_rejected_when_its_turn_is_foreign_or_missing(self):
+        rows = [json.loads(line) for line in self.rollout.read_text(encoding='utf-8').splitlines()]
+        for turn in ('foreign', None):
+            with self.subTest(turn=turn):
+                changed = [{**row, 'payload': dict(row['payload'])} for row in rows]
+                if turn is None:
+                    changed[-1]['payload'].pop('turn_id')
+                else:
+                    changed[-1]['payload']['turn_id'] = turn
+                self.rollout.write_text(''.join(json.dumps(row) + '\n' for row in changed), encoding='utf-8')
+                guard = cli_client.NativeCompletion(self.entry)
+                self.event('task_complete')
+                with self.assertRaisesRegex(RuntimeError, 'did not belong'):
+                    guard.poll()
+        self.rollout.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+
     def test_pin_rejects_replaced_or_truncated_rollout(self):
         guard = cli_client.NativeCompletion(self.entry)
         pin = guard.pin()

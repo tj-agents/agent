@@ -28,6 +28,26 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.assertEqual("closed", self.outcome()["status"])
         self.assertEqual("closed", self.row()["end_reason"])
 
+    def test_store_bookkeeping_failure_after_a_real_stop_keeps_the_close_proof(self):
+        self.arm()
+        self.stop()
+        with mock.patch.object(WATCHER, "_record_end", side_effect=OSError("Store unavailable")):
+            self.assertEqual(0, self.wait())
+        outcome = self.outcome()
+        self.assertEqual({"status": "closed", "session_id": "one"},
+                         {key: outcome[key] for key in ("status", "session_id")})
+        self.assertEqual("session Store bookkeeping failed after close: Store unavailable", outcome["reason"])
+        self.assertIsNone(self.row()["ended_at"])
+
+    def test_refused_stop_does_not_attempt_store_bookkeeping(self):
+        self.arm()
+        self.stop()
+        with mock.patch.object(session_close, "stop_cli_client", side_effect=session_close.Refusal("still live")), \
+                mock.patch.object(WATCHER, "_record_end") as record_end:
+            self.assertEqual(2, self.wait())
+        record_end.assert_not_called()
+        self.assertEqual("refused", self.outcome()["status"])
+
     def test_new_native_turn_at_the_final_signal_guard_cancels(self):
         self.arm()
         self.stop()
