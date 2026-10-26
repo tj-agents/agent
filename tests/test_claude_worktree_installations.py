@@ -159,6 +159,31 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
         ], [command[1:] for command, _ in calls[:2]])
         self.assertEqual([self.primary], [cwd for command, cwd in calls if command[2] == 'install'])
 
+    def test_user_dependencies_cannot_borrow_project_or_local_installations(self):
+        dependencies = {IDENTITY: ['base@tj-agents']}
+        for scope in ('project', 'local'):
+            rows = [{'id': 'base@tj-agents', 'scope': scope, 'projectPath': str(self.primary), 'enabled': True}]
+            with self.subTest(scope=scope):
+                self.assertEqual([], REFRESH.missing_dependencies(IDENTITY, 'project', self.nested, dependencies, rows))
+                self.assertEqual(['base@tj-agents'], REFRESH.missing_dependencies(
+                    IDENTITY, 'user', self.nested, dependencies, rows))
+        with mock.patch.object(required_plugins, 'git_common_directory', side_effect=AssertionError('unneeded query')):
+            self.assertEqual([], REFRESH.missing_dependencies(IDENTITY, 'user', self.root, {}, rows))
+
+    def test_dependency_persistence_uses_the_first_native_repository_registration(self):
+        valid = {'id': 'base@tj-agents', 'scope': 'project', 'projectPath': str(self.primary), 'enabled': True}
+        dependency = ('base@tj-agents', 'project', self.nested)
+        for rows in ([valid], [{**valid, 'enabled': False}, {**valid, 'projectPath': str(self.nested)}],
+                     [{**valid, 'projectPath': str(self.foreign)}], [{**valid, 'scope': 'local'}]):
+            with self.subTest(rows=rows), mock.patch.object(REFRESH, 'run', side_effect=lambda command, cwd:
+                    json.dumps(rows) if command[1:3] == ['plugin', 'list'] else ''):
+                if rows == [valid]:
+                    self.assertEqual(['base@tj-agents'], REFRESH.apply_claude(
+                        'claude', self.nested, [], [], dependencies=[dependency]))
+                else:
+                    with self.assertRaisesRegex(REFRESH.RefreshError, 'did not persist enabled'):
+                        REFRESH.apply_claude('claude', self.nested, [], [], dependencies=[dependency])
+
     def test_dependency_install_requires_an_enabled_effective_owner_scope(self):
         dependency = ('base@tj-agents', 'project', self.primary)
         for row in (None, {'id': 'base@tj-agents', 'scope': 'project', 'projectPath': str(self.primary),

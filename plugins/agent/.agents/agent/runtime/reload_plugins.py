@@ -163,7 +163,8 @@ def persistence_problems(expected: list[tuple[str, str, Path, str]], installatio
 def dependency_problems(expected: list[tuple[str, str, Path]], installations: list) -> list[str]:
     problems = []
     for identity, scope, owner in expected:
-        entry = entry_for(required_plugins.claude_installations(owner, installations), identity, scope, owner)
+        entry = next((entry for entry in required_plugins.claude_installations(owner, installations)
+                      if entry.get("id") == identity and entry.get("scope") == scope), None)
         if entry is None or entry.get("enabled") is not True:
             problems.append(f"{identity} ({scope}): native installation did not persist enabled")
     return problems
@@ -200,8 +201,13 @@ def missing_dependencies(identity: str, scope: str, owner: Path, dependencies: d
                 visit(dependency)
                 order.append(dependency)
     visit(identity)
+    if not order:
+        return []
     effective = required_plugins.claude_installations(owner, installations)
-    return [dependency for dependency in order if not any(entry.get("id") == dependency for entry in effective)]
+    return [dependency for dependency in order if not any(
+        entry.get("id") == dependency and (entry.get("scope") in {"user", "managed"}
+                                           or scope != "user" and entry.get("scope") in {"project", "local"})
+        for entry in effective)]
 
 
 def dependency_installs(dependents: list[tuple[str, str, Path]]) -> list[tuple[str, str, Path]]:
