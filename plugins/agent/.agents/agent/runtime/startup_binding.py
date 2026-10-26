@@ -29,6 +29,7 @@ ACK_DIRECTORY_ENV = "TJ_AGENTS_STARTUP_ACK_DIRECTORY"
 ACK_TOKEN_ENV = "TJ_AGENTS_STARTUP_ACK_TOKEN"
 REQUIRED_HOOKS_ENV = "TJ_AGENTS_STARTUP_REQUIRED_HOOKS"
 STARTUP_TIMEOUT_SECONDS = 20
+_HOOK_ROOTS_UNSET = object()
 
 
 def _peer_module(name: str):
@@ -193,7 +194,7 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                 on_running: Callable[..., None] | None = None,
                 on_unconfirmed: Callable[..., None] | None = None,
                 require_session_start: bool = False,
-                hook_project: Path | None = None,
+                hook_roots=_HOOK_ROOTS_UNSET,
                 on_phase: Callable[[str], None] | None = None,
                 terminal: Mapping[str, object] | None = None) -> int:
     phase = on_phase or (lambda _name: None)
@@ -210,7 +211,10 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
         if require_session_start:
             environment[ACK_DIRECTORY_ENV] = str(directory)
             environment[ACK_TOKEN_ENV] = token
-            roots = required_plugins.check(hook_project or project, host, target)
+            if hook_roots is _HOOK_ROOTS_UNSET:
+                _effective_project, roots = required_plugins.check_launch_roots(project, host, target, arguments)
+            else:
+                roots = hook_roots
             environment[REQUIRED_HOOKS_ENV] = json.dumps(startup_participants(host, roots))
         phase("starting-native")
         try:
@@ -302,7 +306,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     phase("checking-plugins")
     try:
-        effective_project = launch_check.prepare_launch(parsed.project.resolve(), parsed.host, parsed.target, arguments)
+        effective_project, hook_roots = launch_check.prepare_launch_roots(
+            parsed.project.resolve(), parsed.host, parsed.target, arguments,
+        )
     except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
         message = f"launch: {error}"
         print(message, file=sys.stderr)
@@ -337,7 +343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         terminal = _prelaunch_terminal()
         if terminal is not None:
             status["terminal"] = terminal
-        options = {"require_session_start": True, "hook_project": effective_project, "terminal": terminal} if parsed.require_session_start else {
+        options = {"require_session_start": True, "hook_roots": hook_roots, "terminal": terminal} if parsed.require_session_start else {
             "terminal": terminal,
         }
         if parsed.status_file is not None:

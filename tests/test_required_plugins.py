@@ -60,6 +60,25 @@ class RequiredPluginInventoryTests(unittest.TestCase):
         self.assertIn("cli@tj-agents", roots)
         self.assertEqual(["native-codex", "plugin", "list", "--json"], run.call_args.args[0])
 
+    def test_claude_launch_roots_reuse_overrides_until_the_delimiter(self):
+        roots = {"agent@tj-agents": self.root / "override-agent"}
+        arguments = [
+            "--settings", "override.json", "--setting-sources=project,local",
+            "--plugin-dir", "plugins", "--plugin-url=https://example.test/plugin", "--",
+            "--settings", "literal prompt",
+        ]
+        with mock.patch.object(REQUIRED, "check", return_value=roots) as check:
+            effective, actual = REQUIRED.check_launch_roots(self.project, "claude", "native-claude", arguments)
+        self.assertEqual(self.project.resolve(), effective)
+        self.assertIs(roots, actual)
+        check.assert_called_once_with(
+            self.project.resolve(), "claude", "native-claude",
+            inventory_options=(
+                "--settings", "override.json", "--setting-sources", "project,local",
+                "--plugin-dir", "plugins", "--plugin-url", "https://example.test/plugin",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
