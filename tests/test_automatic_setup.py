@@ -129,6 +129,35 @@ class AutomaticSetupIntegration(unittest.TestCase):
             self.assertEqual("current", self.check())
         self.assertFalse(marker.exists())
 
+    def test_first_fetch_failure_can_be_retried_without_manual_cleanup(self):
+        native = subprocess.run
+
+        def fail_fetch(command, **options):
+            if command[0] == "git" and "fetch" in command:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="transient fetch failure")
+            return native(command, **options)
+
+        with mock.patch.object(CHECK.subprocess, "run", side_effect=fail_fetch), \
+                self.assertRaisesRegex(RuntimeError, "transient fetch failure"):
+            self.check()
+        self.assertFalse((self.state / "installed-version").exists())
+        self.assertEqual("current", self.check())
+        self.assertEqual("1", (self.state / "setup-applications").read_text(encoding="utf-8"))
+
+    def test_interrupted_initial_checkout_does_not_publish_a_partial_source(self):
+        native = subprocess.run
+
+        def fail_checkout(command, **options):
+            if command[0] == "git" and "checkout" in command:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="interrupted checkout")
+            return native(command, **options)
+
+        with mock.patch.object(CHECK.subprocess, "run", side_effect=fail_checkout), \
+                self.assertRaisesRegex(RuntimeError, "interrupted checkout"):
+            self.check()
+        self.assertFalse((self.state / "sources/core").exists())
+        self.assertEqual("current", self.check())
+
     @unittest.skipUnless(os.name == "nt", "Windows native script policy; shared setup refusal is covered on Linux")
     def test_native_script_policy_is_preserved_when_setup_is_refused(self):
         with mock.patch.dict(os.environ, {"PSExecutionPolicyPreference": "Restricted"}), self.assertRaises(RuntimeError):

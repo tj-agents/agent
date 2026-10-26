@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -61,13 +62,16 @@ def bootstrap_setup(project: Path) -> None:
                 raise RuntimeError(f"Automatic setup refuses a linked source directory: {path}")
         if run(["git", "ls-remote", "--get-url", SETUP_SOURCE]) != SETUP_SOURCE:
             raise RuntimeError("Automatic setup refuses a rewritten canonical source URL")
-        created = not checkout.exists()
-        if created:
+        if not checkout.exists():
             checkout.parent.mkdir(parents=True, exist_ok=True)
-            run(["git", "clone", "--no-checkout", "--template=", "--depth=1", "--branch", "main", SETUP_SOURCE, str(checkout)])
+            with tempfile.TemporaryDirectory(prefix="core-bootstrap-", dir=checkout.parent) as temporary:
+                staged = Path(temporary) / "core"
+                run(["git", "clone", "--no-checkout", "--template=", "--depth=1", "--branch", "main", SETUP_SOURCE, str(staged)])
+                run(["git", "checkout", "--detach", "HEAD"], staged)
+                os.replace(staged, checkout)
         if run(["git", "remote", "get-url", "origin"], checkout) != SETUP_SOURCE:
             raise RuntimeError("Automatic setup source is not the canonical tj-agents/core repository")
-        if not created and run(["git", "status", "--porcelain"], checkout):
+        if run(["git", "status", "--porcelain"], checkout):
             raise RuntimeError(f"Automatic setup source has local changes: {checkout}")
         run(["git", "fetch", "--depth=1", "origin", "refs/heads/main"], checkout)
         run(["git", "checkout", "--detach", "FETCH_HEAD"], checkout)
