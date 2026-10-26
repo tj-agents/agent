@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import functools
 import hashlib
 import json
 import os
@@ -146,10 +147,59 @@ def selected(project: Path) -> tuple[str, ...]:
     return tuple(sorted(set(plugins)))
 
 
+@functools.lru_cache(maxsize=None)
+def git_common_directory(project: Path) -> str | None:
+    if not project.is_dir() or not any((directory / ".git").exists() for directory in (project, *project.parents)):
+        return None
+    try:
+        result = subprocess.run(['git', '-C', str(project), 'rev-parse', '--git-common-dir'],
+                                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                timeout=INVENTORY_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RequiredPluginsError(f'Cannot resolve the native Claude repository for {project}: {error}') from error
+    if result.returncode or not result.stdout.strip():
+        raise RequiredPluginsError(f'Cannot resolve the native Claude repository for {project}: {result.stderr.strip()}')
+    return os.path.normcase(str((project / result.stdout.strip()).resolve()))
+
+
+def claude_installations(project: Path, entries: list) -> list:
+    if not entries:
+        return []
+    project = project.resolve()
+    common = git_common_directory(project)
+    selected, seen = [], set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        scope, owner = entry.get('scope'), entry.get('projectPath')
+        if scope in {'project', 'local'}:
+            if not isinstance(owner, str) or not owner:
+                continue
+            owner = Path(owner).resolve()
+            try:
+                owner_common = git_common_directory(owner)
+            except RequiredPluginsError:
+                continue
+            if common and owner_common:
+                if common != owner_common:
+                    continue
+            elif not project.is_relative_to(owner):
+                continue
+            key = entry.get('id'), scope
+            if key in seen:
+                continue
+            seen.add(key)
+        elif owner and scope not in {'user', 'managed'}:
+            if not isinstance(owner, str) or not project.is_relative_to(Path(owner).resolve()):
+                continue
+        selected.append(entry)
+    return selected
+
+
 def enabled_roots(host: str, project: Path, entries: list) -> dict[str, Path]:
     roots = {}
     profile = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-    for entry in entries:
+    for entry in claude_installations(project, entries) if host == 'claude' else entries:
         if not isinstance(entry, dict) or entry.get("enabled") is not True:
             continue
         if entry.get("installed") is False or entry.get("error") or entry.get("errors"):
@@ -159,7 +209,7 @@ def enabled_roots(host: str, project: Path, entries: list) -> dict[str, Path]:
             continue
         if owner and not isinstance(owner, str):
             continue
-        if owner and entry.get("scope") not in ("user", "managed"):
+        if host != 'claude' and owner and entry.get("scope") not in ("user", "managed"):
             if not project.resolve().is_relative_to(Path(owner).resolve()):
                 continue
         if host == "codex":
