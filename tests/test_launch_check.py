@@ -26,7 +26,7 @@ class LaunchCheckExpiryTests(unittest.TestCase):
         self.cursor.write_text(json.dumps({"since": "old", "since_at": 0}), encoding="utf-8")
         environment = mock.patch.dict(os.environ, {
             "AGENT_STATE_DIRECTORY": str(self.state),
-            "TJ_AGENTS_SETUP_RECOVERY": "1",
+            "TJ_AGENTS_INSTALL_RECOVERY": "1",
         })
         environment.start()
         self.addCleanup(environment.stop)

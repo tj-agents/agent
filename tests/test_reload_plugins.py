@@ -26,7 +26,7 @@ def setUpModule():
     ISOLATION.append(home)
     environment = {key: value for key, value in os.environ.items() if key not in SESSION_VARIABLES}
     environment.update(GIT_CONFIG_COUNT='0', CLAUDE_CONFIG_DIR=str(Path(home.name) / "claude"), CODEX_HOME=str(Path(home.name) / "codex"),
-                       AGENT_STATE_DIRECTORY=str(Path(home.name) / "state"), TJ_AGENTS_SETUP_RECOVERY="1")
+                       AGENT_STATE_DIRECTORY=str(Path(home.name) / "state"), TJ_AGENTS_INSTALL_RECOVERY="1")
     patcher = mock.patch.dict(os.environ, environment, clear=True)
     patcher.start()
     ISOLATION.append(patcher)
