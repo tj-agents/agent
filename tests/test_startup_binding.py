@@ -166,8 +166,65 @@ class StartupBindingTests(unittest.TestCase):
             ])
 
         self.assertEqual(0, result)
-        prepare.assert_called_once_with(root.resolve(), 'claude', 'native-claude', arguments)
+        self.assertEqual([
+            mock.call(root.resolve(), 'claude', 'native-claude', arguments),
+            mock.call(root.resolve(), 'claude', 'native-claude', arguments),
+        ], prepare.call_args_list)
         self.assertIs(roots, calls[0]['hook_roots'])
+
+    def test_updated_plugin_roster_replaces_removed_startup_participants_before_spawn(self):
+        directory = tempfile.TemporaryDirectory(prefix='startup updated roster ')
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+
+        def dispatcher(name):
+            plugin = root / name
+            manifest = plugin / '.claude-plugin/plugin.json'
+            hooks = plugin / 'hooks.json'
+            manifest.parent.mkdir(parents=True)
+            hooks.write_text(json.dumps({'hooks': {'SessionStart': [
+                {'hooks': [{'command': 'python hook_dispatch.py'}]},
+            ]}}), encoding='utf-8')
+            manifest.write_text(json.dumps({'hooks': ['hooks.json']}), encoding='utf-8')
+            return plugin
+
+        old_roots = {'old@tj-agents': dispatcher('old')}
+        new_roots = {'new@tj-agents': dispatcher('new')}
+        installed = {'roots': old_roots}
+
+        def prepare_launch_roots(*_args):
+            return root, installed['roots']
+
+        def update_roster(*_args, **_kwargs):
+            installed['roots'] = new_roots
+            return 'updated'
+
+        process = mock.Mock(pid=72)
+        process.wait.return_value = 0
+
+        def native_prepare(_host, argv, _project, environment, **_kwargs):
+            return argv, environment, None
+
+        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=prepare_launch_roots) as preflight, \
+                mock.patch.object(self.binding.launch_check, 'check', side_effect=update_roster), \
+                mock.patch.object(self.binding.cli_client, 'prepare', side_effect=native_prepare), \
+                mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn, \
+                mock.patch.object(self.binding, '_acknowledged', return_value=True), \
+                mock.patch.object(self.binding, '_record_launch_binding'):
+            result = self.binding.main([
+                '--host', 'claude', '--project', directory.name, '--target', 'native-claude',
+                '--require-session-start', '--', '--settings', 'override.json', '--', 'literal prompt',
+            ])
+
+        self.assertEqual(0, result)
+        self.assertEqual([
+            mock.call(root.resolve(), 'claude', 'native-claude',
+                      ['--settings', 'override.json', '--', 'literal prompt']),
+            mock.call(root.resolve(), 'claude', 'native-claude',
+                      ['--settings', 'override.json', '--', 'literal prompt']),
+        ], preflight.call_args_list)
+        required = json.loads(spawn.call_args.kwargs['env'][self.binding.REQUIRED_HOOKS_ENV])
+        self.assertEqual(['new@tj-agents'], required)
 
 
 if __name__ == '__main__':
