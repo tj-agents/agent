@@ -1,6 +1,7 @@
 """Verified native rollout completion cannot be inferred from hook state."""
 
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -78,10 +79,12 @@ class NativeCompletionTests(unittest.TestCase):
         guard = cli_client.NativeCompletion(self.entry)
         pin = guard.pin()
         original = self.rollout.read_bytes()
-        self.rollout.unlink()
-        self.rollout.write_bytes(original)
-        with self.assertRaisesRegex(RuntimeError, 'replaced or truncated'):
-            cli_client.NativeCompletion(self.entry, pin)
+        replacement = self.rollout.with_name('replacement.jsonl')
+        replacement.write_bytes(original)
+        with self.rollout.open('rb'):
+            os.replace(replacement, self.rollout)
+            with self.assertRaisesRegex(RuntimeError, 'replaced or truncated'):
+                cli_client.NativeCompletion(self.entry, pin)
         self.rollout.unlink()
         self.rollout.write_bytes(original[:10])
         with self.assertRaisesRegex(RuntimeError, 'replaced or truncated'):
