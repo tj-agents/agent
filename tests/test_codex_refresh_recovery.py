@@ -34,7 +34,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         self.refresh = load("reload_plugins")
         temporary = tempfile.TemporaryDirectory(prefix="codex-refresh-recovery-")
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         environment = mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(self.root / "state")})
         environment.start()
         self.addCleanup(environment.stop)
