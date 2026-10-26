@@ -70,7 +70,7 @@ class InputBindingTests(unittest.TestCase):
         return ticket, environment, arguments
 
     def resolve(self):
-        return client.recorded_client('current-thread', self.nearest, self.infos.get, self.infos)
+        return client.recorded_client('current-thread', self.infos[123], self.infos.get, self.infos)
 
     def test_launcher_starts_a_sanitized_daemon_and_keeps_each_frontend_private_record(self):
         ticket, environment, arguments = self.bind()
@@ -126,11 +126,10 @@ class InputBindingTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.resolve()
 
-    def test_ambiguous_live_writers_and_two_matching_frontends_refuse(self):
+    def test_nearest_frontend_selects_its_own_shared_daemon_recording(self):
         first, _, _ = self.bind()
         self.bind(pid=456)
-        with self.assertRaisesRegex(RuntimeError, 'Cannot attribute'):
-            self.resolve()
+        self.assertEqual(123, self.resolve()[0].pid)
         client.release(first)
         self.contexts[123][client.RECORD_PATH_ENV] = self.contexts[456][client.RECORD_PATH_ENV]
         with self.assertRaisesRegex(RuntimeError, 'Multiple native processes'):

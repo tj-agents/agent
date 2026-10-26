@@ -237,7 +237,10 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
         raise RuntimeError('Codex frontend attribution requires Python 3.11 or newer')
     arguments = process_arguments(nearest.pid)
     private = bool(arguments and is_session(arguments[1:]) and '--no-daemon' in arguments)
-    backend = None if private else daemon_identity(expected_pid=nearest.pid)
+    # `nearest` is the actual frontend ancestor. A shared daemon is a
+    # separate process, so verify its identity independently and bind the
+    # selected recorded frontend to both identities below.
+    backend = None if private else daemon_identity()
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import codex_hook_trust
 
@@ -256,8 +259,6 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
                 continue
             info = lookup(record['pid'])
             if info is None or Path(info.name).stem.casefold() != 'codex':
-                continue
-            if private and info.pid != nearest.pid:
                 continue
             times = [record.get(key) for key in ('created_at', 'recorded_at')]
             if (not all(type(value) in (int, float) and math.isfinite(value) and value > 0 for value in times)
@@ -279,6 +280,8 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
                     continue
                 if process_context(other.pid).get(RECORD_PATH_ENV) == event_path:
                     raise RuntimeError('Multiple native processes share a frontend recording; preserving every client')
+            if info.pid != nearest.pid:
+                continue
             matches.append((info, record))
         except (OSError, ValueError, TypeError, KeyError):
             continue

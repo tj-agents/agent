@@ -126,8 +126,7 @@ CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile
 
 
 def revalidate_codex_client(entry):
-    backend = entry.get("backend")
-    nearest = process_info(backend["pid"] if isinstance(backend, dict) else entry["pid"])
+    nearest = process_info(entry["pid"])
     if nearest is None or entry.get("client_identity") != "managed-input":
         raise Refusal("the frozen native client binding is unavailable")
     info, details = current_codex_client(entry["session_id"], nearest, project=entry.get("cwd"))

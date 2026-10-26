@@ -74,7 +74,7 @@ class ClientAttributionTests(unittest.TestCase):
         return ticket, environment
 
     def resolve(self):
-        nearest = SimpleNamespace(pid=1, name="codex.exe")
+        nearest = self.infos[123]
         return CLIENT.recorded_client("thread", nearest, self.infos.get, self.infos)
 
     def test_recorder_sanitizes_daemon_and_selects_only_matching_frontend(self):
@@ -88,6 +88,24 @@ class ClientAttributionTests(unittest.TestCase):
         self.assertEqual("turn", record["turn_id"])
         CLIENT.release(ticket)
 
+    def test_shared_daemon_and_frontend_are_verified_as_distinct_bindings(self):
+        self.bind()
+        CLIENT.daemon_identity.reset_mock()
+        self.assertEqual(123, self.resolve()[0].pid)
+        CLIENT.daemon_identity.assert_called_once_with()
+        with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
+            CLIENT.recorded_client("thread", SimpleNamespace(pid=1, name="codex.exe"), self.infos.get, self.infos)
+
+    def test_revalidation_rechecks_the_bound_frontend_not_the_shared_daemon(self):
+        frontend = SimpleNamespace(pid=123, name="codex.exe", started_at=10.0)
+        entry = {"host": "codex", "session_id": "thread", "pid": 123, "backend": self.backend,
+                 "client_identity": "managed-input", "cwd": str(self.root)}
+        with mock.patch.object(session_close, "process_info", return_value=frontend), \
+                mock.patch.object(session_close, "current_codex_client", return_value=(frontend, {})) as current:
+            with self.assertRaisesRegex(session_close.Refusal, "binding changed"):
+                session_close.revalidate_codex_client(entry)
+        self.assertEqual(123, current.call_args.args[1].pid)
+
     def test_newer_unattributed_input_refuses_the_old_frontend(self):
         ticket, _environment = self.bind()
         with Path(ticket["recording_path"]).open("a", encoding="utf-8") as stream:
@@ -95,11 +113,10 @@ class ClientAttributionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
             self.resolve()
 
-    def test_ambiguous_matching_frontends_refuse(self):
+    def test_nearest_frontend_selects_its_own_shared_daemon_recording(self):
         first, _environment = self.bind()
         self.bind(pid=456)
-        with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
-            self.resolve()
+        self.assertEqual(123, self.resolve()[0].pid)
         CLIENT.release(first)
 
     def test_incomplete_or_duplicate_recording_refuses(self):
