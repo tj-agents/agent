@@ -93,6 +93,47 @@ class RefreshCliTests(unittest.TestCase):
         self.assertEqual(["claude", "codex"], [call.args[1] for call in self.admission.call_args_list])
         refresh.assert_called_once_with("codex", "native", Path.cwd().resolve(), {}, [])
 
+    def test_default_refresh_completes_the_other_host_after_admission_failure(self):
+        for failed_host, healthy_host in (("claude", "codex"), ("codex", "claude")):
+            for result in ("current", "unconfigured"):
+                def admit(project, host, **kwargs):
+                    if host == failed_host:
+                        raise REFRESH.RefreshError(f"{host} install failed")
+
+                self.admission.reset_mock()
+                self.admission.side_effect = admit
+                self.readiness.reset_mock()
+                with self.subTest(failed_host=failed_host, result=result), \
+                        mock.patch.object(REFRESH.launch_check, "check", return_value=result) as check, \
+                        mock.patch.object(REFRESH, "executable_for", return_value="native"), \
+                        mock.patch.object(REFRESH, "selection", return_value=({}, [])), \
+                        mock.patch.object(REFRESH, "refresh", return_value=[]) as refresh, \
+                        mock.patch.object(REFRESH.required_plugins, "converge_setup", return_value=[]) as setup, \
+                        mock.patch.object(REFRESH, "relaunch_session", return_value=None) as relaunch, \
+                        mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
+                    self.assertEqual(1, REFRESH.main([]))
+                    self.assertEqual(["claude", "codex"],
+                                     [call.args[1] for call in self.admission.call_args_list[:2]])
+                    self.assertEqual(healthy_host, check.call_args.kwargs["host"])
+                    self.assertEqual((healthy_host,), setup.call_args.args[1])
+                    self.assertEqual(healthy_host == "codex", self.readiness.called)
+                    self.assertEqual(healthy_host == "claude", relaunch.called)
+                    self.assertEqual(result == "unconfigured", refresh.called)
+                    if refresh.called:
+                        self.assertEqual(healthy_host, refresh.call_args.args[0])
+                    self.assertIn(f"{failed_host} install failed",
+                                  "".join(call.args[0] for call in stdout.write.call_args_list))
+
+    def test_default_refresh_stops_when_neither_host_is_admitted(self):
+        self.admission.side_effect = REFRESH.RefreshError("inventory failed")
+        with mock.patch.object(REFRESH.launch_check, "check") as check, \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            self.assertEqual(1, REFRESH.main([]))
+        self.assertEqual(2, self.admission.call_count)
+        check.assert_not_called()
+        self.readiness.assert_not_called()
+        REFRESH.required_plugins.converge_setup.assert_not_called()
+
     def test_verify_only_never_repairs_missing_installations(self):
         with mock.patch.object(REFRESH, "executable_for", return_value="native"), \
                 mock.patch.object(REFRESH, "selection", return_value=({}, [])), \
