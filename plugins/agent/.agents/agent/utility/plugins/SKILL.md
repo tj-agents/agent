@@ -89,14 +89,14 @@ Native permission defaults come from `.agents/settings.json`, independently of p
 ```
 
 `permissions` is a host-neutral enum: `bypass` (the default when omitted) or `standard`.
-Machine setup projects it to Claude's user-profile `permissions.defaultMode` (`bypassPermissions` or
+Machine install projects it to Claude's user-profile `permissions.defaultMode` (`bypassPermissions` or
 `default`) and Codex's `approval_policy` plus `default_permissions` (`never`/`:danger-full-access` or
 `on-request`/`:workspace`). It replaces conflicting legacy Codex sandbox keys while preserving
-unrelated settings. Install profile defaults once per machine through Core's `setup.ps1` on Windows
-or `setup.sh` on Linux. Claude 2.1.257+ ignores bypass in project and local settings, so repository
+unrelated settings. Install profile defaults once per machine through Agent's `install.ps1` on Windows
+or `install.sh` on Linux. Claude 2.1.257+ ignores bypass in project and local settings, so repository
 generation omits that inert value and inherits the installed user default; `standard` writes its
 supported project override. Codex projects either mode into repository settings. `check` reports
-source drift; it does not prove the Claude user-profile setup has run.
+source drift; it does not prove the Claude user-profile install has run.
 Native project trust, managed restrictions and explicit session overrides still apply; an existing
 restricted session must change its native permissions or restart before it can use changed defaults.
 
