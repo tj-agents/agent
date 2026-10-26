@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -67,6 +68,31 @@ class ObserverStoreStageTests(unittest.TestCase):
         staging = self.start_stage()
         (staging / 'session_store.py').write_text('tampered\n', encoding='utf-8')
         self.assertIsNone(load_register(staging / 'register_session.py', 'tampered_register_session')._load_session_store())
+
+    def test_detached_launcher_restores_explicit_state_and_profiles(self):
+        launcher = SCRIPTS / 'detached_launch.py'
+        state, codex, claude = self.state, self.state / 'codex', self.state / 'claude'
+        output, probe = self.state / 'context.json', self.state / 'probe.py'
+        self.state.mkdir()
+        probe.write_text(
+            'import json, os, sys\nfrom pathlib import Path\n'
+            'Path(sys.argv[1]).write_text(json.dumps({key: os.environ.get(key) for key in '
+            '("AGENT_STATE_DIRECTORY", "CODEX_HOME", "CLAUDE_CONFIG_DIR")}))\n', encoding='utf-8')
+        result = subprocess.run([sys.executable, '-I', '-B', str(launcher), '--state-directory', str(state),
+                                 '--codex-home', str(codex), '--claude-config-dir', str(claude), '--',
+                                 str(probe), str(output)], capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual({"AGENT_STATE_DIRECTORY": str(state.resolve()), "CODEX_HOME": str(codex.resolve()),
+                          "CLAUDE_CONFIG_DIR": str(claude.resolve())}, json.loads(output.read_text(encoding='utf-8')))
+
+    def test_scheduler_command_passes_only_owned_detached_context(self):
+        with mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.state), 'CODEX_HOME': str(self.state / 'codex'),
+                                          'CLAUDE_CONFIG_DIR': str(self.state / 'claude'), 'UNRELATED': 'secret'}, clear=True):
+            command = session_close.detached_command(self.state / 'watcher.py', ['--request', 'exact'], SCRIPTS / 'detached_launch.py')
+        self.assertIn('--state-directory', command)
+        self.assertIn('--codex-home', command)
+        self.assertIn('--claude-config-dir', command)
+        self.assertNotIn('UNRELATED', ' '.join(command))
 
 
 if __name__ == '__main__':

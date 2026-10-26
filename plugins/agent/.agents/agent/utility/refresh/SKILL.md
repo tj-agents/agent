@@ -36,7 +36,9 @@ be verified, retain the current owner and report the failed hook and exact recov
 
 The host entry point names how this session adopts the result.
 
-Keep the same conversation through recovery. If the host cannot reload a running session's hook
-definitions, checkpoint the current task and give the exact native resume command for its existing
-session ID and absolute directory, then ask the user to say `continue`. Keep the session open while
-waiting for that action. Missing reload access does not authorize a successor or a new conversation.
+Keep the same conversation through recovery. If a verified Claude or Codex session needs a fresh client,
+Agent arms its exact attributable frontend close and resumes that same session with its original profile,
+directory and safe native options. The watcher requires the immutable close request digest and its matching
+closed result before resuming. Checkpoint before the turn ends; the resumed client must verify required hook
+execution before ordinary work. `--no-relaunch` reports incomplete adoption and never arms a close. Trust
+failures remain failures; refresh never bypasses trust or creates another conversation.

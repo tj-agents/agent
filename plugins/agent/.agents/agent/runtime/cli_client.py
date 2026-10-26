@@ -1,5 +1,6 @@
 """Bind managed Codex launches to their frontend process (Python 3.9+)."""
 
+import errno
 import json
 import math
 import os
@@ -204,10 +205,13 @@ def current_input(server, session_id):
     turns = server.request('thread/turns/list', {'threadId': session_id, 'limit': 5,
                                                'sortDirection': 'desc', 'itemsView': 'notLoaded'})['data']
     for turn in turns:
+        turn_id = turn.get('id')
+        if not isinstance(turn_id, str) or not turn_id:
+            raise RuntimeError('The latest native input has no attributable turn identity')
         cursor = None
         seen = set()
         for _ in range(128):
-            params = {'threadId': session_id, 'turnId': turn['id'], 'limit': 100, 'sortDirection': 'desc'}
+            params = {'threadId': session_id, 'turnId': turn_id, 'limit': 100, 'sortDirection': 'desc'}
             if cursor is not None:
                 params['cursor'] = cursor
             page = server.request('thread/items/list', params)
@@ -217,7 +221,7 @@ def current_input(server, session_id):
                     identity = item.get('clientId')
                     if not isinstance(identity, str) or not identity:
                         raise RuntimeError('The latest native input has no attributable frontend identity')
-                    return identity
+                    return {'turn_id': turn_id, 'client_message_id': identity}
             cursor = page.get('nextCursor')
             if cursor is None:
                 break
@@ -229,19 +233,42 @@ def current_input(server, session_id):
     raise RuntimeError('This native thread has no attributable frontend input')
 
 
-def recorded_client(session_id, nearest, lookup, table, *, project=None):
+def peer_recording_path(peer, peer_state):
+    try:
+        return process_context(peer.pid).get(RECORD_PATH_ENV)
+    except FileNotFoundError as error:
+        disappearance = error
+    except OSError as error:
+        if error.errno != errno.ESRCH:
+            raise
+        disappearance = error
+    state, current = peer_state(peer.pid)
+    absent = state == 'absent'
+    if state not in ('absent', 'present'):
+        raise disappearance
+    if absent:
+        return None
+    if current is not None and getattr(current, 'started_at', None) != getattr(peer, 'started_at', None):
+        return None
+    raise disappearance
+
+
+def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_state):
     if sys.version_info < (3, 11):
         raise RuntimeError('Codex frontend attribution requires Python 3.11 or newer')
     arguments = process_arguments(nearest.pid)
     private = bool(arguments and is_session(arguments[1:]) and '--no-daemon' in arguments)
-    backend = None if private else daemon_identity(expected_pid=nearest.pid)
+    # `nearest` is the actual frontend ancestor. A shared daemon is a
+    # separate process, so verify its identity independently and bind the
+    # selected recorded frontend to both identities below.
+    backend = None if private else daemon_identity()
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import codex_hook_trust
 
     executable = arguments[0]
     with codex_hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
                                    existing=not private, timeout=15) as server:
-        identity = current_input(server, session_id)
+        submitted = current_input(server, session_id)
     state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
     matches = []
     for path in (state / 'cli-clients').glob('*/client.json'):
@@ -253,8 +280,6 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
                 continue
             info = lookup(record['pid'])
             if info is None or Path(info.name).stem.casefold() != 'codex':
-                continue
-            if private and info.pid != nearest.pid:
                 continue
             times = [record.get(key) for key in ('created_at', 'recorded_at')]
             if (not all(type(value) in (int, float) and math.isfinite(value) and value > 0 for value in times)
@@ -268,13 +293,17 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
                 continue
             arguments = process_arguments(info.pid)
             if (not arguments or not is_session(arguments[1:])
-                    or ('--no-daemon' in arguments) != private or latest_input(event_path) != identity):
+                    or ('--no-daemon' in arguments) != private
+                    or latest_input(event_path) != submitted['client_message_id']):
                 continue
             for other in table.values():
                 if other.pid == info.pid or Path(other.name).stem.casefold() != 'codex':
                     continue
-                if process_context(other.pid).get(RECORD_PATH_ENV) == event_path:
+                if peer_recording_path(other, peer_state) == event_path:
                     raise RuntimeError('Multiple native processes share a frontend recording; preserving every client')
+            if (info.pid != nearest.pid
+                    and (private or nearest.pid != backend['pid'])):
+                continue
             matches.append((info, record))
         except (OSError, ValueError, TypeError, KeyError):
             continue
@@ -289,7 +318,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None):
         raise RuntimeError('Cannot attribute this input to one managed Codex frontend; preserve the shared backend. '
                            'Resume this conversation from a fresh managed terminal: ' + command)
     info, record = matches[0]
-    return info, {**record, 'client_message_id': identity}
+    return info, {**record, **submitted}
 
 
 def process_arguments(pid):

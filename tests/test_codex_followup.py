@@ -81,7 +81,12 @@ class FollowupTests(unittest.TestCase):
         self.receipt = {'version': 1, 'thread_id': THREAD, 'client_id': CLIENT,
                         'cwd': FOLLOWUP.path_key(self.root),
                         'codex_home': FOLLOWUP.path_key(self.root),
-                        'message_sha256': hashlib.sha256(b'exact message').hexdigest()}
+                        'message_sha256': hashlib.sha256(b'exact message').hexdigest(),
+                        'routing': {'execution_key': 'execution:known',
+                                    'reason': 'Evidence changes the owned repair'}}
+        admission = patch.object(FOLLOWUP, 'admit_route')
+        admission.start()
+        self.addCleanup(admission.stop)
 
     def submit(self, proxy):
         return FOLLOWUP.send(proxy, self.receipt, self.receipt_path, 'exact message')
@@ -208,14 +213,36 @@ class FollowupTests(unittest.TestCase):
 
     def run_main(self, arguments, proxy):
         output = io.StringIO()
-        with patch.object(FOLLOWUP, 'Proxy', return_value=proxy), contextlib.redirect_stdout(output):
+        with patch.object(FOLLOWUP, 'Proxy', return_value=proxy), \
+                patch.object(FOLLOWUP, 'responsibility', return_value='owner'), \
+                contextlib.redirect_stdout(output):
             code = FOLLOWUP.main(arguments)
         return code, json.loads(output.getvalue())
 
     def arguments(self):
         return ['--timeout', '0.1', 'send', '--thread', THREAD, '--cwd', str(self.root),
                 '--codex-home', str(self.root), '--message-file', str(self.message),
-                '--receipt', str(self.receipt_path)]
+                '--receipt', str(self.receipt_path), '--execution-key', 'execution:known',
+                '--reason', 'Evidence changes the owned repair']
+
+    def test_unknown_execution_is_refused_before_proxy_connection(self):
+        arguments = self.arguments()
+        arguments[arguments.index('--execution-key') + 1] = 'execution:unknown'
+        with patch.object(FOLLOWUP, 'responsibility', side_effect=FOLLOWUP.FollowupError('unknown execution')), \
+                patch.object(FOLLOWUP, 'Proxy') as proxy, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(2, FOLLOWUP.main(arguments))
+        proxy.assert_not_called()
+        self.assertFalse(self.receipt_path.exists())
+
+    def test_correction_requires_verified_original_delivery(self):
+        original = dict(self.receipt, client_id='00000000-0000-4000-8000-000000000003')
+        original_path = self.root / 'original.json'
+        original_path.write_text(json.dumps(original), encoding='utf-8')
+        correction = dict(self.receipt, routing={'corrects': str(original_path), 'reason': 'Retract mistaken assignment'})
+        proxy = Session(correction)
+        proxy.item_client = original['client_id']
+        with patch.object(FOLLOWUP, 'admit_route', wraps=FOLLOWUP.admit_route):
+            self.assertEqual('delivered', FOLLOWUP.send(proxy, correction, self.receipt_path, 'exact message')['status'])
 
     def test_cli_retry_checks_history_without_writing_again(self):
         self.receipt_path.write_text(json.dumps(self.receipt))
@@ -491,11 +518,13 @@ for line in sys.stdin:
 
         output = io.StringIO()
         with patch.object(FOLLOWUP, 'Proxy', side_effect=proxy_with_caller_deadline), \
+                patch.object(FOLLOWUP, 'responsibility', return_value='owner'), \
                 patch.object(proxy, 'request', wraps=proxy.request) as request, \
                 contextlib.redirect_stdout(output):
             code = FOLLOWUP.main(['--timeout', '1', 'send', '--thread', THREAD, '--cwd', str(root),
                                   '--codex-home', str(root), '--message-file', str(message),
-                                  '--receipt', str(receipt)])
+                                  '--receipt', str(receipt), '--execution-key', 'execution:known',
+                                  '--reason', 'Exercise approval handling'])
         self.assertEqual(2, code)
         self.assertIn(json.loads(output.getvalue())['status'], ('unverified', 'unavailable'))
         self.assertEqual(1, sum(call.args[0].startswith('turn/') for call in request.call_args_list))
@@ -555,11 +584,13 @@ for line in sys.stdin:
         proxy = self.create_proxy('import time; time.sleep(30)', timeout=0.2)
         output = io.StringIO()
         with patch.object(FOLLOWUP, 'Proxy', return_value=proxy), \
+                patch.object(FOLLOWUP, 'responsibility', return_value='owner'), \
                 patch.object(proxy.process.stdin, 'close', side_effect=BrokenPipeError('broken')), \
                 contextlib.redirect_stdout(output):
             code = FOLLOWUP.main(['send', '--thread', THREAD, '--cwd', str(root),
                                   '--codex-home', str(root), '--message-file', str(message),
-                                  '--receipt', str(receipt)])
+                                  '--receipt', str(receipt), '--execution-key', 'execution:known',
+                                  '--reason', 'Exercise close handling'])
         result = json.loads(output.getvalue())
         self.assertEqual(2, code)
         self.assertIn(result['status'], ('unverified', 'unavailable'))

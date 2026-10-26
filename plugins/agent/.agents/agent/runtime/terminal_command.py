@@ -67,6 +67,7 @@ def command_for_target(target: str, arguments: list[str]) -> list[str]:
 BINDING_STATE_VARIABLES = (
     "TJ_AGENTS_STARTUP_ACK_DIRECTORY",
     "TJ_AGENTS_STARTUP_ACK_TOKEN",
+    "TJ_AGENTS_STARTUP_REQUIRED_HOOKS",
     "TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY",
 )
 

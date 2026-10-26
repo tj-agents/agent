@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,13 +15,18 @@ import subprocess
 import sys
 import time
 
+import agent_cli
+import required_plugins
+
 HERE = Path(__file__).resolve().parent
 IN_USE = ".in_use"
 PROMPT = "Plugins were refreshed and this conversation resumed in a fresh process. Continue the requested work."
 WAIT_SECONDS = 960
-VARIADIC = {"--add-dir", "--mcp-config"}
+VARIADIC = {"--add-dir", "--mcp-config", "--tools", "--allowedTools", "--allowed-tools",
+            "--disallowedTools", "--disallowed-tools"}
 SINGLE = {"--settings", "--plugin-dir", "--setting-sources", "--permission-mode", "--model"}
-FLAGS = {"--strict-mcp-config", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}
+FLAGS = {"--strict-mcp-config", "--restricted", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}
+TOOL_RESTRICTIONS = {"--tools", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools"}
 
 
 def state_directory() -> Path:
@@ -50,6 +56,8 @@ def preserved_arguments(argv: list[str]) -> list[str]:
     kept, index = [], 0
     while index < len(argv):
         token = argv[index]
+        if token == "--":
+            break
         name, equals, _ = token.partition("=")
         index += 1
         if name in FLAGS and not equals:
@@ -66,6 +74,52 @@ def preserved_arguments(argv: list[str]) -> list[str]:
                 index += 1
             if values:
                 kept += [token, *values]
+            elif name in TOOL_RESTRICTIONS:
+                raise RuntimeError(f"Refusing recovery because {name} did not retain its tool restrictions")
+    return kept
+
+
+def codex_arguments(argv: list[str]) -> list[str]:
+    kept, index, selector, subcommand = [], 0, False, False
+    single = {"--config", "-c", "--model", "-m", "--profile", "-p", "--sandbox", "-s",
+              "--ask-for-approval", "-a", "--add-dir", "--enable", "--disable",
+              "--remote", "--remote-auth-token-env", "--local-provider"}
+    flags = {"--no-daemon", "--no-alt-screen", "--search", "--oss", "--strict-config",
+             "--approve-for-me", "--dangerously-bypass-approvals-and-sandbox"}
+    recorder = {f'shell_environment_policy.set.{name}=\"\"' for name in
+                ("CODEX_TUI_RECORD_SESSION", "CODEX_TUI_SESSION_LOG_PATH")}
+    while index < len(argv):
+        token = argv[index]
+        name, equals, _ = token.partition("=")
+        index += 1
+        if token == "--":
+            break
+        if not token.startswith("-"):
+            if token in {"resume", "fork"} and not subcommand:
+                subcommand, selector = True, True
+                continue
+            if selector:
+                selector = False
+                continue
+            continue
+        if len(token) > 2 and token[:2] in {"-c", "-m", "-p", "-s", "-a", "-C", "-i"}:
+            name, equals = token[:2], True
+        if name in flags and not equals:
+            kept.append(token)
+        elif name in single and equals:
+            value = token[2:].removeprefix("=") if name in {"-c", "-m", "-p", "-s", "-a"} else token.partition("=")[2]
+            if name not in {"-c", "--config"} or value not in recorder:
+                kept.append(token)
+        elif name in single and index < len(argv):
+            if name not in {"-c", "--config"} or argv[index] not in recorder:
+                kept += [token, argv[index]]
+            index += 1
+        elif name in {"--cd", "-C", "--image", "-i"} and not equals:
+            index += 1
+        elif name == "--dangerously-bypass-hook-trust":
+            raise RuntimeError("Refusing to carry a hook-trust bypass into recovery")
+        elif name == "--last":
+            selector = False
     return kept
 
 
@@ -134,11 +188,14 @@ def stale_plugins(pid: int, project: Path, identities: list[str], installed: dic
 
 
 def utility_script(skill: str, name: str) -> Path:
-    for root in HERE.parents:
-        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        path = root / ".agents" / "agent" / "utility" / skill / "scripts" / name
-        if path.is_file() and any(marker.exists() for marker in markers):
-            return path
+    root_helper = HERE / "package_root.py"
+    spec = importlib.util.spec_from_file_location("session_relaunch_package_root", root_helper)
+    package_root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_root)
+    root = package_root.find_package_root(HERE)
+    path = root / ".agents" / "agent" / "utility" / skill / "scripts" / name
+    if path.is_file():
+        return path
     raise RuntimeError(f"the packaged Agent {skill} utility ({name}) was not found")
 
 
@@ -155,32 +212,114 @@ def recovery_script(project: Path, installed: dict) -> Path:
     return HERE / "agent_recovery.py"
 
 
-def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments) -> dict:
-    if close is None:
-        raise RuntimeError("session relaunch is unavailable until the declared CLI close capability supplies an exact target")
+def cli_close_capability(project: Path, host: str, executable: str) -> Path:
+    root = required_plugins.inventory_roots(project, host, executable).get("cli@tj-agents")
+    if root is None:
+        raise RuntimeError("Automatic refresh requires enabled cli@tj-agents with its close capability")
+    script = root / ".agents" / "cli" / "utility" / "close" / "scripts" / "process_identity.py"
+    if not script.is_file():
+        raise RuntimeError("The enabled cli@tj-agents package does not ship process_identity.py")
+    return script
+
+
+def arm_client_close(project: Path, entry: dict, cli_close: Path, token: str, host: str) -> dict:
+    close = utility_script("close", "agent_close.py")
+    root = state_directory() / "refresh-close" / token
+    target, completion, cancel = root / "target.json", root / "complete.json", root / "cancel.json"
+    environment = {**os.environ, **({"CLAUDE_CONFIG_DIR": entry["profile"]} if host == "claude" else {})}
+    prepared = subprocess.run([sys.executable, "-B", str(close), "prepare", "--session-id", entry["session_id"],
+                               "--profile", entry["profile"], "--target", str(target)], cwd=project,
+                              env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    if prepared.returncode:
+        raise RuntimeError((prepared.stderr or prepared.stdout).strip() or "cannot prepare exact client close")
+    command = [sys.executable, "-B", str(close), "arm", "--host", host,
+                             "--session-id", entry["session_id"],
+                             "--target", str(target), "--profile", entry["profile"], "--cli-close", str(cli_close),
+                             "--completion", str(completion), "--cancel", str(cancel), "--completion-token", token]
+    if host == "codex":
+        command += ["--turn-id", entry["native_turn_id"]]
+    armed = subprocess.run(command,
+                            cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    if armed.returncode:
+        raise RuntimeError((armed.stderr or armed.stdout).strip() or "cannot arm exact client close")
+    request = state_directory() / "client-close" / f"{token}.json"
+    result = state_directory() / "client-close" / f"{token}.result.json"
+    raw = request.read_bytes()
+    return {"request": str(request.resolve()), "request_sha256": hashlib.sha256(raw).hexdigest(),
+            "result": str(result.resolve()), "completion": str(completion.resolve()), "cancel": str(cancel.resolve()),
+            "completion_token": token}
+
+
+def claim_record(record: Path, value: dict) -> None:
+    import plugin_autoupdate
+
+    record.parent.mkdir(parents=True, exist_ok=True)
+    lock = None
+    deadline = time.monotonic() + 5
+    try:
+        while lock is None and time.monotonic() < deadline:
+            lock = plugin_autoupdate.acquire_lock(record.with_name(record.name + ".claim.lock"))
+            if lock is None:
+                time.sleep(0.02)
+        if lock is None:
+            raise RuntimeError("the automatic refresh recovery record is busy")
+        existing = read_json(record)
+        if existing.get("state") == "waiting":
+            raise RuntimeError("an automatic refresh recovery is already armed for this exact session")
+        write_json(record, value)
+    finally:
+        if lock is not None:
+            lock.close()
+
+
+def cancel_codex_close(close: dict, reason: str) -> None:
+    try:
+        path = Path(close["cancel"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8") as stream:
+            json.dump({"cancelled": True, "reason": reason}, stream)
+            stream.write("\n")
+    except (KeyError, OSError, TypeError):
+        pass
+
+
+def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, host="claude") -> dict:
     shared = shared or load(utility_script("peer", "session_close.py"), "session_close")
     entry = shared.own_host_and_entry()
-    if entry.get("host") != "claude":
-        raise RuntimeError("the calling session is not a registered Claude session")
+    if host not in {"claude", "codex"} or entry.get("host") != host:
+        raise RuntimeError("the calling session is not the expected registered CLI")
+    if host == "codex" and Path(entry.get("launch_cwd", "")).resolve() != project.resolve():
+        raise RuntimeError("the refresh checkout does not match this Codex client's checkout")
     session_id = entry["session_id"]
-    native = preserved_arguments(arguments(entry["pid"]))
+    native = (codex_arguments if host == "codex" else preserved_arguments)(arguments(entry["pid"]))
+    executable = agent_cli.resolve_codex_executable()[0] if host == "codex" else agent_cli.resolve_claude_executable()
+    if host == "codex":
+        required_plugins.check_launch(project, "codex", executable, [*native, "resume", session_id, PROMPT])
+    cli_close = cli_close_capability(project, host, executable)
     token = secrets.token_hex(16)
     record = record_path(session_id)
-    write_json(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
-                        "native_arguments": native, "at": time.time()})
-    options = ["--session-id", session_id, "--pid", str(entry["pid"]),
+    claim_record(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
+                          "host": host, "profile": entry.get("profile"), "cwd": str(project.resolve()),
+                          "native_arguments": native, "at": time.time()})
+    options = ["--host", host, "--session-id", session_id, "--pid", str(entry["pid"]),
                "--pid-started-at", repr(entry["pid_started_at"]), "--record", str(record), "--token", token,
-               "--recovery", str(recovery_script(project, installed)), "--title", entry.get("title") or "Claude",
+               "--recovery", str(recovery_script(project, installed)), "--title", entry.get("title") or host.title(),
                "--prompt", PROMPT, "--timeout", str(WAIT_SECONDS),
+               "--expected-cwd", str(project.resolve()),
                *[f"--native-argument={value}" for value in native]]
+    armed = None
+    if entry.get("profile"):
+        options += ["--profile", str(entry["profile"])]
     try:
         shared.start_detached(HERE / "relaunch_watcher.py", options)
-        armed = close.arm()
+        armed = arm_client_close(project, entry, cli_close, token, host)
+        write_json(record, {**read_json(record), "close": armed, "at": time.time()})
     except Exception as error:
+        if armed is not None:
+            cancel_codex_close(armed, "automatic refresh recovery was cancelled before relaunch")
         write_json(record, {**read_json(record), "state": "cancelled", "reason": str(error), "at": time.time()})
         raise RuntimeError(f"relaunch was not armed: {error}") from error
-    return {"relaunch": "armed", "session_id": session_id, "native_arguments": native,
-            "close": armed.get("status")}
+    return {"relaunch": "armed", "session_id": session_id, "native_arguments": native, "close": "armed"}
 
 
 def session_identity() -> tuple[str, int] | None:

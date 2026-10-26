@@ -19,9 +19,14 @@ class PackageRootTests(unittest.TestCase):
             (root / ".agents" / "agent" / "runtime").mkdir(parents=True)
             (root / "source.json").write_text(json.dumps({
                 "repository": "tj-agents/agent", "revision": "abc", "exports": [".agents/agent/runtime"],
-                "sha256": "a" * 64,
+                "sha256": "a" * 64, "files": {".agents/agent/runtime/example.py": "a" * 64},
             }), encoding="utf-8")
             self.assertTrue(PACKAGE_ROOT.is_package_root(root))
+
+            receipt = json.loads((root / "source.json").read_text(encoding="utf-8"))
+            receipt["pending"] = {"files": {}, "exports": []}
+            (root / "source.json").write_text(json.dumps(receipt), encoding="utf-8")
+            self.assertFalse(PACKAGE_ROOT.is_package_root(root))
 
     def test_unreceipted_or_wrong_stage_is_not_a_root(self):
         with tempfile.TemporaryDirectory() as temporary:

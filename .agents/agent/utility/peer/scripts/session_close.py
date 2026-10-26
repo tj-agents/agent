@@ -53,11 +53,18 @@ class Refusal(RuntimeError):
 
 def _package_root():
     here = Path(__file__).resolve()
-    for root in (here.parent, *here.parents):
-        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        if any(path.exists() for path in markers):
-            return root
-    raise Refusal("the packaged Agent root is unavailable")
+    locator = next((root / ".agents" / "agent" / "runtime" / "package_root.py"
+                    for root in (here.parent, *here.parents)
+                    if (root / ".agents" / "agent" / "runtime" / "package_root.py").is_file()), None)
+    if locator is None:
+        raise Refusal("the packaged Agent root is unavailable")
+    spec = importlib.util.spec_from_file_location("session_close_package_root", locator)
+    package_root = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(package_root)
+    try:
+        return package_root.find_package_root(here)
+    except RuntimeError as error:
+        raise Refusal("the packaged Agent root is unavailable") from error
 
 
 def _agent_runtime(name):
@@ -103,10 +110,12 @@ def process_identity_runtime(cli_root):
 def current_codex_client(session_id, nearest, *, project=None):
     client = client_runtime()
     info, record = client.recorded_client(session_id, nearest, process_info,
-                                          register_session.process_table(), project=project)
+                                          register_session.process_table(), project=project,
+                                          peer_state=process_state)
     return info, {
         "client_identity": "managed-input", "launch_cwd": record["launch_cwd"],
         "title": record.get("title"), "client_message_id": record["client_message_id"],
+        "native_turn_id": record["turn_id"],
         "recording_path": record["recording_path"], "backend": record["backend"],
         "profile": record["profile"],
         "terminal": register_session.terminal_identity(record.get("terminal_environment", {})),
@@ -114,12 +123,11 @@ def current_codex_client(session_id, nearest, *, project=None):
 
 
 CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile", "backend",
-                         "recording_path", "client_message_id", "client_identity", "launch_cwd")
+                         "recording_path", "client_message_id", "native_turn_id", "client_identity", "launch_cwd")
 
 
 def revalidate_codex_client(entry):
-    backend = entry.get("backend")
-    nearest = process_info(backend["pid"] if isinstance(backend, dict) else entry["pid"])
+    nearest = process_info(entry["pid"])
     if nearest is None or entry.get("client_identity") != "managed-input":
         raise Refusal("the frozen native client binding is unavailable")
     info, details = current_codex_client(entry["session_id"], nearest, project=entry.get("cwd"))
@@ -675,13 +683,24 @@ def _write_observer_store_receipt(staging):
     os.replace(temporary, receipt)
 
 
+def detached_command(script, arguments, launcher):
+    """Build a scheduler-safe command that restores only the owned context."""
+    command = [sys.executable, "-I", "-B", str(launcher), "--state-directory", str(state_directory().resolve())]
+    for option, key in (("--codex-home", "CODEX_HOME"), ("--claude-config-dir", "CLAUDE_CONFIG_DIR")):
+        value = os.environ.get(key)
+        if value:
+            command += [option, str(Path(value).resolve())]
+    return [*command, "--", str(Path(script).resolve()), *arguments]
+
+
 def start_detached(script, arguments, extra=(), stage=True):
     """Run a staged script outside the host's process tree, so it outlives the host closing."""
     here = Path(__file__)
     if stage:
         staging = state_directory() / "merge-cleanup" / "observers" / uuid.uuid4().hex
         staging.mkdir(parents=True, exist_ok=False)
-        for path in (Path(script), here, here.with_name("register_session.py"), *map(Path, extra)):
+        for path in (Path(script), here, here.with_name("register_session.py"), here.with_name("detached_launch.py"),
+                     *map(Path, extra)):
             shutil.copy2(path, staging / path.name)
         store = register_session.session_store_path()
         if store is not None:
@@ -695,6 +714,8 @@ def start_detached(script, arguments, extra=(), stage=True):
               "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     timeout = bounded_timeout("AGENT_FINISH_SPAWN_TIMEOUT_SECONDS")
     if os.name == "nt":
+        launcher = (staging / "detached_launch.py") if stage else here.with_name("detached_launch.py")
+        command = detached_command(script if not stage else staging / Path(script).name, arguments, launcher)
         task = "agent-finish-reaper-" + uuid.uuid4().hex
         scheduler_kwargs = {
             "cwd": str(state_directory()), "stdin": subprocess.DEVNULL,

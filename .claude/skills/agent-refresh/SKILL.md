@@ -15,4 +15,7 @@ route: infer
 Read and follow the [canonical definition](../../../.agents/agent/utility/refresh/SKILL.md) in full.
 This discovery entry is generated; edit the referenced `.agents/` definition.
 
-Claude refresh applies the installed plugin update to future native sessions. If the current session cannot reload, report the required resume condition instead of claiming live adoption.
+Claude refresh preserves the same verified session when an installed update requires a fresh client. Agent
+arms only its attributable frontend close, waits for the immutable close request and matching closed result,
+then resumes the exact session with its original profile, checkout and safe native options. A refusal,
+cancellation, stale generation or failed verification never starts another client; report incomplete adoption.

@@ -130,7 +130,8 @@ def reconcile_policy(repository, run=subprocess.run):
 
 def refresh_plugins():
     arguments = ["--no-sweep", "--retry-failures"]
-    if Path(plugins.__file__).resolve().parent != (plugins.state_directory() / "bin").resolve():
+    managed_runtime = plugins.state_directory() / "bin" / ".agents" / "agent" / "runtime"
+    if Path(plugins.__file__).resolve().parent != managed_runtime.resolve():
         arguments.append("--no-self-update")
     return plugins.main(arguments)
 
