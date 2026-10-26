@@ -86,7 +86,8 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
                 self.commands = []
                 other = self.nested if first != self.nested else self.primary
                 self.rows = [self.entry(self.foreign), self.entry(first), self.entry(other)]
-                with mock.patch.object(REFRESH, 'run', side_effect=self.native):
+                with mock.patch.object(REFRESH, 'dependency_installs', return_value=[]), \
+                        mock.patch.object(REFRESH, 'run', side_effect=self.native):
                     self.assertEqual([IDENTITY], REFRESH.refresh('claude', 'claude', current, {}, [IDENTITY]))
                 self.assertEqual(['old', 'new', 'old'], [row['version'] for row in self.rows])
                 self.assertEqual([first], [cwd for command, cwd in self.commands if command[2] == 'update'])
@@ -130,6 +131,51 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
     def test_empty_inventory_does_not_hide_missing_plugins_behind_a_git_error(self):
         with mock.patch.object(required_plugins, 'git_common_directory', side_effect=AssertionError('unneeded Git query')):
             self.assertEqual({}, required_plugins.enabled_roots('claude', self.nested, []))
+
+    def test_update_first_installs_newly_declared_dependencies(self):
+        dependency = ('base@tj-agents', 'project', self.primary)
+        after = [self.entry(self.primary, 'new')]
+        calls = []
+
+        def run(command, cwd):
+            calls.append((command, Path(cwd)))
+            if command[1:3] == ['plugin', 'update']:
+                return json.dumps({'updateOutcome': 'updated', 'newVersion': 'new'})
+            if command[1:3] == ['plugin', 'list']:
+                return json.dumps(after)
+            return ''
+
+        with mock.patch.object(REFRESH, 'dependency_installs', return_value=[dependency]), \
+                mock.patch.object(REFRESH, 'run', side_effect=run):
+            self.assertEqual(['base@tj-agents', IDENTITY], REFRESH.apply_claude(
+                'claude', self.primary, [], [(IDENTITY, 'project', self.primary)]))
+        self.assertEqual([
+            ['plugin', 'install', 'base@tj-agents', '--scope', 'project'],
+            ['plugin', 'update', IDENTITY, '--scope', 'project', '--json'],
+        ], [command[1:] for command, _ in calls[:2]])
+        self.assertEqual([self.primary], [cwd for command, cwd in calls if command[2] == 'install'])
+
+    def test_current_plugin_still_installs_a_catalog_dependency(self):
+        dependency = ('base@tj-agents', 'project', self.primary)
+        with mock.patch.object(REFRESH, 'selection', return_value=({}, [IDENTITY])), \
+                mock.patch.object(REFRESH, 'installed_entries', return_value=[self.entry(self.primary)]), \
+                mock.patch.object(REFRESH.plugin_autoupdate, 'read_contents', return_value={'heads': {}, 'attempts': {}}), \
+                mock.patch.object(REFRESH, 'tj_agents_marketplaces', return_value={}), \
+                mock.patch.object(REFRESH, 'catalog_publishers', return_value={}), \
+                mock.patch.object(REFRESH, 'dependency_installs', return_value=[dependency]), \
+                mock.patch.object(REFRESH.agent_cli, 'resolve_claude_executable', return_value='claude'), \
+                mock.patch.object(REFRESH, 'refresh_marketplaces'), \
+                mock.patch.object(REFRESH, 'apply_claude', return_value=['base@tj-agents']) as apply:
+            self.assertEqual(['base@tj-agents'], REFRESH.reconcile_claude(self.primary))
+        self.assertEqual([], apply.call_args.args[2])
+        self.assertEqual([], apply.call_args.args[3])
+        self.assertEqual([dependency], apply.call_args.args[-1])
+
+    def test_dependency_identity_keeps_explicit_marketplaces(self):
+        self.assertEqual('service@other', REFRESH.dependency_identity({'name': 'service', 'marketplace': 'other'},
+                                                                       'tj-agents'))
+        self.assertEqual('base@tj-agents', REFRESH.dependency_identity('base', 'tj-agents'))
+        self.assertIsNone(REFRESH.dependency_identity({'marketplace': 'other'}, 'tj-agents'))
 
     def test_package_verification_ignores_only_shadowed_same_repository_rows(self):
         self.rows = [self.entry(self.primary, 'new'), self.entry(self.nested)]
