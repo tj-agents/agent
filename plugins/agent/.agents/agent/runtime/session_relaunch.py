@@ -288,8 +288,11 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
     entry = shared.own_host_and_entry()
     if host not in {"claude", "codex"} or entry.get("host") != host:
         raise RuntimeError("the calling session is not the expected registered CLI")
-    if host == "codex" and Path(entry.get("launch_cwd", "")).resolve() != project.resolve():
-        raise RuntimeError("the refresh checkout does not match this Codex client's checkout")
+    if host == "codex":
+        native_cwd = entry.get("native_cwd")
+        if (not isinstance(native_cwd, str) or not Path(native_cwd).is_absolute()
+                or Path(native_cwd).resolve() != project.resolve()):
+            raise RuntimeError("the refresh checkout does not match this Codex thread's native checkout")
     session_id = entry["session_id"]
     native = (codex_arguments if host == "codex" else preserved_arguments)(arguments(entry["pid"]))
     executable = agent_cli.resolve_codex_executable()[0] if host == "codex" else agent_cli.resolve_claude_executable()
