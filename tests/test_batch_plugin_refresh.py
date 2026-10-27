@@ -142,6 +142,23 @@ class BatchPluginRefreshTests(unittest.TestCase):
         destination = registry.materialize(self.root / "cache", {"run.sh": b"#!/bin/sh\nexit 0\n"}, {"run.sh": 0o755})
         self.assertEqual(0o755, (destination / "run.sh").stat().st_mode & 0o777)
 
+    @unittest.skipIf(os.name == "nt", "Unix executable permission")
+    def test_local_source_mode_changes_and_installed_mode_corruption_are_repaired(self):
+        self.write([self.row(self.project)])
+        mode = 0o644
+        def fetch(*args, **kwargs):
+            kwargs["modes"].update({name: mode for name in TREE})
+            return TREE
+        self.fetch.side_effect = fetch
+        registry.synchronize([self.project])
+        mode = 0o755
+        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+        row = json.loads(self.registry.read_text())["plugins"][IDENTITY][0]
+        script = Path(row["installPath"]) / "skill.txt"
+        self.assertEqual(mode, script.stat().st_mode & 0o777)
+        script.chmod(0o644)
+        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+
     def test_corrupt_bytes_at_a_recorded_head_are_repaired_without_mutating_the_loaded_cache(self):
         self.write([self.row(self.project)])
         registry.synchronize([self.project])
