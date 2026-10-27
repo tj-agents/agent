@@ -169,15 +169,15 @@ class DependencyInstallationIntegration(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.home), "TJ_AGENTS_INSTALL_RECOVERY": "1"})
         patcher.start()
         self.addCleanup(patcher.stop)
-        catalog = {"plugins": [{"name": "personal", "dependencies": ["agent"]},
-                               {"name": "agent", "dependencies": ["base"]}, {"name": "base"}]}
-        (self.home / "catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
+        roster = {"plugins": [{"name": "personal", "dependencies": ["agent"]},
+                              {"name": "agent", "dependencies": ["base"]}, {"name": "base"}]}
+        (self.home / "plugins.json").write_text(json.dumps(roster), encoding="utf-8")
         market = self.home / "plugins/known_marketplaces.json"
         market.parent.mkdir()
         market.write_text(json.dumps({"tj-agents": {"source": {"source": "github", "repo": "tj-agents/marketplace"},
                                                    "installLocation": str(self.home)}}), encoding="utf-8")
         (self.home / ".claude-plugin").mkdir()
-        (self.home / ".claude-plugin/marketplace.json").write_text(json.dumps(catalog), encoding="utf-8")
+        (self.home / ".claude-plugin/marketplace.json").write_text(json.dumps(roster), encoding="utf-8")
         native_run = plugin_refresh.run
         patcher = mock.patch.object(plugin_refresh, "run", side_effect=lambda command, project: native_run(
             [sys.executable, str(FIXTURES / "plugin_cli.py"), *command[1:]], project))

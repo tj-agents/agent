@@ -298,6 +298,7 @@ def refresh_marketplaces(executable: str, project: Path, marketplaces: dict) -> 
 
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     retired = retire_unpublished_user_plugins(marketplaces)
+    uninstall_unpublished(executable, marketplaces)
     plugins = [identity for identity in plugins if identity not in retired or declared_scopes(identity, project)]
     if not plugins:
         return []
@@ -360,6 +361,22 @@ def retire_unpublished_user_plugins(refreshed) -> list[str]:
         plugin_autoupdate.write_json(path, settings)
         print("plugins: removed user-scope selections no longer published: " + ", ".join(retired), file=sys.stderr)
     return retired
+
+
+def uninstall_unpublished(executable: str, refreshed) -> list[str]:
+    published = {name: names for name, names in published_plugins().items() if name in refreshed}
+    removed = []
+    for entry in installed_entries():
+        identity, scope = entry["id"], entry.get("scope")
+        plugin, _, marketplace = identity.partition("@")
+        if marketplace not in published or plugin in published[marketplace]:
+            continue
+        owner = Path(entry.get("projectPath") or Path.home())
+        if scope not in {"user", "project", "local"} or not owner.is_dir():
+            continue
+        plugin_refresh.run([executable, "plugin", "uninstall", identity, "--scope", scope], owner)
+        removed.append(identity)
+    return removed
 
 
 def catalog_publishers(marketplaces: dict[str, tuple[str, Path]]) -> dict[str, dict[str, tuple[str, str]]]:
