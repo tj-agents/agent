@@ -10,6 +10,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
+from tj_agent import content
 SPEC = importlib.util.spec_from_file_location("runtime_delivery_tests", ROOT / "plugins/agent/.agents/agent/runtime/runtime_delivery.py")
 DELIVERY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DELIVERY)
@@ -31,7 +32,7 @@ class RuntimeDeliveryTests(unittest.TestCase):
         exports = [".agents/agent/runtime"]
         contents = DELIVERY.closure(self.source, exports)
         return {"repository": DELIVERY.REPOSITORY, "revision": revision, "exports": exports,
-                "sha256": DELIVERY.digest(contents),
+                "sha256": content.digest(contents),
                 "files": {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}}
 
     def test_retired_owned_file_is_removed_but_unknown_extra_survives(self):

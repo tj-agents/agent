@@ -36,6 +36,7 @@ import machine_events
 import host_permissions
 import required_plugins
 import runtime_delivery
+from tj_agent import content
 
 COMMAND_TIMEOUT_SECONDS = 60
 INSTALLER_TIMEOUT_SECONDS = 600
@@ -615,7 +616,7 @@ def runtime_receipt(root: Path) -> dict:
         contents = runtime_delivery.closure(root, list(RUNTIME_EXPORTS))
     except (OSError, runtime_delivery.DeliveryError) as error:
         raise InstallError(f"the Agent runtime in {root} is unavailable: {error}") from error
-    digest = runtime_delivery.digest(contents)
+    digest = content.digest(contents)
     return {"repository": runtime_delivery.REPOSITORY, "revision": f"local:{digest}", "exports": list(RUNTIME_EXPORTS),
             "sha256": digest, "files": {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}}
 
