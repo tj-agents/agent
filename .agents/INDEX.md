@@ -8,7 +8,6 @@ Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; a skill's n
 - `close` — utility — core — `.agents/agent/utility/close/SKILL.md`
 - `handoff` — utility — core — `.agents/agent/utility/handoff/SKILL.md`
 - `listen` — utility — core — `.agents/agent/utility/listen/SKILL.md`
-- `memory` — utility — core — `.agents/agent/utility/memory/SKILL.md`
 - `message` — utility — core — `.agents/agent/utility/message/SKILL.md`
 - `open` — utility — core — `.agents/agent/utility/open/SKILL.md`
 - `peer` — utility — core — `.agents/agent/utility/peer/SKILL.md`
