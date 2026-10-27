@@ -269,6 +269,8 @@ def refresh_marketplaces(host: str, executable: str, project: Path, marketplaces
 def refresh(host: str, executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     refresh_marketplaces(host, executable, project, marketplaces)
     if host == "claude":
+        retired = retire_unpublished_user_plugins(marketplaces)
+        plugins =[identity for identity in plugins if identity not in retired or declared_scopes(identity, project)]
         return refresh_claude(executable, project, plugins) if plugins else []
     user_config = configuration_root(host) / "config.toml"
     user_enabled = plugin_autoupdate.enabled_identities(plugin_autoupdate.load_toml(user_config))
@@ -335,6 +337,32 @@ def tj_agents_marketplaces() -> dict[str, tuple[str, Path]]:
     return found
 
 
+def published_plugins() -> dict[str, set[str]]:
+    published = {}
+    for name, (_, location) in tj_agents_marketplaces().items():
+        names = {entry["name"] for entry in read_json(location / ".claude-plugin/marketplace.json").get("plugins", [])
+                 if isinstance(entry, dict) and isinstance(entry.get("name"), str)}
+        if names:
+            published[name] = names
+    return published
+
+
+def retire_unpublished_user_plugins(refreshed) -> list[str]:
+    path = configuration_root("claude") / "settings.json"
+    settings = read_json(path)
+    enabled = settings.get("enabledPlugins")
+    if not isinstance(enabled, dict):
+        return []
+    published = {name: names for name, names in published_plugins().items() if name in refreshed}
+    retired = sorted(identity for identity in enabled if identity.count("@") == 1
+                     and identity.split("@")[1] in published and identity.split("@")[0] not in published[identity.split("@")[1]])
+    if retired:
+        settings["enabledPlugins"] = {identity: flag for identity, flag in enabled.items() if identity not in retired}
+        plugin_autoupdate.write_json(path, settings)
+        print("plugins: removed user-scope selections no longer published: " + ", ".join(retired), file=sys.stderr)
+    return retired
+
+
 def catalog_publishers(marketplaces: dict[str, tuple[str, Path]]) -> dict[str, dict[str, tuple[str, str]]]:
     result = {}
     for name, (_, location) in marketplaces.items():
@@ -375,6 +403,7 @@ def attempt_key(identity: str, scope: str, owner: Path) -> str:
 
 def reconcile_claude(project: Path, event: bool = False, repositories: set[str] | None = None,
                      fresh: frozenset[str] = frozenset()) -> list[str]:
+    retire_unpublished_user_plugins(fresh)
     marketplaces, plugins = selection("claude", "", project)
     installations = installed_entries()
     effective = required_plugins.claude_installations(project, installations)
