@@ -268,10 +268,16 @@ def prepare_launch_roots(project, host, executable, arguments):
         roots = reload_plugins.prepare_required(effective_project, host, executable, options)
     except required_plugins.RequiredPluginsError:
         raise
-    except (RuntimeError, OSError):
+    except (RuntimeError, OSError) as admission_error:
         if os.environ.get(INSTALL_RECOVERY):
             raise
-        recover_install(effective_project, "plugin setup")
+        try:
+            recover_install(effective_project, "plugin setup")
+        except (RuntimeError, OSError) as recovery_error:
+            raise RuntimeError(
+                f"Required plugin setup failed: {admission_error}\n"
+                f"Automatic plugin setup recovery failed: {recovery_error}"
+            ) from recovery_error
         roots = reload_plugins.prepare_required(effective_project, host, executable, options)
     return effective_project, roots
 

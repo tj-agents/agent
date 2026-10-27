@@ -89,7 +89,8 @@ def run(command: list[str], project: Path) -> str:
     result = subprocess.run(command, cwd=project, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=TIMEOUT)
     if result.returncode:
-        raise RefreshError((result.stderr or result.stdout).strip() or f"Command exited {result.returncode}")
+        detail = (result.stderr or result.stdout).strip() or f"Command exited {result.returncode}"
+        raise RefreshError(f"{' '.join(command[1:])}: {detail}")
     return result.stdout
 
 
