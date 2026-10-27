@@ -1,9 +1,9 @@
 {
   "repository": "tj-agents/marketplace",
-  "revision": "5ec3d776612e07a6c55d57f0748cbd6b2d3303f6",
+  "revision": "50b2de54b6e23ba4f4d753ca587fb51835dd73a1",
   "catalog": {
     "name": "tj-agents",
-    "description": "Shared base, Agent Store, machine, workflow, engineering, C++, .NET, React, Neovim, Rust, Python, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
+    "description": "Shared base, Agent Store, agent, CLI, workflow, engineering, C++, .NET, React, Neovim, Rust, Python, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
     "owner": "Tommy Seery",
     "plugins": [
       {
@@ -23,7 +23,6 @@
         "requires": [
           "base",
           "agent-store",
-          "machine",
           "cli"
         ]
       },
@@ -32,14 +31,6 @@
         "repository": "agent",
         "requires": [
           "agent"
-        ]
-      },
-      {
-        "name": "machine",
-        "repository": "core",
-        "requires": [
-          "base",
-          "agent-store"
         ]
       },
       {
@@ -55,7 +46,6 @@
         "requires": [
           "base",
           "agent-store",
-          "machine",
           "agent"
         ]
       },
@@ -66,7 +56,6 @@
           "base",
           "workflow",
           "agent-store",
-          "machine",
           "agent"
         ]
       },

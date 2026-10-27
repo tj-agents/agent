@@ -110,7 +110,9 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
     if selection.is_file():
         document = lock_io.load_json(selection)
         marketplaces, kept = plugin_selection.validate(document)
-        kept = [identity for identity in kept if identity not in removals]
+        kept = [identity for identity in kept if identity not in removals and (
+            plugin_selection.split(identity)[1] != plugin_selection.MARKETPLACE_NAME
+            or plugin_selection.split(identity)[0] in roster["plugins"])]
         requested |= {plugin_selection.split(identity)[0] for identity in kept
                       if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
                       and plugin_selection.split(identity)[0] in roster["plugins"]}
