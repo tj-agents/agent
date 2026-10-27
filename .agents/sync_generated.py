@@ -1412,6 +1412,7 @@ def build(root: Path) -> dict[str, bytes]:
     output: dict[str, bytes] = {}
     canonical_locations: dict[tuple[str, str], list[str]] = {}
     adapter_locations: list[tuple[SkillRecord, str, str, bool, bool]] = []
+    mirrored_resources: set[tuple[Path, str]] = set()
 
     def emit(relative: str, data: str | bytes) -> None:
         key = PurePosixPath(relative).as_posix()
@@ -1493,7 +1494,23 @@ def build(root: Path) -> dict[str, bytes]:
                 )
 
         for source_file, destination in resources.get(package, []):
-            emit(destination, source_file.read_bytes())
+            data = source_file.read_bytes()
+            emit(destination, data)
+            relative = PurePosixPath(destination).relative_to(f"plugins/{package}")
+            if len(relative.parts) < 3 or relative.parts[0] != "skills":
+                continue
+            skill_name = relative.parts[1]
+            if skill_name not in skills:
+                continue
+            skill = skills[skill_name]
+            suffix = PurePosixPath(*relative.parts[2:]).as_posix()
+            for adapter_root in ADAPTER_ROOTS.values():
+                target = f"{adapter_root}/{adapter_name(skill, single_plugin)}/{suffix}"
+                if (source_file, target) not in mirrored_resources:
+                    emit(target, data)
+                    mirrored_resources.add((source_file, target))
+            if source in plugins_with_host_adapters:
+                emit(f"plugins/{package}/codex-skills/{skill_name}/{suffix}", data)
 
         entries = [
             f"- `{skill['name']}` — {skill['kind']} — {skill['metadata']['profile']}"

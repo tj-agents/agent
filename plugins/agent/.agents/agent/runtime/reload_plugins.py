@@ -21,6 +21,7 @@ import plugin_refresh
 from plugin_refresh import RefreshError
 import required_plugins
 import session_relaunch
+from tj_agent.plugins import sources
 
 ADOPTION = "Client adoption is separate from installed package verification; an armed restart resumes this same conversation automatically."
 
@@ -67,35 +68,6 @@ def repair_missing(host: Host, project: Path, missing, executable: str | None = 
     plugins.install_missing(executable, project, missing)
 
 
-def source_tree(source: object, location: Path, project: Path, temporary: Path,
-                publishers: dict) -> dict[str, bytes]:
-    if isinstance(source, dict) and source.get("source") == "git-subdir":
-        publisher = plugin_refresh.repository(source.get("url"))
-        if not plugin_refresh.tj_agents(publisher):
-            raise RefreshError("Cannot verify package from an unknown publisher")
-        ref = source.get("sha") or source.get("ref") or "main"
-        if not isinstance(ref, str) or not ref or ref.startswith("-"):
-            raise RefreshError("Invalid package source revision")
-        key = (publisher, ref)
-        if key not in publishers:
-            checkout = temporary / str(len(publishers))
-            plugin_refresh.run(["git", "init", str(checkout)], project)
-            plugin_refresh.run(["git", "-C", str(checkout), "fetch", "--depth=1",
-                 f"https://github.com/{publisher}.git", ref], project)
-            plugin_refresh.run(["git", "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"], project)
-            publishers[key] = checkout
-        location = publishers[key]
-        source = source.get("path")
-    elif isinstance(source, dict) and source.get("source") == "local":
-        source = source.get("path")
-    if not isinstance(source, str) or not source or Path(source).is_absolute():
-        raise RefreshError("Cannot verify catalog package source")
-    root = (location / source).resolve()
-    if not root.is_relative_to(location.resolve()):
-        raise RefreshError("Catalog package escapes its publisher")
-    return plugin_refresh.package_tree(root)
-
-
 def verify(plugins: Plugins, executable: str, project: Path, marketplaces: dict, identities: list[str]) -> dict:
     with tempfile.TemporaryDirectory(prefix="tj-agents-verify-") as temporary:
         return verify_packages(plugins, executable, project, marketplaces, identities, Path(temporary))
@@ -126,13 +98,13 @@ def verify_packages(plugins: Plugins, executable: str, project: Path, marketplac
         if local != remote[0]:
             problems.append(f"{name} checkout is at {local}, main is {remote[0]}")
         catalog = plugin_refresh.read_json(Path(location) / plugins.CATALOG)
-        sources = {entry["name"]: entry.get("source") for entry in catalog.get("plugins", [])}
+        catalog_sources = {entry["name"]: entry.get("source") for entry in catalog.get("plugins", [])}
         for identity in identities:
             plugin, marketplace = identity.rsplit("@", 1)
             if marketplace != name:
                 continue
             try:
-                expected = source_tree(sources.get(plugin), Path(location), project, temporary, publishers)
+                expected = sources.tree(catalog_sources.get(plugin), Path(location), project, temporary, publishers)
             except RefreshError as error:
                 problems.append(f"{identity}: {error}")
                 continue
