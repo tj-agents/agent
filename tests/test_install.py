@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path, PurePosixPath
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -74,7 +75,7 @@ class Machine(unittest.TestCase):
     def context(self, windows=True, run=None, which=None, user_environment=None, **environ):
         return install.Context(
             home=self.home,
-            checkout=self.checkout,
+            project=self.checkout,
             environ=dict(environ),
             windows=windows,
             run=run or self.unexpected_run,
@@ -104,126 +105,6 @@ def step(name):
     return next(item for item in install.STEPS if item.name == name)
 
 
-class MainCheckoutTests(Machine):
-    def git(self, *arguments, cwd):
-        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *arguments], cwd=cwd,
-                       check=True, capture_output=True)
-
-    def test_a_linked_worktree_resolves_to_the_main_checkout(self):
-        main = self.root / "core"
-        main.mkdir()
-        self.git("init", "-q", cwd=main)
-        self.git("commit", "-q", "--allow-empty", "-m", "start", cwd=main)
-        worktree = self.root / "core.worktrees" / "Feature"
-        self.git("worktree", "add", "-q", str(worktree), cwd=main)
-        self.assertEqual(main.resolve(), install.main_checkout(worktree).resolve())
-        self.assertEqual(main.resolve(), install.main_checkout(main).resolve())
-
-    def test_outside_a_checkout_there_is_no_main_checkout(self):
-        self.assertIsNone(install.main_checkout(self.root, run=lambda *args, **kwargs: completed(128)))
-
-    def clones(self):
-        origin = self.root / "origin.git"
-        self.git("init", "-q", "--bare", "-b", "main", str(origin), cwd=self.root)
-        main, other = self.root / "core", self.root / "other"
-        self.git("clone", "-q", str(origin), str(main), cwd=self.root)
-        self.git("commit", "-q", "--allow-empty", "-m", "start", cwd=main)
-        self.git("push", "-q", "-u", "origin", "HEAD:main", cwd=main)
-        self.git("clone", "-q", str(origin), str(other), cwd=self.root)
-        self.git("commit", "-q", "--allow-empty", "-m", "published", cwd=other)
-        self.git("push", "-q", "origin", "HEAD:main", cwd=other)
-        return main, other
-
-    def head(self, checkout):
-        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=checkout, capture_output=True, text=True).stdout
-
-    def test_a_stale_main_checkout_is_fast_forwarded_once(self):
-        main, other = self.clones()
-        self.assertTrue(install.fast_forward(main))
-        self.assertEqual(self.head(other), self.head(main))
-        self.assertFalse(install.fast_forward(main))
-
-    def test_an_updated_checkout_reruns_its_own_install_once(self):
-        calls = []
-
-        def run(command, **kwargs):
-            calls.append((command, kwargs.get("env", {}).get(install.CHECKOUT_UPDATED)))
-            return completed(3)
-
-        with mock.patch.object(install, "main_checkout", return_value=self.root), \
-                mock.patch.object(install, "fast_forward", return_value=True), \
-                mock.patch.object(install.subprocess, "run", side_effect=run), \
-                contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(3, install.main(["--step", "shell profiles"]))
-        self.assertEqual([([sys.executable, str(install.canonical_script(self.root)), "--step", "shell profiles"], "1")],
-                         calls)
-
-    def test_a_checkout_that_cannot_update_fails_install_and_check_never_updates(self):
-        with mock.patch.object(install, "main_checkout", return_value=self.root), \
-                mock.patch.object(install, "fast_forward", side_effect=install.InstallError("diverged")) as update, \
-                contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(2, install.main([]))
-            with mock.patch.object(install, "reexec_if_not_main_checkout", return_value=0):
-                for reading in (["--check"], ["--help"], ["-h"]):
-                    self.assertEqual(0, install.main(reading))
-        update.assert_called_once()
-
-    def test_a_failed_fetch_warns_and_keeps_the_current_revision(self):
-        main, _ = self.clones()
-        with contextlib.redirect_stderr(io.StringIO()) as error:
-            self.assertFalse(install.fast_forward(main, run=lambda command, **kwargs: completed(
-                1 if "fetch" in command else 0, stderr="authentication failed")))
-        self.assertIn("authentication failed", error.getvalue())
-
-    def test_a_diverged_main_checkout_fails_instead_of_running_stale(self):
-        main, _ = self.clones()
-        self.git("commit", "-q", "--allow-empty", "-m", "local", cwd=main)
-        with self.assertRaisesRegex(install.InstallError, "cannot fast-forward"):
-            install.fast_forward(main)
-
-
-class ReexecTests(Machine):
-    def canonical(self):
-        path = install.canonical_script(self.checkout)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
-        return path
-
-    def test_running_from_a_worktree_reexecs_the_main_checkouts_script(self):
-        canonical = self.canonical()
-        running = self.root / "worktree" / "scripts" / "install.py"
-        running.parent.mkdir(parents=True)
-        running.write_text("", encoding="utf-8")
-        calls = []
-
-        def run(command, **kwargs):
-            calls.append(command)
-            return completed(7)
-
-        result = install.reexec_if_not_main_checkout(self.checkout, running, ["--check"], run=run)
-
-        self.assertEqual(7, result)
-        self.assertEqual([[sys.executable, str(canonical), "--check"]], calls)
-
-    def test_running_the_canonical_script_does_not_reexec(self):
-        canonical = self.canonical()
-
-        result = install.reexec_if_not_main_checkout(self.checkout, canonical, [], run=self.unexpected_run)
-
-        self.assertIsNone(result)
-
-    def test_without_a_main_checkout_nothing_is_reexeced(self):
-        result = install.reexec_if_not_main_checkout(None, self.root / "install.py", [], run=self.unexpected_run)
-
-        self.assertIsNone(result)
-
-    def test_a_main_checkout_missing_the_canonical_script_is_not_reexeced(self):
-        result = install.reexec_if_not_main_checkout(self.checkout, self.root / "install.py", [],
-                                                    run=self.unexpected_run)
-
-        self.assertIsNone(result)
-
-
 class ProfileTests(Machine):
     def profiles(self):
         return [self.documents / name / "Microsoft.PowerShell_profile.ps1" for name in install.PROFILE_NAMES]
@@ -232,7 +113,7 @@ class ProfileTests(Machine):
         return self.home / ".agents-state" / "bin" / ".agents" / "agent" / "runtime" / "startup_binding.py"
 
     def block(self, newline="\r\n", loader=None):
-        loader = loader or self.checkout / "shell" / "profile.ps1"
+        loader = loader or install.profile_loader(self.context())
         return install.powershell_block(install.plugin_autoupdate.console_python(), self.script(), loader, newline)
 
     def test_missing_profiles_are_created_with_the_block(self):
@@ -353,6 +234,7 @@ class ProfileTests(Machine):
 class HiddenBashTests(Machine):
     def setUp(self):
         super().setUp()
+        (self.home / ".agents-state/bin").mkdir(parents=True)
         (self.checkout / "shell" / "hidden-bash.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
         self.real = self.root / "Git" / "bash.exe"
         self.real.parent.mkdir()
@@ -383,15 +265,15 @@ class HiddenBashTests(Machine):
         context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
                                user_environment=self.environment)
         self.converge(step("hidden Git Bash for Claude"), context)
-        proxy = self.checkout / "shell" / "hidden-bash.exe"
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
         self.assertEqual(b"proxy", proxy.read_bytes())
-        self.assertFalse((self.checkout / "shell" / "hidden-bash.build.exe").exists())
+        self.assertFalse((self.home / ".agents-state/bin/hidden-bash.build.exe").exists())
         self.assertEqual(str(proxy), self.environment.values["CLAUDE_CODE_GIT_BASH_PATH"])
         self.assertEqual(1, self.environment.broadcasts)
         self.assertEqual(2, len(self.calls))
 
     def test_a_newer_source_rebuilds_the_proxy(self):
-        proxy = self.checkout / "shell" / "hidden-bash.exe"
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
         proxy.write_bytes(b"old")
         os.utime(proxy, (1, 1))
         context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
@@ -411,11 +293,11 @@ class HiddenBashTests(Machine):
                                user_environment=self.environment)
         with self.assertRaises(install.InstallError):
             install.apply_hidden_bash(context)
-        self.assertFalse((self.checkout / "shell" / "hidden-bash.exe").exists())
-        self.assertFalse((self.checkout / "shell" / "hidden-bash.build.exe").exists())
+        self.assertFalse((self.home / ".agents-state/bin/hidden-bash.exe").exists())
+        self.assertFalse((self.home / ".agents-state/bin/hidden-bash.build.exe").exists())
 
     def test_rebuilding_renames_the_running_proxy_aside_instead_of_replacing_it(self):
-        proxy = self.checkout / "shell" / "hidden-bash.exe"
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
         proxy.write_bytes(b"old")
         build = proxy.with_name("hidden-bash.build.exe")
         build.write_bytes(b"new")
@@ -439,7 +321,7 @@ class HiddenBashTests(Machine):
         self.assertNotEqual(first_asides[0], second_asides[0])
 
     def test_a_stale_aside_that_cannot_be_deleted_is_ignored(self):
-        proxy = self.checkout / "shell" / "hidden-bash.exe"
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
         proxy.write_bytes(b"old")
         stuck = proxy.with_name(f"{proxy.stem}.stale-stuck{proxy.suffix}")
         stuck.mkdir()
@@ -452,7 +334,7 @@ class HiddenBashTests(Machine):
         self.assertTrue(stuck.is_dir())
 
     def test_a_failed_install_restores_the_moved_aside_proxy(self):
-        proxy = self.checkout / "shell" / "hidden-bash.exe"
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
         proxy.write_bytes(b"old")
         build = proxy.with_name("hidden-bash.build.exe")
         build.write_bytes(b"new")
@@ -545,7 +427,7 @@ class PermissionStepTests(Machine):
         self.assertEqual(["Bash(mine)", "Bash(shipped)"], json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"])
 
     def test_a_missing_permission_sync_module_is_reported(self):
-        context = install.Context(home=self.home, checkout=self.checkout, environ={}, windows=False,
+        context = install.Context(home=self.home, project=self.checkout, environ={}, windows=False,
                                 run=self.unexpected_run, which=lambda name: None, documents=self.documents,
                                 root=self.root / "no such runtime root")
 
@@ -556,6 +438,40 @@ class PermissionStepTests(Machine):
 class RuntimeTests(Machine):
     def installed_receipt(self, context):
         return json.loads((context.state_directory / "bin" / "source.json").read_text(encoding="utf-8"))
+
+    def test_packaged_install_and_fresh_shell_survive_removing_the_source_checkout(self):
+        source = self.root / "published package"
+        shutil.copytree(install.ROOT, source)
+        context = self.context(windows=os.name == "nt")
+        context.root = source
+        install.apply_runtime(context)
+        install.apply_profile(context)
+        shutil.rmtree(source)
+        shutil.rmtree(self.checkout)
+        loader = context.state_directory / "bin/.agents/agent/resources/shell/profile.ps1"
+        self.assertTrue(loader.is_file())
+        if context.windows:
+            profile = install.profile_paths(context)[0]
+            quoted = str(profile).replace("'", "''")
+            command = ["powershell.exe", "-NoProfile", "-Command",
+                       f". '{quoted}'; (Get-Command codex).Definition"]
+        else:
+            command = ["bash", "--noprofile", "--norc", "-c", 'source "$1"; declare -f codex',
+                       "fixture", str(context.home / ".bashrc")]
+        result = subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("startup_binding.py", result.stdout)
+        self.assertNotIn(str(source), result.stdout)
+        self.assertEqual([], install.check_profile(context))
+
+    def test_native_permission_defaults_do_not_require_an_installer_checkout(self):
+        context = self.context(windows=False)
+        context.project = self.root / "consumer"
+        context.project.mkdir()
+        with mock.patch.object(install.host_permissions, "permissions", return_value="standard") as mode:
+            planned = install.native_permissions_plan(context)
+        mode.assert_called_once_with(context.project)
+        self.assertTrue(planned)
 
     def test_installed_runtime_preserves_the_agent_package_closure_without_source_checkout(self):
         context = self.context(windows=False)
@@ -783,9 +699,7 @@ class RunStepsTests(Machine):
              ["preconditions", "plugin and merge-policy catch-up", "harness permissions", "plugin setup"]),
         )
         for arguments, expected in cases:
-            with mock.patch.object(install, "main_checkout", return_value=self.checkout), \
-                    mock.patch.object(install, "reexec_if_not_main_checkout", return_value=None), \
-                    mock.patch.object(install, "machine_context", return_value=self.context()), \
+            with mock.patch.object(install, "machine_context", return_value=self.context()), \
                     mock.patch.object(install, "run_steps", return_value=0) as run:
                 self.assertEqual(0, install.main(arguments))
                 self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
@@ -802,8 +716,6 @@ class RunStepsTests(Machine):
         )
         context = self.context()
         with mock.patch.object(install, "STEPS", steps), \
-                mock.patch.object(install, "main_checkout", return_value=self.checkout), \
-                mock.patch.object(install, "reexec_if_not_main_checkout", return_value=None), \
                 mock.patch.object(install, "machine_context", return_value=context), \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, install.main(["--step", "launch-check runtime"]))
@@ -812,9 +724,7 @@ class RunStepsTests(Machine):
         unrelated.assert_not_called()
 
     def test_unknown_step_fails_before_any_machine_operation(self):
-        with mock.patch.object(install, "main_checkout", return_value=self.checkout), \
-                mock.patch.object(install, "reexec_if_not_main_checkout", return_value=None), \
-                mock.patch.object(install, "machine_context") as context, \
+        with mock.patch.object(install, "machine_context") as context, \
                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             install.main(["--step", "not an install step"])
         self.assertEqual(2, error.exception.code)
