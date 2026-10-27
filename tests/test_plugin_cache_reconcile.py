@@ -101,6 +101,33 @@ class PluginCacheReconcileTests(ReconcileHarness):
         self.assertFalse(orphan.exists())
         self.assertIn('removed 2 directories', output)
 
+    def test_installs_for_projects_that_no_longer_exist_are_pruned_from_the_registry(self):
+        live = self.version('market', 'kept', 'aaaa')
+        retired = self.version('market', 'retired', 'bbbb')
+        project = Path(self.temp.name) / 'live project'
+        project.mkdir()
+        gone = Path(self.temp.name) / 'deleted worktree'
+        path = self.config / 'plugins' / 'installed_plugins.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'version': 2, 'plugins': {
+            'kept@market': [{'scope': 'user', 'installPath': str(live)},
+                            {'scope': 'project', 'projectPath': str(project), 'installPath': str(live)}],
+            'retired@market': [{'scope': 'project', 'projectPath': str(gone), 'installPath': str(retired)}],
+        }}), encoding='utf-8')
+
+        code, output = self.run_cli()
+        self.assertEqual(PRUNE.EXIT_OK, code)
+        self.assertIn('would remove retired@market for missing project', output)
+        self.assertIn('retired@market', json.loads(path.read_text(encoding='utf-8'))['plugins'])
+
+        code, output = self.run_cli('--apply')
+        self.assertEqual(PRUNE.EXIT_OK, code)
+        plugins = json.loads(path.read_text(encoding='utf-8'))['plugins']
+        self.assertEqual(['kept@market'], list(plugins))
+        self.assertEqual(2, len(plugins['kept@market']))
+        self.assertTrue(live.is_dir())
+        self.assertFalse(retired.exists())
+
     def test_apply_is_idempotent(self):
         live = self.version('market', 'kept', 'aaaa')
         self.version('market', 'kept', 'bbbb')

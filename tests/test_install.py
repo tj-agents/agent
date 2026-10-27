@@ -496,6 +496,8 @@ class RuntimeTests(Machine):
         self.assertEqual(install.runtime_receipt(install.ROOT), self.installed_receipt(context))
         for relative in (Path('.agents/agent/runtime/startup_binding.py'),
                          Path('.agents/agent/runtime/install.py'),
+                         Path('.agents/agent/runtime/tj_agent/content.py'),
+                         Path('.agents/agent/runtime/tj_agent/plugins/sources.py'),
                          Path('.agents/agent/resources/lanes/resolve.py'),
                          Path('.agents/agent/utility/peer/scripts/register_session.py'),
                          Path('.agents/agent-store/runtime/session_store.py')):
@@ -802,7 +804,7 @@ class RunStepsTests(Machine):
             "preconditions", "native permission defaults", "event channel and publishers",
             "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
             "Codex profile agents", "plugin and merge-policy catch-up", "harness permissions",
-            "plugin setup",
+            "plugin setup", "background machine events",
         ], [item.name for item in install.STEPS])
 
 

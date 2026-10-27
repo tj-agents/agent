@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import tempfile
 
 import agent_cli
 from codex import hook_trust
@@ -11,6 +13,8 @@ import plugin_autoupdate
 import plugin_refresh
 import required_plugins
 import session_relaunch
+from tj_agent import content
+from tj_agent.plugins import sources
 
 HOST = Host.CODEX
 CATALOG = ".agents/plugins/marketplace.json"
@@ -35,7 +39,6 @@ MODEL_CONFIG_KEYS = frozenset({
     "model_verbosity", "service_tier", "personality",
 })
 NODE_SHIM_BYPASSED = True
-reconcile = None
 
 
 def resolve_executable() -> str:
@@ -121,7 +124,78 @@ def install_missing(executable: str, project: Path, missing) -> None:
 
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     install_missing(executable, project, plugins)
-    return []
+    return reconcile(project, executable=executable, refresh=True)
+
+
+def reconcile(project: Path, executable: str | None = None, *, refresh: bool = False) -> list[str]:
+    executable = executable or resolve_executable()
+    marketplaces, identities = plugin_refresh.selected(*selection(executable, project))
+    if not identities:
+        return []
+    if refresh:
+        wanted = {}
+        for marketplace in marketplaces:
+            for entry in plugin_autoupdate.marketplace_manifest(marketplace).get("plugins", []):
+                source = entry.get("source") if isinstance(entry, dict) else None
+                if (not isinstance(source, dict) or source.get("source") != "git-subdir"
+                        or f"{entry.get('name')}@{marketplace}" not in identities):
+                    continue
+                key = plugin_autoupdate.publisher_key(source.get("url"), source.get("sha") or source.get("ref"))
+                if key:
+                    wanted.setdefault(key, set()).add(plugin_autoupdate.plugin_path(source))
+        heads = plugin_autoupdate.refresh_contents(wanted, {}, revision=plugin_autoupdate.remote_revision)
+        if set(wanted) - set(heads):
+            raise plugin_refresh.RefreshError("Could not resolve the published Codex plugin heads")
+    receipt_path = plugin_autoupdate.state_directory() / "codex-plugin-bytes.json"
+    receipts = plugin_autoupdate.read_json(receipt_path)
+    contents = plugin_autoupdate.read_contents()
+    roots = required_plugins.inventory_roots(project, HOST, executable)
+    publishers, expected, stale, signatures = {}, {}, [], {}
+    with tempfile.TemporaryDirectory(prefix="codex-plugin-bytes-") as temporary:
+        for marketplace in marketplaces:
+            catalog = plugin_autoupdate.marketplace_manifest(marketplace)
+            entries = {entry["name"]: entry for entry in catalog.get("plugins", [])
+                       if isinstance(entry, dict) and isinstance(entry.get("name"), str)}
+            location = HOST.configuration_root / ".tmp/marketplaces" / marketplace
+            for identity in identities:
+                plugin, name = identity.rsplit("@", 1)
+                if name != marketplace:
+                    continue
+                if plugin not in entries:
+                    raise plugin_refresh.RefreshError(f"Selected plugin is not published: {identity}")
+                source = entries[plugin].get("source")
+                publisher = (plugin_autoupdate.publisher_key(source.get("url"), source.get("sha") or source.get("ref"))
+                             if isinstance(source, dict) and source.get("source") == "git-subdir" else None)
+                head = contents["heads"].get(publisher) if publisher else None
+                local_tree = (sources.tree(source, location, project, Path(temporary), publishers)
+                              if not head else None)
+                resolved = sources.resolved_head(source, publishers) if publisher and not head else None
+                if resolved:
+                    head = resolved
+                    contents["heads"][publisher] = head
+                    plugin_autoupdate.record_contents(heads={publisher: head})
+                signature = json.dumps([source, head, content.digest(local_tree) if publisher is None else None], sort_keys=True)
+                root = roots.get(identity)
+                actual = plugin_refresh.package_tree(root) if root is not None else None
+                saved = receipts.get(identity)
+                if (isinstance(saved, dict) and saved.get("source") == signature and actual is not None
+                        and content.digest(actual) == saved.get("digest")):
+                    continue
+                frozen = {**source, "sha": head} if publisher and head else source
+                tree = (local_tree if local_tree is not None else sources.tree(
+                    frozen, location, project, Path(temporary), publishers))
+                expected[identity], signatures[identity] = tree, signature
+                if actual != tree:
+                    stale.append(identity)
+        if stale:
+            install_missing(executable, project, stale)
+            roots = required_plugins.inventory_roots(project, HOST, executable)
+        for identity, tree in expected.items():
+            if identity not in roots or plugin_refresh.package_tree(roots[identity]) != tree:
+                raise plugin_refresh.RefreshError(f"Native installed bytes differ from marketplace after update: {identity}")
+            receipts[identity] = {"source": signatures[identity], "digest": content.digest(tree)}
+    plugin_autoupdate.write_json(receipt_path, receipts)
+    return stale
 
 
 def update(repositories: set[str] | None, project: Path, updated: set[str] | None = None) -> bool:
