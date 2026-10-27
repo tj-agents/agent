@@ -16,7 +16,7 @@ from host import Host
 import plugin_autoupdate as plugins
 
 OWNERS = ("tj-agents", "Concertable", "tomjseery")
-TOPIC_VARIABLE = "MACHINE_EVENTS_TOPIC"
+TOPIC_VARIABLE = "UPDATE_TOPIC"
 LOG = logging.getLogger("machine-events")
 FIELDS = """nameWithOwner isArchived isFork
 defaultBranchRef { name target { oid } }

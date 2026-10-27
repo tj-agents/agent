@@ -584,7 +584,7 @@ def check_channel(context: Context) -> list[str]:
     directory = context.state_directory
     remote = remote_topic(machine_events.gh)
     saved = plugin_autoupdate.read_json(directory / "machine-events.json").get("topic")
-    pending = [] if remote else [f"create the MACHINE_EVENTS_TOPIC variable on {TOPIC_REPOSITORY}"]
+    pending = [] if remote else [f"create the UPDATE_TOPIC variable on {TOPIC_REPOSITORY}"]
     if remote and saved != remote:
         pending.append(f"save the shared topic in {directory / 'machine-events.json'}")
     topic = remote or saved
