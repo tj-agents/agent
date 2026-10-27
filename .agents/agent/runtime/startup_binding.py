@@ -319,7 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report("failed", error=message)
         return 1
     try:
-        result = launch_check.check(effective_project or parsed.project.resolve(), host=parsed.host)
+        result = launch_check.check(effective_project or parsed.project.resolve(), hosts=(parsed.host,))
     except Exception as error:
         print(f"plugins: update check failed: {error}", file=sys.stderr)
         result = "failed"
