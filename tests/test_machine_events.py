@@ -185,7 +185,7 @@ class IdentityTests(unittest.TestCase):
 class InstallTests(unittest.TestCase):
     def test_shared_topic_is_reused_without_writing_github_on_rerun(self):
         with tempfile.TemporaryDirectory() as directory:
-            api = mock.Mock(return_value={"variables": [{"name": "MACHINE_EVENTS_TOPIC", "value": "a" * 48}]})
+            api = mock.Mock(return_value={"variables": [{"name": "UPDATE_TOPIC", "value": "a" * 48}]})
             self.assertEqual("a" * 48, install.configure_topic(Path(directory), api=api))
             self.assertEqual(1, api.call_count)
             api.reset_mock()
@@ -194,8 +194,8 @@ class InstallTests(unittest.TestCase):
 
     def test_publisher_configuration_keeps_the_topic_masked_and_skips_current_settings(self):
         rows = [current("tj-agents/current"), current("tj-agents/new")]
-        api = mock.Mock(side_effect=[{"variables": [{"name": "MACHINE_EVENTS_TOPIC", "value": "a" * 48}]},
-                                    {"secrets": [{"name": "MACHINE_EVENTS_TOPIC"}]},
+        api = mock.Mock(side_effect=[{"variables": [{"name": "UPDATE_TOPIC", "value": "a" * 48}]},
+                                    {"secrets": [{"name": "UPDATE_TOPIC"}]},
                                     {"variables": []}, {"secrets": []}, None])
         secret = mock.Mock()
         self.assertEqual(1, install.configure_publishers("a" * 48, rows, api=api, secret=secret))
@@ -204,7 +204,7 @@ class InstallTests(unittest.TestCase):
         self.assertEqual("repos/tj-agents/new/actions/variables", api.call_args.args[0][2])
 
     def test_existing_variable_is_migrated_to_a_topic_secret(self):
-        api = mock.Mock(side_effect=[{"variables": [{"name": "MACHINE_EVENTS_TOPIC", "value": "a" * 48}]},
+        api = mock.Mock(side_effect=[{"variables": [{"name": "UPDATE_TOPIC", "value": "a" * 48}]},
                                     {"secrets": []}])
         secret = mock.Mock()
         self.assertEqual(1, install.configure_publishers("a" * 48, [current()], api=api, secret=secret))
@@ -212,9 +212,9 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(2, api.call_count)
 
     def test_rotated_canonical_variable_refreshes_the_masked_secret(self):
-        api = mock.Mock(side_effect=[{"variables": [{"name": "MACHINE_EVENTS_TOPIC", "value": "a" * 48,
+        api = mock.Mock(side_effect=[{"variables": [{"name": "UPDATE_TOPIC", "value": "a" * 48,
                                                      "updated_at": "2026-10-20T12:00:00Z"}]},
-                                    {"secrets": [{"name": "MACHINE_EVENTS_TOPIC", "updated_at": "2026-10-19T12:00:00Z"}]}])
+                                    {"secrets": [{"name": "UPDATE_TOPIC", "updated_at": "2026-10-19T12:00:00Z"}]}])
         secret = mock.Mock()
         self.assertEqual(1, install.configure_publishers("a" * 48, [current()], api=api, secret=secret))
         secret.assert_called_once()
