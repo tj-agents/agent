@@ -45,21 +45,21 @@ class ReconcileTests(unittest.TestCase):
         self.reconciler.repository(current(revision="b", policy="new-policy", marketplace=False))
         self.assertEqual(2, self.policy.call_count)
 
-    def test_a_revision_change_with_an_unchanged_catalog_never_refreshes(self):
+    def test_a_publisher_revision_change_refreshes_even_with_an_unchanged_catalog(self):
         self.reconciler.repository(current())
         self.refresh.assert_called_once_with()
         self.reconciler.repository(current(revision="b"))
-        self.refresh.assert_called_once_with()
+        self.assertEqual(2, self.refresh.call_count)
         self.assertEqual("b", self.reconciler.state["tj-agents/core"]["revision"])
 
     def test_catalog_comparison_survives_a_json_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             state_file = Path(directory) / "state.json"
-            self.reconciler.repository(current())
+            self.reconciler.repository(current(repository="Concertable/domain"))
             self.refresh.assert_called_once_with()
             events.plugins.write_json(state_file, self.reconciler.state)
             reloaded = events.Reconciler(events.plugins.read_json(state_file), refresh=self.refresh, policy=self.policy)
-            reloaded.repository(current(revision="b"))
+            reloaded.repository(current(repository="Concertable/domain", revision="b"))
         self.refresh.assert_called_once_with()
 
     def test_a_changed_catalog_oid_refreshes_again(self):
@@ -105,9 +105,12 @@ class ReconcileTests(unittest.TestCase):
         reconciler.policy = self.policy
 
     def test_plugin_refresh_keeps_the_generic_updater_cleanup_disabled(self):
-        with mock.patch.object(events.plugins, "main", return_value=0) as update:
+        with mock.patch.object(events.plugins, "main", return_value=0) as update, \
+                mock.patch.object(events.plugins, "declarations", return_value=[]), \
+                mock.patch("claude.plugins.update_registered") as scoped:
             self.assertEqual(0, events.refresh_plugins())
         self.assertIn("--no-sweep", update.call_args.args[0])
+        scoped.assert_called_once()
 
     def test_catch_up_upgrades_codex_marketplaces_while_a_codex_session_runs(self):
         def declared(executable, config, recorded, previous, repositories):
@@ -117,7 +120,14 @@ class ReconcileTests(unittest.TestCase):
                 executable, target, recorded, revision=lambda *_: "b" * 40, run=lambda *_, **__: True,
                 busy=lambda: True, packages=lambda name: [{"snapshot_first": False}], preserve=lambda *_: None)}
 
-        with tempfile.TemporaryDirectory() as state,                 mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": state}),                 mock.patch.object(events.plugins.shutil, "which", return_value="codex"),                 mock.patch.object(events.plugins, "load_codex_config", return_value={}),                 mock.patch.object(events.plugins, "refresh_declared", side_effect=declared):
+        with (
+            tempfile.TemporaryDirectory() as state,
+            mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": state}),
+            mock.patch.object(events.plugins.shutil, "which", return_value="codex"),
+            mock.patch.object(events.plugins, "load_codex_config", return_value={}),
+            mock.patch.object(events.plugins, "refresh_declared", side_effect=declared),
+            mock.patch("claude.plugins.update_registered"),
+        ):
             self.assertEqual([], events.Reconciler(policy=self.policy).catch_up([]))
 
     def test_absent_policy_never_gets_a_default_gate(self):
@@ -228,9 +238,9 @@ class InstallTests(unittest.TestCase):
                                     text=True, timeout=30)
             self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_the_listener_service_and_task_are_retired_and_never_scheduled(self):
-        for name in ("schedule_windows", "schedule_systemd", "windows_task_xml"):
-            self.assertFalse(hasattr(install, name))
+    def test_subscriber_step_requires_the_channel_and_installed_runtime(self):
+        self.assertEqual(["preconditions", "event channel and publishers", "launch-check runtime", "background machine events"],
+                         [step.name for step in install.selected_steps({"background machine events"})])
 
 
 if __name__ == "__main__":
