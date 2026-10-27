@@ -91,6 +91,60 @@ class CloseLifecycleTests(unittest.TestCase):
         self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
         self.assertFalse(completion.exists())
 
+    def test_claude_streams_past_large_tool_result_to_bind_and_finish_user_turn(self):
+        transcript = self.state / "session.jsonl"
+        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "close"}})
+        self.append(transcript, {"type": "user", "uuid": "tool", "message": {"content": [
+            {"type": "tool_result", "content": "x" * (256 * 1024 + 1)}]}})
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        completion, _cancel = self.arm_claude(transcript, "one")
+        self.assertEqual("one", LIFECYCLE.SESSIONS[Host.CLAUDE].user_turn(transcript))
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
+        self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
+
+    def test_claude_later_user_replaces_bound_turn(self):
+        transcript = self.state / "session.jsonl"
+        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "first"}})
+        completion, _cancel = self.arm_claude(transcript, "one")
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        self.append(transcript, {"type": "user", "uuid": "two", "message": {"content": "second"}})
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
+        self.assertFalse(completion.exists())
+
+    def test_claude_latest_user_without_uuid_does_not_reuse_old_turn(self):
+        transcript = self.state / "session.jsonl"
+        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "first"}})
+        completion, _cancel = self.arm_claude(transcript, "one")
+        self.append(transcript, {"type": "user", "message": {"content": "second"}})
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        with self.assertRaisesRegex(ValueError, "no bounded"):
+            LIFECYCLE.SESSIONS[Host.CLAUDE].user_turn(transcript)
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
+        self.assertFalse(completion.exists())
+
+    def test_claude_ignores_metadata_and_sidechain_turns(self):
+        transcript = self.state / "session.jsonl"
+        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "close"}})
+        completion, _cancel = self.arm_claude(transcript, "one")
+        self.append(transcript, {"type": "user", "uuid": "meta", "isMeta": True, "message": {"content": "meta"}})
+        self.append(transcript, {"type": "user", "uuid": "compact", "isCompactSummary": True, "message": {"content": "summary"}})
+        self.append(transcript, {"type": "user", "uuid": "tool", "message": {"content": [{"type": "tool_result"}]}})
+        self.append(transcript, {"type": "user", "uuid": "sidechain", "isSidechain": True, "message": {"content": "sidechain"}})
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        self.append(transcript, {"type": "assistant", "isSidechain": True, "message": {"stop_reason": "tool_use"}})
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
+        self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
+
+    def test_claude_non_terminal_assistant_after_end_turn_refuses_completion(self):
+        transcript = self.state / "session.jsonl"
+        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "close"}})
+        completion, _cancel = self.arm_claude(transcript, "one")
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "tool_use"}})
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
+        self.assertFalse(completion.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
