@@ -28,10 +28,6 @@ execution primitive. Retain its returned task/session ID with the current task. 
 has a running handle, attach the completion relay to that handle rather than starting it again.
 A shell returning a process ID alone does not wire completion back to the agent.
 
-On Codex, use the host adapter's shipped listener command. It freezes the current thread binding, persists
-the listener identity, cancels delivery if the owning input changes, and returns its result once through the
-native thread transport. A detached shell process without that binding is not a listener.
-
 On the native completion event, read that task's result once, verify its identity, report the outcome
 and perform the caller's next authorized action. Keep existing host notification settings for desktop
 alerts. Do not add a separate alert service or alter those settings as listener setup. A failed command,
