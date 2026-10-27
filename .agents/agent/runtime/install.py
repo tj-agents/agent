@@ -3,8 +3,8 @@
 
 Runs an ordered list of steps, each with a check and an apply. A step whose check reports no drift is
 left alone, so rerunning converges and writes nothing once the machine is current. `--check` reports
-drift without writing anything and exits 1 when something would change. Paths installed into the
-machine resolve to the main checkout, never the worktree that invoked install.
+drift without writing anything and exits 1 when something would change. Installed launch paths use
+the managed package closure, independently of source checkouts.
 """
 
 from __future__ import annotations
@@ -38,7 +38,6 @@ import required_plugins
 import runtime_delivery
 
 COMMAND_TIMEOUT_SECONDS = 60
-CHECKOUT_UPDATED = "TJ_AGENTS_INSTALL_CHECKOUT_UPDATED"
 INSTALLER_TIMEOUT_SECONDS = 600
 TOPIC_REPOSITORY = "tj-agents/core"
 RUNTIME_EXPORTS = (
@@ -65,7 +64,6 @@ class InstallError(RuntimeError):
 @dataclass
 class Context:
     home: Path
-    checkout: Path | None
     environ: dict
     windows: bool
     run: Callable = subprocess.run
@@ -93,12 +91,6 @@ class Context:
     def codex_home(self) -> Path:
         return self.path_from(Host.CODEX.home_variable, self.home / Host.CODEX.home_directory)
 
-    def checkout_path(self, *parts: str) -> Path:
-        if self.checkout is None:
-            raise InstallError("install is not running from a git checkout of tj-agents/agent")
-        return self.checkout.joinpath(*parts)
-
-
 @dataclass(frozen=True)
 class Step:
     name: str
@@ -106,19 +98,6 @@ class Step:
     apply: Callable[[Context], list[str]]
     skip: Callable[[Context], str | None] = lambda context: None
     required: bool = False
-
-
-def main_checkout(start: Path, run: Callable = subprocess.run) -> Path | None:
-    try:
-        result = run(["git", "-C", str(start), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                     capture_output=True, text=True, encoding="utf-8", errors="replace",
-                     timeout=COMMAND_TIMEOUT_SECONDS, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode:
-        return None
-    common = Path(result.stdout.strip())
-    return common.parent if common.name == ".git" else None
 
 
 def documents_directory(home: Path) -> Path:
@@ -235,6 +214,11 @@ def powershell_block(python: str, script: Path, loader: Path | None, newline: st
 
     lines = [PROFILE_START]
     if loader is not None:
+        for name in ("TJ_AGENTS_REAL_GIT_BASH", "CLAUDE_CODE_GIT_BASH_PATH"):
+            lines += [
+                f"$tjAgentsBash = [Environment]::GetEnvironmentVariable('{name}', 'User')",
+                f"if ($tjAgentsBash) {{ $env:{name} = $tjAgentsBash }}",
+            ]
         lines += [
             f"$tjAgentsShell = {quoted(loader)}",
             "if (Test-Path -LiteralPath $tjAgentsShell) { . $tjAgentsShell }",
@@ -311,10 +295,7 @@ def shell_profile_updates(paths: list[Path], python: str, script: Path, loader: 
 def profile_loader(context: Context) -> Path | None:
     if not context.windows:
         return None
-    loader = context.checkout_path("shell", "profile.ps1")
-    if not loader.is_file():
-        raise InstallError(f"shell/profile.ps1 is missing from the main checkout {context.checkout}")
-    return loader
+    return context.state_directory / "bin" / ".agents/agent/resources/shell/profile.ps1"
 
 
 def launch_script(context: Context) -> Path:
@@ -349,8 +330,8 @@ def same_path(left: str | Path, right: str | Path) -> bool:
 
 
 def hidden_bash_paths(context: Context) -> tuple[Path, Path]:
-    shell = context.checkout_path("shell")
-    return shell / "hidden-bash.c", shell / "hidden-bash.exe"
+    return (context.root / ".agents/agent/resources/shell/hidden-bash.c",
+            context.state_directory / "bin" / "hidden-bash.exe")
 
 
 def real_git_bash(context: Context, proxy: Path) -> str:
@@ -413,6 +394,7 @@ def gui_flags(context: Context, compiler: str) -> list[str]:
 
 def build_hidden_bash(context: Context, real: str) -> None:
     source, proxy = hidden_bash_paths(context)
+    proxy.parent.mkdir(parents=True, exist_ok=True)
     compiler = context.which("clang.exe") or context.which("gcc.exe")
     if not compiler:
         raise InstallError("clang.exe or gcc.exe is required to build the Windows GUI Bash proxy")
@@ -791,17 +773,6 @@ def windows_only(context: Context) -> str | None:
     return None if context.windows else WINDOWS_ONLY
 
 
-def needs_checkout(*parts: str) -> Callable[[Context], str | None]:
-    def skip(context: Context) -> str | None:
-        reason = windows_only(context)
-        if reason:
-            return reason
-        if context.checkout is None or not context.checkout.joinpath(*parts).exists():
-            return f"the main checkout has no {'/'.join(parts)}"
-        return None
-    return skip
-
-
 def nothing(context: Context) -> list[str]:
     return []
 
@@ -811,7 +782,7 @@ def codex_config_path(context: Context) -> Path:
 
 
 def native_permissions_plan(context: Context) -> dict[Path, str]:
-    mode = host_permissions.permissions(context.checkout_path())
+    mode = host_permissions.permissions(plugin_setup_project(context))
     return host_permissions.plan(context.claude_home / "settings.json", codex_config_path(context), mode)
 
 
@@ -833,7 +804,7 @@ def apply_native_permissions(context: Context) -> list[str]:
 
 
 def plugin_setup_project(context: Context) -> Path:
-    return context.project or context.checkout or Path.cwd().resolve()
+    return context.project or Path.cwd().resolve()
 
 
 def plugin_setup_executables(context: Context) -> dict[Host, str | None]:
@@ -858,7 +829,7 @@ STEPS = (
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
     Step("launch-check runtime", check_runtime, apply_runtime),
     Step("shell profiles", check_profile, apply_profile),
-    Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, needs_checkout("shell", "hidden-bash.c")),
+    Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
     Step("plugin and merge-policy catch-up", check_catch_up, apply_catch_up),
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
@@ -868,7 +839,7 @@ STEPS = (
 
 
 def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys.stderr) -> int:
-    print(f"main checkout: {context.checkout or 'none (checkout-based steps are skipped)'}", file=out)
+    print(f"package root: {context.root}", file=out)
     drift = False
     failed = False
     failed_steps = set()
@@ -924,53 +895,12 @@ def repair(name: str, project: Path) -> list[str]:
     return step.apply(context)
 
 
-def canonical_script(checkout: Path) -> Path:
-    return checkout / "plugins" / "agent" / ".agents" / "agent" / "runtime" / "install.py"
-
-
-def reexec_if_not_main_checkout(checkout: Path | None, running: Path, argv: list[str],
-                                run: Callable = subprocess.run, env: dict | None = None) -> int | None:
-    if checkout is None:
-        return None
-    canonical = canonical_script(checkout)
-    if not canonical.is_file() or same_path(canonical, running):
-        return None
-    return run([sys.executable, str(canonical), *argv], check=False, env=env).returncode
-
-
-def fast_forward(checkout: Path, run: Callable = subprocess.run) -> bool:
-    environment = {"GIT_SSH_COMMAND": "ssh -o BatchMode=yes", **os.environ,
-                   "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
-
-    def git(*arguments: str) -> subprocess.CompletedProcess:
-        return run(["git", "-C", str(checkout), *arguments], capture_output=True, text=True, encoding="utf-8",
-                   errors="replace", timeout=COMMAND_TIMEOUT_SECONDS, check=False, env=environment)
-
-    try:
-        if git("rev-parse", "--verify", "--quiet", "@{u}").returncode:
-            return False
-        fetched = git("fetch", "--quiet")
-        if fetched.returncode:
-            raise subprocess.SubprocessError((fetched.stderr or fetched.stdout).strip() or "git fetch failed")
-        if not git("merge-base", "--is-ancestor", "@{u}", "HEAD").returncode:
-            return False
-        merged = git("merge", "--ff-only", "--quiet", "@{u}")
-    except (OSError, subprocess.SubprocessError) as error:
-        print(f"warning: could not update the main checkout {checkout} ({error}); "
-              "install runs on its current revision", file=sys.stderr)
-        return False
-    if merged.returncode:
-        raise InstallError(f"the main checkout {checkout} is behind its upstream and cannot fast-forward: "
-                           f"{(merged.stderr or merged.stdout).strip()}. Reconcile it, then rerun install")
-    return True
-
-
-def machine_context(checkout: Path | None = None) -> Context:
+def machine_context() -> Context:
     home = Path.home()
     windows = os.name == "nt"
     return Context(
         home=home,
-        checkout=checkout if checkout is not None else main_checkout(RUNTIME),
+        project=Path.cwd().resolve(),
         environ=dict(os.environ),
         windows=windows,
         documents=documents_directory(home) if windows else None,
@@ -983,22 +913,6 @@ def main(argv: list[str] | None = None) -> int:
         print("install requires Python 3.11 or newer", file=sys.stderr)
         return 2
     arguments = list(argv if argv is not None else sys.argv[1:])
-    running = Path(__file__).resolve()
-    checkout = main_checkout(running.parent)
-    reads_only = any(argument in ("--check", "-h", "--help") for argument in arguments)
-    if checkout is not None and not reads_only and not os.environ.get(CHECKOUT_UPDATED):
-        try:
-            updated = fast_forward(checkout)
-        except InstallError as error:
-            print(f"failed checkout update: {error}", file=sys.stderr)
-            return 2
-        if updated:
-            print(f"updated the main checkout {checkout}; rerunning install on the new revision", file=sys.stderr)
-            return subprocess.run([sys.executable, str(canonical_script(checkout)), *arguments],
-                                  env={**os.environ, CHECKOUT_UPDATED: "1"}, check=False).returncode
-    delegated = reexec_if_not_main_checkout(checkout, running, arguments, env={**os.environ, CHECKOUT_UPDATED: "1"})
-    if delegated is not None:
-        return delegated
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="report drift, write nothing, exit 1 on drift")
@@ -1006,7 +920,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--step", action="append", choices=[step.name for step in STEPS],
                         help="run named steps with their dependencies and required preconditions; repeat to select several")
     parsed = parser.parse_args(arguments)
-    context = machine_context(checkout)
+    context = machine_context()
     context.onboard = parsed.onboard
     return run_steps(selected_steps(set(parsed.step or ())), context, parsed.check)
 

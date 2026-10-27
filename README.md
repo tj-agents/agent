@@ -26,7 +26,7 @@ the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.
 ## Install
 
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
-the machine event channel, the launch runtime in `~/.agents-state/bin`, shell profiles (`shell/`), Codex
+the machine event channel, the launch runtime in `~/.agents-state/bin`, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
@@ -34,6 +34,10 @@ Managed launches and refresh repair only the failing install step and retry read
 unconfigured event channel, a failed plugin update (catch-up) or missing required plugins (plugin setup).
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
+
+Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`.
+Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
+managed directory rather than modifying the repository or an installed plugin cache.
 
 ## Skills
 
