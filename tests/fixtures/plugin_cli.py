@@ -17,8 +17,8 @@ if arguments[:2] == ["plugin", "marketplace"]:
     raise SystemExit(0)
 operation, identity = arguments[1:3]
 scope = arguments[arguments.index("--scope") + 1]
-catalog = json.loads((home / "catalog.json").read_text())
-dependencies = next(row.get("dependencies", []) for row in catalog["plugins"] if row["name"] == identity.split("@")[0])
+roster = json.loads((home / "plugins.json").read_text())
+dependencies = next(row.get("dependencies", []) for row in roster["plugins"] if row["name"] == identity.split("@")[0])
 missing = [name for name in dependencies if name + "@tj-agents" not in entries]
 if missing and not os.environ.get("FIXTURE_IGNORE_DEPENDENCIES"):
     raise SystemExit("missing dependencies before " + operation + ": " + ", ".join(missing))

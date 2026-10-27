@@ -14,7 +14,7 @@ route: infer
 # Plugin selection
 
 Maintainers regenerate the adjacent Marketplace snapshot with
-`scripts/update_marketplace_catalog.py --source <marketplace-checkout>`; do not edit the lock by hand.
+`scripts/update_marketplace_plugins.py --source <marketplace-checkout>`; do not edit the lock by hand.
 
 The commands below show Windows paths and use `python` in Windows PowerShell. On Linux/macOS, use
 `python3` with POSIX paths and the same script arguments.
@@ -49,9 +49,9 @@ settings are current, not that native trust, installation or session loading suc
 The selection lists every required package explicitly as `<plugin>@<marketplace>`. A marketplace key must
 match its published identity, and its repository must belong to `tj-agents` or `Concertable`. The `tj-agents`
 name belongs only to `tj-agents/marketplace`. Each declared marketplace supplies a selected plugin, and
-two marketplace names cannot refer to the same repository. The schema is `catalog/plugins.schema.json`.
+two marketplace names cannot refer to the same repository. The schema is `plugins/selection.schema.json`.
 TJ Agents producer repositories are package sources, not selectable marketplaces. Follow the
-[shared catalog naming rule](https://github.com/tj-agents/marketplace#readme); ordinary validation rejects
+[shared plugin naming rule](https://github.com/tj-agents/marketplace#readme); ordinary validation rejects
 producer registrations, including Python and React, before either host's settings are written.
 
 ## Adopt a stack
