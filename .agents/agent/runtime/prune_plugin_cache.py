@@ -16,6 +16,7 @@ Codex is deliberately out of scope; see https://github.com/tj-agents/core/issues
 """
 
 import argparse
+import importlib
 import json
 import os
 import shutil
@@ -23,6 +24,9 @@ import stat
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+registry = importlib.import_module("claude.registry")
 
 CACHE_DEPTH = 3
 NOTICE_INTERVAL_SECONDS = 60 * 60
@@ -503,6 +507,15 @@ def run_notice(config_root, keep_previous, now, environ=None, home=None, stream=
 
 
 def run_reconcile(config_root, keep_previous, apply_mode, stream=sys.stdout, environ=None, home=None):
+    try:
+        orphaned = (registry.remove_orphaned if apply_mode else registry.orphaned)(registry_path(config_root))
+    except (OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        print("refusing to prune: the registry must establish what is live", file=sys.stderr)
+        return EXIT_REGISTRY
+    for identity, project in orphaned:
+        verb = "removed" if apply_mode else "would remove"
+        print(f"registry: {verb} {identity} for missing project {project}", file=stream)
     try:
         result = reconcile(config_root, keep_previous, environ, home)
     except RegistryUnusable as error:
