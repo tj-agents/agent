@@ -116,7 +116,7 @@ def update_host(host: Host, repositories: set[str] | None, project: Path, update
 
 
 def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update, now: float,
-         expired: bool = False) -> str:
+         expired: bool = False, active_hosts=tuple(Host)) -> str:
     import machine_events
     import plugin_autoupdate
 
@@ -128,7 +128,7 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
         last = identifiers[-1] if identifiers else cursor.get("since", "all")
         hosts = cursor.get("hosts") if isinstance(cursor.get("hosts"), dict) else {}
         work: dict[Host, set[str] | None] = {}
-        for host in Host:
+        for host in active_hosts:
             state = hosts.get(host.value) if isinstance(hosts.get(host.value), dict) else {}
             applied = state.get("applied")
             start = identifiers.index(applied) + 1 if applied in identifiers else 0
@@ -146,7 +146,7 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
             for host, succeeded in results.items():
                 previous = hosts.get(host.value) if isinstance(hosts.get(host.value), dict) else {}
                 hosts[host.value] = {"applied": last} if succeeded else {"applied": previous.get("applied")}
-        if all(hosts[host.value].get("applied") == last for host in Host):
+        if all(hosts.get(host.value, {}).get("applied") == last for host in Host):
             plugin_autoupdate.write_json(path, {"since": last, "since_at": now})
         else:
             saved = {"since": cursor.get("since", "all"), "hosts": hosts}
@@ -219,8 +219,11 @@ def check(project: Path, fetch=https_get, update=update_host, now: float | None 
     except (OSError, ValueError) as error:
         print(f"plugins: update check skipped ({type(error).__name__})", file=sys.stderr)
         return "offline"
-    result = apply(envelopes, cursor, path, project, update, now, expired) if envelopes or expired else "current"
-    result = settle(project, hosts, updated) if result == "current" else result
+    result = apply(envelopes, cursor, path, project, update, now, expired, hosts) if envelopes or expired else "current"
+    if result in {"current", "updated"}:
+        settled = settle(project, hosts, updated)
+        if settled != "current":
+            result = settled
     if result == "failed" and recover and not os.environ.get(INSTALL_RECOVERY):
         recover_install(project, "plugin and merge-policy catch-up")
         return check(project, fetch, update, now, hosts, updated, recover=False)

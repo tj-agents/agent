@@ -28,6 +28,11 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         self.addCleanup(lambda: sys.path.remove(runtime_directory))
         self.runtime = load("runtime_receipt_update", ROOT / "plugins/agent/.agents/agent/runtime/plugin_autoupdate.py")
         self.events = load("runtime_receipt_events", ROOT / "plugins/agent/.agents/agent/runtime/machine_events.py")
+        from tj_agent import content
+        import runtime_delivery
+
+        self.content = content
+        self.delivery = runtime_delivery
         temporary = tempfile.TemporaryDirectory(prefix="agent-receipt-update-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -41,8 +46,9 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         runtime.write_bytes(runtime_body)
         resource.write_bytes(resource_body)
         exports = [".agents/agent/runtime", ".agents/agent/resources"]
-        digest = self.runtime._digest(self.runtime._closure(root, exports))
-        files = {key: hashlib.sha256(value).hexdigest() for key, value in self.runtime._closure(root, exports).items()}
+        contents = self.delivery.closure(root, exports)
+        digest = self.content.digest(contents)
+        files = {key: hashlib.sha256(value).hexdigest() for key, value in contents.items()}
         (root / "source.json").write_text(json.dumps({
             "repository": "tj-agents/agent", "revision": name,
             "exports": exports, "sha256": digest, "files": files,

@@ -39,7 +39,7 @@ class LaunchCheckExpiryTests(unittest.TestCase):
             calls.append((host, repositories))
             return outcomes.get(host, True)
 
-        with mock.patch.object(sys, "stderr"):
+        with mock.patch.object(sys, "stderr"), mock.patch.object(CHECK, "settle", return_value="current"):
             result = CHECK.check(self.state, fetch=lambda _path: b"", update=update,
                                  now=CHECK.EXPIRY_SECONDS + 1)
         return result, calls
