@@ -1,0 +1,14 @@
+name: Update shared action pins
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  update:
+    uses: tj-agents/github-actions/.github/workflows/update-pins.yml@8d0f28a33f6340f1cfa82dfb40796473ff3a1f27
+    with:
+      repositories: tj-agents/github-actions
+    secrets:
+      UPDATE_APP_PRIVATE_KEY: ${{ secrets.UPDATE_APP_PRIVATE_KEY }}
