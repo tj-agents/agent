@@ -1,0 +1,35 @@
+name: Update shared action pins
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: update-pins
+  cancel-in-progress: false
+jobs:
+  update:
+    if: vars.UPDATE_APP_CLIENT_ID != '' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment: update-pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Mint repository token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          client-id: ${{ vars.UPDATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.UPDATE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+      - name: Update shared action pins
+        uses: tj-agents/github-actions/.github/actions/update-pins@ef03e0aaa9bdaca8be97c0fa7a5a077d2b62a78a
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          repositories: tj-agents/github-actions
