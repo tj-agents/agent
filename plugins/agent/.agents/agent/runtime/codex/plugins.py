@@ -123,7 +123,7 @@ def install_missing(executable: str, project: Path, missing) -> None:
 
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     install_missing(executable, project, plugins)
-    return reconcile(project, executable=executable)
+    return reconcile(project, executable=executable, refresh=True)
 
 
 def tree_digest(tree: dict[str, bytes]) -> str:
@@ -133,13 +133,27 @@ def tree_digest(tree: dict[str, bytes]) -> str:
     return value.hexdigest()
 
 
-def reconcile(project: Path, executable: str | None = None) -> list[str]:
+def reconcile(project: Path, executable: str | None = None, *, refresh: bool = False) -> list[str]:
     import reload_plugins
 
     executable = executable or resolve_executable()
     marketplaces, identities = plugin_refresh.selected(*selection(executable, project))
     if not identities:
         return []
+    if refresh:
+        wanted = {}
+        for marketplace in marketplaces:
+            for entry in plugin_autoupdate.marketplace_manifest(marketplace).get("plugins", []):
+                source = entry.get("source") if isinstance(entry, dict) else None
+                if (not isinstance(source, dict) or source.get("source") != "git-subdir"
+                        or f"{entry.get('name')}@{marketplace}" not in identities):
+                    continue
+                key = plugin_autoupdate.publisher_key(source.get("url"), source.get("sha") or source.get("ref"))
+                if key:
+                    wanted.setdefault(key, set()).add(plugin_autoupdate.plugin_path(source))
+        heads = plugin_autoupdate.refresh_contents(wanted, {})
+        if set(wanted) - set(heads):
+            raise plugin_refresh.RefreshError("Could not resolve the published Codex plugin heads")
     receipt_path = plugin_autoupdate.state_directory() / "codex-plugin-bytes.json"
     receipts = plugin_autoupdate.read_json(receipt_path)
     contents = plugin_autoupdate.read_contents()
@@ -161,7 +175,9 @@ def reconcile(project: Path, executable: str | None = None) -> list[str]:
                 publisher = (plugin_autoupdate.publisher_key(source.get("url"), source.get("sha") or source.get("ref"))
                              if isinstance(source, dict) and source.get("source") == "git-subdir" else None)
                 head = contents["heads"].get(publisher) if publisher else None
-                signature = json.dumps([source, head], sort_keys=True)
+                local_tree = (reload_plugins.source_tree(source, location, project, Path(temporary), publishers)
+                              if not head else None)
+                signature = json.dumps([source, head, tree_digest(local_tree) if local_tree is not None else None], sort_keys=True)
                 root = roots.get(identity)
                 actual = plugin_refresh.package_tree(root) if root is not None else None
                 saved = receipts.get(identity)
@@ -169,7 +185,8 @@ def reconcile(project: Path, executable: str | None = None) -> list[str]:
                         and tree_digest(actual) == saved.get("digest")):
                     continue
                 frozen = {**source, "sha": head} if publisher and head else source
-                tree = reload_plugins.source_tree(frozen, location, project, Path(temporary), publishers)
+                tree = (local_tree if local_tree is not None else reload_plugins.source_tree(
+                    frozen, location, project, Path(temporary), publishers))
                 expected[identity], signatures[identity] = tree, signature
                 if actual != tree:
                     stale.append(identity)
