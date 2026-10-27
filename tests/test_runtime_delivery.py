@@ -9,8 +9,8 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".agents/agent/runtime"))
-SPEC = importlib.util.spec_from_file_location("runtime_delivery_tests", ROOT / ".agents/agent/runtime/runtime_delivery.py")
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
+SPEC = importlib.util.spec_from_file_location("runtime_delivery_tests", ROOT / "plugins/agent/.agents/agent/runtime/runtime_delivery.py")
 DELIVERY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DELIVERY)
 

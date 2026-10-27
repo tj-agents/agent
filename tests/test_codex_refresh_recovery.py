@@ -14,9 +14,9 @@ import shutil
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / ".agents/agent/runtime"
+RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(RUNTIME))
-sys.path.insert(0, str(ROOT / ".agents/agent/utility/peer/scripts"))
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
 
 
 def load(name):
@@ -247,7 +247,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
 
     def run_refresh(self, failure=None, extra=(), setup_errors=()):
         output = io.StringIO()
-        failure = failure or self.refresh.codex_hook_trust.RestartRequired("unloaded daemon")
+        failure = failure or self.refresh.hook_trust.RestartRequired("unloaded daemon")
         with mock.patch.object(self.refresh.launch_check, "check", return_value="current"), \
                 mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=failure), \
                 mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=list(setup_errors)), \
@@ -297,7 +297,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
                 mock.patch.object(self.refresh, "verify", return_value={"host": "codex", "problems": []}), \
                 mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=[]), \
                 mock.patch.object(self.refresh, "calling_host", return_value="codex"), \
-                mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=self.refresh.codex_hook_trust.RestartRequired("restart")), \
+                mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=self.refresh.hook_trust.RestartRequired("restart")), \
                 mock.patch.object(self.refresh, "relaunch_codex", return_value={"relaunch": "armed"}) as restart, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(0, self.refresh.main(["--host", "codex", "--verify", "--project", str(self.root)]))
@@ -310,7 +310,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
                 mock.patch.object(self.refresh, "verify", return_value={"host": "codex", "problems": []}), \
                 mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=[]), \
                 mock.patch.object(self.refresh, "calling_host", return_value="claude"), \
-                mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=self.refresh.codex_hook_trust.RestartRequired("restart")) as readiness, \
+                mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=self.refresh.hook_trust.RestartRequired("restart")) as readiness, \
                 mock.patch.object(self.refresh, "relaunch_codex") as restart, \
                 mock.patch.object(self.refresh, "relaunch_session") as adopt, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):

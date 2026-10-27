@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / ".agents/agent/runtime"
+SCRIPTS = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(SCRIPTS))
 import install  # noqa: E402
 import plugin_autoupdate  # noqa: E402

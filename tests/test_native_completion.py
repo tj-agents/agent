@@ -9,7 +9,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.agents/agent/runtime'))
+sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
 import cli_client
 
 

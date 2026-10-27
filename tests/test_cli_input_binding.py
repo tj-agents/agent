@@ -13,9 +13,9 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.agents/agent/runtime'))
+sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
 import cli_client as client
-import codex_hook_trust
+from codex import hook_trust
 
 
 def events(identity, stamp, *following):
@@ -43,7 +43,7 @@ class InputBindingTests(unittest.TestCase):
             mock.patch.object(client, 'daemon_identity', return_value=self.backend),
             mock.patch.object(client, 'process_context', side_effect=lambda pid: self.contexts.get(pid, {})),
             mock.patch.object(client, 'process_arguments', side_effect=lambda pid: self.commands[pid]),
-            mock.patch.object(codex_hook_trust, 'AppServer'),
+            mock.patch.object(hook_trust, 'AppServer'),
         ):
             patch.start()
             self.addCleanup(patch.stop)
@@ -180,7 +180,7 @@ class InputBindingTests(unittest.TestCase):
             self.resolve()
         self.input.return_value = {'turn_id': 'turn', 'client_message_id': 'displayed-thread-input'}
         self.assertEqual(123, self.resolve()[0].pid)
-        self.assertFalse(codex_hook_trust.AppServer.call_args.kwargs['existing'])
+        self.assertFalse(hook_trust.AppServer.call_args.kwargs['existing'])
 
 
 class RecorderTests(unittest.TestCase):

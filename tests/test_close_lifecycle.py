@@ -7,7 +7,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATH = ROOT / ".agents" / "agent" / "runtime" / "close_lifecycle.py"
+PATH = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime" / "close_lifecycle.py"
 spec = importlib.util.spec_from_file_location("close_lifecycle", PATH)
 LIFECYCLE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(LIFECYCLE)

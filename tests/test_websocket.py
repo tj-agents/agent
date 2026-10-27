@@ -1,19 +1,16 @@
 import base64
 import hashlib
-import importlib.util
 import io
 import json
 from pathlib import Path
 import struct
+import sys
 import unittest
 from unittest.mock import patch
 
 
-SPEC = importlib.util.spec_from_file_location(
-    "codex_websocket", Path(__file__).resolve().parents[1] / ".agents/agent/runtime/codex_websocket.py",
-)
-WS = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(WS)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/runtime"))
+from codex import websocket as WS
 
 
 def frame(payload, opcode=1):

@@ -29,8 +29,8 @@ class HandoffStartupTests(unittest.TestCase):
         self.prompt.write_text('Continue the authorized source task.', encoding='utf-8')
 
     def run_launch(self, host, status, terminal_timeout=False):
-        launcher = load(f'handoff_startup_{host}', ROOT / f'.agents/agent/resources/handoff/launch_{host}.py')
-        cli = load(f'handoff_cli_{host}', ROOT / '.agents/agent/runtime/agent_cli.py')
+        launcher = load(f'handoff_startup_{host}', ROOT / f'plugins/agent/.agents/agent/resources/handoff/launch_{host}.py')
+        cli = load(f'handoff_cli_{host}', ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py')
         cli.resolve_codex_executable = mock.Mock(return_value=launcher_test_support.CODEX_EXECUTABLE)
         cli.resolve_claude_executable = mock.Mock(return_value='/bin/claude')
         cli.launch_tab = mock.Mock()
@@ -67,7 +67,7 @@ class HandoffStartupTests(unittest.TestCase):
                 self.assertNotIn('"startup": "verified"', output)
 
     def test_dispatcher_requires_host_and_forwards_only_the_host_arguments(self):
-        dispatcher = load('handoff_dispatcher', ROOT / '.agents/agent/utility/handoff/scripts/handoff.py')
+        dispatcher = load('handoff_dispatcher', ROOT / 'plugins/agent/.agents/agent/utility/handoff/scripts/handoff.py')
         handler = mock.Mock()
         handler.main.return_value = 7
         with mock.patch.object(dispatcher, '_load_handler', return_value=handler) as loader:
@@ -76,7 +76,7 @@ class HandoffStartupTests(unittest.TestCase):
         handler.main.assert_called_once_with(['--lane', 'L4', '--title', 'exact'])
 
     def test_dispatcher_refuses_unseparated_or_unsupported_host_before_loading(self):
-        dispatcher = load('handoff_dispatcher_refusal', ROOT / '.agents/agent/utility/handoff/scripts/handoff.py')
+        dispatcher = load('handoff_dispatcher_refusal', ROOT / 'plugins/agent/.agents/agent/utility/handoff/scripts/handoff.py')
         with mock.patch.object(dispatcher, '_load_handler') as loader:
             with self.assertRaises(SystemExit):
                 dispatcher.main(['--host', 'claude', '--lane', 'L4'])
@@ -85,7 +85,7 @@ class HandoffStartupTests(unittest.TestCase):
         loader.assert_not_called()
 
     def test_authored_and_packaged_dispatchers_find_only_packaged_private_handlers(self):
-        copies = [ROOT / '.agents/agent/utility/handoff/scripts/handoff.py',
+        copies = [ROOT / 'plugins/agent/.agents/agent/utility/handoff/scripts/handoff.py',
                   ROOT / 'plugins/agent/skills/handoff/scripts/handoff.py']
         for copy in copies:
             with self.subTest(copy=str(copy.relative_to(ROOT))):
@@ -109,7 +109,7 @@ class HandoffStartupTests(unittest.TestCase):
         dispatcher_path = nested / 'skills/handoff/scripts/handoff.py'
         dispatcher_path.parent.mkdir(parents=True)
         dispatcher_path.write_text(
-            (ROOT / '.agents/agent/utility/handoff/scripts/handoff.py').read_text(encoding='utf-8'),
+            (ROOT / 'plugins/agent/.agents/agent/utility/handoff/scripts/handoff.py').read_text(encoding='utf-8'),
             encoding='utf-8',
         )
         dispatcher = load('nested_missing_handoff_dispatcher', dispatcher_path)
@@ -132,7 +132,7 @@ class HandoffStartupTests(unittest.TestCase):
                 handler_path = nested / f'.agents/agent/resources/handoff/launch_{host}.py'
                 handler_path.parent.mkdir(parents=True, exist_ok=True)
                 handler_path.write_text(
-                    (ROOT / f'.agents/agent/resources/handoff/launch_{host}.py').read_text(encoding='utf-8'),
+                    (ROOT / f'plugins/agent/.agents/agent/resources/handoff/launch_{host}.py').read_text(encoding='utf-8'),
                     encoding='utf-8',
                 )
                 handler = load(f'nested_missing_runtime_{host}', handler_path)
@@ -189,7 +189,7 @@ class HandoffStartupTests(unittest.TestCase):
                 self.assertEqual(str(self.prompt.resolve()), event['prompt_path'])
 
     def test_wrapper_claim_wins_abandonment_race_without_late_success(self):
-        cli = load('handoff_race_cli', ROOT / '.agents/agent/runtime/agent_cli.py')
+        cli = load('handoff_race_cli', ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py')
         receipt = self.directory / 'race.json'
         class Status:
             @staticmethod

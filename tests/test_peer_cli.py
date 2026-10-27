@@ -7,7 +7,7 @@ import sys
 import unittest
 from unittest import mock
 
-PATH = Path(__file__).resolve().parents[1] / ".agents/agent/utility/peer/scripts/peer_cli.py"
+PATH = Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/utility/peer/scripts/peer_cli.py"
 sys.path.insert(0, str(PATH.parent))
 spec = importlib.util.spec_from_file_location("peer_cli", PATH); peer_cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(peer_cli)
 

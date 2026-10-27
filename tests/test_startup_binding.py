@@ -20,10 +20,10 @@ def load(name, path):
 
 class StartupBindingTests(unittest.TestCase):
     def setUp(self):
-        self.binding = load('startup_binding_tests', ROOT / '.agents/agent/runtime/startup_binding.py')
+        self.binding = load('startup_binding_tests', ROOT / 'plugins/agent/.agents/agent/runtime/startup_binding.py')
 
     def test_windows_terminal_uses_application_title(self):
-        cli = load('agent_cli_windows_tests', ROOT / '.agents/agent/runtime/agent_cli.py')
+        cli = load('agent_cli_windows_tests', ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py')
         calls = []
 
         def run(arguments, **kwargs):

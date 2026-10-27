@@ -94,9 +94,9 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.stop()
         self.assertEqual(0, self.wait())
         self.assertIsNone(self.request["entry"]["backend"])
-        from close_fixtures import codex_hook_trust
-        self.assertFalse(codex_hook_trust.AppServer.call_args.kwargs["existing"])
-        self.assertEqual(self.root.resolve(), codex_hook_trust.AppServer.call_args.args[1].resolve())
+        from close_fixtures import hook_trust
+        self.assertFalse(hook_trust.AppServer.call_args.kwargs["existing"])
+        self.assertEqual(self.root.resolve(), hook_trust.AppServer.call_args.args[1].resolve())
 
     def test_canonical_state_mutation_inside_native_rpc_prevents_signal(self):
         self.arm()

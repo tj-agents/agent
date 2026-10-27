@@ -6,7 +6,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATH = ROOT / ".agents" / "agent" / "runtime" / "package_root.py"
+PATH = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime" / "package_root.py"
 spec = importlib.util.spec_from_file_location("agent_package_root", PATH)
 PACKAGE_ROOT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PACKAGE_ROOT)

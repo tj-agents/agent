@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / ".agents/agent/runtime"
+SCRIPTS = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(SCRIPTS))
 SPEC = importlib.util.spec_from_file_location("reload_plugins", SCRIPTS / "reload_plugins.py")
 REFRESH = importlib.util.module_from_spec(SPEC)

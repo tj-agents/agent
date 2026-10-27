@@ -11,10 +11,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".agents/agent/runtime"))
-sys.path.insert(0, str(ROOT / ".agents/agent/utility/peer/scripts"))
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
 import cli_client
-import codex_hook_trust
+from codex import hook_trust
 import session_close
 import register_session
 
@@ -26,9 +26,9 @@ def load(name, relative):
     return module
 
 
-CLOSE = load("test_close_command", ".agents/agent/utility/close/scripts/agent_close.py")
-WATCHER = load("test_close_watch", ".agents/agent/utility/peer/scripts/client_close_watcher.py")
-LIFECYCLE = load("test_close_hooks", ".agents/agent/runtime/close_lifecycle.py")
+CLOSE = load("test_close_command", "plugins/agent/.agents/agent/utility/close/scripts/agent_close.py")
+WATCHER = load("test_close_watch", "plugins/agent/.agents/agent/utility/peer/scripts/client_close_watcher.py")
+LIFECYCLE = load("test_close_hooks", "plugins/agent/.agents/agent/runtime/close_lifecycle.py")
 
 
 class CloseFixture:
@@ -69,7 +69,7 @@ class CloseFixture:
         self.native_input = "input-one"
         self.server = mock.Mock()
         self.server.request.side_effect = self.native_request
-        appserver = self.patch(mock.patch.object(codex_hook_trust, "AppServer"))
+        appserver = self.patch(mock.patch.object(hook_trust, "AppServer"))
         appserver.return_value.__enter__.return_value = self.server
         self.patch(mock.patch.object(cli_client, "daemon_identity", return_value=self.backend))
         self.recording = self.root / ("cli-clients/" + "a" * 64 + "/events.jsonl")

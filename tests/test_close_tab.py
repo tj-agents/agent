@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 
-SCRIPTS = Path(__file__).resolve().parents[1] / ".agents/agent/utility/peer/scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/utility/peer/scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 
