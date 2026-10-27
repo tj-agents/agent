@@ -29,6 +29,7 @@ def load(name, path):
 RELAUNCH = load("session_relaunch", SCRIPTS / "session_relaunch.py")
 WATCHER = load("relaunch_watcher", SCRIPTS / "relaunch_watcher.py")
 REFRESH = load("reload_plugins_for_relaunch", SCRIPTS / "reload_plugins.py")
+REGISTER = load("register_session", PEER / "register_session.py")
 SESSION = "5ea1d656-3e27-42e1-afb3-0af687449f91"
 
 
@@ -95,6 +96,27 @@ class StalenessTests(State):
                    {"scope": "local", "projectPath": str(self.root / "other"), "installPath": "other"}]
         self.assertEqual("project", RELAUNCH.effective_installation(entries, project / "src")["installPath"])
         self.assertEqual("user", RELAUNCH.effective_installation(entries, self.root / "elsewhere")["installPath"])
+
+
+class CallerHostTests(State):
+    def test_caller_host_uses_the_recorded_native_ancestor_despite_foreign_environment(self):
+        processes = {
+            9001: REGISTER.ProcessInfo(9001, 4242, "foreign.exe", 1.0),
+            4242: REGISTER.ProcessInfo(4242, 111, "claude.exe", 2.0),
+        }
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "foreign-codex")}), \
+                mock.patch.object(RELAUNCH, "utility_script", return_value=self.root / "register_session.py"), \
+                mock.patch.object(RELAUNCH, "load", return_value=REGISTER), \
+                mock.patch.object(REGISTER, "build_process_lookup", return_value=processes.get), \
+                mock.patch.object(RELAUNCH.os, "getppid", return_value=9001):
+            self.assertEqual("claude", RELAUNCH.caller_host())
+
+    def test_caller_host_returns_none_when_no_native_host_is_recorded(self):
+        register = mock.Mock()
+        register.resolve_recorded_pid.return_value = (4242, None, 1.0)
+        with mock.patch.object(RELAUNCH, "utility_script", return_value=self.root / "register_session.py"), \
+                mock.patch.object(RELAUNCH, "load", return_value=register):
+            self.assertIsNone(RELAUNCH.caller_host())
 
 
 class Shared:
@@ -228,6 +250,7 @@ class SyncTests(State):
                 mock.patch.object(RELAUNCH, "stale_plugins", return_value=list(stale)), \
                 mock.patch.object(RELAUNCH, "relaunch", relaunched), \
                 mock.patch.dict(sys.modules, {"session_relaunch": RELAUNCH}), \
+                mock.patch.object(REFRESH, "calling_host", return_value="claude"), \
                 mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
             code = REFRESH.main(["--project", str(self.root)] + (["--no-relaunch"] if no_relaunch else []))
         output = "".join(call.args[0] for call in stdout.write.call_args_list)
@@ -266,6 +289,7 @@ class SyncTests(State):
                 mock.patch.object(RELAUNCH, "stale_plugins", return_value=["workflow@tj-agents"]), \
                 mock.patch.object(RELAUNCH, "relaunch", relaunched), \
                 mock.patch.dict(sys.modules, {"session_relaunch": RELAUNCH}), \
+                mock.patch.object(REFRESH, "calling_host", return_value="claude"), \
                 mock.patch("sys.stdout"), mock.patch("sys.stderr"):
             self.assertEqual(1, REFRESH.main(["--project", str(self.root)]))
 
