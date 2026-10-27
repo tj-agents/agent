@@ -22,7 +22,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "tj-cli", git = "https://github.com/tj-agents/cli.git?subdirectory=packages%2Ftj-cli&rev=b3ca9ec2debd55ed0d7d633187367f0b01da2260" }]
+requires-dist = [{ name = "tj-cli", git = "https://github.com/tj-agents/cli.git?subdirectory=packages%2Ftj-cli&rev=40d4fa1dc7e502a4cbb648b67ddd450fbca4b822" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -357,7 +357,7 @@ wheels = [
 [[package]]
 name = "tj-cli"
 version = "0.1.0"
-source = { git = "https://github.com/tj-agents/cli.git?subdirectory=packages%2Ftj-cli&rev=b3ca9ec2debd55ed0d7d633187367f0b01da2260#b3ca9ec2debd55ed0d7d633187367f0b01da2260" }
+source = { git = "https://github.com/tj-agents/cli.git?subdirectory=packages%2Ftj-cli&rev=40d4fa1dc7e502a4cbb648b67ddd450fbca4b822#40d4fa1dc7e502a4cbb648b67ddd450fbca4b822" }
 
 [[package]]
 name = "typing-extensions"
