@@ -63,6 +63,9 @@ class BatchPluginRefreshTests(unittest.TestCase):
             str(self.other / ".git") if project == self.other else str(self.project / ".git"))
         common.start()
         self.addCleanup(common.stop)
+        repositories = mock.patch.object(registry, "repository_projects", side_effect=list)
+        repositories.start()
+        self.addCleanup(repositories.stop)
 
     def row(self, project, scope="project"):
         return {"scope": scope, "projectPath": str(project), "installPath": str(self.root / "old"), "version": "1.0.0"}
@@ -85,7 +88,16 @@ class BatchPluginRefreshTests(unittest.TestCase):
         write.assert_called_once()
         self.fetch.reset_mock()
         self.assertEqual([], registry.synchronize([self.project, self.sibling]))
-        self.fetch.assert_not_called()
+        self.fetch.assert_called_once()
+
+    def test_local_source_changes_at_the_same_path_refresh_without_a_new_catalog(self):
+        self.write([self.row(self.project)])
+        registry.synchronize([self.project])
+        updated = {**TREE, "skill.txt": b"new published content"}
+        self.fetch.return_value = updated
+        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+        row = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY][0]
+        self.assertEqual(updated, CLAUDE.plugin_refresh.package_tree(Path(row["installPath"])))
 
     def test_local_scope_remains_local(self):
         (self.project / ".claude/settings.json").write_text("{}", encoding="utf-8")
@@ -109,6 +121,9 @@ class BatchPluginRefreshTests(unittest.TestCase):
         self.assertEqual({IDENTITY, "base@tj-agents"}, set(plugins))
         self.assertTrue(all(row["scope"] == "project" for rows in plugins.values() for row in rows))
         self.assertEqual(2, self.fetch.call_count)
+        for project in (self.project, self.sibling):
+            self.assertTrue(json.loads((project / ".claude/settings.json").read_text())["enabledPlugins"]["base@tj-agents"])
+        self.assertFalse((self.config / "settings.json").exists())
 
     def test_a_new_project_installs_the_selected_plugin_without_a_publish_event(self):
         self.write([])
@@ -189,7 +204,9 @@ class CodexStaleBytesTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"CODEX_HOME": str(root), "AGENT_STATE_DIRECTORY": str(root / "state")}), \
                     mock.patch.object(CODEX, "resolve_executable", return_value="codex"), \
                     mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
-                    mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": "./python"}]}), \
+                    mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": {
+                        "source": "git-subdir", "url": "https://github.com/tj-agents/python.git", "ref": "main", "path": "plugins/python"}}]}), \
+                    mock.patch.object(plugin_autoupdate, "read_contents", return_value={"heads": {"tj-agents/python@main": "b" * 40}}), \
                     mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
                     mock.patch.object(reload_plugins, "source_tree", return_value=tree) as fetch, \
                     mock.patch.object(plugin_autoupdate, "main", return_value=0) as memoized_update, \
@@ -201,6 +218,50 @@ class CodexStaleBytesTests(unittest.TestCase):
                 update.assert_called_once()
                 fetch.assert_called_once()
                 memoized_update.assert_called_once()
+
+    def test_local_publisher_changes_at_the_same_path_invalidate_the_byte_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installed = root / "local"
+            installed.mkdir()
+            (installed / "skill.txt").write_bytes(b"old")
+            tree = {"skill.txt": b"old"}
+            def repair(*args):
+                (installed / "skill.txt").write_bytes(tree["skill.txt"])
+            with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(root / "state")}), \
+                    mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
+                    mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": "./python"}]}), \
+                    mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
+                    mock.patch.object(reload_plugins, "source_tree", side_effect=lambda *args: dict(tree)), \
+                    mock.patch.object(CODEX, "install_missing", side_effect=repair) as update:
+                self.assertEqual([], CODEX.reconcile(root, executable="codex"))
+                tree["skill.txt"] = b"new"
+                self.assertEqual([IDENTITY], CODEX.reconcile(root, executable="codex"))
+                update.assert_called_once()
+
+    def test_explicit_refresh_resolves_a_new_head_before_verifying_native_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installed = root / "local"
+            installed.mkdir()
+            (installed / "skill.txt").write_bytes(b"new published")
+            source = {"source": "git-subdir", "url": "https://github.com/tj-agents/python.git",
+                      "ref": "main", "path": "plugins/python"}
+            key = "tj-agents/python@main"
+            def heads(*args):
+                plugin_autoupdate.record_contents(heads={key: "b" * 40})
+                return {key: "b" * 40}
+            with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(root / "state")}), \
+                    mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
+                    mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": source}]}), \
+                    mock.patch.object(plugin_autoupdate, "refresh_contents", side_effect=heads), \
+                    mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
+                    mock.patch.object(reload_plugins, "source_tree", return_value={"skill.txt": b"new published"}) as fetch, \
+                    mock.patch.object(CODEX, "install_missing") as update:
+                plugin_autoupdate.record_contents(heads={key: "a" * 40})
+                CODEX.refresh_plugins("codex", root, {"tj-agents": "tj-agents/marketplace"}, [IDENTITY])
+                self.assertEqual("b" * 40, fetch.call_args.args[0]["sha"])
+                update.assert_called_once()
 
     def test_failed_native_update_cannot_receive_a_current_byte_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -70,6 +70,9 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
         return {'id': IDENTITY, 'scope': 'project', 'projectPath': str(owner), 'version': version,
                 'installPath': str(self.root / version), 'enabled': True, **extra}
 
+    def test_repository_discovery_finds_nested_and_sibling_worktrees_only(self):
+        self.assertEqual({self.primary, self.nested, self.sibling}, set(registry.repository_projects([self.sibling])))
+
     def native(self, command, cwd):
         self.commands.append((command, Path(cwd)))
         if command[1:3] == ['plugin', 'list']:
