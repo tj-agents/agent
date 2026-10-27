@@ -69,6 +69,17 @@ class FakeClaude:
         return ""
 
 
+class RefreshRunTests(unittest.TestCase):
+    def test_native_failure_includes_the_command_identity(self):
+        command = ["claude", "plugin", "install", "template@tj-agents"]
+        failed = subprocess.CompletedProcess(command, 1, stdout="", stderr="native install failed")
+        with mock.patch.object(REFRESH.subprocess, "run", return_value=failed), \
+                mock.patch("sys.stderr"), \
+                self.assertRaisesRegex(REFRESH.RefreshError,
+                                       "plugin install template@tj-agents: native install failed"):
+            REFRESH.run(command, ROOT)
+
+
 class RefreshCliTests(unittest.TestCase):
     def setUp(self):
         admission = mock.patch.object(REFRESH, "prepare_required", return_value=None)
