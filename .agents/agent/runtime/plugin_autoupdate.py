@@ -538,8 +538,8 @@ def refresh_codex(executable: str, targets: dict[str, dict], recorded: dict, rev
             elif plugin_head is not None:
                 recorded[plugin_key] = plugin_head
         if retired:
-            recorded["retired:" + key] = sorted(retired)
             unlisted = {plugin for plugin in retired if listed and plugin.rsplit("@", 1)[0] not in listed}
+            recorded["retired:" + key] = sorted(unlisted if listed else retired)
             remove_user_plugins(codex_home() / "config.toml", unlisted)
         retired = f" (no longer published, not installed: {', '.join(retired)})" if retired else ""
         if refreshed:
