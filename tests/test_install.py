@@ -686,9 +686,9 @@ class ChannelTests(Machine):
                 return None
             repository = arguments[0].split("/actions/")[0].removeprefix("repos/")
             if "/actions/variables" in arguments[0]:
-                return {"variables": [{"name": "MACHINE_EVENTS_TOPIC", "value": variables[repository]}]
+                return {"variables": [{"name": "UPDATE_TOPIC", "value": variables[repository]}]
                         if repository in variables else []}
-            return {"secrets": [{"name": "MACHINE_EVENTS_TOPIC"}] if repository in stored else []}
+            return {"secrets": [{"name": "UPDATE_TOPIC"}] if repository in stored else []}
 
         def secret(repository, topic):
             writes.append(repository)
