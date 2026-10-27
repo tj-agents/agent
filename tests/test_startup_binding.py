@@ -142,7 +142,7 @@ class StartupBindingTests(unittest.TestCase):
             return 0
 
         with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(None, None)), \
-                mock.patch.object(self.binding.launch_check, 'check', return_value='not-applicable'), \
+                mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='not-applicable'), \
                 mock.patch.object(self.binding, '_prelaunch_terminal', side_effect=lambda: calls.append(('capture', terminal)) or terminal), \
                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
             result = self.binding.main(['--host', 'codex', '--project', directory.name, '--target', 'native.exe',
@@ -171,7 +171,7 @@ class StartupBindingTests(unittest.TestCase):
             '--plugin-dir', 'plugins', '--plugin-url=https://example.test/plugin', '--', '--settings', 'literal prompt',
         ]
         with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(root, roots)) as prepare, \
-                mock.patch.object(self.binding.launch_check, 'check', return_value='current'), \
+                mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='current'), \
                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
             result = self.binding.main([
                 '--host', 'claude', '--project', directory.name, '--target', 'native-claude',
@@ -219,7 +219,7 @@ class StartupBindingTests(unittest.TestCase):
             return argv, environment, None
 
         with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=prepare_launch_roots) as preflight, \
-                mock.patch.object(self.binding.launch_check, 'check', side_effect=update_roster), \
+                mock.patch.object(self.binding.launch_check, 'check', autospec=True, side_effect=update_roster), \
                 mock.patch.object(SESSIONS[Host.CLAUDE], 'prepare_frontend', side_effect=native_prepare), \
                 mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn, \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
