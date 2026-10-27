@@ -32,6 +32,9 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         self.watcher = load("relaunch_watcher")
         self.recovery = load("agent_recovery")
         self.refresh = load("reload_plugins")
+        caller = mock.patch.object(self.refresh, "calling_host", return_value="codex")
+        caller.start()
+        self.addCleanup(caller.stop)
         temporary = tempfile.TemporaryDirectory(prefix="codex-refresh-recovery-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
@@ -248,6 +251,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         with mock.patch.object(self.refresh.launch_check, "check", return_value="current"), \
                 mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=failure), \
                 mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=list(setup_errors)), \
+                mock.patch.object(self.refresh, "calling_host", return_value="codex"), \
                 mock.patch.object(self.refresh, "relaunch_codex", side_effect=(self.refresh.RefreshError("--no-relaunch forbids restart")
                                                                                if "--no-relaunch" in extra else None),
                                   return_value={"relaunch": "armed", "session_id": "thread"}) as restart, \
@@ -292,11 +296,28 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
                 mock.patch.object(self.refresh, "refresh", return_value=[]), \
                 mock.patch.object(self.refresh, "verify", return_value={"host": "codex", "problems": []}), \
                 mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=[]), \
+                mock.patch.object(self.refresh, "calling_host", return_value="codex"), \
                 mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=self.refresh.codex_hook_trust.RestartRequired("restart")), \
                 mock.patch.object(self.refresh, "relaunch_codex", return_value={"relaunch": "armed"}) as restart, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(0, self.refresh.main(["--host", "codex", "--verify", "--project", str(self.root)]))
         restart.assert_called_once_with(self.root, "restart", True)
+
+    def test_full_refresh_does_not_restart_a_foreign_codex_client(self):
+        with mock.patch.object(self.refresh, "executable_for", return_value="native"), \
+                mock.patch.object(self.refresh, "selection", return_value=({}, [])), \
+                mock.patch.object(self.refresh, "refresh", return_value=[]), \
+                mock.patch.object(self.refresh, "verify", return_value={"host": "codex", "problems": []}), \
+                mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=[]), \
+                mock.patch.object(self.refresh, "calling_host", return_value="claude"), \
+                mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=self.refresh.codex_hook_trust.RestartRequired("restart")) as readiness, \
+                mock.patch.object(self.refresh, "relaunch_codex") as restart, \
+                mock.patch.object(self.refresh, "relaunch_session") as adopt, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(0, self.refresh.main(["--host", "codex", "--verify", "--project", str(self.root)]))
+        readiness.assert_called_once_with(self.root, "native", running_session=False)
+        restart.assert_not_called()
+        adopt.assert_not_called()
 
     def test_actual_open_item_must_match_expected_checkout_before_launch(self):
         item = {"status": "closed", "cwd": str(self.root / "other"), "profile": str(self.root)}

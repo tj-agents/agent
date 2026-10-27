@@ -567,6 +567,12 @@ def executable_for(host: str) -> str:
     return agent_cli.resolve_claude_executable() if host == "claude" else agent_cli.resolve_codex_executable()[0]
 
 
+def calling_host() -> str | None:
+    import session_relaunch
+
+    return session_relaunch.caller_host()
+
+
 def relaunch_session(project: Path, updated: set[str], allowed: bool = True) -> dict | None:
     import session_relaunch
 
@@ -615,6 +621,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--verify-only cannot be used with --onboard")
     project = arguments.project.resolve()
     hosts = ("claude", "codex") if arguments.host == "both" else (arguments.host,)
+    caller = calling_host()
     updated: set[str] = set()
 
     def converge_plugin_setup() -> list[str]:
@@ -645,7 +652,7 @@ def main(argv: list[str] | None = None) -> int:
             restart_reason = None
             if "codex" in hosts and result in {"current", "updated", "offline"}:
                 try:
-                    launch_check.ensure_hooks(project, running_session=True)
+                    launch_check.ensure_hooks(project, running_session=caller == "codex")
                 except codex_hook_trust.RestartRequired as error:
                     restart_reason = str(error)
                 except Exception as error:
@@ -654,13 +661,14 @@ def main(argv: list[str] | None = None) -> int:
             setup_errors = (converge_plugin_setup() if result not in {"failed", "busy"}
                             else [f"skipped because launch check is {result}"])
             summary["plugin setup"] = setup_errors
-            if restart_reason and result not in {"failed", "busy", "offline"} and not setup_errors:
+            if restart_reason and caller == "codex" and result not in {"failed", "busy", "offline"} and not setup_errors:
                 try:
                     summary["codex"] = relaunch_codex(project, restart_reason, not arguments.no_relaunch)
                 except (OSError, ValueError, RuntimeError) as error:
                     summary["hook_readiness_error"] = str(error)
                     result = "failed"
-            relaunched = relaunch_session(project, updated, not arguments.no_relaunch) if "claude" in hosts and result != "failed" and not setup_errors else None
+            relaunched = (relaunch_session(project, updated, not arguments.no_relaunch)
+                          if caller == "claude" and "claude" in hosts and result != "failed" and not setup_errors else None)
             if relaunched:
                 summary["claude"] = relaunched
             print(json.dumps(summary, indent=2))
@@ -683,7 +691,7 @@ def main(argv: list[str] | None = None) -> int:
                       if arguments.verify or arguments.verify_only else {"host": host, "plugins": plugins, "problems": []})
             if host == "codex" and not arguments.verify_only and not report["problems"]:
                 try:
-                    launch_check.ensure_hooks(project, executable, running_session=True)
+                    launch_check.ensure_hooks(project, executable, running_session=caller == "codex")
                 except codex_hook_trust.RestartRequired as error:
                     restart_reason = str(error)
         except (RefreshError, agent_cli.LaunchError, OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
@@ -693,14 +701,14 @@ def main(argv: list[str] | None = None) -> int:
                     else ["skipped because plugin refresh or verification failed"])
     if setup_errors:
         reports.append({"host": "plugin setup", "plugins": [], "problems": setup_errors})
-    if restart_reason and not any(report["problems"] for report in reports):
+    if restart_reason and caller == "codex" and not any(report["problems"] for report in reports):
         try:
             result = relaunch_codex(project, restart_reason, not arguments.no_relaunch)
         except (OSError, ValueError, RuntimeError) as error:
             reports.append({"host": "codex restart", "plugins": [], "problems": [str(error)]})
         else:
             reports.append({"host": "codex restart", **result, "problems": []})
-    if "claude" in hosts and not arguments.verify_only and not any(report["problems"] for report in reports):
+    if caller == "claude" and "claude" in hosts and not arguments.verify_only and not any(report["problems"] for report in reports):
         relaunched = relaunch_session(project, updated, not arguments.no_relaunch)
         if relaunched:
             reports.append({"host": "claude relaunch", "plugins": [], "problems":
