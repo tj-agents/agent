@@ -46,21 +46,27 @@ class RetiredPluginTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def refresh_codex(self, listed):
+    def refresh_codex(self, listed, recorded=None, added=None):
         config = self.root / "codex" / "config.toml"
-        config.parent.mkdir(parents=True)
-        config.write_text(
-            'model = "gpt"\n\n[marketplaces.tj-agents]\nsource_type = "git"\nsource = "' + MARKETPLACE + '"\n\n'
-            '[plugins."base@tj-agents"]\nenabled = true\n\n[plugins."kit@tj-agents"]\nenabled = true\n\n'
-            '[projects.\'c:\\users\\fixture\\repo\']\ntrust_level = "trusted"\n', encoding="utf-8")
+        if not config.exists():
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                'model = "gpt"\n\n[marketplaces.tj-agents]\nsource_type = "git"\nsource = "' + MARKETPLACE + '"\n\n'
+                '[plugins."base@tj-agents"]\nenabled = true\n\n[plugins."kit@tj-agents"]\nenabled = true\n\n'
+                '[projects.\'c:\\users\\fixture\\repo\']\ntrust_level = "trusted"\n', encoding="utf-8")
+        added = [] if added is None else added
 
         def run(command, cwd):
+            added.append(command[-1])
             return AUTOUPDATE.RETIRED if command[-1] == "kit@tj-agents" else True
 
         target = {"tj-agents": {"source": MARKETPLACE, "ref": None, "project": self.root,
-                                "plugins": ["base@tj-agents", "kit@tj-agents"]}}
+                                "plugins": ["base@tj-agents", "kit@tj-agents"], "missing": ["kit@tj-agents"]}}
         sources = {name: (MARKETPLACE, "HEAD", f"plugins/{name}") for name in listed}
-        outcomes = AUTOUPDATE.refresh_codex("codex", target, {}, revision=lambda *_: "b" * 40, run=run,
+        recorded = {} if recorded is None else recorded
+        recorded.update({f"codex-plugin:{name}@tj-agents": "b" * 40 for name in listed
+                         if f"codex-plugin:{name}@tj-agents" not in recorded})
+        outcomes = AUTOUPDATE.refresh_codex("codex", target, recorded, revision=lambda *_: "b" * 40, run=run,
                                             busy=lambda: False, packages=lambda name: [],
                                             preserve=lambda *_: None, sources=lambda *_: sources)
         self.assertTrue(outcomes["tj-agents"].startswith("updated"), outcomes)
@@ -78,6 +84,12 @@ class RetiredPluginTests(unittest.TestCase):
     def test_codex_keeps_a_selection_its_refreshed_marketplace_still_lists(self):
         config = self.refresh_codex(["base", "kit"])
         self.assertIn("kit@tj-agents", tomllib.loads(config.read_text(encoding="utf-8"))["plugins"])
+
+    def test_codex_retries_a_still_listed_selection_the_cli_reported_missing(self):
+        recorded, added = {}, []
+        self.refresh_codex(["base", "kit"], recorded, added)
+        self.refresh_codex(["base", "kit"], recorded, added)
+        self.assertEqual(2, added.count("kit@tj-agents"))
 
     def test_codex_keeps_selections_when_the_marketplace_listing_is_unreadable(self):
         config = self.refresh_codex([])
