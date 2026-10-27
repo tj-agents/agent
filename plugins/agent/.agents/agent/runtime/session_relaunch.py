@@ -15,11 +15,11 @@ import subprocess
 import sys
 import time
 
-import agent_cli
+from host import Host
+import host_plugins
 import required_plugins
 
 HERE = Path(__file__).resolve().parent
-IN_USE = ".in_use"
 PROMPT = "Plugins were refreshed and this conversation resumed in a fresh process. Continue the requested work."
 WAIT_SECONDS = 960
 VARIADIC = {"--add-dir", "--mcp-config", "--tools", "--allowedTools", "--allowed-tools",
@@ -159,33 +159,6 @@ def host_arguments(pid: int) -> list[str]:
     return shlex.split(result.stdout.strip())[1:]
 
 
-def effective_installation(entries: list, project: Path) -> dict | None:
-    ranked = []
-    for entry in required_plugins.claude_installations(project, entries):
-        if not isinstance(entry, dict) or not isinstance(entry.get("installPath"), str):
-            continue
-        scope, owner = entry.get("scope"), entry.get("projectPath")
-        if scope in {"local", "project"} and owner:
-            ranked.append(((0 if scope == "local" else 1), -len(Path(owner).resolve().parts), entry))
-        elif scope in {"user", "managed"}:
-            ranked.append((2 if scope == "user" else 3, 0, entry))
-    return min(ranked, key=lambda item: item[:2])[2] if ranked else None
-
-
-def stale_plugins(pid: int, project: Path, identities: list[str], installed: dict, updated: set[str]) -> list[str]:
-    stale = []
-    for identity in identities:
-        entry = effective_installation(installed.get(identity) or [], project)
-        if entry is None:
-            continue
-        current = Path(entry["installPath"])
-        loaded = {os.path.normcase(str(version)) for version in (current.parent.iterdir() if pid and current.parent.is_dir() else ())
-                  if (version / IN_USE / str(pid)).is_file()}
-        if (os.path.normcase(str(current)) not in loaded) and (loaded or identity in updated):
-            stale.append(identity)
-    return stale
-
-
 def utility_script(skill: str, name: str) -> Path:
     root_helper = HERE / "package_root.py"
     spec = importlib.util.spec_from_file_location("session_relaunch_package_root", root_helper)
@@ -207,17 +180,20 @@ def load(path: Path, name: str):
     return module
 
 
-def caller_host() -> str | None:
+def caller_host() -> Host | None:
     register_session = load(utility_script("peer", "register_session.py"), "register_session")
     _, host, _ = register_session.resolve_recorded_pid(os.getppid())
-    return host if host in {"claude", "codex"} else None
+    try:
+        return Host(host)
+    except ValueError:
+        return None
 
 
 def recovery_script(project: Path, installed: dict) -> Path:
     return HERE / "agent_recovery.py"
 
 
-def cli_close_capability(project: Path, host: str, executable: str) -> Path:
+def cli_close_capability(project: Path, host: Host, executable: str) -> Path:
     root = required_plugins.inventory_roots(project, host, executable).get("cli@tj-agents")
     if root is None:
         raise RuntimeError("Automatic refresh requires enabled cli@tj-agents with its close capability")
@@ -227,21 +203,21 @@ def cli_close_capability(project: Path, host: str, executable: str) -> Path:
     return script
 
 
-def arm_client_close(project: Path, entry: dict, cli_close: Path, token: str, host: str) -> dict:
+def arm_client_close(project: Path, entry: dict, cli_close: Path, token: str, host: Host) -> dict:
     close = utility_script("close", "agent_close.py")
     root = state_directory() / "refresh-close" / token
     target, completion, cancel = root / "target.json", root / "complete.json", root / "cancel.json"
-    environment = {**os.environ, **({"CLAUDE_CONFIG_DIR": entry["profile"]} if host == "claude" else {})}
+    environment = {**os.environ, host.home_variable: entry["profile"]}
     prepared = subprocess.run([sys.executable, "-B", str(close), "prepare", "--session-id", entry["session_id"],
                                "--profile", entry["profile"], "--target", str(target)], cwd=project,
                               env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     if prepared.returncode:
         raise RuntimeError((prepared.stderr or prepared.stdout).strip() or "cannot prepare exact client close")
-    command = [sys.executable, "-B", str(close), "arm", "--host", host,
+    command = [sys.executable, "-B", str(close), "arm", "--host", host.value,
                              "--session-id", entry["session_id"],
                              "--target", str(target), "--profile", entry["profile"], "--cli-close", str(cli_close),
                              "--completion", str(completion), "--cancel", str(cancel), "--completion-token", token]
-    if host == "codex":
+    if host is Host.CODEX:
         command += ["--turn-id", entry["native_turn_id"]]
     armed = subprocess.run(command,
                             cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
@@ -288,17 +264,17 @@ def cancel_codex_close(close: dict, reason: str) -> None:
         pass
 
 
-def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, host="claude") -> dict:
+def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, host=Host.CLAUDE) -> dict:
     shared = shared or load(utility_script("peer", "session_close.py"), "session_close")
     entry = shared.own_host_and_entry()
-    if host not in {"claude", "codex"} or entry.get("host") != host:
+    if entry.get("host") != host.value:
         raise RuntimeError("the calling session is not the expected registered CLI")
-    if host == "codex":
+    if host is Host.CODEX:
         native_cwd = entry.get("native_cwd")
         if (not isinstance(native_cwd, str) or not Path(native_cwd).is_absolute()
                 or Path(native_cwd).resolve() != project.resolve()):
             raise RuntimeError("the refresh checkout does not match this Codex thread's native checkout")
-    if host == "claude":
+    if host is Host.CLAUDE:
         identity = session_identity()
         if identity is not None and (identity[0] != entry["session_id"] or identity[1] and identity[1] != entry["pid"]):
             raise RuntimeError("the calling Claude session does not match its registered client")
@@ -306,19 +282,19 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         if "subagents" in Path(transcript).parts:
             raise RuntimeError("a subagent cannot relaunch its parent client")
     session_id = entry["session_id"]
-    native = (codex_arguments if host == "codex" else preserved_arguments)(arguments(entry["pid"]))
-    executable = agent_cli.resolve_codex_executable()[0] if host == "codex" else agent_cli.resolve_claude_executable()
-    if host == "codex":
-        required_plugins.check_launch(project, "codex", executable, [*native, "resume", session_id, PROMPT])
+    native = (codex_arguments if host is Host.CODEX else preserved_arguments)(arguments(entry["pid"]))
+    executable = host_plugins.PLUGINS[host].resolve_executable()
+    if host is Host.CODEX:
+        required_plugins.check_launch(project, host, executable, [*native, "resume", session_id, PROMPT])
     cli_close = cli_close_capability(project, host, executable)
     token = secrets.token_hex(16)
     record = record_path(session_id)
     claim_record(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
-                          "host": host, "profile": entry.get("profile"), "cwd": str(project.resolve()),
+                          "host": host.value, "profile": entry.get("profile"), "cwd": str(project.resolve()),
                           "native_arguments": native, "at": time.time()})
-    options = ["--host", host, "--session-id", session_id, "--pid", str(entry["pid"]),
+    options = ["--host", host.value, "--session-id", session_id, "--pid", str(entry["pid"]),
                "--pid-started-at", repr(entry["pid_started_at"]), "--record", str(record), "--token", token,
-               "--recovery", str(recovery_script(project, installed)), "--title", entry.get("title") or host.title(),
+               "--recovery", str(recovery_script(project, installed)), "--title", entry.get("title") or host.value.title(),
                "--prompt", PROMPT, "--timeout", str(WAIT_SECONDS),
                "--expected-cwd", str(project.resolve()),
                *[f"--native-argument={value}" for value in native]]

@@ -9,6 +9,8 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
+from host import Host  # noqa: E402
 
 
 def load(name, path):
@@ -50,7 +52,7 @@ class StartupBindingTests(unittest.TestCase):
             hooks.write_text(json.dumps({'hooks': {'SessionStart': [{'hooks': [{'command': 'python hook_dispatch.py'}]}]}}), encoding='utf-8')
             manifest.write_text(json.dumps({'hooks': ['hooks.json']}), encoding='utf-8')
             roots[name + '@tj-agents'] = plugin
-        self.assertEqual(sorted(roots), self.binding.startup_participants('codex', roots))
+        self.assertEqual(sorted(roots), self.binding.startup_participants(Host.CODEX, roots))
 
     def test_required_startup_failure_stops_the_owned_native_child(self):
         temporary = tempfile.TemporaryDirectory(prefix='startup failure ')
@@ -71,7 +73,7 @@ class StartupBindingTests(unittest.TestCase):
         with mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
                 mock.patch.object(self.binding.cli_client, 'prepare', side_effect=prepare):
             with self.assertRaisesRegex(self.binding.StartupBindingError, 'fixture hook failed'):
-                self.binding.run_session('codex', sys.executable, root, [str(script)], require_session_start=True)
+                self.binding.run_session(Host.CODEX, sys.executable, root, [str(script)], require_session_start=True)
         self.assertFalse(survived.exists())
 
     def test_prelaunch_snapshot_captures_tab_before_native_start(self):
@@ -107,11 +109,11 @@ class StartupBindingTests(unittest.TestCase):
                 mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
                 mock.patch.object(self.binding, '_record_launch_binding') as record:
-            result = self.binding.run_session('codex', 'native.exe', Path.cwd(), (),
+            result = self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), (),
                                               require_session_start=True, terminal=terminal)
 
         self.assertEqual(0, result)
-        record.assert_called_once_with('codex', 72, terminal)
+        record.assert_called_once_with(Host.CODEX, 72, terminal)
 
     def test_ordinary_status_retains_prelaunch_terminal_binding(self):
         directory = tempfile.TemporaryDirectory(prefix='startup status ')
@@ -167,8 +169,8 @@ class StartupBindingTests(unittest.TestCase):
 
         self.assertEqual(0, result)
         self.assertEqual([
-            mock.call(root.resolve(), 'claude', 'native-claude', arguments),
-            mock.call(root.resolve(), 'claude', 'native-claude', arguments),
+            mock.call(root.resolve(), Host.CLAUDE, 'native-claude', arguments),
+            mock.call(root.resolve(), Host.CLAUDE, 'native-claude', arguments),
         ], prepare.call_args_list)
         self.assertIs(roots, calls[0]['hook_roots'])
 
@@ -218,9 +220,9 @@ class StartupBindingTests(unittest.TestCase):
 
         self.assertEqual(0, result)
         self.assertEqual([
-            mock.call(root.resolve(), 'claude', 'native-claude',
+            mock.call(root.resolve(), Host.CLAUDE, 'native-claude',
                       ['--settings', 'override.json', '--', 'literal prompt']),
-            mock.call(root.resolve(), 'claude', 'native-claude',
+            mock.call(root.resolve(), Host.CLAUDE, 'native-claude',
                       ['--settings', 'override.json', '--', 'literal prompt']),
         ], preflight.call_args_list)
         required = json.loads(spawn.call_args.kwargs['env'][self.binding.REQUIRED_HOOKS_ENV])

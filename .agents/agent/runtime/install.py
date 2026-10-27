@@ -29,6 +29,7 @@ RUNTIME = Path(__file__).resolve().parent
 ROOT = RUNTIME.parents[2]
 sys.path.insert(0, str(RUNTIME))
 
+from host import Host
 import launch_check
 import plugin_autoupdate
 import machine_events
@@ -39,7 +40,6 @@ import runtime_delivery
 COMMAND_TIMEOUT_SECONDS = 60
 CHECKOUT_UPDATED = "TJ_AGENTS_INSTALL_CHECKOUT_UPDATED"
 INSTALLER_TIMEOUT_SECONDS = 600
-HOSTS = ("claude", "codex")
 TOPIC_REPOSITORY = "tj-agents/core"
 RUNTIME_EXPORTS = (
     ".agents/agent/runtime",
@@ -240,7 +240,7 @@ def powershell_block(python: str, script: Path, loader: Path | None, newline: st
             "if (Test-Path -LiteralPath $tjAgentsShell) { . $tjAgentsShell }",
             'else { Write-Host "profile: tj-agents missing at $tjAgentsShell" -ForegroundColor Red }',
         ]
-    for name in HOSTS:
+    for name in map(str, Host):
         lines += [
             f"function global:{name} {{",
             f"    $tjAgentsTarget = Get-Command {name} -CommandType Application, ExternalScript"
@@ -264,7 +264,7 @@ def posix_block(python: str, script: Path) -> str:
     return "\n".join([PROFILE_START, f'export PATH={quoted(runtime_bin)}:"$PATH"', *(
         f'{name}() {{ [ -x {quoted(python)} ] || {{ printf "%s\\n" "Standards verifier Python is unavailable" >&2; return 1; }}; '
         f'{launch_check.HOST_VARIABLE}={name} {quoted(python)} -I -B {quoted(script)} --host {name} --project "$PWD" --target "$(command -v {name})" --require-session-start -- "$@"; }}'
-        for name in HOSTS), PROFILE_END])
+        for name in map(str, Host)), PROFILE_END])
 
 
 def wired_profile(text: str, block: str, newline: str) -> str:
@@ -836,16 +836,16 @@ def plugin_setup_project(context: Context) -> Path:
     return context.project or context.checkout or Path.cwd().resolve()
 
 
-def plugin_setup_executables(context: Context) -> dict[str, str | None]:
-    return {host: context.which(host) for host in HOSTS}
+def plugin_setup_executables(context: Context) -> dict[Host, str | None]:
+    return {host: context.which(host.value) for host in Host}
 
 
 def check_plugin_setup(context: Context) -> list[str]:
-    return required_plugins.check_setup(plugin_setup_project(context), HOSTS, plugin_setup_executables(context))
+    return required_plugins.check_setup(plugin_setup_project(context), tuple(Host), plugin_setup_executables(context))
 
 
 def apply_plugin_setup(context: Context) -> list[str]:
-    errors = required_plugins.converge_setup(plugin_setup_project(context), HOSTS, plugin_setup_executables(context), context.onboard)
+    errors = required_plugins.converge_setup(plugin_setup_project(context), tuple(Host), plugin_setup_executables(context), context.onboard)
     if errors:
         raise InstallError("; ".join(errors))
     return []

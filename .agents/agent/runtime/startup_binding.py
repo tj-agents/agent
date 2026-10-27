@@ -22,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import launch_check
 import launch_status
 import cli_client
+from host import Host
+from host_plugins import PLUGINS
 import required_plugins
 from terminal_command import command_for_target, without_binding_state
 
@@ -116,7 +118,7 @@ def _prelaunch_terminal() -> dict | None:
         return None
 
 
-def _record_launch_binding(host: str, child_pid: int, terminal: Mapping[str, object] | None = None) -> None:
+def _record_launch_binding(host: Host, child_pid: int, terminal: Mapping[str, object] | None = None) -> None:
     """Bind an acknowledged SessionStart to this wrapper's exact Popen child."""
     try:
         lookup = register_session.build_process_lookup()
@@ -134,7 +136,7 @@ def _record_launch_binding(host: str, child_pid: int, terminal: Mapping[str, obj
                 record = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if (isinstance(record, dict) and record.get("host") == host and record.get("pid") == child_pid
+            if (isinstance(record, dict) and record.get("host") == host.value and record.get("pid") == child_pid
                     and record.get("pid_started_at") == child_identity["started_at"]
                     and isinstance(record.get("session_id"), str) and isinstance(record.get("profile"), str)):
                 matches.append((path, record))
@@ -144,7 +146,7 @@ def _record_launch_binding(host: str, child_pid: int, terminal: Mapping[str, obj
         namespace = hashlib.sha256(record["profile"].encode("utf-8")).hexdigest()[:16]
         receipt = register_session.state_directory().parent / "recovery-launches" / (
             f"{host}-{namespace}-{record['session_id']}.json")
-        _write_json(receipt, {"host": host, "session": record["session_id"], "profile": record["profile"],
+        _write_json(receipt, {"host": host.value, "session": record["session_id"], "profile": record["profile"],
                               "state": "launched", "created_at": time.time(),
                               "wrapper": {**wrapper_identity, "child": child_identity, "terminal": terminal,
                                           "title": os.environ.get(register_session.TITLE_ENV)}})
@@ -162,10 +164,10 @@ def _acknowledged(directory: Path, token: str) -> bool:
         return False
 
 
-def startup_participants(host: str, roots) -> list[str]:
+def startup_participants(host: Host, roots) -> list[str]:
     participants = []
     for identity, root in (roots or {}).items():
-        manifest = json.loads((root / f".{host}-plugin/plugin.json").read_text(encoding="utf-8-sig"))
+        manifest = json.loads((root / host.manifest_directory / "plugin.json").read_text(encoding="utf-8-sig"))
         sources = manifest.get("hooks", [])
         if not isinstance(sources, list):
             sources = [sources]
@@ -188,7 +190,7 @@ def _terminate(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
 
 
-def run_session(host: str, target: str, project: Path, arguments: Sequence[str], *,
+def run_session(host: Host, target: str, project: Path, arguments: Sequence[str], *,
                 extra_environment: Mapping[str, str] | None = None,
                 timeout: float = STARTUP_TIMEOUT_SECONDS,
                 on_running: Callable[..., None] | None = None,
@@ -265,7 +267,7 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", choices=("claude", "codex"), required=True)
+    parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--status-file", type=Path)
@@ -329,10 +331,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             report("failed", error=message)
             return 1
 
-    if parsed.host == "codex" and effective_project is not None:
+    if effective_project is not None:
         phase("verifying-required-hooks")
         try:
-            launch_check.ensure_hooks(effective_project, parsed.target)
+            PLUGINS[parsed.host].ensure_hooks(effective_project, parsed.target)
         except Exception as error:
             message = f"launch: required hook readiness failed: {error}"
             print(message, file=sys.stderr)

@@ -26,10 +26,6 @@ TRUSTED_OWNER = "tj-agents"
 TIMEOUT = 45
 
 
-class RestartRequired(RuntimeError):
-    """Verified installed hooks need a fresh instance of the owning client."""
-
-
 def github_repository(source):
     match = GITHUB_SOURCE.fullmatch(source) if isinstance(source, str) else None
     if not match or match["repo"] in {".", ".."}:
