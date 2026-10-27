@@ -2,10 +2,16 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
+import re
 import runpy
 import shutil
 import sys
+import time
 import uuid
+
+MARKER = ".snapshot-digest"
+RETENTION_SECONDS = 3 * 24 * 60 * 60
+SNAPSHOT_NAME = re.compile(r"[0-9a-f]{64}(\.[0-9a-f]{32})?")
 
 
 def fail(message):
@@ -56,27 +62,70 @@ def verified(root, expected):
         fail("Codex hook package integrity check failed")
 
 
+def current(snapshot, expected):
+    marker = snapshot / MARKER
+    try:
+        if snapshot.is_symlink() or marker.read_text(encoding="utf-8") != expected:
+            return False
+    except OSError:
+        return False
+    try:
+        os.utime(marker)
+    except OSError:
+        pass
+    return True
+
+
+def create(root, expected, snapshot_dir, key):
+    snapshot = snapshot_dir / key
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    temporary = snapshot_dir / (key + "." + uuid.uuid4().hex)
+    try:
+        shutil.copytree(root, temporary, symlinks=True)
+        if digest_tree(temporary) != expected:
+            raise OSError("Codex hook snapshot copy differs from its package")
+        (temporary / MARKER).write_text(expected, encoding="utf-8")
+        try:
+            temporary.rename(snapshot)
+        except OSError:
+            if current(snapshot, expected):
+                return
+            snapshot.rename(snapshot_dir / (key + "." + uuid.uuid4().hex))
+            temporary.rename(snapshot)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
+def prune(snapshot_dir, key):
+    cutoff = time.time() - RETENTION_SECONDS
+    for entry in snapshot_dir.iterdir():
+        if entry.name == key or not SNAPSHOT_NAME.fullmatch(entry.name):
+            continue
+        try:
+            marker = entry / MARKER
+            if (marker if marker.is_file() else entry).stat().st_mtime < cutoff:
+                marker.unlink(missing_ok=True)
+                shutil.rmtree(entry)
+        except OSError:
+            pass
+
+
 def snapshot_root(root, expected, snapshot_dir):
     root = Path(root)
     snapshot_dir = Path(snapshot_dir)
     key = hashlib.sha256((str(root) + "\0" + expected).encode("utf-8")).hexdigest()
     snapshot = snapshot_dir / key
-    if not snapshot.is_dir():
-        verified(root, expected)
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-        temporary = snapshot_dir / (key + "." + uuid.uuid4().hex)
-        shutil.copytree(root, temporary, symlinks=True)
-        try:
-            verified(temporary, expected)
-            try:
-                temporary.rename(snapshot)
-            except OSError:
-                if not snapshot.is_dir():
-                    raise
-        finally:
-            if temporary.is_dir():
-                shutil.rmtree(temporary)
-    verified(snapshot, expected)
+    if current(snapshot, expected):
+        return snapshot
+    verified(root, expected)
+    try:
+        create(root, expected, snapshot_dir, key)
+    except OSError:
+        return root
+    try:
+        prune(snapshot_dir, key)
+    except OSError:
+        pass
     return snapshot
 
 
@@ -90,10 +139,12 @@ def main():
         fail("Codex hook package identity is invalid")
     data = os.environ.get("PLUGIN_DATA")
     configured = os.environ.get("TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY")
-    if not data and not configured:
-        fail("Codex hook data directory is unavailable")
-    snapshot_dir = Path(configured).resolve() if configured else Path(data).resolve() / "hook-snapshots"
-    selected = snapshot_root(root, expected, snapshot_dir)
+    if data or configured:
+        snapshot_dir = Path(configured).resolve() if configured else Path(data).resolve() / "hook-snapshots"
+        selected = snapshot_root(root, expected, snapshot_dir)
+    else:
+        verified(root, expected)
+        selected = root
     target = selected / relative
     if not target.is_file():
         fail("Codex hook script is unavailable")

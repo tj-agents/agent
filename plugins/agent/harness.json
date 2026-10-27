@@ -33,13 +33,6 @@
         ]
       },
       {
-        "path": ".agents/agent/runtime/reap_orphans.py",
-        "hosts": [
-          "claude",
-          "codex"
-        ]
-      },
-      {
         "path": ".agents/agent/utility/peer/scripts/register_session.py",
         "hosts": [
           "claude",

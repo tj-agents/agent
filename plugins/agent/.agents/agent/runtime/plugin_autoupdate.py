@@ -35,12 +35,10 @@ CLI_TIMEOUT_SECONDS = 60
 STILL_ACTIVE = 259
 FAILURE_BACKOFF_SECONDS = 24 * 60 * 60
 RETIRED = "retired"
-HOOK_DIGEST = re.compile(r'"(sha256:[0-9a-f]{64})"')
 SHA = re.compile(r"[0-9a-f]{40}")
 NAME = re.compile(r"[A-Za-z0-9_.-]+")
 REVISION_PATH = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*")
 CONTENTS_WAIT_SECONDS = 10
-SNAPSHOT_FIRST = "(Path(s) if s else d/'hook-snapshots')/k/"
 MARKETPLACE_NAME = "tj-agents"
 MARKETPLACE_REPOSITORY = "tj-agents/marketplace"
 
@@ -396,36 +394,6 @@ def codex_session_running(alive=process_alive) -> bool:
                for profile, pid in rows)
 
 
-def hook_packages(marketplace: str) -> list[dict]:
-    packages = []
-    for path in sorted((Host.CODEX.configuration_root / "plugins" / "cache" / marketplace).glob("*/*/hooks/codex.json")):
-        try:
-            hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
-            commands = [hook.get("commandWindows") or hook.get("command") or "" for groups in hooks.values()
-                        for group in groups for hook in group["hooks"]]
-        except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            continue
-        digests = {match[1] for command in commands if (match := HOOK_DIGEST.search(command))}
-        if len(digests) == 1:
-            packages.append({"plugin": path.parents[2].name, "root": path.parents[1], "digest": digests.pop(),
-                             "snapshot_first": all(SNAPSHOT_FIRST in command for command in commands)})
-    return packages
-
-
-def preserve_hook_snapshots(marketplace: str, packages: list[dict]) -> None:
-    for package in packages:
-        plugin, root = package["plugin"], package["root"]
-        try:
-            spec = importlib.util.spec_from_file_location("codex_hook_snapshot_" + plugin,
-                                                          root / "hooks" / "codex_hook_snapshot.py")
-            loader = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(loader)
-            loader.snapshot_root(root, package["digest"], plugin,
-                                 Host.CODEX.configuration_root / "plugins" / "data" / f"{plugin}-{marketplace}" / "hook-snapshots")
-        except (Exception, SystemExit):
-            continue
-
-
 def remote_revision(source: str, ref: object = None) -> str | None:
     reference = ref if isinstance(ref, str) and ref else "HEAD"
     if is_pinned(reference):
@@ -458,8 +426,8 @@ def run_cli(command: list[str], *, cwd: Path) -> bool | str:
 
 
 def refresh_codex(executable: str, targets: dict[str, dict], recorded: dict, revision=remote_revision,
-                  run=run_cli, now: float | None = None, busy=codex_session_running, packages=hook_packages,
-                  preserve=preserve_hook_snapshots, sources=plugin_sources, query=None) -> dict[str, str]:
+                  run=run_cli, now: float | None = None, busy=codex_session_running, sources=plugin_sources,
+                  query=None) -> dict[str, str]:
     now = time.time() if now is None else now
     outcomes: dict[str, str] = {}
     references = sorted({(source["source"], source.get("ref") or "HEAD")
@@ -485,11 +453,7 @@ def refresh_codex(executable: str, targets: dict[str, dict], recorded: dict, rev
         if isinstance(failed_at, (int, float)) and now - failed_at < FAILURE_BACKOFF_SECONDS:
             outcomes[marketplace] = "failed recently; retried after 24 hours"
             continue
-        hooks = packages(marketplace)
-        cache_first = not all(package["snapshot_first"] for package in hooks)
-        if cache_first:
-            running = busy() if running is None else running
-        preserve(marketplace, hooks)
+        running = busy() if running is None else running
         refreshed = run([executable, "plugin", "marketplace", "upgrade", marketplace],
                         cwd=target["project"]) is True
         listed = sources(marketplace, target) if refreshed else {}
@@ -543,7 +507,7 @@ def refresh_codex(executable: str, targets: dict[str, dict], recorded: dict, rev
                 recorded[key] = head
             recorded.pop("failed:" + key, None)
             outcomes[marketplace] = "updated" + retired + (
-                "; restart Codex sessions opened before this update to reload their hooks" if cache_first and running else "")
+                "; restart Codex sessions opened before this update to reload their hooks" if running else "")
         else:
             recorded["failed:" + key] = now
             outcomes[marketplace] = "failed" + retired
