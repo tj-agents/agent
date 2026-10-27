@@ -10,12 +10,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 from claude import plugins as CLAUDE
-from claude import registry
 from codex import plugins as CODEX
 import launch_check
 import plugin_autoupdate
-import reload_plugins
 import required_plugins
+from tj_agent.plugins import sources
 
 
 IDENTITY = "python@tj-agents"
@@ -49,7 +48,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
         for project in (self.project, self.sibling):
             (project / ".claude").mkdir()
             (project / ".claude/settings.json").write_text(json.dumps({"enabledPlugins": {IDENTITY: True}}), encoding="utf-8")
-        self.source = mock.patch.object(reload_plugins, "source_tree", return_value=TREE)
+        self.source = mock.patch.object(sources, "tree", return_value=TREE)
         self.fetch = self.source.start()
         self.addCleanup(self.source.stop)
         marketplaces = mock.patch.object(CLAUDE, "tj_agents_marketplaces", return_value={"tj-agents": ("tj-agents/marketplace", self.market)})
@@ -63,7 +62,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
             str(self.other / ".git") if project == self.other else str(self.project / ".git"))
         common.start()
         self.addCleanup(common.stop)
-        repositories = mock.patch.object(registry, "repository_projects", side_effect=list)
+        repositories = mock.patch.object(CLAUDE, "repository_projects", side_effect=list)
         repositories.start()
         self.addCleanup(repositories.stop)
 
@@ -77,7 +76,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
         foreign = self.row(self.other)
         self.write([self.row(self.project), self.row(self.sibling), foreign, self.row(self.root / "deleted")])
         with mock.patch.object(plugin_autoupdate, "write_json", wraps=plugin_autoupdate.write_json) as write:
-            self.assertEqual([IDENTITY], registry.synchronize([self.project, self.sibling]))
+            self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project, self.sibling]))
         rows = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY]
         self.assertEqual(2, len(rows))
         self.assertIn(foreign, rows)
@@ -87,15 +86,15 @@ class BatchPluginRefreshTests(unittest.TestCase):
         self.fetch.assert_called_once()
         write.assert_called_once()
         self.fetch.reset_mock()
-        self.assertEqual([], registry.synchronize([self.project, self.sibling]))
+        self.assertEqual([], CLAUDE.synchronize([self.project, self.sibling]))
         self.fetch.assert_called_once()
 
     def test_local_source_changes_at_the_same_path_refresh_without_a_new_catalog(self):
         self.write([self.row(self.project)])
-        registry.synchronize([self.project])
+        CLAUDE.synchronize([self.project])
         updated = {**TREE, "skill.txt": b"new published content"}
         self.fetch.return_value = updated
-        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+        self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project]))
         row = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY][0]
         self.assertEqual(updated, CLAUDE.plugin_refresh.package_tree(Path(row["installPath"])))
 
@@ -105,11 +104,11 @@ class BatchPluginRefreshTests(unittest.TestCase):
         self.catalog["plugins"][0]["source"] = source
         (self.market / CLAUDE.CATALOG).write_text(json.dumps(self.catalog))
         self.write([self.row(self.project)])
-        with mock.patch.object(reload_plugins, "resolved_head", return_value="b" * 40):
-            registry.synchronize([self.project])
+        with mock.patch.object(sources, "resolved_head", return_value="b" * 40):
+            CLAUDE.synchronize([self.project])
         self.fetch.reset_mock()
         self.fetch.side_effect = OSError("offline")
-        self.assertEqual([], registry.synchronize([self.project]))
+        self.assertEqual([], CLAUDE.synchronize([self.project]))
         self.fetch.assert_not_called()
 
     def test_all_repository_groups_keep_the_shared_payload_modes(self):
@@ -126,7 +125,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
             return TREE
         self.fetch.side_effect = fetch
         with mock.patch.object(CLAUDE, "selected", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])):
-            registry.synchronize([self.project, self.other])
+            CLAUDE.synchronize([self.project, self.other])
         rows = json.loads(self.registry.read_text())["plugins"][IDENTITY]
         self.assertEqual(2, len(rows))
         self.assertTrue(all(row["tjAgentsModes"] == {name: 0o666 for name in TREE} for row in rows))
@@ -136,7 +135,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
         (self.project / ".claude/settings.json").write_text("{}", encoding="utf-8")
         (self.project / ".claude/settings.local.json").write_text(json.dumps({"enabledPlugins": {IDENTITY: True}}), encoding="utf-8")
         self.write([self.row(self.project, "local"), self.row(self.sibling, "local")])
-        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+        self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project]))
         rows = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY]
         self.assertEqual(["local"], [row["scope"] for row in rows])
 
@@ -149,7 +148,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
             name = source.removeprefix("./")
             return {".claude-plugin/plugin.json": json.dumps({"name": name, "version": "2.0.0"}).encode()}
         self.fetch.side_effect = fetch
-        self.assertEqual(["base@tj-agents", IDENTITY], registry.synchronize([self.project, self.sibling]))
+        self.assertEqual(["base@tj-agents", IDENTITY], CLAUDE.synchronize([self.project, self.sibling]))
         plugins = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"]
         self.assertEqual({IDENTITY, "base@tj-agents"}, set(plugins))
         self.assertTrue(all(row["scope"] == "project" for rows in plugins.values() for row in rows))
@@ -160,7 +159,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
 
     def test_a_new_project_installs_the_selected_plugin_without_a_publish_event(self):
         self.write([])
-        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+        self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project]))
         rows = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY]
         self.assertEqual(["project"], [row["scope"] for row in rows])
         self.assertEqual("2.0.0", rows[0]["version"])
@@ -172,7 +171,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "Unix executable permission")
     def test_materialization_preserves_executable_permissions(self):
-        destination = registry.materialize(self.root / "cache", {"run.sh": b"#!/bin/sh\nexit 0\n"}, {"run.sh": 0o755})
+        destination = CLAUDE.materialize(self.root / "cache", {"run.sh": b"#!/bin/sh\nexit 0\n"}, {"run.sh": 0o755})
         self.assertEqual(0o755, (destination / "run.sh").stat().st_mode & 0o777)
 
     @unittest.skipIf(os.name == "nt", "Unix executable permission")
@@ -183,22 +182,22 @@ class BatchPluginRefreshTests(unittest.TestCase):
             kwargs["modes"].update({name: mode for name in TREE})
             return TREE
         self.fetch.side_effect = fetch
-        registry.synchronize([self.project])
+        CLAUDE.synchronize([self.project])
         mode = 0o755
-        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+        self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project]))
         row = json.loads(self.registry.read_text())["plugins"][IDENTITY][0]
         script = Path(row["installPath"]) / "skill.txt"
         self.assertEqual(mode, script.stat().st_mode & 0o777)
         script.chmod(0o644)
-        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+        self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project]))
 
     def test_corrupt_bytes_at_a_recorded_head_are_repaired_without_mutating_the_loaded_cache(self):
         self.write([self.row(self.project)])
-        registry.synchronize([self.project])
+        CLAUDE.synchronize([self.project])
         first = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY][0]
         loaded = Path(first["installPath"])
         (loaded / "skill.txt").write_bytes(b"corrupt")
-        self.assertEqual([IDENTITY], registry.synchronize([self.project]))
+        self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project]))
         repaired = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY][0]
         self.assertNotEqual(first["installPath"], repaired["installPath"])
         self.assertEqual(b"corrupt", (loaded / "skill.txt").read_bytes())
@@ -209,7 +208,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
         original = self.registry.read_bytes()
         self.fetch.side_effect = RuntimeError("publisher offline")
         with self.assertRaisesRegex(RuntimeError, "publisher offline"):
-            registry.synchronize([self.project])
+            CLAUDE.synchronize([self.project])
         self.assertEqual(original, self.registry.read_bytes())
 
     def test_dependency_cycle_never_changes_registration_bytes(self):
@@ -219,7 +218,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
         self.write([self.row(self.project)])
         original = self.registry.read_bytes()
         with self.assertRaisesRegex(RuntimeError, "Cyclic plugin dependency"):
-            registry.synchronize([self.project])
+            CLAUDE.synchronize([self.project])
         self.assertEqual(original, self.registry.read_bytes())
 
     def test_native_concurrent_registry_write_is_preserved(self):
@@ -230,7 +229,7 @@ class BatchPluginRefreshTests(unittest.TestCase):
             return TREE
         self.fetch.side_effect = fetch
         with self.assertRaisesRegex(RuntimeError, "during refresh"):
-            registry.synchronize([self.project])
+            CLAUDE.synchronize([self.project])
         self.assertEqual(changed, json.loads(self.registry.read_text(encoding="utf-8")))
 
 
@@ -248,8 +247,8 @@ class CodexStaleBytesTests(unittest.TestCase):
                     mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
                     mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": source}]}), \
                     mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
-                    mock.patch.object(reload_plugins, "source_tree", return_value=tree) as fetch, \
-                    mock.patch.object(reload_plugins, "resolved_head", return_value="b" * 40):
+                    mock.patch.object(sources, "tree", return_value=tree) as fetch, \
+                    mock.patch.object(sources, "resolved_head", return_value="b" * 40):
                 self.assertEqual([], CODEX.reconcile(root, executable="codex"))
                 fetch.reset_mock()
                 fetch.side_effect = OSError("offline")
@@ -278,7 +277,7 @@ class CodexStaleBytesTests(unittest.TestCase):
                         "source": "git-subdir", "url": "https://github.com/tj-agents/python.git", "ref": "main", "path": "plugins/python"}}]}), \
                     mock.patch.object(plugin_autoupdate, "read_contents", return_value={"heads": {"tj-agents/python@main": "b" * 40}}), \
                     mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
-                    mock.patch.object(reload_plugins, "source_tree", return_value=tree) as fetch, \
+                    mock.patch.object(sources, "tree", return_value=tree) as fetch, \
                     mock.patch.object(plugin_autoupdate, "main", return_value=0) as memoized_update, \
                     mock.patch.object(CODEX, "install_missing", side_effect=repair) as update:
                 self.assertEqual("updated", launch_check.check(root, hosts=(CODEX.HOST,),
@@ -302,7 +301,7 @@ class CodexStaleBytesTests(unittest.TestCase):
                     mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
                     mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": "./python"}]}), \
                     mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
-                    mock.patch.object(reload_plugins, "source_tree", side_effect=lambda *args: dict(tree)), \
+                    mock.patch.object(sources, "tree", side_effect=lambda *args: dict(tree)), \
                     mock.patch.object(CODEX, "install_missing", side_effect=repair) as update:
                 self.assertEqual([], CODEX.reconcile(root, executable="codex"))
                 tree["skill.txt"] = b"new"
@@ -326,7 +325,7 @@ class CodexStaleBytesTests(unittest.TestCase):
                     mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": source}]}), \
                     mock.patch.object(plugin_autoupdate, "refresh_contents", side_effect=heads), \
                     mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
-                    mock.patch.object(reload_plugins, "source_tree", return_value={"skill.txt": b"new published"}) as fetch, \
+                    mock.patch.object(sources, "tree", return_value={"skill.txt": b"new published"}) as fetch, \
                     mock.patch.object(CODEX, "install_missing") as update:
                 plugin_autoupdate.record_contents(heads={key: "a" * 40})
                 CODEX.refresh_plugins("codex", root, {"tj-agents": "tj-agents/marketplace"}, [IDENTITY])
@@ -343,7 +342,7 @@ class CodexStaleBytesTests(unittest.TestCase):
                     mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
                     mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": "./python"}]}), \
                     mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
-                    mock.patch.object(reload_plugins, "source_tree", return_value={"skill.txt": b"published"}), \
+                    mock.patch.object(sources, "tree", return_value={"skill.txt": b"published"}), \
                     mock.patch.object(CODEX, "install_missing"):
                 with self.assertRaisesRegex(RuntimeError, "bytes differ from marketplace after update"):
                     CODEX.reconcile(root, executable="codex")

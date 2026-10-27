@@ -347,24 +347,22 @@ class RefreshCliTests(unittest.TestCase):
         self.assertEqual("v1", fake.installations[1]["version"])
 
     def test_scoped_refresh_uses_one_registry_transaction(self):
-        from claude import registry
         for declared in ("settings.local.json", "settings.json"):
             def settings(path):
                 return {"enabledPlugins": {"infonetica@tj-agents": True}} if path.name == declared else {}
             with self.subTest(declared=declared), mock.patch.object(plugin_refresh, "read_json", side_effect=settings), \
-                    mock.patch.object(registry, "synchronize", return_value=["infonetica@tj-agents"]) as synchronize, \
+                    mock.patch.object(CLAUDE, "synchronize", return_value=["infonetica@tj-agents"]) as synchronize, \
                     mock.patch.object(plugin_refresh, "run") as native:
                 self.assertEqual(["infonetica@tj-agents"], CLAUDE.refresh_plugins("claude", ROOT, {}, ["infonetica@tj-agents"]))
             synchronize.assert_called_once_with([ROOT], identities={"infonetica@tj-agents"}, force=True)
             native.assert_not_called()
 
     def test_scoped_refresh_does_not_create_a_user_installation(self):
-        from claude import registry
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary)
             (project / ".claude").mkdir()
             (project / ".claude/settings.json").write_text(json.dumps({"enabledPlugins": {"workflow@tj-agents": True}}), encoding="utf-8")
-            with mock.patch.object(registry, "synchronize", return_value=["workflow@tj-agents"]), \
+            with mock.patch.object(CLAUDE, "synchronize", return_value=["workflow@tj-agents"]), \
                     mock.patch.object(plugin_refresh, "run") as native:
                 self.assertEqual(["workflow@tj-agents"], CLAUDE.refresh_plugins("claude", project, {}, ["workflow@tj-agents"]))
             native.assert_not_called()
@@ -548,13 +546,13 @@ class RefreshCliTests(unittest.TestCase):
             source = {"source": "git-subdir", "url": "ssh://git@github.com/TJ-Agents/core.git",
                       "path": "plugins/base", "sha": revision}
             with mock.patch.object(plugin_refresh, "run", side_effect=run) as commands, mock.patch("sys.stderr"):
-                expected = REFRESH.source_tree(source, root, root, root / "scratch", clones)
+                expected = REFRESH.sources.tree(source, root, root, root / "scratch", clones)
                 self.assertEqual({"payload": b"published"}, expected)
-                self.assertEqual(expected, REFRESH.source_tree(source, root, root, root / "scratch", clones))
+                self.assertEqual(expected, REFRESH.sources.tree(source, root, root, root / "scratch", clones))
                 self.assertEqual(1, sum("fetch" in call.args[0] for call in commands.call_args_list))
                 source["path"] = "./../../escape"
                 with self.assertRaisesRegex(REFRESH.RefreshError, "escapes"):
-                    REFRESH.source_tree(source, root, root, root / "scratch", clones)
+                    REFRESH.sources.tree(source, root, root, root / "scratch", clones)
 
     def test_another_projects_installation_does_not_satisfy_verification(self):
         inventory = [{"id": "base@tj-agents", "enabled": True, "scope": "project", "projectPath": str(ROOT / "elsewhere")}]

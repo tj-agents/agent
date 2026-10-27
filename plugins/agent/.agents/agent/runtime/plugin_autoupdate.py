@@ -663,40 +663,6 @@ def _receipt(root: Path) -> dict | None:
     return value
 
 
-def _receipt_path(root: Path, relative: str) -> Path:
-    item = PurePosixPath(relative)
-    if item.is_absolute() or ".." in item.parts or "\\" in relative or ":" in relative:
-        raise ValueError("unsafe receipted runtime path")
-    candidate = root.joinpath(*item.parts)
-    if not candidate.resolve().is_relative_to(root.resolve()):
-        raise ValueError("receipted runtime path escapes its root")
-    return candidate
-
-
-def _closure(root: Path, exports: list[str]) -> dict[str, bytes]:
-    result = {}
-    for relative in exports:
-        target = _receipt_path(root, relative)
-        if not target.exists():
-            raise ValueError("receipted runtime export is unavailable")
-        paths = target.rglob("*") if target.is_dir() else (target,)
-        for path in sorted(paths):
-            if path.is_symlink() or not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
-                continue
-            name = path.relative_to(root).as_posix()
-            if name in result:
-                raise ValueError("receipted runtime exports overlap")
-            result[name] = path.read_bytes()
-    return result
-
-
-def _digest(contents: dict[str, bytes]) -> str:
-    value = hashlib.sha256()
-    for name, body in sorted(contents.items()):
-        value.update(name.encode("utf-8") + b"\0" + str(len(body)).encode("ascii") + b"\0" + body)
-    return value.hexdigest()
-
-
 def _receipt_root(current: Path) -> Path | None:
     for root in (current.parent, *current.parents):
         if current.resolve() == (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).resolve():

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -14,6 +13,8 @@ import plugin_autoupdate
 import plugin_refresh
 import required_plugins
 import session_relaunch
+from tj_agent import content
+from tj_agent.plugins import sources
 
 HOST = Host.CODEX
 CATALOG = ".agents/plugins/marketplace.json"
@@ -126,16 +127,7 @@ def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins:
     return reconcile(project, executable=executable, refresh=True)
 
 
-def tree_digest(tree: dict[str, bytes]) -> str:
-    value = hashlib.sha256()
-    for name, body in sorted(tree.items()):
-        value.update(name.encode("utf-8") + b"\0" + str(len(body)).encode("ascii") + b"\0" + body)
-    return value.hexdigest()
-
-
 def reconcile(project: Path, executable: str | None = None, *, refresh: bool = False) -> list[str]:
-    import reload_plugins
-
     executable = executable or resolve_executable()
     marketplaces, identities = plugin_refresh.selected(*selection(executable, project))
     if not identities:
@@ -175,22 +167,22 @@ def reconcile(project: Path, executable: str | None = None, *, refresh: bool = F
                 publisher = (plugin_autoupdate.publisher_key(source.get("url"), source.get("sha") or source.get("ref"))
                              if isinstance(source, dict) and source.get("source") == "git-subdir" else None)
                 head = contents["heads"].get(publisher) if publisher else None
-                local_tree = (reload_plugins.source_tree(source, location, project, Path(temporary), publishers)
+                local_tree = (sources.tree(source, location, project, Path(temporary), publishers)
                               if not head else None)
-                resolved = reload_plugins.resolved_head(source, publishers) if publisher and not head else None
+                resolved = sources.resolved_head(source, publishers) if publisher and not head else None
                 if resolved:
                     head = resolved
                     contents["heads"][publisher] = head
                     plugin_autoupdate.record_contents(heads={publisher: head})
-                signature = json.dumps([source, head, tree_digest(local_tree) if publisher is None else None], sort_keys=True)
+                signature = json.dumps([source, head, content.digest(local_tree) if publisher is None else None], sort_keys=True)
                 root = roots.get(identity)
                 actual = plugin_refresh.package_tree(root) if root is not None else None
                 saved = receipts.get(identity)
                 if (isinstance(saved, dict) and saved.get("source") == signature and actual is not None
-                        and tree_digest(actual) == saved.get("digest")):
+                        and content.digest(actual) == saved.get("digest")):
                     continue
                 frozen = {**source, "sha": head} if publisher and head else source
-                tree = (local_tree if local_tree is not None else reload_plugins.source_tree(
+                tree = (local_tree if local_tree is not None else sources.tree(
                     frozen, location, project, Path(temporary), publishers))
                 expected[identity], signatures[identity] = tree, signature
                 if actual != tree:
@@ -201,7 +193,7 @@ def reconcile(project: Path, executable: str | None = None, *, refresh: bool = F
         for identity, tree in expected.items():
             if identity not in roots or plugin_refresh.package_tree(roots[identity]) != tree:
                 raise plugin_refresh.RefreshError(f"Native installed bytes differ from marketplace after update: {identity}")
-            receipts[identity] = {"source": signatures[identity], "digest": tree_digest(tree)}
+            receipts[identity] = {"source": signatures[identity], "digest": content.digest(tree)}
     plugin_autoupdate.write_json(receipt_path, receipts)
     return stale
 
