@@ -20,8 +20,8 @@ and ships as the `claude` and `codex` packages inside `.agents/agent/runtime`, s
 from the generated `plugins/agent` tree.
 
 Maintainers refresh the offline Marketplace selection snapshot only with
-`.agents/agent/utility/plugins/scripts/update_marketplace_catalog.py --source <marketplace-checkout>`;
-the adjacent `marketplace_catalog.lock.json` is the canonical producer snapshot.
+`.agents/agent/utility/plugins/scripts/update_marketplace_plugins.py --source <marketplace-checkout>`;
+the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.
 
 ## Install
 
