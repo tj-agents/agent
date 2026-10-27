@@ -20,6 +20,8 @@ Runtime scripts use Python's standard library on Windows and Linux, retaining th
 conventions in [Core's CODE_CONVENTIONS.md](https://github.com/tj-agents/core/blob/main/CODE_CONVENTIONS.md).
 Run `python -B -m unittest discover -s .agents/tests -p "test_*.py"` on Windows or `python3` on Linux.
 Keep native application packaging and dependencies out of this plugin publisher unless the work needs them.
+`.agents/agent/runtime` stays host-neutral: anything naming one host's tools, settings, rule syntax or paths
+lives in `.claude/runtime/` or `.codex/runtime/` and is reached through `Host` or the `claude`/`codex` packages.
 
 ```powershell
 pwsh .agents/sync-generated.ps1
