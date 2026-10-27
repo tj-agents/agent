@@ -82,6 +82,9 @@ class RefreshRunTests(unittest.TestCase):
 
 class RefreshCliTests(unittest.TestCase):
     def setUp(self):
+        caller = mock.patch.object(REFRESH, "calling_host", return_value="codex")
+        caller.start()
+        self.addCleanup(caller.stop)
         admission = mock.patch.object(REFRESH, "prepare_required", return_value=None)
         self.admission = admission.start()
         self.addCleanup(admission.stop)
@@ -124,6 +127,7 @@ class RefreshCliTests(unittest.TestCase):
                         mock.patch.object(REFRESH, "selection", return_value=({}, ["base@tj-agents"])), \
                         mock.patch.object(REFRESH, "refresh", return_value=[]) as refresh, \
                         mock.patch.object(REFRESH.required_plugins, "converge_setup", return_value=[]) as setup, \
+                        mock.patch.object(REFRESH, "calling_host", return_value="claude"), \
                         mock.patch.object(REFRESH, "relaunch_session", return_value=None) as relaunch, \
                         mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
                     self.assertEqual(1, REFRESH.main([]))
@@ -137,6 +141,48 @@ class RefreshCliTests(unittest.TestCase):
                               "".join(call.args[0] for call in stdout.write.call_args_list))
                 check.assert_not_called()
                 self.assertEqual(saved, cursor.read_text(encoding="utf-8"))
+
+    def test_default_both_adopts_only_the_claude_caller(self):
+        restart = mock.Mock()
+        adopt = mock.Mock(return_value={"relaunch": "armed"})
+        self.readiness.side_effect = REFRESH.codex_hook_trust.RestartRequired("restart")
+        with mock.patch.object(REFRESH, "calling_host", return_value="claude"), \
+                mock.patch.object(REFRESH.launch_check, "check", return_value="current"), \
+                mock.patch.object(REFRESH, "relaunch_codex", restart), \
+                mock.patch.object(REFRESH, "relaunch_session", adopt), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            self.assertEqual(0, REFRESH.main([]))
+        self.readiness.assert_called_once_with(Path.cwd().resolve(), running_session=False)
+        restart.assert_not_called()
+        adopt.assert_called_once()
+
+    def test_default_both_adopts_only_the_codex_caller(self):
+        restart = mock.Mock(return_value={"relaunch": "armed"})
+        adopt = mock.Mock()
+        self.readiness.side_effect = REFRESH.codex_hook_trust.RestartRequired("restart")
+        with mock.patch.object(REFRESH, "calling_host", return_value="codex"), \
+                mock.patch.object(REFRESH.launch_check, "check", return_value="current"), \
+                mock.patch.object(REFRESH, "relaunch_codex", restart), \
+                mock.patch.object(REFRESH, "relaunch_session", adopt), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            self.assertEqual(0, REFRESH.main([]))
+        self.readiness.assert_called_once_with(Path.cwd().resolve(), running_session=True)
+        restart.assert_called_once()
+        adopt.assert_not_called()
+
+    def test_unknown_caller_never_claims_client_adoption(self):
+        restart = mock.Mock()
+        adopt = mock.Mock()
+        with mock.patch.object(REFRESH, "calling_host", return_value=None), \
+                mock.patch.object(REFRESH.launch_check, "check", return_value="current"), \
+                mock.patch.object(REFRESH, "relaunch_codex", restart), \
+                mock.patch.object(REFRESH, "relaunch_session", adopt), \
+                mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
+            self.assertEqual(0, REFRESH.main([]))
+        self.readiness.assert_called_once_with(Path.cwd().resolve(), running_session=False)
+        restart.assert_not_called()
+        adopt.assert_not_called()
+        self.assertNotIn('"relaunch"', "".join(call.args[0] for call in stdout.write.call_args_list))
 
     def test_default_refresh_stops_when_neither_host_is_admitted(self):
         self.admission.side_effect = REFRESH.RefreshError("inventory failed")
