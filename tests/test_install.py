@@ -439,6 +439,22 @@ class RuntimeTests(Machine):
     def installed_receipt(self, context):
         return json.loads((context.state_directory / "bin" / "source.json").read_text(encoding="utf-8"))
 
+    @unittest.skipUnless(shutil.which("powershell.exe") or shutil.which("pwsh"), "PowerShell shell ownership check")
+    def test_agent_profile_preserves_cli_owned_session_search_and_navigation(self):
+        loader = install.ROOT / ".agents/agent/resources/shell/profile.ps1"
+        quoted = str(loader).replace("'", "''")
+        script = (
+            "function global:cr { 'CLI_CR' }; function global:f { 'CLI_F' }; "
+            f". '{quoted}'; "
+            "if ((Get-Command cr).Definition -notmatch 'CLI_CR' -or "
+            "(Get-Command f).Definition -notmatch 'CLI_F') { exit 9 }; "
+            "Write-Output 'cli-commands-preserved'"
+        )
+        result = subprocess.run([shutil.which("powershell.exe") or shutil.which("pwsh"), "-NoProfile", "-Command", script],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("cli-commands-preserved", result.stdout)
+
     def test_packaged_install_and_fresh_shell_survive_removing_the_source_checkout(self):
         source = self.root / "published package"
         shutil.copytree(install.ROOT, source)
