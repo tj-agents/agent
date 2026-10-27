@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch a native CLI and report handoff acknowledgement (Python 3.9+)."""
+"""Launch a native CLI and report handoff acknowledgement (Python 3.12+)."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from host_plugins import PLUGINS
 from host_sessions import SESSIONS
 import required_plugins
 from terminal_command import command_for_target, without_binding_state
+from tj_cli.paths import prepend
 
 ACK_DIRECTORY_ENV = "TJ_AGENTS_STARTUP_ACK_DIRECTORY"
 ACK_TOKEN_ENV = "TJ_AGENTS_STARTUP_ACK_TOKEN"
@@ -209,7 +210,9 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                    if (key.upper() if os.name == "nt" else key) not in inherited}
     interpreter = launch_check.state_directory() / "bin" / "python"
     if os.name != "nt" and interpreter.is_file():
-        environment["PATH"] = str(interpreter.parent) + os.pathsep + environment.get("PATH", "")
+        environment["PATH"] = os.pathsep.join(
+            prepend(environment.get("PATH", "").split(os.pathsep), str(interpreter.parent))
+        )
     with tempfile.TemporaryDirectory(prefix="tj-agents-launch-") as temporary:
         directory = Path(temporary)
         token = secrets.token_urlsafe(32)
@@ -269,6 +272,9 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if sys.version_info < (3, 12):
+        print("launch requires Python 3.12 or newer", file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     parser.add_argument("--project", type=Path, required=True)
