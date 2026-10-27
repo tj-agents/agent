@@ -31,5 +31,9 @@ class Host(Enum):
         return Path(os.environ.get(self.home_variable) or Path.home() / self.home_directory)
 
     @property
+    def history_root(self) -> Path:
+        return self.configuration_root / self.history_directory
+
+    @property
     def manifest_directory(self) -> str:
         return f".{self.value}-plugin"

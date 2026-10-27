@@ -72,7 +72,7 @@ class HandoffStartupTests(unittest.TestCase):
         handler.main.return_value = 7
         with mock.patch.object(dispatcher, '_load_handler', return_value=handler) as loader:
             self.assertEqual(7, dispatcher.main(['--host', 'claude', '--', '--lane', 'L4', '--title', 'exact']))
-        loader.assert_called_once_with('claude')
+        self.assertEqual(['claude'], [str(call.args[0]) for call in loader.call_args_list])
         handler.main.assert_called_once_with(['--lane', 'L4', '--title', 'exact'])
 
     def test_dispatcher_refuses_unseparated_or_unsupported_host_before_loading(self):

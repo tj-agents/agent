@@ -18,7 +18,9 @@ RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(RUNTIME))
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
 import agent_cli  # noqa: E402
+from claude import sessions as CLAUDE_SESSIONS  # noqa: E402
 from codex import plugins as CODEX  # noqa: E402
+from codex import sessions as CODEX_SESSIONS  # noqa: E402
 from host import Host  # noqa: E402
 
 
@@ -47,12 +49,12 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
 
     def args(self, record, token="token"):
         return argparse.Namespace(host="codex", session_id="thread", pid=17, pid_started_at=3.0,
-                                  record=record, token=token, timeout=1.0, profile=self.root,
+                                  record=record, token=token, timeout=1.0, history_root=self.root,
                                   recovery=self.root / "agent_recovery.py", title="Codex", prompt="continue",
                                   native_argument=["--profile", "work"], expected_cwd=self.root)
 
     def test_codex_options_preserve_safe_native_configuration(self):
-        options = self.relaunch.codex_arguments([
+        options = CODEX_SESSIONS.native_arguments([
             "initial prompt", "--profile", "work", "--model=gpt-6", "--no-daemon", "--sandbox", "read-only", "--config", "model=fast",
             "resume", "old-thread", "ignored prompt",
         ])
@@ -60,14 +62,14 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
 
     def test_codex_options_refuse_hook_trust_bypass(self):
         with self.assertRaisesRegex(RuntimeError, "hook-trust bypass"):
-            self.relaunch.codex_arguments(["--dangerously-bypass-hook-trust"])
+            CODEX_SESSIONS.native_arguments(["--dangerously-bypass-hook-trust"])
 
     def test_compact_and_resume_last_options_preserve_safe_settings(self):
         self.assertEqual(["-sread-only", "-aon-request", "-mchosen", "-cmodel_reasoning_effort=high"],
-                         self.relaunch.codex_arguments(["resume", "thread", "-sread-only", "-aon-request",
+                         CODEX_SESSIONS.native_arguments(["resume", "thread", "-sread-only", "-aon-request",
                                                         "-mchosen", "-cmodel_reasoning_effort=high", "old prompt"]))
         self.assertEqual(["--no-daemon", "-sread-only"],
-                         self.relaunch.codex_arguments(["resume", "--last", "--no-daemon", "-sread-only", "old prompt"]))
+                         CODEX_SESSIONS.native_arguments(["resume", "--last", "--no-daemon", "-sread-only", "old prompt"]))
 
     def test_cancelled_or_changed_close_never_relaunches(self):
         request = self.root / "request.json"
@@ -227,7 +229,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         self.assertEqual([
             "--tools", "Read", "--disallowedTools", "Bash,Write", "--allowed-tools=Read,Edit",
             "--restricted", "--dangerously-skip-permissions",
-        ], self.relaunch.preserved_arguments([
+        ], CLAUDE_SESSIONS.native_arguments([
             "initial prompt", "--tools", "Read", "--disallowedTools", "Bash,Write",
             "--allowed-tools=Read,Edit", "--restricted", "--dangerously-skip-permissions",
         ]))
@@ -241,10 +243,10 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         self.assertFalse(self.relaunch.record_path("thread").exists())
 
     def test_claude_argument_delimiter_never_promotes_literal_prompt_tokens(self):
-        self.assertEqual([], self.relaunch.preserved_arguments([]))
-        self.assertEqual([], self.relaunch.preserved_arguments(["--", "--dangerously-skip-permissions"]))
-        self.assertEqual([], self.relaunch.preserved_arguments(["--", "--tools", "Read"]))
-        self.assertEqual(["--tools", "Read"], self.relaunch.preserved_arguments([
+        self.assertEqual([], CLAUDE_SESSIONS.native_arguments([]))
+        self.assertEqual([], CLAUDE_SESSIONS.native_arguments(["--", "--dangerously-skip-permissions"]))
+        self.assertEqual([], CLAUDE_SESSIONS.native_arguments(["--", "--tools", "Read"]))
+        self.assertEqual(["--tools", "Read"], CLAUDE_SESSIONS.native_arguments([
             "--tools", "Read", "--", "--dangerously-skip-permissions",
         ]))
 

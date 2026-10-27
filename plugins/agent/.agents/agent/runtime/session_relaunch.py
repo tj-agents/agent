@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resume the calling Claude session in a fresh process once it has closed (Python 3.9+)."""
+"""Resume the calling session in a fresh process once it has closed (Python 3.9+)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import secrets
 import shlex
 import subprocess
@@ -17,16 +16,12 @@ import time
 
 from host import Host
 import host_plugins
+import host_sessions
 import required_plugins
 
 HERE = Path(__file__).resolve().parent
 PROMPT = "Plugins were refreshed and this conversation resumed in a fresh process. Continue the requested work."
 WAIT_SECONDS = 960
-VARIADIC = {"--add-dir", "--mcp-config", "--tools", "--allowedTools", "--allowed-tools",
-            "--disallowedTools", "--disallowed-tools"}
-SINGLE = {"--settings", "--plugin-dir", "--setting-sources", "--permission-mode", "--model"}
-FLAGS = {"--strict-mcp-config", "--restricted", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}
-TOOL_RESTRICTIONS = {"--tools", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools"}
 
 
 def state_directory() -> Path:
@@ -50,77 +45,6 @@ def write_json(path: Path, value: dict) -> None:
     temporary = path.with_name(path.name + "." + secrets.token_hex(4))
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)
-
-
-def preserved_arguments(argv: list[str]) -> list[str]:
-    kept, index = [], 0
-    while index < len(argv):
-        token = argv[index]
-        if token == "--":
-            break
-        name, equals, _ = token.partition("=")
-        index += 1
-        if name in FLAGS and not equals:
-            kept.append(token)
-        elif name in SINGLE | VARIADIC and equals:
-            kept.append(token)
-        elif name in SINGLE and index < len(argv):
-            kept += [token, argv[index]]
-            index += 1
-        elif name in VARIADIC:
-            values = []
-            while index < len(argv) and not argv[index].startswith("-"):
-                values.append(argv[index])
-                index += 1
-            if values:
-                kept += [token, *values]
-            elif name in TOOL_RESTRICTIONS:
-                raise RuntimeError(f"Refusing recovery because {name} did not retain its tool restrictions")
-    return kept
-
-
-def codex_arguments(argv: list[str]) -> list[str]:
-    kept, index, selector, subcommand = [], 0, False, False
-    single = {"--config", "-c", "--model", "-m", "--profile", "-p", "--sandbox", "-s",
-              "--ask-for-approval", "-a", "--add-dir", "--enable", "--disable",
-              "--remote", "--remote-auth-token-env", "--local-provider"}
-    flags = {"--no-daemon", "--no-alt-screen", "--search", "--oss", "--strict-config",
-             "--approve-for-me", "--dangerously-bypass-approvals-and-sandbox"}
-    recorder = {f'shell_environment_policy.set.{name}=\"\"' for name in
-                ("CODEX_TUI_RECORD_SESSION", "CODEX_TUI_SESSION_LOG_PATH")}
-    while index < len(argv):
-        token = argv[index]
-        name, equals, _ = token.partition("=")
-        index += 1
-        if token == "--":
-            break
-        if not token.startswith("-"):
-            if token in {"resume", "fork"} and not subcommand:
-                subcommand, selector = True, True
-                continue
-            if selector:
-                selector = False
-                continue
-            continue
-        if len(token) > 2 and token[:2] in {"-c", "-m", "-p", "-s", "-a", "-C", "-i"}:
-            name, equals = token[:2], True
-        if name in flags and not equals:
-            kept.append(token)
-        elif name in single and equals:
-            value = token[2:].removeprefix("=") if name in {"-c", "-m", "-p", "-s", "-a"} else token.partition("=")[2]
-            if name not in {"-c", "--config"} or value not in recorder:
-                kept.append(token)
-        elif name in single and index < len(argv):
-            if name not in {"-c", "--config"} or argv[index] not in recorder:
-                kept += [token, argv[index]]
-            index += 1
-        elif name in {"--cd", "-C", "--image", "-i"} and not equals:
-            index += 1
-        elif name == "--dangerously-bypass-hook-trust":
-            raise RuntimeError("Refusing to carry a hook-trust bypass into recovery")
-        elif name == "--last":
-            selector = False
-    return kept
 
 
 def windows_split(command_line: str) -> list[str]:
@@ -217,8 +141,7 @@ def arm_client_close(project: Path, entry: dict, cli_close: Path, token: str, ho
                              "--session-id", entry["session_id"],
                              "--target", str(target), "--profile", entry["profile"], "--cli-close", str(cli_close),
                              "--completion", str(completion), "--cancel", str(cancel), "--completion-token", token]
-    if host is Host.CODEX:
-        command += ["--turn-id", entry["native_turn_id"]]
+    command += host_sessions.SESSIONS[host].close_arguments(entry)
     armed = subprocess.run(command,
                             cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     if armed.returncode:
@@ -253,7 +176,7 @@ def claim_record(record: Path, value: dict) -> None:
             lock.close()
 
 
-def cancel_codex_close(close: dict, reason: str) -> None:
+def cancel_close(close: dict, reason: str) -> None:
     try:
         path = Path(close["cancel"])
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -264,28 +187,17 @@ def cancel_codex_close(close: dict, reason: str) -> None:
         pass
 
 
-def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, host=Host.CLAUDE) -> dict:
+def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, *, host: Host) -> dict:
+    sessions = host_sessions.SESSIONS[host]
     shared = shared or load(utility_script("peer", "session_close.py"), "session_close")
     entry = shared.own_host_and_entry()
     if entry.get("host") != host.value:
         raise RuntimeError("the calling session is not the expected registered CLI")
-    if host is Host.CODEX:
-        native_cwd = entry.get("native_cwd")
-        if (not isinstance(native_cwd, str) or not Path(native_cwd).is_absolute()
-                or Path(native_cwd).resolve() != project.resolve()):
-            raise RuntimeError("the refresh checkout does not match this Codex thread's native checkout")
-    if host is Host.CLAUDE:
-        identity = session_identity()
-        if identity is not None and (identity[0] != entry["session_id"] or identity[1] and identity[1] != entry["pid"]):
-            raise RuntimeError("the calling Claude session does not match its registered client")
-        transcript = os.environ.get("CLAUDE_CODE_SESSION_LOG", "")
-        if "subagents" in Path(transcript).parts:
-            raise RuntimeError("a subagent cannot relaunch its parent client")
+    sessions.validate_relaunch(entry, project)
     session_id = entry["session_id"]
-    native = (codex_arguments if host is Host.CODEX else preserved_arguments)(arguments(entry["pid"]))
+    native = sessions.native_arguments(arguments(entry["pid"]))
     executable = host_plugins.PLUGINS[host].resolve_executable()
-    if host is Host.CODEX:
-        required_plugins.check_launch(project, host, executable, [*native, "resume", session_id, PROMPT])
+    sessions.check_relaunch(project, executable, native, session_id, PROMPT)
     cli_close = cli_close_capability(project, host, executable)
     token = secrets.token_hex(16)
     record = record_path(session_id)
@@ -300,21 +212,14 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
                *[f"--native-argument={value}" for value in native]]
     armed = None
     if entry.get("profile"):
-        options += ["--profile", str(entry["profile"])]
+        options += ["--history-root", str(Path(entry["profile"]) / host.history_directory)]
     try:
         shared.start_detached(HERE / "relaunch_watcher.py", options)
         armed = arm_client_close(project, entry, cli_close, token, host)
         write_json(record, {**read_json(record), "close": armed, "at": time.time()})
     except Exception as error:
         if armed is not None:
-            cancel_codex_close(armed, "automatic refresh recovery was cancelled before relaunch")
+            cancel_close(armed, "automatic refresh recovery was cancelled before relaunch")
         write_json(record, {**read_json(record), "state": "cancelled", "reason": str(error), "at": time.time()})
         raise RuntimeError(f"relaunch was not armed: {error}") from error
     return {"relaunch": "armed", "session_id": session_id, "native_arguments": native, "close": "armed"}
-
-
-def session_identity() -> tuple[str, int] | None:
-    session_id, pid = os.environ.get("CLAUDE_CODE_SESSION_ID"), os.environ.get("CLAUDE_PID")
-    if not session_id or not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
-        return None
-    return session_id, int(pid) if pid and pid.isdigit() else 0

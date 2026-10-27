@@ -26,7 +26,6 @@ HERE = Path(__file__).resolve().parent
 STATE_DIRECTORY_ENV = "AGENT_STATE_DIRECTORY"
 TITLE_ENV = "AGENT_CLI_TAB_TITLE"
 HOST_NAMES_ENV = "AGENT_CLI_HOST_NAMES"
-DEFAULT_HOST_NAMES = frozenset({"claude", "codex"})
 MAX_ANCESTOR_DEPTH = 10
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
@@ -45,12 +44,24 @@ def state_directory():
     return root / "cli-sessions"
 
 
+def native_hosts():
+    for root in HERE.parents:
+        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
+        if any(marker.exists() for marker in markers) or _staged_agent_root(root):
+            runtime = root / ".agents" / "agent" / "runtime"
+            if not (runtime / "host.py").is_file():
+                break
+            if str(runtime) not in sys.path:
+                sys.path.insert(0, str(runtime))
+            from host import Host
+            return Host
+    raise RuntimeError("the packaged Agent host runtime is unavailable")
+
+
 def read_host_names():
     override = os.environ.get(HOST_NAMES_ENV)
-    if not override:
-        return DEFAULT_HOST_NAMES
-    names = {part.strip().casefold() for part in override.split(",") if part.strip()}
-    return frozenset(names) if names else DEFAULT_HOST_NAMES
+    names = {part.strip().casefold() for part in (override or "").split(",") if part.strip()}
+    return frozenset(names) if names else frozenset(map(str, native_hosts()))
 
 
 def stem(name):
@@ -345,11 +356,11 @@ def terminal_identity(environ=None):
 
 
 def profile_identity(host):
-    if host == "codex":
-        return os.path.normcase(str(Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").resolve()))
-    if host == "claude":
-        return os.path.normcase(str(Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude").resolve()))
-    return None
+    try:
+        native = native_hosts()(host)
+    except ValueError:
+        return None
+    return os.path.normcase(str(native.configuration_root.resolve()))
 
 
 def _staged_agent_root(root):
@@ -470,7 +481,7 @@ def record(data, lookup=None, host_names=None, client=None):
     staging = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
     staging.write_text(json.dumps(entry, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(staging, destination)
-    if host in ("claude", "codex"):
+    if profile_identity(host) is not None:
         try:
             _record_session_start(host, str(session), cwd, title, pid, pid_started_at,
                                   **({"preserve_turn": True} if client is not None else {}))

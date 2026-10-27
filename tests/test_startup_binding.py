@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
 from host import Host  # noqa: E402
+from host_sessions import SESSIONS  # noqa: E402
 
 
 def load(name, path):
@@ -67,14 +69,23 @@ class StartupBindingTests(unittest.TestCase):
                           "time.sleep(3)\n"
                           f"Path({str(survived)!r}).write_text('ordinary work')\n", encoding='utf-8')
 
-        def prepare(_host, argv, _project, environment, **_kwargs):
+        def prepare(argv, _project, environment, **_kwargs):
             return argv, environment, None
 
         with mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
-                mock.patch.object(self.binding.cli_client, 'prepare', side_effect=prepare):
+                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', side_effect=prepare):
             with self.assertRaisesRegex(self.binding.StartupBindingError, 'fixture hook failed'):
                 self.binding.run_session(Host.CODEX, sys.executable, root, [str(script)], require_session_start=True)
         self.assertFalse(survived.exists())
+
+    def test_every_host_launch_drops_inherited_frontend_recording_state(self):
+        process = mock.Mock(pid=72)
+        process.wait.return_value = 0
+        inherited = {name: 'parent' for native in Host for name in SESSIONS[native].FRONTEND_STATE}
+        self.assertTrue(inherited)
+        with mock.patch.dict(os.environ, inherited),                 mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn:
+            self.assertEqual(0, self.binding.run_session(Host.CLAUDE, 'native.exe', Path.cwd(), ()))
+        self.assertFalse(set(inherited) & set(spawn.call_args.kwargs['env']))
 
     def test_prelaunch_snapshot_captures_tab_before_native_start(self):
         identity = SimpleNamespace(pid=71, started_at=8.0)
@@ -105,7 +116,7 @@ class StartupBindingTests(unittest.TestCase):
                     'tab_binding': {'runtime_id': 'uia-tab', 'observed_title': 'launch nonce',
                                     'evidence': 'windows-uia-unique-title-at-launch'}}
         with mock.patch.object(self.binding.subprocess, 'Popen', return_value=process), \
-                mock.patch.object(self.binding.cli_client, 'prepare', return_value=([], {}, None)), \
+                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', return_value=([], {}, None)), \
                 mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
                 mock.patch.object(self.binding, '_record_launch_binding') as record:
@@ -204,12 +215,12 @@ class StartupBindingTests(unittest.TestCase):
         process = mock.Mock(pid=72)
         process.wait.return_value = 0
 
-        def native_prepare(_host, argv, _project, environment, **_kwargs):
+        def native_prepare(argv, _project, environment, **_kwargs):
             return argv, environment, None
 
         with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=prepare_launch_roots) as preflight, \
                 mock.patch.object(self.binding.launch_check, 'check', side_effect=update_roster), \
-                mock.patch.object(self.binding.cli_client, 'prepare', side_effect=native_prepare), \
+                mock.patch.object(SESSIONS[Host.CLAUDE], 'prepare_frontend', side_effect=native_prepare), \
                 mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn, \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
                 mock.patch.object(self.binding, '_record_launch_binding'):

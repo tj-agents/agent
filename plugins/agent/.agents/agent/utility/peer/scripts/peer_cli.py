@@ -41,7 +41,7 @@ def unrecorded(items):
         if info and Path(info.name).stem.casefold() in register_session.read_host_names():
             name = Path(info.name).stem.casefold()
             found.append({"pid": pid, "title": None, "session_id": None, "cwd": None,
-                          "host": name if name in {"codex", "claude"} else None,
+                          "host": name if name in set(map(str, register_session.native_hosts())) else None,
                           "alive": True, "recorded": False})
     return found
 
@@ -75,7 +75,7 @@ def main(argv=None):
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--under")
     parser.add_argument("--include-unrecorded", action="store_true")
-    parser.add_argument("--host", choices=("claude", "codex"))
+    parser.add_argument("--host", choices=[str(host) for host in register_session.native_hosts()])
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
     items = records()

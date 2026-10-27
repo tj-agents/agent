@@ -20,6 +20,7 @@ class Plugins(Protocol):
     DIRECTORY_OPTIONS: frozenset[str]
     INFORMATION_OPTIONS: frozenset[str]
     MAINTENANCE_COMMANDS: frozenset[str]
+    NODE_SHIM_BYPASSED: bool
 
     @property
     def reconcile(self) -> Callable[[Path], list[str]] | None: ...
