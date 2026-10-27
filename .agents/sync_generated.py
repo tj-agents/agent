@@ -3,6 +3,7 @@
 installable payloads."""
 
 import argparse
+import ast
 import hashlib
 import json
 import posixpath
@@ -49,6 +50,10 @@ MARKETPLACE_FIELDS = {
 }
 CODEX_POLICY = {"installation": "INSTALLED_BY_DEFAULT", "authentication": "ON_INSTALL"}
 CODEX_HOOK_LOADER = ".codex/hooks/snapshot.py"
+CODEX_HOOK_BOOTSTRAP = ".codex/hooks/bootstrap.py"
+BOOTSTRAP_DIGEST = "LOADER_DIGEST"
+BOOTSTRAP_STATEMENTS = (ast.Import, ast.ImportFrom, ast.Assign, ast.Expr)
+COMMAND_UNSAFE = frozenset('"$`\\\n\r')
 HOST_ROOTS = (".claude", ".codex")
 RESOURCE_ROOTS = (".agents", *HOST_ROOTS)
 CODEX_HOOK_MANIFEST = "hooks/codex.json"
@@ -79,7 +84,6 @@ CLAUDE_DEPENDENCY = re.compile(rf"^[a-z0-9][a-z0-9-]*(@{TJ_AGENTS_MARKETPLACE})?
 STACK_CORE_DEPENDENCIES = (
     "tj-agents/base",
     "tj-agents/engineering",
-    "tj-agents/machine",
 )
 
 type JSONObject = dict[str, Any]
@@ -1142,23 +1146,30 @@ def package_digest(output: dict[str, bytes], package: str) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def codex_snapshot_bootstrap(loader: bytes) -> str:
-    digest = hashlib.sha256(loader).hexdigest()
-    return (
-        "import hashlib,os,runpy,sys,tempfile;from pathlib import Path;"
-        "r=Path(sys.argv[1]);e=sys.argv[2];"
-        "s=os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY','');"
-        "d=Path(os.environ.get('PLUGIN_DATA','')).resolve();"
-        "k=hashlib.sha256((str(r)+chr(0)+e).encode()).hexdigest();"
-        "p=(Path(s) if s else d/'hook-snapshots')/k/'hooks'/'codex'/'snapshot.py';"
-        "p=p if p.is_file() else r/'hooks'/'codex'/'snapshot.py';"
-        "b=p.read_bytes() if p.is_file() else b'';n=chr(10).encode();"
-        "b=b.replace(chr(13).encode()+n,n).replace(chr(13).encode(),n);"
-        f"h=hashlib.sha256(b).hexdigest();h=='{digest}' or (sys.stderr.write("
-        "'Codex hook snapshot loader integrity check failed'+chr(10)),sys.exit(2));"
-        "t=tempfile.TemporaryDirectory();q=Path(t.name)/'loader.py';q.write_bytes(b);"
-        "runpy.run_path(str(q),run_name='__main__')"
-    )
+class LoaderDigest(ast.NodeTransformer):
+    def __init__(self, digest: str) -> None:
+        self.digest = digest
+
+    def visit_Name(self, node: ast.Name) -> ast.expr:
+        if node.id == BOOTSTRAP_DIGEST:
+            return ast.Constant(self.digest)
+        return node
+
+
+def codex_snapshot_bootstrap(root: Path, loader: bytes) -> str:
+    tree = ast.parse((root / CODEX_HOOK_BOOTSTRAP).read_text(encoding="utf-8"))
+    for statement in tree.body:
+        if not isinstance(statement, BOOTSTRAP_STATEMENTS):
+            raise ValueError(
+                f"{CODEX_HOOK_BOOTSTRAP}:{statement.lineno}: only simple statements "
+                "fit one command line"
+            )
+    tree = LoaderDigest(hashlib.sha256(loader).hexdigest()).visit(tree)
+    command = ";".join(ast.unparse(statement) for statement in tree.body)
+    unsafe = sorted({character for character in command if character in COMMAND_UNSAFE})
+    if unsafe:
+        raise ValueError(f"{CODEX_HOOK_BOOTSTRAP} compiles to unsafe {unsafe}")
+    return command
 
 
 def snapshot_command(command: str, prefix: str, wrapped: str, field: str) -> str:
@@ -1178,7 +1189,7 @@ def bind_codex_hook_snapshots(
     if not hooked:
         return
     loader = canonical_text((root / CODEX_HOOK_LOADER).read_bytes())
-    bootstrap = codex_snapshot_bootstrap(loader)
+    bootstrap = codex_snapshot_bootstrap(root, loader)
     for package in hooked:
         manifest = f"plugins/{package}/{CODEX_HOOK_MANIFEST}"
         output[f"plugins/{package}/{CODEX_HOOK_PACKAGE_LOADER}"] = loader
