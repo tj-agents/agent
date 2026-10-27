@@ -60,7 +60,7 @@ class InstallRecoveryTests(unittest.TestCase):
 
     def check(self, reconcile=lambda project: []):
         with mock.patch.object(CLAUDE, "reconcile", reconcile):
-            return CHECK.check(self.project, fetch=lambda path: b"")
+            return CHECK.check(self.project, fetch=lambda path: b"", hosts=(Host.CLAUDE,))
 
     def test_an_unconfigured_channel_repairs_only_the_channel_step_then_rechecks(self):
         with mock.patch.object(install, "repair", side_effect=self.configure_channel) as repair:

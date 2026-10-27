@@ -33,9 +33,11 @@ from host import Host
 import launch_check
 import plugin_autoupdate
 import machine_events
+import event_service
 import host_permissions
 import required_plugins
 import runtime_delivery
+from tj_agent import content
 
 COMMAND_TIMEOUT_SECONDS = 60
 INSTALLER_TIMEOUT_SECONDS = 600
@@ -615,7 +617,7 @@ def runtime_receipt(root: Path) -> dict:
         contents = runtime_delivery.closure(root, list(RUNTIME_EXPORTS))
     except (OSError, runtime_delivery.DeliveryError) as error:
         raise InstallError(f"the Agent runtime in {root} is unavailable: {error}") from error
-    digest = runtime_delivery.digest(contents)
+    digest = content.digest(contents)
     return {"repository": runtime_delivery.REPOSITORY, "revision": f"local:{digest}", "exports": list(RUNTIME_EXPORTS),
             "sha256": digest, "files": {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}}
 
@@ -822,6 +824,24 @@ def apply_plugin_setup(context: Context) -> list[str]:
     return []
 
 
+def background_receipt(context: Context) -> dict:
+    return event_service.receipt(context.state_directory, context.claude_home, context.codex_home,
+                                 context.environ.get("PATH", os.defpath))
+
+
+def check_background(context: Context) -> list[str]:
+    pending = event_service.check(context)
+    if plugin_autoupdate.read_json(context.state_directory / "machine-events-service.json") != background_receipt(context):
+        pending.append("record machine-event supervisor installation")
+    return pending
+
+
+def apply_background(context: Context) -> list[str]:
+    pending = event_service.apply(context)
+    plugin_autoupdate.write_json(context.state_directory / "machine-events-service.json", background_receipt(context))
+    return pending + ["machine-event supervisor installation verified"]
+
+
 STEPS = (
     Step("preconditions", check_preconditions, nothing, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
@@ -835,6 +855,7 @@ STEPS = (
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
+    Step("background machine events", check_background, apply_background),
 )
 
 
@@ -844,6 +865,11 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
     failed = False
     failed_steps = set()
     for step in steps:
+        if step.name == "background machine events" and failed_steps & {
+                "event channel and publishers", "launch-check runtime", "plugin and merge-policy catch-up",
+                "harness permissions", "plugin setup"}:
+            print("n/a    background machine events: prerequisite install step failed", file=out)
+            continue
         if step.name == "plugin setup" and failed_steps & {"plugin and merge-policy catch-up", "harness permissions"}:
             print("n/a    plugin setup: prerequisite install step failed", file=out)
             continue
@@ -876,6 +902,8 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
 
 def selected_steps(names: set[str]) -> tuple[Step, ...]:
     selected = set(names)
+    if "background machine events" in selected:
+        selected.update({"launch-check runtime", "event channel and publishers"})
     if "shell profiles" in selected:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
