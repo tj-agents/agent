@@ -67,8 +67,7 @@ class RetiredPluginTests(unittest.TestCase):
         recorded.update({f"codex-plugin:{name}@tj-agents": "b" * 40 for name in listed
                          if f"codex-plugin:{name}@tj-agents" not in recorded})
         outcomes = AUTOUPDATE.refresh_codex("codex", target, recorded, revision=lambda *_: "b" * 40, run=run,
-                                            busy=lambda: False, packages=lambda name: [],
-                                            preserve=lambda *_: None, sources=lambda *_: sources)
+                                            busy=lambda: False, sources=lambda *_: sources)
         self.assertTrue(outcomes["tj-agents"].startswith("updated"), outcomes)
         return config
 
