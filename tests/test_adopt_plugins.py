@@ -52,6 +52,20 @@ class RemovePluginTests(unittest.TestCase):
         self.assertEqual(["base@tj-agents"], self.selected())
         self.assertEqual([], ADOPT.run(self.root, [], [], "check", removals=["cli"]))
 
+    def test_unpublished_selections_converge_away_without_a_removal_request(self):
+        self.write_selection(["agent@tj-agents", "agent-store@tj-agents", "base@tj-agents", "cli@tj-agents",
+                              "kit@tj-agents", "machine@tj-agents"])
+        ADOPT.run(self.root, [], [], "write")
+        self.assertEqual(["agent-store@tj-agents", "agent@tj-agents", "base@tj-agents", "cli@tj-agents"],
+                         self.selected())
+        self.assertNotIn("machine@tj-agents", (self.root / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual([], ADOPT.run(self.root, [], [], "check"))
+
+    def test_default_selection_never_selects_the_retired_machine_package(self):
+        ADOPT.run(self.root, [], [], "write")
+        self.assertIn("cli@tj-agents", self.selected())
+        self.assertNotIn("machine@tj-agents", self.selected())
+
     def test_removal_of_remaining_prerequisite_refuses_without_writing(self):
         self.write_selection(["agent@tj-agents", "base@tj-agents", "cli@tj-agents"])
         before = (self.root / ".agents" / "plugins.json").read_bytes()
