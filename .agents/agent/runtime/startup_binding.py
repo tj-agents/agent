@@ -21,7 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import launch_check
 import launch_status
-import cli_client
+from host import Host
+from host_plugins import PLUGINS
+from host_sessions import SESSIONS
 import required_plugins
 from terminal_command import command_for_target, without_binding_state
 
@@ -116,7 +118,7 @@ def _prelaunch_terminal() -> dict | None:
         return None
 
 
-def _record_launch_binding(host: str, child_pid: int, terminal: Mapping[str, object] | None = None) -> None:
+def _record_launch_binding(host: Host, child_pid: int, terminal: Mapping[str, object] | None = None) -> None:
     """Bind an acknowledged SessionStart to this wrapper's exact Popen child."""
     try:
         lookup = register_session.build_process_lookup()
@@ -134,7 +136,7 @@ def _record_launch_binding(host: str, child_pid: int, terminal: Mapping[str, obj
                 record = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            if (isinstance(record, dict) and record.get("host") == host and record.get("pid") == child_pid
+            if (isinstance(record, dict) and record.get("host") == host.value and record.get("pid") == child_pid
                     and record.get("pid_started_at") == child_identity["started_at"]
                     and isinstance(record.get("session_id"), str) and isinstance(record.get("profile"), str)):
                 matches.append((path, record))
@@ -144,7 +146,7 @@ def _record_launch_binding(host: str, child_pid: int, terminal: Mapping[str, obj
         namespace = hashlib.sha256(record["profile"].encode("utf-8")).hexdigest()[:16]
         receipt = register_session.state_directory().parent / "recovery-launches" / (
             f"{host}-{namespace}-{record['session_id']}.json")
-        _write_json(receipt, {"host": host, "session": record["session_id"], "profile": record["profile"],
+        _write_json(receipt, {"host": host.value, "session": record["session_id"], "profile": record["profile"],
                               "state": "launched", "created_at": time.time(),
                               "wrapper": {**wrapper_identity, "child": child_identity, "terminal": terminal,
                                           "title": os.environ.get(register_session.TITLE_ENV)}})
@@ -162,10 +164,10 @@ def _acknowledged(directory: Path, token: str) -> bool:
         return False
 
 
-def startup_participants(host: str, roots) -> list[str]:
+def startup_participants(host: Host, roots) -> list[str]:
     participants = []
     for identity, root in (roots or {}).items():
-        manifest = json.loads((root / f".{host}-plugin/plugin.json").read_text(encoding="utf-8-sig"))
+        manifest = json.loads((root / host.manifest_directory / "plugin.json").read_text(encoding="utf-8-sig"))
         sources = manifest.get("hooks", [])
         if not isinstance(sources, list):
             sources = [sources]
@@ -188,7 +190,7 @@ def _terminate(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
 
 
-def run_session(host: str, target: str, project: Path, arguments: Sequence[str], *,
+def run_session(host: Host, target: str, project: Path, arguments: Sequence[str], *,
                 extra_environment: Mapping[str, str] | None = None,
                 timeout: float = STARTUP_TIMEOUT_SECONDS,
                 on_running: Callable[..., None] | None = None,
@@ -202,6 +204,9 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
     environment = without_binding_state(os.environ)
     if extra_environment:
         environment.update(without_binding_state(extra_environment))
+    inherited = {name for native in Host for name in SESSIONS[native].FRONTEND_STATE}
+    environment = {key: value for key, value in environment.items()
+                   if (key.upper() if os.name == "nt" else key) not in inherited}
     interpreter = launch_check.state_directory() / "bin" / "python"
     if os.name != "nt" and interpreter.is_file():
         environment["PATH"] = str(interpreter.parent) + os.pathsep + environment.get("PATH", "")
@@ -219,8 +224,8 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
         phase("starting-native")
         try:
             command = command_for_target(target, list(arguments))
-            arguments, environment, ticket = cli_client.prepare(
-                host, command[1:], project, environment, executable=command[0],
+            arguments, environment, ticket = SESSIONS[host].prepare_frontend(
+                command[1:], project, environment, executable=command[0],
             )
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             raise StartupBindingError(f"native {host} could not prepare: {error}") from error
@@ -231,7 +236,7 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
         except OSError as error:
             raise StartupBindingError(f"native {host} could not start: {error}") from error
         try:
-            cli_client.attach(ticket, process.pid)
+            SESSIONS[host].attach_frontend(ticket, process.pid)
             if require_session_start:
                 phase("waiting-session-start")
                 deadline = time.monotonic() + timeout
@@ -260,12 +265,12 @@ def run_session(host: str, target: str, project: Path, arguments: Sequence[str],
                     print(f"launch: native child cleanup failed: {error}", file=sys.stderr)
             raise
         finally:
-            cli_client.release(ticket)
+            SESSIONS[host].release_frontend(ticket)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", choices=("claude", "codex"), required=True)
+    parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     parser.add_argument("--project", type=Path, required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--status-file", type=Path)
@@ -275,11 +280,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parsed.arguments[1:] if parsed.arguments[:1] == ["--"] else parsed.arguments
     status: dict[str, object] = {"pid": os.getpid(), "terminal": register_session.terminal_identity(),
                                  "title": os.environ.get(register_session.TITLE_ENV)}
-    if parsed.host == "claude" and parsed.require_session_start and parsed.status_file is not None:
-        if not any(value == "--debug-file" or value.startswith("--debug-file=") for value in arguments):
-            debug_log = parsed.status_file.resolve().parent / "native-debug.log"
-            arguments = ["--debug-file", str(debug_log), *arguments]
-            status["debug_log"] = str(debug_log)
+    if parsed.require_session_start and parsed.status_file is not None:
+        arguments, debug_log = SESSIONS[parsed.host].debug_arguments(arguments, parsed.status_file.resolve().parent)
+        if debug_log is not None:
+            status["debug_log"] = debug_log
 
     def report(state: str, **details: object) -> None:
         status.update(details, state=state, at=time.time())
@@ -329,10 +333,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             report("failed", error=message)
             return 1
 
-    if parsed.host == "codex" and effective_project is not None:
+    if effective_project is not None:
         phase("verifying-required-hooks")
         try:
-            launch_check.ensure_hooks(effective_project, parsed.target)
+            PLUGINS[parsed.host].ensure_hooks(effective_project, parsed.target)
         except Exception as error:
             message = f"launch: required hook readiness failed: {error}"
             print(message, file=sys.stderr)

@@ -13,8 +13,8 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".agents/agent/runtime"))
-import codex_hook_trust
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
+from codex import hook_trust
 
 
 def load(name, path):
@@ -25,9 +25,10 @@ def load(name, path):
     return module
 
 
-CLIENT = load("agent_cli_client_tests", ROOT / ".agents/agent/runtime/cli_client.py")
-sys.path.insert(0, str(ROOT / ".agents/agent/utility/peer/scripts"))
-import session_close
+from codex import client as CLIENT  # noqa: E402
+from codex import sessions as CODEX_SESSIONS  # noqa: E402
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
+import session_close  # noqa: E402
 import register_session
 
 
@@ -55,14 +56,14 @@ class ClientAttributionTests(unittest.TestCase):
             mock.patch.object(CLIENT, "process_context", side_effect=lambda pid: self.contexts.get(pid, {})),
             mock.patch.object(CLIENT, "process_arguments", side_effect=lambda pid: self.commands[pid]),
             mock.patch.object(CLIENT, "current_input", return_value={"turn_id": "turn", "client_message_id": "own-input"}),
-            mock.patch.object(codex_hook_trust, "AppServer"),
+            mock.patch.object(hook_trust, "AppServer"),
         ]
         for patcher in self.patchers:
             patcher.start()
             self.addCleanup(patcher.stop)
 
     def bind(self, pid=123, identity="own-input"):
-        prepared, environment, ticket = CLIENT.prepare("codex", ["resume", "thread"], self.root, os.environ,
+        prepared, environment, ticket = CLIENT.prepare(["resume", "thread"], self.root, os.environ,
                                                         executable="codex")
         CLIENT.attach(ticket, pid)
         Path(ticket["recording_path"]).write_text(
@@ -130,9 +131,9 @@ class ClientAttributionTests(unittest.TestCase):
         entry = {"host": "codex", "session_id": "thread", "pid": 123, "backend": self.backend,
                  "client_identity": "managed-input", "cwd": str(self.root)}
         with mock.patch.object(session_close, "process_info", return_value=frontend), \
-                mock.patch.object(session_close, "current_codex_client", return_value=(frontend, {})) as current:
+                mock.patch.object(CODEX_SESSIONS, "current_client", return_value=(frontend, {})) as current:
             with self.assertRaisesRegex(session_close.Refusal, "binding changed"):
-                session_close.revalidate_codex_client(entry)
+                CODEX_SESSIONS.revalidate_client(entry, session_close.SHARED)
         self.assertEqual(123, current.call_args.args[1].pid)
 
     def test_newer_unattributed_input_refuses_the_old_frontend(self):
@@ -226,9 +227,9 @@ class ClientAttributionTests(unittest.TestCase):
         })
         nearest = SimpleNamespace(pid=123)
         table = {123: nearest}
-        with mock.patch.object(session_close, "client_runtime", return_value=runtime), \
+        with mock.patch.object(CODEX_SESSIONS, "client", runtime), \
                 mock.patch.object(session_close.register_session, "process_table", return_value=table):
-            _info, record = session_close.current_codex_client("thread", nearest)
+            _info, record = CODEX_SESSIONS.current_client("thread", nearest, session_close.SHARED)
         self.assertIs(session_close.process_state, runtime.recorded_client.call_args.kwargs["peer_state"])
         self.assertEqual(str(self.root), record["native_cwd"])
 
@@ -259,8 +260,7 @@ class ClientAttributionTests(unittest.TestCase):
 
         with mock.patch.object(session_close, "process_info", return_value=SimpleNamespace(name="codex.exe")), \
                 mock.patch.object(session_close, "verified_live", return_value=True), \
-                mock.patch.object(session_close, "revalidate_codex_client"), \
-                mock.patch.object(session_close, "client_runtime", return_value=CLIENT), \
+                mock.patch.object(CODEX_SESSIONS, "revalidate_client"), \
                 mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive), \
                 mock.patch.object(CLIENT, "process_arguments", return_value=["codex"]), \
                 mock.patch.object(CLIENT, "process_context", return_value={

@@ -31,7 +31,7 @@ class LoaderRootTests(unittest.TestCase):
         runtime = self.inner / '.agents/agent/runtime'
         runtime.mkdir(parents=True)
         for name in ('agent_cli.py', 'package_root.py'):
-            shutil.copy2(ROOT / '.agents/agent/runtime' / name, runtime / name)
+            shutil.copy2(ROOT / 'plugins/agent/.agents/agent/runtime' / name, runtime / name)
         sentinel = self.outer / '.agents/agent/resources/lanes/resolve.py'
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("raise AssertionError('outer resolver loaded')\n", encoding='utf-8')
@@ -42,7 +42,7 @@ class LoaderRootTests(unittest.TestCase):
     def test_store_loader_refuses_missing_inner_store(self):
         scripts = self.inner / '.agents/agent/utility/peer/scripts'
         scripts.mkdir(parents=True)
-        shutil.copy2(ROOT / '.agents/agent/utility/peer/scripts/register_session.py', scripts / 'register_session.py')
+        shutil.copy2(ROOT / 'plugins/agent/.agents/agent/utility/peer/scripts/register_session.py', scripts / 'register_session.py')
         sentinel = self.outer / '.agents/agent-store/runtime/session_store.py'
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("raise AssertionError('outer store loaded')\n", encoding='utf-8')
@@ -52,8 +52,8 @@ class LoaderRootTests(unittest.TestCase):
     def test_followup_loader_refuses_missing_inner_transport(self):
         script = self.inner / '.agents/agent/utility/message/scripts/codex_followup.py'
         script.parent.mkdir(parents=True)
-        shutil.copy2(ROOT / '.agents/agent/utility/message/scripts/codex_followup.py', script)
-        sentinel = self.outer / '.agents/agent/runtime/codex_hook_trust.py'
+        shutil.copy2(ROOT / 'plugins/agent/.agents/agent/utility/message/scripts/codex_followup.py', script)
+        sentinel = self.outer / '.agents/agent/runtime/codex/hook_trust.py'
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("raise AssertionError('outer transport loaded')\n", encoding='utf-8')
         followup = load('nested_codex_followup', script)

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-import functools
 import hashlib
 import json
 import os
@@ -14,18 +14,12 @@ import subprocess
 import sys
 import time
 
+from host import Host
+import host_plugins
+
 
 IDENTITY = re.compile(r"[a-z][a-z0-9-]*@[a-z][a-z0-9-]*\Z")
 INVENTORY_TIMEOUT_SECONDS = 20
-GIT_TIMEOUT_SECONDS = 5
-MAINTENANCE_COMMANDS = {
-    "codex": frozenset({"plugin", "login", "logout", "doctor", "help", "completion", "update", "mcp", "features"}),
-    "claude": frozenset({"plugin", "plugins", "auth", "doctor", "install", "setup-token", "update", "upgrade", "mcp"}),
-}
-MODEL_CONFIG_KEYS = frozenset({
-    "model", "model_provider", "model_reasoning_effort", "model_reasoning_summary",
-    "model_verbosity", "service_tier", "personality",
-})
 
 
 class RequiredPluginsError(RuntimeError):
@@ -47,66 +41,52 @@ def project_root(project: Path) -> Path:
     return project
 
 
-def launch_context(project: Path, host: str, arguments) -> tuple[Path | None, tuple[str, ...]]:
+def launch_context(project: Path, host: Host, arguments) -> tuple[Path | None, tuple[str, ...]]:
+    plugins = host_plugins.PLUGINS[host]
     original_project = project
-    value_options = {
-        "-C", "--cd", "-c", "--config", "-m", "--model", "-p", "--profile",
-        "-s", "--sandbox", "-a", "--ask-for-approval", "--add-dir", "--enable", "--disable",
-        "--remote", "--remote-auth-token-env", "-i", "--image", "--local-provider",
-    } if host == "codex" else {
-        "--model", "--permission-mode", "--settings", "--setting-sources", "--plugin-dir", "--plugin-url",
-    }
-    configuration_options = {"-c", "--config", "-p", "--profile", "--enable", "--disable"} if host == "codex" else {
-        "--settings", "--setting-sources", "--plugin-dir", "--plugin-url",
-    }
     inventory_options = []
-    flag_options = {
-        "--no-alt-screen", "--search", "--full-auto", "--dangerously-bypass-approvals-and-sandbox",
-        "--no-daemon", "--strict-config", "--oss", "--approve-for-me",
-        "--dangerously-bypass-hook-trust", "--worktree",
-    } if host == "codex" else set()
     command_seen = False
     index = 0
     while index < len(arguments):
         argument = arguments[index]
         if argument == "--":
             break
-        if argument in ("--help", "-h", "--version", "-V" if host == "codex" else "-v"):
+        if argument in plugins.INFORMATION_OPTIONS:
             return None, ()
-        if not command_seen and argument in MAINTENANCE_COMMANDS[host]:
+        if not command_seen and argument in plugins.MAINTENANCE_COMMANDS:
             return None, ()
         option, separator, value = argument.partition("=")
-        if host == "codex" and len(argument) > 2 and argument[:2] in value_options:
+        if len(argument) > 2 and argument[:2] in plugins.VALUE_OPTIONS:
             option, separator, value = argument[:2], "=", argument[2:].removeprefix("=")
-        if option in value_options:
+        if option in plugins.VALUE_OPTIONS:
             if not separator:
                 index += 1
                 if index >= len(arguments):
                     raise RequiredPluginsError(f"{option} requires a value")
                 value = arguments[index]
-            if host == "codex" and option in ("-C", "--cd"):
+            if option in plugins.DIRECTORY_OPTIONS:
                 project = original_project / value
-            if option in configuration_options:
+            if option in plugins.CONFIGURATION_OPTIONS:
                 inventory_options.extend((option, value))
-        elif argument not in flag_options:
+        elif argument not in plugins.FLAG_OPTIONS:
             command_seen = True
         index += 1
     return project.resolve(), tuple(inventory_options)
 
 
-def check_launch_roots(project: Path, host: str, executable: str | None, arguments) -> tuple[Path | None, dict[str, Path] | None]:
+def check_launch_roots(project: Path, host: Host, executable: str | None, arguments) -> tuple[Path | None, dict[str, Path] | None]:
     effective_project, inventory_options = launch_context(project, host, arguments)
     if effective_project is None:
         return None, None
     return effective_project, check(effective_project, host, executable, inventory_options=inventory_options)
 
 
-def check_launch(project: Path, host: str, executable: str | None, arguments) -> Path | None:
+def check_launch(project: Path, host: Host, executable: str | None, arguments) -> Path | None:
     return check_launch_roots(project, host, executable, arguments)[0]
 
 
-def readable_payload(path: Path, host: str, name: str) -> bool:
-    manifest = path / f".{host}-plugin" / "plugin.json"
+def readable_payload(path: Path, host: Host, name: str) -> bool:
+    manifest = path / host.manifest_directory / "plugin.json"
     try:
         document = json.loads(manifest.read_text(encoding="utf-8-sig"))
         if not isinstance(document, dict) or document.get("name") != name:
@@ -149,59 +129,9 @@ def selected(project: Path) -> tuple[str, ...]:
     return tuple(sorted(set(plugins)))
 
 
-@functools.lru_cache(maxsize=None)
-def git_common_directory(project: Path) -> str | None:
-    if not project.is_dir() or not any((directory / ".git").exists() for directory in (project, *project.parents)):
-        return None
-    try:
-        result = subprocess.run(['git', '-C', str(project), 'rev-parse', '--git-common-dir'],
-                                capture_output=True, text=True, encoding='utf-8', errors='replace',
-                                timeout=GIT_TIMEOUT_SECONDS)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise RequiredPluginsError(f'Cannot resolve the native Claude repository for {project}: {error}') from error
-    if result.returncode or not result.stdout.strip():
-        raise RequiredPluginsError(f'Cannot resolve the native Claude repository for {project}: {result.stderr.strip()}')
-    return os.path.normcase(str((project / result.stdout.strip()).resolve()))
-
-
-def claude_installations(project: Path, entries: list) -> list:
-    if not entries:
-        return []
-    project = project.resolve()
-    common = git_common_directory(project)
-    selected, seen = [], set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        scope, owner = entry.get('scope'), entry.get('projectPath')
-        if scope in {'project', 'local'}:
-            if not isinstance(owner, str) or not owner:
-                continue
-            owner = Path(owner).resolve()
-            try:
-                owner_common = git_common_directory(owner)
-            except RequiredPluginsError:
-                continue
-            if common and owner_common:
-                if common != owner_common:
-                    continue
-            elif not project.is_relative_to(owner):
-                continue
-            key = entry.get('id'), scope
-            if key in seen:
-                continue
-            seen.add(key)
-        elif owner and scope not in {'user', 'managed'}:
-            if not isinstance(owner, str) or not project.is_relative_to(Path(owner).resolve()):
-                continue
-        selected.append(entry)
-    return selected
-
-
-def enabled_roots(host: str, project: Path, entries: list) -> dict[str, Path]:
+def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
     roots = {}
-    profile = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-    for entry in claude_installations(project, entries) if host == 'claude' else entries:
+    for entry in plugins.installations(project, entries):
         if not isinstance(entry, dict) or entry.get("enabled") is not True:
             continue
         if entry.get("installed") is False or entry.get("error") or entry.get("errors"):
@@ -211,57 +141,35 @@ def enabled_roots(host: str, project: Path, entries: list) -> dict[str, Path]:
             continue
         if owner and not isinstance(owner, str):
             continue
-        if host != 'claude' and owner and entry.get("scope") not in ("user", "managed"):
-            if not project.resolve().is_relative_to(Path(owner).resolve()):
-                continue
-        if host == "codex":
-            name, marketplace, version = (entry.get(key) for key in ("name", "marketplaceName", "version"))
-            if not all(isinstance(value, str) and value for value in (name, marketplace, version)):
-                continue
-            identity = f"{name}@{marketplace}"
-            if (not IDENTITY.fullmatch(identity) or version in (".", "..")
-                    or "/" in version or "\\" in version):
-                continue
-            path = profile / "plugins" / "cache" / marketplace / name / version
-        else:
-            identity, location = entry.get("id"), entry.get("installPath")
-            if not isinstance(identity, str) or not IDENTITY.fullmatch(identity) or not isinstance(location, str):
-                continue
-            path = Path(location)
-        if readable_payload(path, host, identity.split("@", 1)[0]):
+        located = plugins.location(entry, project)
+        if located is None:
+            continue
+        identity, path = located
+        if readable_payload(path, plugins.HOST, identity.split("@", 1)[0]):
             roots[identity] = path
     return roots
 
 
-def check(project: Path, host: str, executable: str | None = None,
+def check(project: Path, host: Host, executable: str | None = None,
           inventory_options: tuple[str, ...] = ()) -> dict[str, Path] | None:
+    plugins = host_plugins.PLUGINS[host]
     launch_directory = project.resolve()
     project = project_root(launch_directory)
     required = selected(project)
     if not required:
         return None
-    if host == "codex":
-        for option, value in zip(inventory_options[::2], inventory_options[1::2]):
-            key = value.partition("=")[0].strip().strip("\"'")
-            if option not in ("-c", "--config") or key not in MODEL_CONFIG_KEYS:
-                raise RequiredPluginsError(
-                    f"Cannot verify required Codex plugins with launch override {option}: native plugin "
-                    "inventory does not apply session activation overrides. Use the persisted repository "
-                    "configuration for plugin, profile and feature settings, then relaunch. "
-                    "Model and reasoning overrides remain available."
-                )
-    binary = executable or shutil.which(host)
+    plugins.require_inventory_options(inventory_options)
+    binary = executable or shutil.which(host.value)
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
-    marketplaces = sorted({identity.rsplit("@", 1)[1] for identity in required}) if host == "codex" else (None,)
     entries = []
     deadline = time.monotonic() + INVENTORY_TIMEOUT_SECONDS
-    for marketplace in marketplaces:
+    for marketplace in plugins.inventory_marketplaces(required):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise RequiredPluginsError(f"Required {host} plugin inventory exceeded its {INVENTORY_TIMEOUT_SECONDS}-second budget")
-        entries.extend(inventory(binary, host, launch_directory, inventory_options, marketplace, timeout=remaining))
-    roots = enabled_roots(host, launch_directory, entries)
+        entries.extend(inventory(binary, plugins, launch_directory, inventory_options, marketplace, timeout=remaining))
+    roots = enabled_roots(plugins, launch_directory, entries)
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(
@@ -272,17 +180,18 @@ def check(project: Path, host: str, executable: str | None = None,
     return {identity: roots[identity] for identity in required}
 
 
-def inventory_roots(project: Path, host: str, executable: str | None = None,
+def inventory_roots(project: Path, host: Host, executable: str | None = None,
                     inventory_options: tuple[str, ...] = ()) -> dict[str, Path]:
     """Return the host's enabled, verified inventory without project selection filtering."""
+    plugins = host_plugins.PLUGINS[host]
     launch_directory = project.resolve()
-    binary = executable or shutil.which(host)
+    binary = executable or shutil.which(host.value)
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
-    return enabled_roots(host, launch_directory, inventory(binary, host, launch_directory, inventory_options))
+    return enabled_roots(plugins, launch_directory, inventory(binary, plugins, launch_directory, inventory_options))
 
 
-def inventory(binary: str, host: str, launch_directory: Path, inventory_options: tuple[str, ...],
+def inventory(binary: str, plugins: host_plugins.Plugins, launch_directory: Path, inventory_options: tuple[str, ...],
               marketplace: str | None = None, *, timeout: float | None = None) -> list:
     command = [binary, *inventory_options, "plugin", "list"]
     if marketplace is not None:
@@ -299,19 +208,19 @@ def inventory(binary: str, host: str, launch_directory: Path, inventory_options:
         )
     except (OSError, subprocess.SubprocessError) as error:
         scope = f" for marketplace {marketplace}" if marketplace is not None else ""
-        raise RequiredPluginsError(f"Required {host} plugin inventory{scope} could not run: {error}") from error
+        raise RequiredPluginsError(f"Required {plugins.HOST} plugin inventory{scope} could not run: {error}") from error
     if result.returncode:
         scope = f" for marketplace {marketplace}" if marketplace is not None else ""
         raise RequiredPluginsError(
-            f"Required {host} plugin inventory{scope} failed: {(result.stderr or result.stdout).strip()[:1024]}"
+            f"Required {plugins.HOST} plugin inventory{scope} failed: {(result.stderr or result.stdout).strip()[:1024]}"
         )
     try:
         data = json.loads(result.stdout)
     except ValueError as error:
-        raise RequiredPluginsError(f"Required {host} plugin inventory returned invalid JSON") from error
-    entries = data.get("installed") if host == "codex" and isinstance(data, dict) else data
+        raise RequiredPluginsError(f"Required {plugins.HOST} plugin inventory returned invalid JSON") from error
+    entries = plugins.inventory_entries(data)
     if not isinstance(entries, list):
-        raise RequiredPluginsError(f"Required {host} plugin inventory returned an invalid roster")
+        raise RequiredPluginsError(f"Required {plugins.HOST} plugin inventory returned an invalid roster")
     return entries
 
 
@@ -417,7 +326,7 @@ def declaration(root: Path, identity: str, document: dict | None = None) -> Targ
     return Target(identity, script, setup["script"], runtime_bytes(script.parent))
 
 
-def targets(project: Path, host: str, executable: str | None, *, repair=False) -> list[Target]:
+def targets(project: Path, host: Host, executable: str | None, *, repair=False) -> list[Target]:
     if repair:
         import reload_plugins
 
@@ -441,7 +350,7 @@ def targets(project: Path, host: str, executable: str | None, *, repair=False) -
     return found
 
 
-def collect(project: Path, hosts: tuple[str, ...], executables: dict[str, str | None], *, repair=False) -> tuple[list[Target], list[str]]:
+def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None], *, repair=False) -> tuple[list[Target], list[str]]:
     discovered, errors = {}, []
     for host in hosts:
         try:
@@ -470,7 +379,7 @@ def invoke(target: Target, arguments: list[str], timeout: int, inherit: bool = F
                           timeout=timeout, check=False)
 
 
-def check_setup(project: Path, hosts: tuple[str, ...], executables: dict[str, str | None]) -> list[str]:
+def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None]) -> list[str]:
     targets_found, errors = collect(project, hosts, executables)
     for target in targets_found:
         try:
@@ -482,7 +391,7 @@ def check_setup(project: Path, hosts: tuple[str, ...], executables: dict[str, st
     return errors
 
 
-def converge_setup(project: Path, hosts: tuple[str, ...], executables: dict[str, str | None], onboard: bool = False) -> list[str]:
+def converge_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None], onboard: bool = False) -> list[str]:
     targets_found, errors = collect(project, hosts, executables, repair=True)
     for target in targets_found:
         try:

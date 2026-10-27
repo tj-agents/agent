@@ -8,7 +8,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
-    'prune_plugin_cache', ROOT / '.agents/agent/runtime/prune_plugin_cache.py'
+    'prune_plugin_cache', ROOT / 'plugins/agent/.agents/agent/runtime/prune_plugin_cache.py'
 )
 PRUNE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PRUNE)

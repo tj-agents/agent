@@ -14,7 +14,7 @@ import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / ".agents" / "agent" / "runtime"
+RUNTIME = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime"
 sys.path.insert(0, str(RUNTIME))
 
 
@@ -26,7 +26,7 @@ def load(name):
 
 
 AUTOUPDATE = load("plugin_autoupdate")
-REFRESH = load("reload_plugins")
+from claude import plugins as CLAUDE  # noqa: E402
 MARKETPLACE = "https://github.com/tj-agents/marketplace.git"
 
 
@@ -106,12 +106,12 @@ class RetiredPluginTests(unittest.TestCase):
         settings = self.root / "claude" / "settings.json"
         write(settings, {"theme": "dark", "enabledPlugins": {
             "agent@tj-agents": True, "kit@tj-agents": True, "machine@tj-agents": True, "concertable@agents": True}})
-        self.assertEqual(["kit@tj-agents", "machine@tj-agents"], REFRESH.retire_unpublished_user_plugins({"tj-agents"}))
+        self.assertEqual(["kit@tj-agents", "machine@tj-agents"], CLAUDE.retire_unpublished_user_plugins({"tj-agents"}))
         value = json.loads(settings.read_text(encoding="utf-8"))
         self.assertEqual({"agent@tj-agents": True, "concertable@agents": True}, value["enabledPlugins"])
         self.assertEqual("dark", value["theme"])
         before = settings.read_bytes()
-        self.assertEqual([], REFRESH.retire_unpublished_user_plugins({"tj-agents"}))
+        self.assertEqual([], CLAUDE.retire_unpublished_user_plugins({"tj-agents"}))
         self.assertEqual(before, settings.read_bytes())
 
     def test_claude_selections_survive_until_their_marketplace_is_refreshed(self):
@@ -119,7 +119,7 @@ class RetiredPluginTests(unittest.TestCase):
         settings = self.root / "claude" / "settings.json"
         write(settings, {"enabledPlugins": {"agent@tj-agents": True, "machine@tj-agents": True}})
         before = settings.read_bytes()
-        self.assertEqual([], REFRESH.retire_unpublished_user_plugins(set()))
+        self.assertEqual([], CLAUDE.retire_unpublished_user_plugins(set()))
         self.assertEqual(before, settings.read_bytes())
 
     def test_claude_selections_survive_when_the_marketplace_manifest_is_unavailable(self):
@@ -128,7 +128,7 @@ class RetiredPluginTests(unittest.TestCase):
         settings = self.root / "claude" / "settings.json"
         write(settings, {"enabledPlugins": {"machine@tj-agents": True}})
         before = settings.read_bytes()
-        self.assertEqual([], REFRESH.retire_unpublished_user_plugins({"tj-agents"}))
+        self.assertEqual([], CLAUDE.retire_unpublished_user_plugins({"tj-agents"}))
         self.assertEqual(before, settings.read_bytes())
 
 

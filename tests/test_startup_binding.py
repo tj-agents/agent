@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,6 +10,9 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
+from host import Host  # noqa: E402
+from host_sessions import SESSIONS  # noqa: E402
 
 
 def load(name, path):
@@ -20,10 +24,10 @@ def load(name, path):
 
 class StartupBindingTests(unittest.TestCase):
     def setUp(self):
-        self.binding = load('startup_binding_tests', ROOT / '.agents/agent/runtime/startup_binding.py')
+        self.binding = load('startup_binding_tests', ROOT / 'plugins/agent/.agents/agent/runtime/startup_binding.py')
 
     def test_windows_terminal_uses_application_title(self):
-        cli = load('agent_cli_windows_tests', ROOT / '.agents/agent/runtime/agent_cli.py')
+        cli = load('agent_cli_windows_tests', ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py')
         calls = []
 
         def run(arguments, **kwargs):
@@ -50,7 +54,7 @@ class StartupBindingTests(unittest.TestCase):
             hooks.write_text(json.dumps({'hooks': {'SessionStart': [{'hooks': [{'command': 'python hook_dispatch.py'}]}]}}), encoding='utf-8')
             manifest.write_text(json.dumps({'hooks': ['hooks.json']}), encoding='utf-8')
             roots[name + '@tj-agents'] = plugin
-        self.assertEqual(sorted(roots), self.binding.startup_participants('codex', roots))
+        self.assertEqual(sorted(roots), self.binding.startup_participants(Host.CODEX, roots))
 
     def test_required_startup_failure_stops_the_owned_native_child(self):
         temporary = tempfile.TemporaryDirectory(prefix='startup failure ')
@@ -65,14 +69,23 @@ class StartupBindingTests(unittest.TestCase):
                           "time.sleep(3)\n"
                           f"Path({str(survived)!r}).write_text('ordinary work')\n", encoding='utf-8')
 
-        def prepare(_host, argv, _project, environment, **_kwargs):
+        def prepare(argv, _project, environment, **_kwargs):
             return argv, environment, None
 
         with mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
-                mock.patch.object(self.binding.cli_client, 'prepare', side_effect=prepare):
+                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', side_effect=prepare):
             with self.assertRaisesRegex(self.binding.StartupBindingError, 'fixture hook failed'):
-                self.binding.run_session('codex', sys.executable, root, [str(script)], require_session_start=True)
+                self.binding.run_session(Host.CODEX, sys.executable, root, [str(script)], require_session_start=True)
         self.assertFalse(survived.exists())
+
+    def test_every_host_launch_drops_inherited_frontend_recording_state(self):
+        process = mock.Mock(pid=72)
+        process.wait.return_value = 0
+        inherited = {name: 'parent' for native in Host for name in SESSIONS[native].FRONTEND_STATE}
+        self.assertTrue(inherited)
+        with mock.patch.dict(os.environ, inherited),                 mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn:
+            self.assertEqual(0, self.binding.run_session(Host.CLAUDE, 'native.exe', Path.cwd(), ()))
+        self.assertFalse(set(inherited) & set(spawn.call_args.kwargs['env']))
 
     def test_prelaunch_snapshot_captures_tab_before_native_start(self):
         identity = SimpleNamespace(pid=71, started_at=8.0)
@@ -103,15 +116,15 @@ class StartupBindingTests(unittest.TestCase):
                     'tab_binding': {'runtime_id': 'uia-tab', 'observed_title': 'launch nonce',
                                     'evidence': 'windows-uia-unique-title-at-launch'}}
         with mock.patch.object(self.binding.subprocess, 'Popen', return_value=process), \
-                mock.patch.object(self.binding.cli_client, 'prepare', return_value=([], {}, None)), \
+                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', return_value=([], {}, None)), \
                 mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
                 mock.patch.object(self.binding, '_record_launch_binding') as record:
-            result = self.binding.run_session('codex', 'native.exe', Path.cwd(), (),
+            result = self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), (),
                                               require_session_start=True, terminal=terminal)
 
         self.assertEqual(0, result)
-        record.assert_called_once_with('codex', 72, terminal)
+        record.assert_called_once_with(Host.CODEX, 72, terminal)
 
     def test_ordinary_status_retains_prelaunch_terminal_binding(self):
         directory = tempfile.TemporaryDirectory(prefix='startup status ')
@@ -167,8 +180,8 @@ class StartupBindingTests(unittest.TestCase):
 
         self.assertEqual(0, result)
         self.assertEqual([
-            mock.call(root.resolve(), 'claude', 'native-claude', arguments),
-            mock.call(root.resolve(), 'claude', 'native-claude', arguments),
+            mock.call(root.resolve(), Host.CLAUDE, 'native-claude', arguments),
+            mock.call(root.resolve(), Host.CLAUDE, 'native-claude', arguments),
         ], prepare.call_args_list)
         self.assertIs(roots, calls[0]['hook_roots'])
 
@@ -202,12 +215,12 @@ class StartupBindingTests(unittest.TestCase):
         process = mock.Mock(pid=72)
         process.wait.return_value = 0
 
-        def native_prepare(_host, argv, _project, environment, **_kwargs):
+        def native_prepare(argv, _project, environment, **_kwargs):
             return argv, environment, None
 
         with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=prepare_launch_roots) as preflight, \
                 mock.patch.object(self.binding.launch_check, 'check', side_effect=update_roster), \
-                mock.patch.object(self.binding.cli_client, 'prepare', side_effect=native_prepare), \
+                mock.patch.object(SESSIONS[Host.CLAUDE], 'prepare_frontend', side_effect=native_prepare), \
                 mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn, \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
                 mock.patch.object(self.binding, '_record_launch_binding'):
@@ -218,9 +231,9 @@ class StartupBindingTests(unittest.TestCase):
 
         self.assertEqual(0, result)
         self.assertEqual([
-            mock.call(root.resolve(), 'claude', 'native-claude',
+            mock.call(root.resolve(), Host.CLAUDE, 'native-claude',
                       ['--settings', 'override.json', '--', 'literal prompt']),
-            mock.call(root.resolve(), 'claude', 'native-claude',
+            mock.call(root.resolve(), Host.CLAUDE, 'native-claude',
                       ['--settings', 'override.json', '--', 'literal prompt']),
         ], preflight.call_args_list)
         required = json.loads(spawn.call_args.kwargs['env'][self.binding.REQUIRED_HOOKS_ENV])

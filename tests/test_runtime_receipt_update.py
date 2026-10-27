@@ -3,6 +3,7 @@ import importlib.util
 import json
 import contextlib
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -22,11 +23,11 @@ def load(name, path):
 
 class RuntimeReceiptUpdateTests(unittest.TestCase):
     def setUp(self):
-        runtime_directory = str(ROOT / ".agents/agent/runtime")
+        runtime_directory = str(ROOT / "plugins/agent/.agents/agent/runtime")
         sys.path.insert(0, runtime_directory)
         self.addCleanup(lambda: sys.path.remove(runtime_directory))
-        self.runtime = load("runtime_receipt_update", ROOT / ".agents/agent/runtime/plugin_autoupdate.py")
-        self.events = load("runtime_receipt_events", ROOT / ".agents/agent/runtime/machine_events.py")
+        self.runtime = load("runtime_receipt_update", ROOT / "plugins/agent/.agents/agent/runtime/plugin_autoupdate.py")
+        self.events = load("runtime_receipt_events", ROOT / "plugins/agent/.agents/agent/runtime/machine_events.py")
         temporary = tempfile.TemporaryDirectory(prefix="agent-receipt-update-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -110,7 +111,7 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
             "agent@other": [{"installPath": str(source)}],
             "agent@tj-agents": [{"installPath": str(source)}],
         }}), encoding="utf-8")
-        with mock.patch.object(self.runtime, "claude_home", return_value=claude):
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude)}):
             self.assertEqual([], self.runtime.native_agent_roots({}))
             (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"agent@tj-agents": True}}), encoding="utf-8")
             self.assertEqual([source], self.runtime.native_agent_roots({}))

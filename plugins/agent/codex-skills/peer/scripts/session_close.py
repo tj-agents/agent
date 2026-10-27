@@ -51,6 +51,20 @@ class Refusal(RuntimeError):
     pass
 
 
+class Cancelled(Refusal):
+    pass
+
+
+class _Shared:
+    """Loaders execute this file without registering it in sys.modules, so host code reads its live globals here."""
+
+    def __getattr__(self, name):
+        return globals()[name]
+
+
+SHARED = _Shared()
+
+
 def _package_root():
     here = Path(__file__).resolve()
     locator = next((root / ".agents" / "agent" / "runtime" / "package_root.py"
@@ -67,26 +81,19 @@ def _package_root():
         raise Refusal("the packaged Agent root is unavailable") from error
 
 
-def _agent_runtime(name):
-    root = _package_root()
-    path = root / ".agents" / "agent" / "runtime" / name
-    if path.is_file():
-        return path
-    raise Refusal("the packaged Agent runtime is unavailable")
-
-
-def _load_runtime(name, module_name):
-    path = _agent_runtime(name)
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
+def host_sessions(host):
+    runtime = _package_root() / ".agents" / "agent" / "runtime"
+    if not (runtime / "host_sessions.py").is_file():
         raise Refusal("the packaged Agent runtime is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    if str(runtime) not in sys.path:
+        sys.path.insert(0, str(runtime))
+    from host import Host
+    from host_sessions import SESSIONS
 
-
-def client_runtime():
-    return _load_runtime("cli_client.py", "agent_session_close_cli_client")
+    try:
+        return SESSIONS[Host(host)]
+    except ValueError:
+        raise Refusal("unsupported native host") from None
 
 
 def process_identity_runtime(cli_root):
@@ -107,56 +114,9 @@ def process_identity_runtime(cli_root):
     return module
 
 
-def current_codex_client(session_id, nearest, *, project=None):
-    client = client_runtime()
-    info, record = client.recorded_client(session_id, nearest, process_info,
-                                          register_session.process_table(), project=project,
-                                          peer_state=process_state)
-    return info, {
-        "client_identity": "managed-input", "launch_cwd": record["launch_cwd"],
-        "title": record.get("title"), "client_message_id": record["client_message_id"],
-        "native_turn_id": record["turn_id"],
-        "native_rollout": record["native_rollout"],
-        "native_cwd": record.get("native_cwd"),
-        "recording_path": record["recording_path"], "backend": record["backend"],
-        "profile": record["profile"],
-        "terminal": register_session.terminal_identity(record.get("terminal_environment", {})),
-    }
-
-
 CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile", "backend",
                          "recording_path", "client_message_id", "native_turn_id", "native_rollout", "native_cwd",
                          "client_identity", "launch_cwd")
-
-
-def revalidate_codex_client(entry):
-    nearest = process_info(entry["pid"])
-    if nearest is None or entry.get("client_identity") != "managed-input":
-        raise Refusal("the frozen native client binding is unavailable")
-    info, details = current_codex_client(entry["session_id"], nearest, project=entry.get("cwd"))
-    current = {**details, "host": "codex", "session_id": entry["session_id"],
-               "pid": info.pid, "pid_started_at": info.started_at}
-    if any(current.get(key) != entry.get(key) for key in CLIENT_BINDING_FIELDS):
-        raise Refusal("the native input or frontend binding changed before close")
-
-
-def verify_claude_receipt(entry):
-    provenance = entry.get("provenance")
-    if (entry.get("host") != "claude" or not isinstance(provenance, dict)
-            or provenance.get("source") != "agent-startup-binding"
-            or not isinstance(provenance.get("receipt"), str)):
-        raise Refusal("record is not the verified Claude startup binding")
-    path = Path(provenance["receipt"]).resolve()
-    if (state_directory() / "recovery-launches").resolve() not in path.parents:
-        raise Refusal("startup binding receipt is outside private runtime state")
-    receipt = read_json(path) or {}
-    wrapper = receipt.get("wrapper")
-    frontend = {"pid": entry.get("pid"), "started_at": entry.get("pid_started_at")}
-    if not (receipt.get("session") == entry.get("session_id")
-            and receipt.get("profile") == entry.get("profile") and receipt.get("state") == "launched"
-            and isinstance(wrapper, dict) and wrapper.get("child") == frontend
-            and entry.get("frontend") == frontend and wrapper.get("terminal") == entry.get("terminal")):
-        raise Refusal("startup binding receipt does not prove this Claude frontend")
 
 
 def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
@@ -164,23 +124,10 @@ def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
     if (info is None or register_session.stem(info.name) != entry.get("host")
             or not verified_live(entry["pid"], entry["pid_started_at"])):
         raise Refusal("CLI client identity is no longer live")
+    sessions = host_sessions(entry.get("host"))
+
     def guard():
-        if entry.get("host") == "codex":
-            revalidate_codex_client(entry)
-            client = client_runtime()
-            context = client.process_context(entry["pid"])
-            if (context.get(client.RECORD_PATH_ENV) != entry.get("recording_path")
-                    or context.get(client.RECORD_ENV) not in ("1", "true", "TRUE", "yes", "YES")
-                    or Path(context["profile"]) != Path(entry.get("profile"))
-                    or (entry.get("backend") is not None and client.daemon_identity(
-                        {"CODEX_HOME": entry["profile"]}, expected_pid=entry["backend"]["pid"],
-                    ) != entry["backend"])
-                    or client.latest_input(entry["recording_path"]) != entry.get("client_message_id")):
-                raise Refusal("the frontend input or backend binding changed before close")
-        elif entry.get("host") == "claude":
-            verify_claude_receipt(entry)
-        else:
-            raise Refusal("unsupported native host")
+        sessions.verify_frontend(entry, SHARED)
         before_signal()
 
     try:
@@ -514,8 +461,9 @@ def close_target(entry):
                     "terminal": terminal, "title": wrapper.get("title")}
     if shared:
         raise Refusal("registered host is shared by multiple session identities; an exact frontend launch binding is required")
-    if entry["host"] == "codex":
-        raise Refusal("an exact frontend launch binding is required for Codex; registration alone cannot identify its frontend")
+    if not host_sessions(entry["host"]).FRONTEND_FROM_REGISTRATION:
+        raise Refusal(f"an exact frontend launch binding is required for {entry['host'].title()}; "
+                      "registration alone cannot identify its frontend")
     return entry
 
 
@@ -543,19 +491,13 @@ def own_host_and_entry(cwd=None, session_id=None):
         current = info.ppid
     if nearest is None:
         raise Refusal("current process is not attached to a recognized registered host")
-    if register_session.stem(nearest.name) == "codex" and not session_id:
-        session_id = os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX_SESSION_ID")
-        if not session_id:
-            raise Refusal("native Codex thread identity is unavailable; preserve the frontend and backend")
-    if session_id and register_session.stem(nearest.name) == "codex":
-        try:
-            client, details = current_codex_client(session_id, nearest)
-        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
-            raise Refusal(str(error)) from error
-        return register_session.record(
-            {"session_id": session_id, "cwd": str(cwd)},
-            client={"pid": client.pid, "host": "codex", "pid_started_at": client.started_at, **details},
-        )
+    try:
+        sessions = host_sessions(register_session.stem(nearest.name))
+    except Refusal:
+        sessions = None
+    own = sessions.own_entry(nearest, cwd, session_id, SHARED) if sessions is not None else None
+    if own is not None:
+        return own
     matches = []
     for _path, entry in entries():
         if not valid_entry(entry) or not attached_to(cwd, entry):

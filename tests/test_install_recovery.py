@@ -12,9 +12,12 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / ".agents/agent/runtime"
+SCRIPTS = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(SCRIPTS))
+from claude import plugins as CLAUDE  # noqa: E402
+from host import Host  # noqa: E402
 import install  # noqa: E402
+import plugin_refresh  # noqa: E402
 import plugin_autoupdate  # noqa: E402
 import reload_plugins  # noqa: E402
 import required_plugins  # noqa: E402
@@ -56,7 +59,8 @@ class InstallRecoveryTests(unittest.TestCase):
         return ["channel configured"]
 
     def check(self, reconcile=lambda project: []):
-        return CHECK.check(self.project, fetch=lambda path: b"", reconcile=reconcile)
+        with mock.patch.object(CLAUDE, "reconcile", reconcile):
+            return CHECK.check(self.project, fetch=lambda path: b"")
 
     def test_an_unconfigured_channel_repairs_only_the_channel_step_then_rechecks(self):
         with mock.patch.object(install, "repair", side_effect=self.configure_channel) as repair:
@@ -124,7 +128,7 @@ class InstallRecoveryTests(unittest.TestCase):
         with mock.patch.object(required_plugins, "check", side_effect=[missing, {}]) as check, \
                 mock.patch.object(reload_plugins, "repair_missing", side_effect=RuntimeError("native install failed")), \
                 mock.patch.object(install, "repair", return_value=[]) as repair:
-            self.assertEqual((self.project, {}), CHECK.prepare_launch_roots(self.project, "claude", "native", []))
+            self.assertEqual((self.project, {}), CHECK.prepare_launch_roots(self.project, Host.CLAUDE, "native", []))
         self.assertEqual(2, check.call_count)
         repair.assert_called_once_with("plugin setup", self.project)
 
@@ -133,9 +137,9 @@ class InstallRecoveryTests(unittest.TestCase):
         with mock.patch.object(reload_plugins, "prepare_required", side_effect=failure) as prepare, \
                 mock.patch.object(CHECK, "recover_install", side_effect=install.InstallError("machine setup is stale")) as recover, \
                 self.assertRaisesRegex(RuntimeError, "plugin install template@tj-agents: native install failed") as raised:
-            CHECK.prepare_launch_roots(self.project, "claude", "native", [])
+            CHECK.prepare_launch_roots(self.project, Host.CLAUDE, "native", [])
         self.assertIn("Automatic plugin setup recovery failed: machine setup is stale", str(raised.exception))
-        prepare.assert_called_once_with(self.project, "claude", "native", ())
+        prepare.assert_called_once_with(self.project, Host.CLAUDE, "native", ())
         recover.assert_called_once_with(self.project, "plugin setup")
 
     def test_failed_plugin_setup_recovery_reports_the_original_os_error(self):
@@ -143,15 +147,15 @@ class InstallRecoveryTests(unittest.TestCase):
         with mock.patch.object(reload_plugins, "prepare_required", side_effect=failure) as prepare, \
                 mock.patch.object(CHECK, "recover_install", side_effect=RuntimeError("machine setup is stale")) as recover, \
                 self.assertRaisesRegex(RuntimeError, "native socket closed") as raised:
-            CHECK.prepare_launch_roots(self.project, "claude", "native", [])
+            CHECK.prepare_launch_roots(self.project, Host.CLAUDE, "native", [])
         self.assertIn("Automatic plugin setup recovery failed: machine setup is stale", str(raised.exception))
-        prepare.assert_called_once_with(self.project, "claude", "native", ())
+        prepare.assert_called_once_with(self.project, Host.CLAUDE, "native", ())
         recover.assert_called_once_with(self.project, "plugin setup")
 
     def test_invalid_launch_input_never_runs_install_recovery(self):
         with mock.patch.object(CHECK, "recover_install") as recover:
             with self.assertRaises(REFRESH.required_plugins.RequiredPluginsError):
-                CHECK.prepare_launch_roots(self.project, "codex", "native", ["--config"])
+                CHECK.prepare_launch_roots(self.project, Host.CODEX, "native", ["--config"])
         recover.assert_not_called()
 
 
@@ -174,8 +178,8 @@ class DependencyInstallationIntegration(unittest.TestCase):
                                                    "installLocation": str(self.home)}}), encoding="utf-8")
         (self.home / ".claude-plugin").mkdir()
         (self.home / ".claude-plugin/marketplace.json").write_text(json.dumps(catalog), encoding="utf-8")
-        native_run = REFRESH.run
-        patcher = mock.patch.object(REFRESH, "run", side_effect=lambda command, project: native_run(
+        native_run = plugin_refresh.run
+        patcher = mock.patch.object(plugin_refresh, "run", side_effect=lambda command, project: native_run(
             [sys.executable, str(FIXTURES / "plugin_cli.py"), *command[1:]], project))
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -190,11 +194,11 @@ class DependencyInstallationIntegration(unittest.TestCase):
             json.dumps({"enabledPlugins": {identity: True}}), encoding="utf-8")
 
         def inventory(_binary, _host, project, _options, _marketplace=None, **_kwargs):
-            return json.loads(REFRESH.run(["fixture", "plugin", "list", "--json"], project))
+            return json.loads(plugin_refresh.run(["fixture", "plugin", "list", "--json"], project))
 
         updated = set()
         with mock.patch.object(required_plugins, "inventory", side_effect=inventory):
-            roots = REFRESH.prepare_required(self.root, "claude", "fixture", updated=updated)
+            roots = REFRESH.prepare_required(self.root, Host.CLAUDE, "fixture", updated=updated)
         self.assertEqual({identity: self.home / "payloads/agent"}, roots)
         self.assertEqual({identity}, updated)
         self.assertEqual([["install", "base@tj-agents"], ["install", identity]],
@@ -203,33 +207,33 @@ class DependencyInstallationIntegration(unittest.TestCase):
         self.assertEqual("project", records["plugins"][identity][0]["scope"])
 
     def test_fresh_dependencies_persist_before_installing_the_dependent(self):
-        REFRESH.apply_claude("fixture", self.root, [("personal@tj-agents", "project")], [])
+        CLAUDE.apply("fixture", self.root, [("personal@tj-agents", "project")], [])
         self.assertEqual([["install", name + "@tj-agents"] for name in ("base", "agent", "personal")],
                          [json.loads(line) for line in (self.home / "operations.jsonl").read_text().splitlines()])
-        self.assertEqual([], REFRESH.dependency_installs([("personal@tj-agents", "project", self.root)]))
+        self.assertEqual([], CLAUDE.dependency_installs([("personal@tj-agents", "project", self.root)]))
 
     def test_outdated_dependent_is_updated_only_after_dependencies_persist(self):
         path = self.home / "plugins/installed_plugins.json"
         path.write_text(json.dumps({"plugins": {"personal@tj-agents": [{"scope": "project", "projectPath": str(self.root),
                                                                     "enabled": True, "version": "old"}]}}), encoding="utf-8")
-        REFRESH.apply_claude("fixture", self.root, [], [("personal@tj-agents", "project", self.root)])
+        CLAUDE.apply("fixture", self.root, [], [("personal@tj-agents", "project", self.root)])
         self.assertEqual([["install", "base@tj-agents"], ["install", "agent@tj-agents"], ["update", "personal@tj-agents"]],
                          [json.loads(line) for line in (self.home / "operations.jsonl").read_text().splitlines()])
 
     def test_dependency_install_that_does_not_persist_fails(self):
         with mock.patch.dict(os.environ, {"FIXTURE_DROP_INSTALL": "agent@tj-agents"}), \
                 self.assertRaisesRegex(REFRESH.RefreshError, "missing dependencies"):
-            REFRESH.apply_claude("fixture", self.root, [("personal@tj-agents", "project")], [])
+            CLAUDE.apply("fixture", self.root, [("personal@tj-agents", "project")], [])
 
     def test_successful_native_response_without_durable_dependency_registration_fails(self):
         with mock.patch.dict(os.environ, {"FIXTURE_DROP_INSTALL": "agent@tj-agents", "FIXTURE_IGNORE_DEPENDENCIES": "1"}), \
                 self.assertRaisesRegex(REFRESH.RefreshError, "agent@tj-agents.*did not persist enabled"):
-            REFRESH.apply_claude("fixture", self.root, [("personal@tj-agents", "project")], [])
+            CLAUDE.apply("fixture", self.root, [("personal@tj-agents", "project")], [])
 
     def test_dependency_cycle_fails_before_starting_native_installation(self):
         dependencies = {"personal@tj-agents": ["agent@tj-agents"], "agent@tj-agents": ["personal@tj-agents"]}
         with self.assertRaisesRegex(REFRESH.RefreshError, "Cyclic plugin dependency"):
-            REFRESH.missing_dependencies("personal@tj-agents", "project", self.root, dependencies, [])
+            CLAUDE.missing_dependencies("personal@tj-agents", "project", self.root, dependencies, [])
         self.assertFalse((self.home / "operations.jsonl").exists())
 
 

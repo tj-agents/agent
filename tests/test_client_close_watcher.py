@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from close_fixtures import CloseFixture, WATCHER, LIFECYCLE, session_close, cli_client
+from close_fixtures import CloseFixture, Host, WATCHER, LIFECYCLE, session_close, cli_client
 
 
 class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
@@ -94,9 +94,9 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.stop()
         self.assertEqual(0, self.wait())
         self.assertIsNone(self.request["entry"]["backend"])
-        from close_fixtures import codex_hook_trust
-        self.assertFalse(codex_hook_trust.AppServer.call_args.kwargs["existing"])
-        self.assertEqual(self.root.resolve(), codex_hook_trust.AppServer.call_args.args[1].resolve())
+        from close_fixtures import hook_trust
+        self.assertFalse(hook_trust.AppServer.call_args.kwargs["existing"])
+        self.assertEqual(self.root.resolve(), hook_trust.AppServer.call_args.args[1].resolve())
 
     def test_canonical_state_mutation_inside_native_rpc_prevents_signal(self):
         self.arm()
@@ -170,7 +170,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
     def test_prompt_end_or_second_stop_keeps_cancellation_routing_until_outcome(self):
         self.arm()
         self.stop()
-        LIFECYCLE.run("stop", "codex", {"session_id": "one", "turn_id": "turn-one"})
+        LIFECYCLE.run("stop", Host.CODEX, {"session_id": "one", "turn_id": "turn-one"})
         self.assertTrue(WATCHER.canonical_path(self.request).exists())
         self.assertEqual(0, self.wait())
         self.assertEqual("cancelled", self.outcome()["status"])

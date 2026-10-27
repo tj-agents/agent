@@ -12,7 +12,10 @@ import tempfile
 import time
 import sys
 
+from codex import hook_trust
+from host import Host
 
+HOST = Host.CODEX
 RECORD_ENV = "CODEX_TUI_RECORD_SESSION"
 RECORD_PATH_ENV = "CODEX_TUI_SESSION_LOG_PATH"
 TOKEN = re.compile(r"[0-9a-f]{64}\Z")
@@ -69,7 +72,7 @@ def profile_directory(environ=None):
     values = os.environ if environ is None else environ
     if os.name == 'nt':
         values = {key.upper(): value for key, value in values.items()}
-    return Path(values.get("CODEX_HOME") or Path.home() / ".codex").resolve()
+    return Path(values.get(HOST.home_variable) or Path.home() / HOST.home_directory).resolve()
 
 
 def binding_path(token):
@@ -100,14 +103,14 @@ def daemon_identity(environment=None, expected_pid=None):
     return {'pid': record['pid'], 'process_start_time': str(record['processStartTime'])}
 
 
-def prepare(host, arguments, project, environment, executable=None):
+def prepare(arguments, project, environment, executable=None):
     values = dict(environment)
     for key in tuple(values):
         compared = key.upper() if os.name == 'nt' else key
         if compared in (RECORD_ENV, RECORD_PATH_ENV):
             values.pop(key)
     arguments = list(arguments)
-    if host != 'codex' or not is_session(arguments):
+    if not is_session(arguments):
         return arguments, values, None
     if not executable:
         raise RuntimeError('Native Codex executable is required for a managed frontend')
@@ -127,7 +130,7 @@ def prepare(host, arguments, project, environment, executable=None):
     values[RECORD_ENV] = '1'
     values[RECORD_PATH_ENV] = str(path.with_name('events.jsonl'))
     ticket = {
-        'schema_version': 1, 'token': token, 'host': host, 'backend': backend,
+        'schema_version': 1, 'token': token, 'host': HOST.value, 'backend': backend,
         'profile': str(profile_directory(values)), 'launch_cwd': str(Path(project).resolve()),
         'created_at': time.time(), 'recording_path': values[RECORD_PATH_ENV],
         'title': values.get('AGENT_CLI_TAB_TITLE'),
@@ -263,12 +266,9 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
     # separate process, so verify its identity independently and bind the
     # selected recorded frontend to both identities below.
     backend = None if private else daemon_identity()
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import codex_hook_trust
-
     executable = arguments[0]
-    with codex_hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
-                                   existing=not private, timeout=15) as server:
+    with hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
+                             existing=not private, timeout=15) as server:
         submitted = current_input(server, session_id)
     state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
     matches = []
@@ -280,7 +280,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
                     or type(record.get('pid')) is not int or record['pid'] <= 0):
                 continue
             info = lookup(record['pid'])
-            if info is None or Path(info.name).stem.casefold() != 'codex':
+            if info is None or Path(info.name).stem.casefold() != HOST.value:
                 continue
             times = [record.get(key) for key in ('created_at', 'recorded_at')]
             if (not all(type(value) in (int, float) and math.isfinite(value) and value > 0 for value in times)
@@ -298,7 +298,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
                     or latest_input(event_path) != submitted['client_message_id']):
                 continue
             for other in table.values():
-                if other.pid == info.pid or Path(other.name).stem.casefold() != 'codex':
+                if other.pid == info.pid or Path(other.name).stem.casefold() != HOST.value:
                     continue
                 if peer_recording_path(other, peer_state) == event_path:
                     raise RuntimeError('Multiple native processes share a frontend recording; preserving every client')
@@ -309,10 +309,10 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
         except (OSError, ValueError, TypeError, KeyError):
             continue
     if len(matches) != 1:
-        arguments = ['codex', '--cd', str(Path.cwd()), 'resume', session_id]
+        arguments = [HOST.value, '--cd', str(Path.cwd()), 'resume', session_id]
         if os.name == 'nt':
             command = ' '.join("'" + value.replace("'", "''") + "'" for value in arguments[1:])
-            command = 'codex ' + command
+            command = HOST.value + ' ' + command
         else:
             import shlex
             command = shlex.join(arguments)
@@ -450,7 +450,8 @@ def process_context(pid):
     if os.name != "nt":
         entries = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
         values = dict(entry.split(b"=", 1) for entry in entries if b"=" in entry)
-        return {'profile': str(Path(os.fsdecode(values.get(b'CODEX_HOME', os.fsencode(Path.home() / '.codex')))).resolve()),
+        return {'profile': str(Path(os.fsdecode(values.get(HOST.home_variable.encode(),
+                                                            os.fsencode(Path.home() / HOST.home_directory)))).resolve()),
                 RECORD_ENV: os.fsdecode(values.get(RECORD_ENV.encode(), b'')),
                 RECORD_PATH_ENV: os.fsdecode(values.get(RECORD_PATH_ENV.encode(), b''))}
     import ctypes
@@ -511,7 +512,7 @@ def process_context(pid):
             key, separator, value = entry.partition('=')
             if separator:
                 values[key.casefold()] = value
-        return {'profile': str(Path(values.get('codex_home') or Path.home() / '.codex').resolve()),
+        return {'profile': str(Path(values.get(HOST.home_variable.casefold()) or Path.home() / HOST.home_directory).resolve()),
                 RECORD_ENV: values.get(RECORD_ENV.casefold(), ''),
                 RECORD_PATH_ENV: values.get(RECORD_PATH_ENV.casefold(), '')}
     finally:

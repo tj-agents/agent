@@ -18,11 +18,12 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from host import Host
+
 SERVER = "ntfy.sh"
 POLL_TIMEOUT_SECONDS = 3
 MAX_RESPONSE = 1 << 20
 EXPIRY_SECONDS = 11 * 60 * 60
-HOSTS = ("claude", "codex")
 HOST_VARIABLE = "TJ_AGENTS_LAUNCH_HOST"
 INSTALL_RECOVERY = "TJ_AGENTS_INSTALL_RECOVERY"
 TOPIC = re.compile(r"[A-Za-z0-9_-]{32,128}")
@@ -104,18 +105,11 @@ def poll(topic: str, since: str, fetch=https_get) -> list[dict]:
     return envelopes
 
 
-def update_host(host: str, repositories: set[str] | None, project: Path, updated: set[str] | None = None) -> bool:
+def update_host(host: Host, repositories: set[str] | None, project: Path, updated: set[str] | None = None) -> bool:
+    from host_plugins import PLUGINS
+
     try:
-        if host == "codex":
-            import plugin_autoupdate
-
-            arguments = ["--no-sweep", "--no-self-update", "--retry-failures"]
-            for repository in sorted(repositories or ()):
-                arguments += ["--repository", repository]
-            return plugin_autoupdate.main(arguments) == 0
-        import reload_plugins
-
-        return reload_plugins.refresh_repositories(project, repositories, updated)
+        return PLUGINS[host].update(repositories, project, updated)
     except Exception as error:
         print(f"plugins: {host} update failed: {error}", file=sys.stderr)
         return False
@@ -133,15 +127,15 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
         identifiers = [envelope["id"] for envelope in envelopes]
         last = identifiers[-1] if identifiers else cursor.get("since", "all")
         hosts = cursor.get("hosts") if isinstance(cursor.get("hosts"), dict) else {}
-        work: dict[str, set[str] | None] = {}
-        for host in HOSTS:
-            state = hosts.get(host) if isinstance(hosts.get(host), dict) else {}
+        work: dict[Host, set[str] | None] = {}
+        for host in Host:
+            state = hosts.get(host.value) if isinstance(hosts.get(host.value), dict) else {}
             applied = state.get("applied")
             start = identifiers.index(applied) + 1 if applied in identifiers else 0
             repositories = None if expired else {repository.casefold() for envelope in envelopes[start:]
                                                   if (repository := machine_events.parse_hint(envelope))}
             if repositories is not None and not repositories:
-                hosts[host] = {"applied": last}
+                hosts[host.value] = {"applied": last}
             else:
                 work[host] = repositories
         if work:
@@ -150,9 +144,9 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
             with ThreadPoolExecutor(max_workers=len(work)) as pool:
                 results = dict(zip(work, pool.map(lambda host: update(host, work[host], project), work)))
             for host, succeeded in results.items():
-                previous = hosts.get(host) if isinstance(hosts.get(host), dict) else {}
-                hosts[host] = {"applied": last} if succeeded else {"applied": previous.get("applied")}
-        if all(hosts[host].get("applied") == last for host in HOSTS):
+                previous = hosts.get(host.value) if isinstance(hosts.get(host.value), dict) else {}
+                hosts[host.value] = {"applied": last} if succeeded else {"applied": previous.get("applied")}
+        if all(hosts[host.value].get("applied") == last for host in Host):
             plugin_autoupdate.write_json(path, {"since": last, "since_at": now})
         else:
             saved = {"since": cursor.get("since", "all"), "hosts": hosts}
@@ -165,7 +159,7 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
         lock.close()
     if not work:
         return "current"
-    failed = sorted(host for host, succeeded in results.items() if not succeeded)
+    failed = sorted(host.value for host, succeeded in results.items() if not succeeded)
     scopes = [repositories for repositories in work.values() if repositories]
     named = ", ".join(sorted(set().union(*scopes))) if scopes else "a full comparison"
     if failed:
@@ -175,42 +169,42 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
     return "updated"
 
 
-def reconcile_installs(project: Path, updated: set[str] | None = None) -> list[str]:
-    import reload_plugins
-
-    changed = reload_plugins.reconcile_claude(project)
-    if updated is not None:
-        updated.update(changed)
-    return changed
-
-
-def settle(project: Path, reconcile=None) -> str:
+def settle(project: Path, hosts, updated: set[str] | None = None) -> str:
+    from host_plugins import PLUGINS
     import plugin_autoupdate
 
+    reconcilers = {host: PLUGINS[host].reconcile for host in hosts if PLUGINS[host].reconcile is not None}
+    if not reconcilers:
+        return "current"
     lock = plugin_autoupdate.acquire_lock(state_directory() / "launch-check.lock")
     if lock is None:
         return "busy"
+    changed = []
     try:
-        changed = (reconcile or reconcile_installs)(project)
-    except Exception as error:
-        print(f"plugins: claude install check failed: {error}", file=sys.stderr)
-        return "failed"
+        for host, reconcile in reconcilers.items():
+            try:
+                changed += reconcile(project)
+            except Exception as error:
+                print(f"plugins: {host} install check failed: {error}", file=sys.stderr)
+                return "failed"
     finally:
         lock.close()
+    if updated is not None:
+        updated.update(changed)
     if not changed:
         return "current"
     print(f"plugins: updated {', '.join(sorted(changed))}", file=sys.stderr)
     return "updated"
 
 
-def check(project: Path, fetch=https_get, update=update_host, now: float | None = None, reconcile=None,
-          host: str | None = None, *, recover: bool = True) -> str:
+def check(project: Path, fetch=https_get, update=update_host, now: float | None = None,
+          hosts=tuple(Host), updated: set[str] | None = None, *, recover: bool = True) -> str:
     directory = state_directory()
     topic = read_json(directory / "machine-events.json").get("topic")
     if not isinstance(topic, str) or not TOPIC.fullmatch(topic):
         if recover and not os.environ.get(INSTALL_RECOVERY):
             recover_install(project, "event channel and publishers")
-            return check(project, fetch, update, now, reconcile, host, recover=False)
+            return check(project, fetch, update, now, hosts, updated, recover=False)
         return "unconfigured"
     path = directory / "machine-events-cursor.json"
     cursor = read_json(path)
@@ -226,10 +220,10 @@ def check(project: Path, fetch=https_get, update=update_host, now: float | None 
         print(f"plugins: update check skipped ({type(error).__name__})", file=sys.stderr)
         return "offline"
     result = apply(envelopes, cursor, path, project, update, now, expired) if envelopes or expired else "current"
-    result = settle(project, reconcile) if result == "current" and host != "codex" else result
+    result = settle(project, hosts, updated) if result == "current" else result
     if result == "failed" and recover and not os.environ.get(INSTALL_RECOVERY):
         recover_install(project, "plugin and merge-policy catch-up")
-        return check(project, fetch, update, now, reconcile, host, recover=False)
+        return check(project, fetch, update, now, hosts, updated, recover=False)
     return result
 
 
@@ -257,7 +251,7 @@ def require_update_check(result: str) -> None:
         )
 
 
-def prepare_launch_roots(project, host, executable, arguments):
+def prepare_launch_roots(project, host: Host, executable, arguments):
     import required_plugins
     import reload_plugins
 
@@ -286,27 +280,11 @@ def prepare_launch(project, host, executable, arguments):
     return prepare_launch_roots(project, host, executable, arguments)[0]
 
 
-def ensure_hooks(project: Path, executable: str | None = None, *, running_session=False) -> None:
-    import agent_cli
-    import codex_hook_trust
-    import required_plugins
-
-    required = required_plugins.selected(required_plugins.project_root(project))
-    if not required:
-        return
-    binary = executable or agent_cli.resolve_codex_executable()[0]
-    expected = {}
-    roots = required_plugins.check(project, "codex", binary)
-    for identity, root in (roots or {}).items():
-        definitions = codex_hook_trust.required_definitions(root, identity)
-        if definitions:
-            expected[identity] = definitions
-    codex_hook_trust.apply_trust(binary, project.resolve(), required=expected)
-    if running_session:
-        try:
-            codex_hook_trust.reload_running(binary, project.resolve(), required=expected)
-        except (OSError, RuntimeError) as error:
-            raise codex_hook_trust.RestartRequired(str(error)) from error
+def launch_host() -> Host | None:
+    try:
+        return Host(os.environ.get(HOST_VARIABLE, "").strip().casefold())
+    except ValueError:
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -314,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, default=Path.cwd())
-    parser.add_argument("--host", choices=HOSTS)
+    parser.add_argument("--host", type=Host, choices=list(Host))
     parser.add_argument("--target")
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
@@ -329,21 +307,22 @@ def main(argv: list[str] | None = None) -> int:
         except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
             print(f"plugins: {error}", file=sys.stderr)
             return 1
+    host = arguments.host or launch_host()
     try:
-        host = arguments.host or os.environ.get(HOST_VARIABLE, "").strip().casefold()
-        result = check(effective_project or arguments.project.resolve(), host=host if host in HOSTS else None)
+        result = check(effective_project or arguments.project.resolve(), hosts=(host,) if host else tuple(Host))
     except Exception as error:
         print(f"plugins: update check failed: {error}", file=sys.stderr)
         result = "failed"
-    if host in HOSTS and effective_project is not None:
+    if host and effective_project is not None:
         try:
             require_update_check(result)
         except RuntimeError as error:
             print(f"plugins: {error}", file=sys.stderr)
             return 1
-    if host == "codex" and effective_project is not None:
+        from host_plugins import PLUGINS
+
         try:
-            ensure_hooks(effective_project, arguments.target)
+            PLUGINS[host].ensure_hooks(effective_project, arguments.target)
         except Exception as error:
             print(f"plugins: required hook readiness failed: {error}", file=sys.stderr)
             return 1

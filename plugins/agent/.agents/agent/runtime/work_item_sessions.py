@@ -13,6 +13,10 @@ import subprocess
 import sys
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from host import Host  # noqa: E402
+
 WORK_ITEM_RE = re.compile(r"^(?P<feature>[a-z0-9]+(?:-[a-z0-9]+)*)/(?P<item>[a-z0-9]+(?:-[a-z0-9]+)*)$")
 WORK_ITEM_STATUSES = ("proposed", "active", "blocked", "paused", "delivery-gated", "done")
 END_REASONS = ("finished", "closed", "handed_off")
@@ -236,22 +240,20 @@ def _validate_plan_path(plan_path, cwd):
 
 
 def _current_session_id(host):
-    variable = "CODEX_THREAD_ID" if host == "codex" else "CLAUDE_CODE_SESSION_ID"
-    return os.environ.get(variable)
+    return os.environ.get(host.session_variable)
 
 
 def _require_session_id(host):
     session_id = _current_session_id(host)
     if not session_id or not _agent_recovery().SESSION_ID.fullmatch(session_id):
-        variable = "CODEX_THREAD_ID" if host == "codex" else "CLAUDE_CODE_SESSION_ID"
-        raise ValueError(f"missing or invalid session id in {variable}")
+        raise ValueError(f"missing or invalid session id in {host.session_variable}")
     return session_id
 
 
 def _registered_current_session(connection, host, cwd):
     session_id = _current_session_id(host)
     if session_id and _agent_recovery().SESSION_ID.fullmatch(session_id):
-        handle = _session_store().session_handle(host, session_id)
+        handle = _session_store().session_handle(host.value, session_id)
         session = _session_store().get_session(connection, handle)
         if session is not None and session["pid"] is not None and session["pid_started_at"] is not None:
             return session_id, None
@@ -259,8 +261,8 @@ def _registered_current_session(connection, host, cwd):
         entry = _session_close().own_host_and_entry(cwd)
     except Exception as error:
         raise ValueError(f"could not verify the current native {host} session: {error}") from error
-    if entry.get("host") != host:
-        raise ValueError(f"the verified current native session is {entry.get('host')!r}, not {host!r}")
+    if entry.get("host") != host.value:
+        raise ValueError(f"the verified current native session is {entry.get('host')!r}, not {host.value!r}")
     registered_id = entry.get("session_id")
     if not isinstance(registered_id, str) or not _agent_recovery().SESSION_ID.fullmatch(registered_id):
         raise ValueError("the verified native session has no valid session id")
@@ -352,9 +354,8 @@ def _finished_elsewhere(row, machine):
 
 
 def _resume_roots(row):
-    host = row["host"]
-    subdirectory = "projects" if host == "claude" else "sessions"
-    return {host: Path(row["profile"]) / subdirectory}
+    host = Host(row["host"])
+    return {host: Path(row["profile"]) / host.history_directory}
 
 
 def _unverified_launch(error):
@@ -398,9 +399,9 @@ def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=Non
             raise ValueError("--plan-path cannot update a work item from a different repository")
         item_branch = record_branch if work_item_repo == repo else None
         session_id, registration = _registered_current_session(connection, host, cwd)
-        handle = store.session_handle(host, session_id)
+        handle = store.session_handle(host.value, session_id)
         removed = store.claim_registered_work_item(
-            connection, host, session_id, cwd, key, work_item_repo, repo, feature, item, role,
+            connection, host.value, session_id, cwd, key, work_item_repo, repo, feature, item, role,
             status=status, branch=item_branch, session_branch=branch, head=head,
             title=title, plan_path=plan_path, predecessor=predecessor, registration=registration,
             require_existing_binding=kind == "reference",
@@ -503,10 +504,10 @@ def cmd_resume(work_item=None, handle=None, execution_key=None, provider=None, s
     roots = _resume_roots(selected)
     if prompt_path:
         return recovery.open_session(
-            selected["host"], selected["session_id"], prompt=None, title=title, roots=roots, prompt_path=prompt_path,
+            Host(selected["host"]), selected["session_id"], prompt=None, title=title, roots=roots, prompt_path=prompt_path,
         )
     return recovery.open_session(
-        selected["host"], selected["session_id"], prompt=prompt or "Continue the requested work.",
+        Host(selected["host"]), selected["session_id"], prompt=prompt or "Continue the requested work.",
         title=title, roots=roots,
     )
 
@@ -551,7 +552,7 @@ def cmd_interrupted(resume_handles=None, cwd=None):
         for handle in resume_handles:
             row = by_handle[handle]
             resumed.append(recovery.open_session(
-                row["host"], row["session_id"], prompt="Continue the requested work.", roots=_resume_roots(row),
+                Host(row["host"]), row["session_id"], prompt="Continue the requested work.", roots=_resume_roots(row),
             ))
         result["resumed"] = resumed
     return result
@@ -560,7 +561,7 @@ def cmd_interrupted(resume_handles=None, cwd=None):
 def cmd_end(host, reason, successor=None):
     store = _session_store()
     session_id = _require_session_id(host)
-    handle = store.session_handle(host, session_id)
+    handle = store.session_handle(host.value, session_id)
     connection = store.connect()
     try:
         store.end_session(connection, handle, reason, successor=successor)
@@ -605,8 +606,8 @@ def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, e
             )
         if status == "done":
             keep = [
-                store.session_handle(host, session_id)
-                for host in ("claude", "codex")
+                store.session_handle(host.value, session_id)
+                for host in Host
                 for session_id in (_current_session_id(host),) if session_id
             ]
             machine = socket.gethostname()
@@ -672,7 +673,7 @@ def _build_parser():
 
     claim_parser = subparsers.add_parser("claim")
     _add_selector_arguments(claim_parser)
-    claim_parser.add_argument("--host", required=True, choices=("claude", "codex"))
+    claim_parser.add_argument("--host", required=True, type=Host, choices=list(Host))
     claim_parser.add_argument("--role", default="owner")
     claim_parser.add_argument("--predecessor")
     claim_parser.add_argument("--status", choices=WORK_ITEM_STATUSES)
@@ -697,7 +698,7 @@ def _build_parser():
     interrupted_parser.add_argument("--resume", dest="resume_handles", action="append", default=[])
 
     end_parser = subparsers.add_parser("end")
-    end_parser.add_argument("--host", required=True, choices=("claude", "codex"))
+    end_parser.add_argument("--host", required=True, type=Host, choices=list(Host))
     end_parser.add_argument("--reason", required=True, choices=END_REASONS)
     end_parser.add_argument("--successor")
 

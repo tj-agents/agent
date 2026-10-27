@@ -9,11 +9,12 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / ".agents/agent/runtime"
+RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(RUNTIME))
 SPEC = importlib.util.spec_from_file_location("agent_launch_check_tests", RUNTIME / "launch_check.py")
 CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
+from host import Host  # noqa: E402
 
 
 class LaunchCheckExpiryTests(unittest.TestCase):
@@ -46,14 +47,14 @@ class LaunchCheckExpiryTests(unittest.TestCase):
     def test_expired_empty_poll_forces_full_comparison_and_advances_from_existing_cursor(self):
         result, calls = self.check({})
         self.assertEqual("updated", result)
-        self.assertEqual({("claude", None), ("codex", None)}, set(calls))
+        self.assertEqual({(Host.CLAUDE, None), (Host.CODEX, None)}, set(calls))
         self.assertEqual({"since": "old", "since_at": CHECK.EXPIRY_SECONDS + 1},
                          json.loads(self.cursor.read_text(encoding="utf-8")))
 
     def test_failed_expired_empty_poll_preserves_the_old_cursor_for_retry(self):
-        result, calls = self.check({"codex": False})
+        result, calls = self.check({Host.CODEX: False})
         self.assertEqual("failed", result)
-        self.assertEqual({("claude", None), ("codex", None)}, set(calls))
+        self.assertEqual({(Host.CLAUDE, None), (Host.CODEX, None)}, set(calls))
         saved = json.loads(self.cursor.read_text(encoding="utf-8"))
         self.assertEqual("old", saved["since"])
         self.assertEqual({"applied": "old"}, saved["hosts"]["claude"])

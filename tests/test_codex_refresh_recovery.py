@@ -14,9 +14,14 @@ import shutil
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / ".agents/agent/runtime"
+RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(RUNTIME))
-sys.path.insert(0, str(ROOT / ".agents/agent/utility/peer/scripts"))
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
+import agent_cli  # noqa: E402
+from claude import sessions as CLAUDE_SESSIONS  # noqa: E402
+from codex import plugins as CODEX  # noqa: E402
+from codex import sessions as CODEX_SESSIONS  # noqa: E402
+from host import Host  # noqa: E402
 
 
 def load(name):
@@ -32,7 +37,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         self.watcher = load("relaunch_watcher")
         self.recovery = load("agent_recovery")
         self.refresh = load("reload_plugins")
-        caller = mock.patch.object(self.refresh, "calling_host", return_value="codex")
+        caller = mock.patch.object(self.refresh, "calling_host", return_value=Host.CODEX)
         caller.start()
         self.addCleanup(caller.stop)
         temporary = tempfile.TemporaryDirectory(prefix="codex-refresh-recovery-")
@@ -44,12 +49,12 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
 
     def args(self, record, token="token"):
         return argparse.Namespace(host="codex", session_id="thread", pid=17, pid_started_at=3.0,
-                                  record=record, token=token, timeout=1.0, profile=self.root,
+                                  record=record, token=token, timeout=1.0, history_root=self.root,
                                   recovery=self.root / "agent_recovery.py", title="Codex", prompt="continue",
                                   native_argument=["--profile", "work"], expected_cwd=self.root)
 
     def test_codex_options_preserve_safe_native_configuration(self):
-        options = self.relaunch.codex_arguments([
+        options = CODEX_SESSIONS.native_arguments([
             "initial prompt", "--profile", "work", "--model=gpt-6", "--no-daemon", "--sandbox", "read-only", "--config", "model=fast",
             "resume", "old-thread", "ignored prompt",
         ])
@@ -57,14 +62,14 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
 
     def test_codex_options_refuse_hook_trust_bypass(self):
         with self.assertRaisesRegex(RuntimeError, "hook-trust bypass"):
-            self.relaunch.codex_arguments(["--dangerously-bypass-hook-trust"])
+            CODEX_SESSIONS.native_arguments(["--dangerously-bypass-hook-trust"])
 
     def test_compact_and_resume_last_options_preserve_safe_settings(self):
         self.assertEqual(["-sread-only", "-aon-request", "-mchosen", "-cmodel_reasoning_effort=high"],
-                         self.relaunch.codex_arguments(["resume", "thread", "-sread-only", "-aon-request",
+                         CODEX_SESSIONS.native_arguments(["resume", "thread", "-sread-only", "-aon-request",
                                                         "-mchosen", "-cmodel_reasoning_effort=high", "old prompt"]))
         self.assertEqual(["--no-daemon", "-sread-only"],
-                         self.relaunch.codex_arguments(["resume", "--last", "--no-daemon", "-sread-only", "old prompt"]))
+                         CODEX_SESSIONS.native_arguments(["resume", "--last", "--no-daemon", "-sread-only", "old prompt"]))
 
     def test_cancelled_or_changed_close_never_relaunches(self):
         request = self.root / "request.json"
@@ -177,12 +182,12 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         shared.own_host_and_entry.return_value = entry
         close = {"request": str(self.root / "request"), "request_sha256": "a" * 64,
                  "result": str(self.root / "result"), "cancel": str(self.root / "cancel")}
-        with mock.patch.object(self.relaunch.agent_cli, "resolve_claude_executable", return_value="claude"), \
+        with mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"), \
                 mock.patch.object(self.relaunch, "cli_close_capability", return_value=self.root / "process_identity.py"), \
                 mock.patch.object(self.relaunch, "arm_client_close", return_value=close) as arm:
-            result = self.relaunch.relaunch(self.root, {}, shared=shared, host="claude", arguments=lambda _: ["--model", "chosen"])
+            result = self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CLAUDE, arguments=lambda _: ["--model", "chosen"])
         self.assertEqual("armed", result["relaunch"])
-        self.assertEqual("claude", arm.call_args.args[-1])
+        self.assertEqual(Host.CLAUDE, arm.call_args.args[-1])
         self.assertEqual(close, self.relaunch.read_json(self.relaunch.record_path("thread"))["close"])
 
     def test_codex_relaunch_uses_native_checkout_not_the_launch_directory(self):
@@ -193,11 +198,11 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         shared.own_host_and_entry.return_value = entry
         close = {"request": str(self.root / "request"), "request_sha256": "a" * 64,
                  "result": str(self.root / "result"), "cancel": str(self.root / "cancel")}
-        with mock.patch.object(self.relaunch.agent_cli, "resolve_codex_executable", return_value=("codex", [])), \
+        with mock.patch.object(agent_cli, "resolve_codex_executable", return_value=("codex", [])), \
                 mock.patch.object(self.relaunch.required_plugins, "check_launch"), \
                 mock.patch.object(self.relaunch, "cli_close_capability", return_value=self.root / "close.py"), \
                 mock.patch.object(self.relaunch, "arm_client_close", return_value=close):
-            result = self.relaunch.relaunch(self.root, {}, shared=shared, host="codex", arguments=lambda _: [])
+            result = self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CODEX, arguments=lambda _: [])
         self.assertEqual("armed", result["relaunch"])
 
     def test_codex_relaunch_refuses_missing_or_different_native_checkout(self):
@@ -208,7 +213,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
                 shared = mock.Mock()
                 shared.own_host_and_entry.return_value = entry
                 with self.assertRaisesRegex(RuntimeError, "checkout"):
-                    self.relaunch.relaunch(self.root, {}, shared=shared, host="codex", arguments=lambda _: [])
+                    self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CODEX, arguments=lambda _: [])
                 shared.start_detached.assert_not_called()
 
     def test_cli_close_uses_enabled_native_inventory_not_repository_selection(self):
@@ -218,13 +223,13 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         process_identity.write_text("# capability\n", encoding="utf-8")
         with mock.patch.object(self.relaunch.required_plugins, "check", side_effect=AssertionError("selection filter used")), \
                 mock.patch.object(self.relaunch.required_plugins, "inventory_roots", return_value={"cli@tj-agents": cli}):
-            self.assertEqual(process_identity, self.relaunch.cli_close_capability(self.root, "codex", "codex"))
+            self.assertEqual(process_identity, self.relaunch.cli_close_capability(self.root, Host.CODEX, "codex"))
 
     def test_claude_tool_restrictions_and_aliases_survive_recovery(self):
         self.assertEqual([
             "--tools", "Read", "--disallowedTools", "Bash,Write", "--allowed-tools=Read,Edit",
             "--restricted", "--dangerously-skip-permissions",
-        ], self.relaunch.preserved_arguments([
+        ], CLAUDE_SESSIONS.native_arguments([
             "initial prompt", "--tools", "Read", "--disallowedTools", "Bash,Write",
             "--allowed-tools=Read,Edit", "--restricted", "--dangerously-skip-permissions",
         ]))
@@ -233,27 +238,24 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         shared = mock.Mock()
         shared.own_host_and_entry.return_value = entry
         with self.assertRaisesRegex(RuntimeError, "tool restrictions"):
-            self.relaunch.relaunch(self.root, {}, shared=shared, host="claude", arguments=lambda _: ["--tools"])
+            self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CLAUDE, arguments=lambda _: ["--tools"])
         shared.start_detached.assert_not_called()
         self.assertFalse(self.relaunch.record_path("thread").exists())
 
     def test_claude_argument_delimiter_never_promotes_literal_prompt_tokens(self):
-        self.assertEqual([], self.relaunch.preserved_arguments([]))
-        self.assertEqual([], self.relaunch.preserved_arguments(["--", "--dangerously-skip-permissions"]))
-        self.assertEqual([], self.relaunch.preserved_arguments(["--", "--tools", "Read"]))
-        self.assertEqual(["--tools", "Read"], self.relaunch.preserved_arguments([
+        self.assertEqual([], CLAUDE_SESSIONS.native_arguments([]))
+        self.assertEqual([], CLAUDE_SESSIONS.native_arguments(["--", "--dangerously-skip-permissions"]))
+        self.assertEqual([], CLAUDE_SESSIONS.native_arguments(["--", "--tools", "Read"]))
+        self.assertEqual(["--tools", "Read"], CLAUDE_SESSIONS.native_arguments([
             "--tools", "Read", "--", "--dangerously-skip-permissions",
         ]))
 
     def run_refresh(self, failure=None, extra=(), setup_errors=()):
         output = io.StringIO()
-        failure = failure or self.refresh.codex_hook_trust.RestartRequired("unloaded daemon")
         with mock.patch.object(self.refresh.launch_check, "check", return_value="current"), \
-                mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=failure), \
+                mock.patch.object(CODEX, "ensure_hooks", return_value="unloaded daemon", side_effect=failure), \
                 mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=list(setup_errors)), \
-                mock.patch.object(self.refresh, "calling_host", return_value="codex"), \
-                mock.patch.object(self.refresh, "relaunch_codex", side_effect=(self.refresh.RefreshError("--no-relaunch forbids restart")
-                                                                               if "--no-relaunch" in extra else None),
+                mock.patch.object(CODEX.session_relaunch, "relaunch",
                                   return_value={"relaunch": "armed", "session_id": "thread"}) as restart, \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
             code = self.refresh.main(["--host", "codex", "--project", str(self.root), *extra])
@@ -278,46 +280,43 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         code, report, restart = self.run_refresh(extra=["--no-relaunch"])
         self.assertEqual(1, code)
         self.assertIn("--no-relaunch", report["hook_readiness_error"])
-        restart.assert_called_once_with(self.root, "unloaded daemon", False)
+        restart.assert_not_called()
 
     def test_verify_only_never_arms_recovery(self):
-        with mock.patch.object(self.refresh, "executable_for", return_value="native"), \
+        with mock.patch.object(CODEX, "resolve_executable", return_value="native"), \
                 mock.patch.object(self.refresh, "selection", return_value=({}, [])), \
                 mock.patch.object(self.refresh, "verify", return_value={"host": "codex", "problems": []}), \
                 mock.patch.object(self.refresh.required_plugins, "check_setup", return_value=[]), \
-                mock.patch.object(self.refresh, "relaunch_codex") as restart, \
+                mock.patch.object(CODEX.session_relaunch, "relaunch") as restart, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(0, self.refresh.main(["--host", "codex", "--verify-only", "--project", str(self.root)]))
         restart.assert_not_called()
 
     def test_full_refresh_uses_the_same_recovery_path(self):
-        with mock.patch.object(self.refresh, "executable_for", return_value="native"), \
+        with mock.patch.object(CODEX, "resolve_executable", return_value="native"), \
                 mock.patch.object(self.refresh, "selection", return_value=({}, [])), \
                 mock.patch.object(self.refresh, "refresh", return_value=[]), \
                 mock.patch.object(self.refresh, "verify", return_value={"host": "codex", "problems": []}), \
                 mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=[]), \
-                mock.patch.object(self.refresh, "calling_host", return_value="codex"), \
-                mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=self.refresh.codex_hook_trust.RestartRequired("restart")), \
-                mock.patch.object(self.refresh, "relaunch_codex", return_value={"relaunch": "armed"}) as restart, \
+                mock.patch.object(CODEX, "ensure_hooks", return_value="restart"), \
+                mock.patch.object(CODEX.session_relaunch, "relaunch", return_value={"relaunch": "armed"}) as restart, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(0, self.refresh.main(["--host", "codex", "--verify", "--project", str(self.root)]))
-        restart.assert_called_once_with(self.root, "restart", True)
+        restart.assert_called_once_with(self.root, {}, host=Host.CODEX)
 
     def test_full_refresh_does_not_restart_a_foreign_codex_client(self):
-        with mock.patch.object(self.refresh, "executable_for", return_value="native"), \
+        with mock.patch.object(CODEX, "resolve_executable", return_value="native"), \
                 mock.patch.object(self.refresh, "selection", return_value=({}, [])), \
                 mock.patch.object(self.refresh, "refresh", return_value=[]), \
                 mock.patch.object(self.refresh, "verify", return_value={"host": "codex", "problems": []}), \
                 mock.patch.object(self.refresh.required_plugins, "converge_setup", return_value=[]), \
-                mock.patch.object(self.refresh, "calling_host", return_value="claude"), \
-                mock.patch.object(self.refresh.launch_check, "ensure_hooks", side_effect=self.refresh.codex_hook_trust.RestartRequired("restart")) as readiness, \
-                mock.patch.object(self.refresh, "relaunch_codex") as restart, \
-                mock.patch.object(self.refresh, "relaunch_session") as adopt, \
+                mock.patch.object(self.refresh, "calling_host", return_value=Host.CLAUDE), \
+                mock.patch.object(CODEX, "ensure_hooks", return_value="restart") as readiness, \
+                mock.patch.object(CODEX.session_relaunch, "relaunch") as restart, \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(0, self.refresh.main(["--host", "codex", "--verify", "--project", str(self.root)]))
         readiness.assert_called_once_with(self.root, "native", running_session=False)
         restart.assert_not_called()
-        adopt.assert_not_called()
 
     def test_actual_open_item_must_match_expected_checkout_before_launch(self):
         item = {"status": "closed", "cwd": str(self.root / "other"), "profile": str(self.root)}

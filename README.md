@@ -15,7 +15,9 @@ Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 
 The generated packages have no dependency on a Core checkout. Shared runtime is authored beneath
 `.agents/agent/runtime` and `.agents/agent-store/runtime`; generated payloads embed the canonical paths
-they consume.
+they consume. Claude-only and Codex-only runtime is authored in `.claude/runtime` and `.codex/runtime`
+and ships as the `claude` and `codex` packages inside `.agents/agent/runtime`, so runtime and tests run
+from the generated `plugins/agent` tree.
 
 Maintainers refresh the offline Marketplace selection snapshot only with
 `.agents/agent/utility/plugins/scripts/update_marketplace_catalog.py --source <marketplace-checkout>`;
