@@ -297,18 +297,27 @@ def refresh_marketplaces(executable: str, project: Path, marketplaces: dict) -> 
 
 
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
+    from claude import registry
+
     retired = retire_unpublished_user_plugins(marketplaces)
     retired.extend(uninstall_unpublished(executable, marketplaces))
     plugins = [identity for identity in plugins if identity not in retired or declared_scopes(identity, project)]
     if not plugins:
         return []
+    scoped = {identity for identity in plugins if declared_scopes(identity, project)}
+    if scoped:
+        refresh_heads(None)
+    changed = registry.synchronize([project], identities=scoped, force=True) if scoped else []
+    plugins = [identity for identity in plugins if identity not in scoped]
+    if not plugins:
+        return changed
     inventory = json.loads(plugin_refresh.run([executable, "plugin", "list", "--json"], project))
     effective = installations(project, inventory)
     installs = [(identity, scope) for identity in plugins for scope in declared_scopes(identity, project)
                 if not any(entry.get('id') == identity and entry.get('scope') == scope for entry in effective)]
     updates = [(identity, scope, owner) for identity in plugins
                for scope, owner in update_targets(identity, project, inventory)]
-    return apply(executable, project, installs, updates)
+    return sorted(set(changed + apply(executable, project, installs, updates)))
 
 
 def install_missing(executable: str, project: Path, missing) -> None:
@@ -419,8 +428,13 @@ def attempt_key(identity: str, scope: str, owner: Path) -> str:
 
 def reconcile(project: Path, event: bool = False, repositories: set[str] | None = None,
               fresh: frozenset[str] = frozenset()) -> list[str]:
+    from claude import registry
+
     retire_unpublished_user_plugins(fresh)
     marketplaces, plugins = selected(project)
+    scoped = {identity for identity in plugins if declared_scopes(identity, project)}
+    changed = registry.synchronize([project], identities=scoped) if scoped else []
+    plugins = [identity for identity in plugins if identity not in scoped]
     inventory = installed_entries()
     effective = installations(project, inventory)
     contents = plugin_autoupdate.read_contents()
@@ -447,7 +461,7 @@ def reconcile(project: Path, event: bool = False, repositories: set[str] | None 
                     attempts[attempt_key(identity, scope, owner)] = head
     dependencies = dependency_installs(present)
     if not installs and not updates and not dependencies:
-        return []
+        return changed
     touched = {work[0].rsplit("@", 1)[1] for work in installs + updates + dependencies}
     native = resolve_executable()
     refresh_marketplaces(native, project, {name: repo for name, repo in marketplaces.items() if name in touched - fresh})
@@ -457,7 +471,7 @@ def reconcile(project: Path, event: bool = False, repositories: set[str] | None 
             with contextlib.suppress(OSError):
                 plugin_autoupdate.record_contents(attempts={key: attempts[key]})
 
-    return apply(native, project, installs, updates, starting, dependencies)
+    return sorted(set(changed + apply(native, project, installs, updates, starting, dependencies)))
 
 
 
@@ -474,6 +488,27 @@ def update(repositories: set[str] | None, project: Path, updated: set[str] | Non
     if updated is not None:
         updated.update(changed)
     return repositories is None or not any(key.rsplit("@", 1)[0] in repositories for key in unresolved)
+
+
+def update_registered(repositories: set[str] | None = None) -> list[str]:
+    from claude import registry
+
+    projects = sorted({Path(entry["projectPath"]).resolve() for entry in installed_entries()
+                       if entry.get("scope") in {"project", "local"} and isinstance(entry.get("projectPath"), str)
+                       and Path(entry["projectPath"]).is_dir()})
+    if not projects:
+        return registry.synchronize([])
+    marketplaces = {name: repo for name, (repo, _) in tj_agents_marketplaces().items()}
+    refresh_marketplaces(resolve_executable(), projects[0], marketplaces)
+    unresolved = refresh_heads(repositories)
+    if unresolved:
+        raise plugin_refresh.RefreshError("Could not resolve plugin publishers: " + ", ".join(sorted(unresolved)))
+    changed = registry.synchronize(projects)
+    import prune_plugin_cache
+
+    if prune_plugin_cache.main(["--apply"]):
+        raise plugin_refresh.RefreshError("Claude plugin cache reconciliation failed")
+    return changed
 
 
 def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False) -> str | None:
