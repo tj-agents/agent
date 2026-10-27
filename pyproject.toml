@@ -14,7 +14,7 @@ tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "40d4fa1dc7e502a4
 dev = ["mypy>=2.4.0", "pytest>=9.1.1", "ruff>=0.17.1"]
 
 [tool.ruff]
-include = [".agents/tests/test_shared_python_paths.py"]
+include = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py"]
 target-version = "py312"
 
 [tool.ruff.lint]
@@ -23,7 +23,7 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "A", "BLE", "C4", "SIM", "PTH", "P
 [tool.mypy]
 strict = true
 warn_unreachable = true
-files = [".agents/tests/test_shared_python_paths.py"]
+files = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py"]
 
 [tool.pytest]
 strict = true
