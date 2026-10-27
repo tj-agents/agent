@@ -1,6 +1,6 @@
 ---
 name: peer
-description: List, inspect and close the other Claude or Codex CLI sessions and their terminal tabs, addressed by the tab title the user can see rather than an internal session name. Use when asked which CLIs are running, which tab to close, to close a finished session or a stale tab, or to check what another session is doing before continuing.
+description: List and inspect agent peers through the current host, or resolve registered Claude and Codex sessions and their visible terminal tabs. Use when asked which agents or CLIs are running, what a peer is doing, or to inspect or close one exact authorized terminal target.
 
 kind: utility
 domain: agent
@@ -13,18 +13,24 @@ route: infer
 
 # Peer CLI sessions
 
-The runtime is Python 3.9+ on Windows and Linux. Use `python3` on Linux/macOS and `python` on Windows.
+Owns peer selection across native session identities and registered physical terminals. Use the current
+host's native listing and inspection first; its entry point names those tools. A native agent handle and
+a visible terminal title are different identities and are not interchangeable.
 
-Two naming systems describe the same window. A session's own name is derived by the harness from its
-branch or directory (`refactor-postgresauthconsumer-ec`), while its tab is titled by whoever launched it
-("Postgres sweep: Search"). Naming a peer by the first is naming something the user cannot see on screen.
-This skill addresses peers by tab title.
+```text
+Request: which peers are running in this host?
+Action: inspect native peers and preserve their native handles
+Request: inspect the visible tab "Postgres sweep: Search" across Claude and Codex
+Action: resolve its recorded terminal identity, checkout and liveness
+```
 
-`ListAgents` and `SendMessage` remain the way to enumerate and talk to in-harness peers. This skill is for
-the two things they do not do: resolving the title the user sees, and ending a session.
+Use the deterministic registry and terminal operations below for cross-host inventory or a requested
+visible terminal target. The runtime is Python 3.9+ on Windows and Linux; use `python3` on Linux/macOS and
+`python` on Windows. Session names can come from a branch or directory, while a tab title comes from its
+launcher. Use the exact visible title when the request names a physical tab, and verify the resulting
+session identity before acting. Messaging follows `agent:message`.
 
 ```sh
-# Linux/macOS: install Python 3.9+ as python3 before using this utility.
 python3 -B <skill-directory>/scripts/peer_cli.py list --host codex
 python3 -B <skill-directory>/scripts/peer_cli.py inspect 'Postgres sweep: Search'
 python3 -B <skill-directory>/scripts/peer_cli.py list --all
@@ -35,7 +41,6 @@ python3 -B <skill-directory>/scripts/peer_cli.py close 'Postgres sweep: Search'
 ```
 
 ```sh
-# Windows
 python -B <skill-directory>\scripts\peer_cli.py list
 python -B <skill-directory>\scripts\peer_cli.py close "Postgres sweep: Search"
 ```
@@ -72,7 +77,6 @@ python3 -B <skill-directory>/scripts/close_tab.py --title 'Postgres sweep: Searc
 ```
 
 ```sh
-# Windows
 python -B <skill-directory>\scripts\configure_terminal_tab_close.py --preview
 python -B <skill-directory>\scripts\close_tab.py --list
 ```
@@ -114,7 +118,7 @@ Close one when it is **finished or duplicating**, and say which and why before y
   other — one switching branches mid-edit is enough to lose a commit's worth of another's work.
 
 Never close a session holding unpushed work, mid-run validation, or a question waiting on the user. Check
-with `list` for its directory, and prefer asking it through `SendMessage` over guessing. When both
+with `list` for its directory, and prefer authorized messaging through `agent:message` over guessing. When both
 sessions are viable, the one holding the live task context is the one that stays.
 
 Closing a CLI is not reversible. Where the user can see the tabs, name the one you mean and let them close

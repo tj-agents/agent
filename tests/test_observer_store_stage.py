@@ -41,7 +41,7 @@ class ObserverStoreStageTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.state)}), \
                 mock.patch.object(session_close.subprocess, 'run', side_effect=self.scheduler), \
                 mock.patch.object(session_close.subprocess, 'Popen', return_value=SimpleNamespace(pid=1)):
-            session_close.start_observer(['--result', 'unused'])
+            session_close.start_detached(SCRIPTS / 'client_close_watcher.py', ['--request', 'unused'])
         return next((self.state / 'merge-cleanup' / 'observers').iterdir())
 
     def test_start_detached_stage_loads_the_receipted_store(self):

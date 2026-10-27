@@ -4,6 +4,7 @@
 - `close` — utility — core
 - `handoff` — utility — core
 - `listen` — utility — core
+- `memory` — utility — core
 - `message` — utility — core
 - `open` — utility — core
 - `peer` — utility — core

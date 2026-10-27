@@ -11,6 +11,7 @@
       "handoff",
       "lanes",
       "listen",
+      "memory",
       "message",
       "open",
       "peer",
@@ -81,6 +82,20 @@
       ]
     },
     {
+      "name": "memory",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
       "name": "message",
       "kind": "utility",
       "profile": "core",
@@ -88,8 +103,7 @@
         "agent sessions"
       ],
       "requires": [
-        "python",
-        "codex app-server"
+        "native host"
       ],
       "provenance": [
         "house"

@@ -50,9 +50,9 @@ class LoaderRootTests(unittest.TestCase):
         self.assertIsNone(register._load_session_store())
 
     def test_followup_loader_refuses_missing_inner_transport(self):
-        script = self.inner / '.agents/agent/utility/message/scripts/codex_followup.py'
+        script = self.inner / '.agents/agent/runtime/codex/codex_followup.py'
         script.parent.mkdir(parents=True)
-        shutil.copy2(ROOT / 'plugins/agent/.agents/agent/utility/message/scripts/codex_followup.py', script)
+        shutil.copy2(ROOT / 'plugins/agent/.agents/agent/runtime/codex/codex_followup.py', script)
         sentinel = self.outer / '.agents/agent/runtime/codex/hook_trust.py'
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("raise AssertionError('outer transport loaded')\n", encoding='utf-8')

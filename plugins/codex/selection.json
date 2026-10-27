@@ -6,8 +6,7 @@
   ],
   "profiles": {
     "core": [
-      "hooks",
-      "memory"
+      "hooks"
     ]
   },
   "compatibilitySkillAliases": {},
@@ -22,20 +21,6 @@
       "requires": [
         "python",
         "codex"
-      ],
-      "provenance": [
-        "house"
-      ]
-    },
-    {
-      "name": "memory",
-      "kind": "utility",
-      "profile": "core",
-      "applicability": [
-        "codex sessions"
-      ],
-      "requires": [
-        "python"
       ],
       "provenance": [
         "house"
