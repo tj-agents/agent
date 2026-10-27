@@ -3,6 +3,7 @@ import importlib.util
 import json
 import contextlib
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -110,7 +111,7 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
             "agent@other": [{"installPath": str(source)}],
             "agent@tj-agents": [{"installPath": str(source)}],
         }}), encoding="utf-8")
-        with mock.patch.object(self.runtime, "claude_home", return_value=claude):
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(claude)}):
             self.assertEqual([], self.runtime.native_agent_roots({}))
             (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"agent@tj-agents": True}}), encoding="utf-8")
             self.assertEqual([source], self.runtime.native_agent_roots({}))

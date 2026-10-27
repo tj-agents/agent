@@ -22,6 +22,10 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from host import Host  # noqa: E402
+
 
 GIT_TIMEOUT_SECONDS = 30
 SWEEP_TIMEOUT_SECONDS = 1800
@@ -66,14 +70,6 @@ def marketplace_error(name: str, repository: object) -> str | None:
 
 def state_directory() -> Path:
     return Path(os.environ.get("AGENT_STATE_DIRECTORY") or Path.home() / ".agents-state")
-
-
-def codex_home() -> Path:
-    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-
-
-def claude_home() -> Path:
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
 def read_json(path: Path) -> dict:
@@ -145,7 +141,7 @@ def project_directories(config: dict, temporary: Path | None = None) -> list[Pat
 
 def declarations(config: dict) -> list[tuple[Path, dict]]:
     found = [(Path.home(), config)]
-    user_file = (codex_home() / "config.toml").resolve()
+    user_file = (Host.CODEX.configuration_root / "config.toml").resolve()
     for project in project_directories(config):
         path = project / ".codex" / "config.toml"
         if path.resolve() != user_file:
@@ -190,7 +186,7 @@ def declared_targets(config: dict) -> tuple[dict[str, dict], list[str]]:
 
 
 def marketplace_manifest(name: str) -> dict:
-    root = codex_home() / ".tmp" / "marketplaces" / name
+    root = Host.CODEX.configuration_root / ".tmp" / "marketplaces" / name
     for relative in (Path(".agents", "plugins", "marketplace.json"), Path(".claude-plugin", "marketplace.json")):
         manifest = read_json(root / relative)
         if manifest:
@@ -240,7 +236,7 @@ def read_contents() -> dict[str, dict[str, str]]:
 
 
 def installed_revisions() -> set[str]:
-    installed = read_json(claude_home() / "plugins" / "installed_plugins.json").get("plugins")
+    installed = read_json(Host.CLAUDE.configuration_root / "plugins" / "installed_plugins.json").get("plugins")
     claude = {entry.get("gitCommitSha") for entries in installed.values() if isinstance(entries, list)
               for entry in entries if isinstance(entry, dict)} if isinstance(installed, dict) else set()
     recorded = read_json(state_directory() / "plugin-autoupdate.json").get("revisions")
@@ -350,7 +346,7 @@ def refresh_contents(wanted: dict[str, set[str]], installed: dict[str, set[str]]
 
 
 def inspect_installation(name: str, target: dict) -> None:
-    cache = codex_home() / "plugins" / "cache" / name
+    cache = Host.CODEX.configuration_root / "plugins" / "cache" / name
     selected = {identity.rsplit("@", 1)[0] for identity in target["plugins"]}
     target["missing"] = [identity for identity in target["plugins"]
                          if not (cache / identity.rsplit("@", 1)[0]).is_dir()]
@@ -395,14 +391,14 @@ def codex_session_running(alive=process_alive) -> bool:
             connection.close()
     except sqlite3.Error:
         return True
-    home = os.path.normcase(str(codex_home().resolve()))
+    home = os.path.normcase(str(Host.CODEX.configuration_root.resolve()))
     return any(isinstance(profile, str) and os.path.normcase(str(Path(profile).resolve())) == home and alive(pid)
                for profile, pid in rows)
 
 
 def hook_packages(marketplace: str) -> list[dict]:
     packages = []
-    for path in sorted((codex_home() / "plugins" / "cache" / marketplace).glob("*/*/hooks/codex.json")):
+    for path in sorted((Host.CODEX.configuration_root / "plugins" / "cache" / marketplace).glob("*/*/hooks/codex.json")):
         try:
             hooks = json.loads(path.read_text(encoding="utf-8"))["hooks"]
             commands = [hook.get("commandWindows") or hook.get("command") or "" for groups in hooks.values()
@@ -425,7 +421,7 @@ def preserve_hook_snapshots(marketplace: str, packages: list[dict]) -> None:
             loader = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(loader)
             loader.snapshot_root(root, package["digest"], plugin,
-                                 codex_home() / "plugins" / "data" / f"{plugin}-{marketplace}" / "hook-snapshots")
+                                 Host.CODEX.configuration_root / "plugins" / "data" / f"{plugin}-{marketplace}" / "hook-snapshots")
         except (Exception, SystemExit):
             continue
 
@@ -540,7 +536,7 @@ def refresh_codex(executable: str, targets: dict[str, dict], recorded: dict, rev
         if retired:
             unlisted = {plugin for plugin in retired if listed and plugin.rsplit("@", 1)[0] not in listed}
             recorded["retired:" + key] = sorted(unlisted if listed else retired)
-            remove_user_plugins(codex_home() / "config.toml", unlisted)
+            remove_user_plugins(Host.CODEX.configuration_root / "config.toml", unlisted)
         retired = f" (no longer published, not installed: {', '.join(retired)})" if retired else ""
         if refreshed:
             if None not in published:
@@ -589,7 +585,7 @@ def refresh_declared(executable: str, config: dict, recorded: dict, previous: li
     selected = {name: target for name, target in targets.items()
                 if repositories is None or publishes(target, repositories)}
     outcomes = refresh_codex(executable, selected, recorded, **options)
-    remove_user_plugins(codex_home() / "config.toml", project_only)
+    remove_user_plugins(Host.CODEX.configuration_root / "config.toml", project_only)
     kept = {prefix + "codex:" + name for name in targets for prefix in ("", "retired:", "failed:")}
     kept |= {"codex-plugin:" + identity for target in targets.values() for identity in target["plugins"]}
     for key in [key for key in recorded if key not in kept]:
@@ -598,7 +594,7 @@ def refresh_declared(executable: str, config: dict, recorded: dict, previous: li
 
 
 def load_codex_config() -> dict:
-    return load_toml(codex_home() / "config.toml")
+    return load_toml(Host.CODEX.configuration_root / "config.toml")
 
 
 def installed_plugin_roots(plugin: str, claude_config: Path, codex_config: dict) -> list[Path]:
@@ -616,7 +612,7 @@ def installed_plugin_roots(plugin: str, claude_config: Path, codex_config: dict)
     if isinstance(plugins, dict):
         for identity, settings in plugins.items():
             if identity.startswith(prefix) and isinstance(settings, dict) and settings.get("enabled") is True:
-                roots.append(codex_home() / "plugins" / "cache" / identity.split("@", 1)[1] / plugin / "local")
+                roots.append(Host.CODEX.configuration_root / "plugins" / "cache" / identity.split("@", 1)[1] / plugin / "local")
     return roots
 
 
@@ -633,7 +629,7 @@ def console_python() -> str:
 
 def sweep_script(codex_config: dict) -> Path | None:
     relative = Path(".agents", "engineering", "workflow", "merge", "scripts", "worktree_sweep.py")
-    return newest_existing([root / relative for root in installed_plugin_roots("engineering", claude_home(),
+    return newest_existing([root / relative for root in installed_plugin_roots("engineering", Host.CLAUDE.configuration_root,
                                                                                 codex_config)])
 
 
@@ -726,7 +722,7 @@ def native_agent_roots(codex_config: dict) -> list[Path]:
     this identity. Do not reuse the prefix-based generic discovery here.
     """
     identity, roots = "agent@tj-agents", []
-    claude = claude_home()
+    claude = Host.CLAUDE.configuration_root
     settings = read_json(claude / "settings.json").get("enabledPlugins")
     installed = read_json(claude / "plugins" / "installed_plugins.json").get("plugins")
     if isinstance(settings, dict) and settings.get(identity) is True and isinstance(installed, dict):
@@ -736,7 +732,7 @@ def native_agent_roots(codex_config: dict) -> list[Path]:
                          if isinstance(entry, dict) and isinstance(entry.get("installPath"), str))
     plugins = codex_config.get("plugins")
     if isinstance(plugins, dict) and isinstance(plugins.get(identity), dict) and plugins[identity].get("enabled") is True:
-        roots.append(codex_home() / "plugins" / "cache" / "tj-agents" / "agent" / "local")
+        roots.append(Host.CODEX.configuration_root / "plugins" / "cache" / "tj-agents" / "agent" / "local")
     result, seen = [], set()
     for root in roots:
         try:
@@ -823,7 +819,7 @@ def main(argv: list[str] | None = None) -> int:
             recorded = {key: value for key, value in recorded.items() if not key.startswith("failed:")}
         previous = state.get("project_only") if isinstance(state.get("project_only"), list) else []
         config = load_codex_config()
-        executable = shutil.which("codex")
+        executable = shutil.which(Host.CODEX.value)
         repositories = set(arguments.repository) if arguments.repository else None
         outcomes = refresh_declared(executable, config, recorded, previous, repositories) if executable else {}
         sweep = "skipped" if arguments.no_sweep else sweep_worktrees(config)
