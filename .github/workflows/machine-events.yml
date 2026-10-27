@@ -1,0 +1,19 @@
+name: machine-events
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: machine-events-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: vars.MACHINE_EVENTS_TOPIC != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Publish repository hint
+        uses: tj-agents/github-actions/.github/actions/machine-events@d45d8a70dc1309ca02d304c8e3c58e493c263f89
+        with:
+          topic: ${{ secrets.MACHINE_EVENTS_TOPIC }}
