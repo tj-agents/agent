@@ -1,7 +1,7 @@
 {
   "repository": "tj-agents/marketplace",
   "revision": "50b2de54b6e23ba4f4d753ca587fb51835dd73a1",
-  "catalog": {
+  "marketplace": {
     "name": "tj-agents",
     "description": "Shared base, Agent Store, agent, CLI, workflow, engineering, C++, .NET, React, Neovim, Rust, Python, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
     "owner": "Tommy Seery",
