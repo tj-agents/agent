@@ -10,6 +10,8 @@ import posixpath
 import re
 import shutil
 import stat
+import subprocess
+import tomllib
 from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any, TypedDict
@@ -311,6 +313,12 @@ def mapped_resource_directories(payloads: Any) -> set[tuple[str, str]]:
         raise ValueError(".agents/plugins/payloads.json: resources must be a list")
     mapped: set[tuple[str, str]] = set()
     for resource in resources:
+        if isinstance(resource, dict) and set(resource) == {
+            "plugin",
+            "distribution",
+            "destination",
+        }:
+            continue
         if not isinstance(resource, dict) or not isinstance(
             resource.get("source"), str
         ):
@@ -570,6 +578,144 @@ def validate_skill_asset_source(
         )
 
 
+def distribution_files(root: Path, name: str) -> list[tuple[Path, tuple[str, ...]]]:
+    """Read a locked, non-editable pure-Python dependency without importing it."""
+    if not NAME.fullmatch(name):
+        raise ValueError(f"Invalid Python distribution resource: {name!r}")
+    for filename in ("pyproject.toml", "uv.lock"):
+        path = root / filename
+        if not path.is_file() or is_link_or_junction(path):
+            raise ValueError(
+                f"Python distribution resources require a regular {filename}"
+            )
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = {
+        re.sub(r"[-_.]+", "-", match[1]).lower()
+        for requirement in project.get("project", {}).get("dependencies", [])
+        if isinstance(requirement, str)
+        and (match := re.match(r"\s*([A-Za-z0-9][A-Za-z0-9_.-]*)", requirement))
+    }
+    if name not in declared:
+        raise ValueError(
+            f"Python distribution resource {name!r} is not a runtime dependency"
+        )
+    uv = shutil.which("uv")
+    if uv is None:
+        raise ValueError("uv is required to resolve Python distribution resources")
+    inspect = """import importlib.metadata, json, re, sys, sysconfig
+from pathlib import Path
+environment = str(Path(sys.executable).parent.parent)
+library = sysconfig.get_path('purelib', scheme='venv',
+    vars={'base': environment, 'platbase': environment})
+distribution = next(item for item in importlib.metadata.distributions(path=[library])
+    if re.sub(r'[-_.]+', '-', item.metadata['Name']).lower() == sys.argv[1])
+wheel = distribution.read_text('WHEEL') or ''
+print(json.dumps({'name': distribution.metadata['Name'],
+    'pure': 'Root-Is-Purelib: true' in wheel and 'Tag: py3-none-any' in wheel,
+    'root': str(distribution.locate_file('')),
+    'files': [str(path) for path in distribution.files or []]}))
+"""
+    try:
+        result = subprocess.run(
+            [
+                uv,
+                "run",
+                "--locked",
+                "--no-editable",
+                "--project",
+                str(root),
+                "python",
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                inspect,
+                name,
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=180,
+            check=True,
+        )
+        metadata = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(
+            f"Cannot resolve locked Python distribution {name!r}: {error}"
+        ) from error
+    if not isinstance(metadata, dict) or metadata.get("pure") is not True:
+        raise ValueError(
+            f"Python distribution resource {name!r} must be a pure Python wheel"
+        )
+    if re.sub(r"[-_.]+", "-", str(metadata.get("name", ""))).lower() != name:
+        raise ValueError(
+            f"Resolved Python distribution identity does not match {name!r}"
+        )
+    base = metadata.get("root")
+    records = metadata.get("files")
+    if (
+        not isinstance(base, str)
+        or not Path(base).is_absolute()
+        or not isinstance(records, list)
+    ):
+        raise ValueError(f"Invalid installed Python distribution metadata for {name!r}")
+    directory = Path(base)
+    resolved_directory = directory.resolve(strict=True)
+    files: list[tuple[Path, tuple[str, ...]]] = []
+    seen: set[str] = set()
+    for record in records:
+        if not isinstance(record, str):
+            raise ValueError(f"Invalid Python distribution record for {name!r}")
+        relative = PurePosixPath(record)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or "\\" in record
+            or ":" in record
+            or "\x00" in record
+            or relative.as_posix() != record
+        ):
+            raise ValueError(f"Unsafe Python distribution record: {record!r}")
+        if ignored(relative):
+            continue
+        if any(
+            part.endswith(".dist-info") for part in relative.parts
+        ) and relative.name in {
+            "INSTALLER",
+            "REQUESTED",
+            "RECORD",
+            "RECORD.jws",
+            "RECORD.p7s",
+            "direct_url.json",
+            "uv_cache.json",
+        }:
+            continue
+        if relative.suffix == ".pth":
+            raise ValueError(
+                "Python distribution resources cannot require .pth import hooks"
+            )
+        source = directory.joinpath(*relative.parts)
+        current = source
+        while current != directory:
+            if is_link_or_junction(current):
+                raise ValueError(f"Linked Python distribution resource: {record!r}")
+            current = current.parent
+        if not source.is_file() or not source.resolve(strict=True).is_relative_to(
+            resolved_directory
+        ):
+            raise ValueError(
+                f"Missing or escaped Python distribution resource: {record!r}"
+            )
+        if record in seen:
+            raise ValueError(f"Duplicate Python distribution record: {record!r}")
+        seen.add(record)
+        files.append((source, relative.parts))
+    if not files:
+        raise ValueError(f"Python distribution resource {name!r} is empty")
+    return sorted(files, key=lambda item: item[1])
+
+
 def validate_resources(
     root: Path,
     payloads: JSONObject,
@@ -581,19 +727,18 @@ def validate_resources(
         raise ValueError(".agents/plugins/payloads.json: resources must be a list")
     mapped: dict[str, list[tuple[Path, str]]] = {}
     destinations: set[str] = set()
+    distributions: dict[str, list[tuple[Path, tuple[str, ...]]]] = {}
     for resource in resources:
-        if not isinstance(resource, dict) or set(resource) != {
-            "plugin",
-            "source",
-            "destination",
-        }:
+        if not isinstance(resource, dict) or set(resource) not in (
+            {"plugin", "source", "destination"},
+            {"plugin", "distribution", "destination"},
+        ):
             raise ValueError(
                 ".agents/plugins/payloads.json: each resource declares exactly "
-                "plugin, source and destination"
+                "plugin, destination and either source or distribution"
             )
-        package, source, destination = (
+        package, destination = (
             resource["plugin"],
-            resource["source"],
             resource["destination"],
         )
         if not isinstance(package, str) or package not in publications:
@@ -601,26 +746,45 @@ def validate_resources(
                 ".agents/plugins/payloads.json: resource plugin must be a declared "
                 "package"
             )
-        if not isinstance(source, str) or not isinstance(destination, str):
+        if not isinstance(destination, str):
             raise ValueError(
                 ".agents/plugins/payloads.json: each resource declares string "
                 "plugin, source and destination"
             )
-        owner, directory = resource_source_parts(source)
-        if owner is not None and owner not in plugins:
-            raise ValueError(
-                ".agents/plugins/payloads.json: resource source must name a declared "
-                "canonical plugin"
-            )
         target = safe_package_destination(destination)
-        source_path = checked_resource_path(root, source)
-        files = resource_files(root, source)
-        if owner is not None and directory not in PLUGIN_RESOURCE_DIRS:
-            validate_skill_asset_source(root, source, files, plugins[owner])
-        for file in files:
-            suffix = (
-                () if source_path.is_file() else file.relative_to(source_path).parts
-            )
+        if "distribution" in resource:
+            name = resource["distribution"]
+            if not isinstance(name, str):
+                raise ValueError(
+                    "A Python distribution resource requires a distribution name"
+                )
+            if name not in distributions:
+                distributions[name] = distribution_files(root, name)
+            selected = distributions[name]
+        else:
+            source = resource["source"]
+            if not isinstance(source, str):
+                raise ValueError("A file resource requires a string source")
+            owner, directory = resource_source_parts(source)
+            if owner is not None and owner not in plugins:
+                raise ValueError(
+                    ".agents/plugins/payloads.json: resource source must name a "
+                    "declared canonical plugin"
+                )
+            source_path = checked_resource_path(root, source)
+            files = resource_files(root, source)
+            if owner is not None and directory not in PLUGIN_RESOURCE_DIRS:
+                validate_skill_asset_source(root, source, files, plugins[owner])
+            selected = [
+                (
+                    file,
+                    ()
+                    if source_path.is_file()
+                    else file.relative_to(source_path).parts,
+                )
+                for file in files
+            ]
+        for file, suffix in selected:
             generated = PurePosixPath(
                 "plugins", package, *target.parts, *suffix
             ).as_posix()
