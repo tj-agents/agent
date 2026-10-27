@@ -30,8 +30,10 @@ def command(hook):
 
 
 def git(cwd, *arguments):
-    subprocess.run(["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
-                    "-C", str(cwd), *arguments], check=True, capture_output=True, text=True)
+    completed = subprocess.run(["git", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid",
+                                "-C", str(cwd), *arguments], capture_output=True, text=True, env=dict(os.environ))
+    if completed.returncode:
+        raise AssertionError(f"git {' '.join(arguments)} failed in {cwd}: {completed.stderr.strip()}")
 
 
 def record(kind, uuid, content, **extra):
