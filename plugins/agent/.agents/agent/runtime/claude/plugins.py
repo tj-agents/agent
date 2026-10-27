@@ -298,7 +298,7 @@ def refresh_marketplaces(executable: str, project: Path, marketplaces: dict) -> 
 
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     retired = retire_unpublished_user_plugins(marketplaces)
-    uninstall_unpublished(executable, marketplaces)
+    retired.extend(uninstall_unpublished(executable, marketplaces))
     plugins = [identity for identity in plugins if identity not in retired or declared_scopes(identity, project)]
     if not plugins:
         return []

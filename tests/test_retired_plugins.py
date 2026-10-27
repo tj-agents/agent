@@ -132,6 +132,35 @@ class RetiredPluginTests(unittest.TestCase):
         self.assertEqual(before, settings.read_bytes())
 
 
+    def test_claude_refresh_does_not_update_uninstalled_project_or_local_plugins(self):
+        self.claude_marketplace("agent")
+        for scope, filename in (("project", "settings.json"), ("local", "settings.local.json")):
+            with self.subTest(scope=scope):
+                project = self.root / scope
+                project.mkdir()
+                settings = project / ".claude" / filename
+                installed = self.root / "claude" / "plugins" / "installed_plugins.json"
+                write(settings, {"enabledPlugins": {"machine@tj-agents": True}})
+                write(installed, {"plugins": {"machine@tj-agents": [
+                    {"scope": scope, "projectPath": str(project)}]}})
+                commands = []
+
+                def run(command, cwd):
+                    commands.append((command, cwd))
+                    if command[1:3] == ["plugin", "uninstall"]:
+                        write(settings, {"enabledPlugins": {}})
+                        write(installed, {"plugins": {}})
+                        return ""
+                    if command[1:3] == ["plugin", "list"]:
+                        return "[]"
+                    self.fail(f"Unexpected native operation after uninstall: {command}")
+
+                with mock.patch.object(CLAUDE.plugin_refresh, "run", side_effect=run):
+                    self.assertEqual([], CLAUDE.refresh_plugins(
+                        "claude", project, {"tj-agents": {}}, ["machine@tj-agents"]))
+                self.assertEqual([(["claude", "plugin", "uninstall", "machine@tj-agents", "--scope", scope],
+                                   project)], commands)
+
     def test_claude_installations_the_marketplace_no_longer_publishes_are_uninstalled(self):
         self.claude_marketplace("agent")
         project = self.root / "repo"
