@@ -272,6 +272,9 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if sys.version_info < (3, 12):
+        print("launch requires Python 3.12 or newer", file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     parser.add_argument("--project", type=Path, required=True)
