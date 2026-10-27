@@ -12,6 +12,7 @@ from unittest import mock
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/agent/.agents/agent/runtime'
 sys.path.insert(0, str(SCRIPTS))
 from claude import plugins as CLAUDE  # noqa: E402
+from claude import registry
 import plugin_refresh  # noqa: E402
 import required_plugins  # noqa: E402
 
@@ -81,18 +82,19 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
             return json.dumps({'updateOutcome': 'updated', 'newVersion': 'new'})
         return ''
 
-    def test_refresh_updates_only_the_first_same_repository_registration(self):
+    def test_refresh_batches_the_current_repository_without_a_native_update_per_worktree(self):
         for first, current in ((self.primary, self.nested), (self.nested, self.primary),
                                (self.sibling, self.nested)):
             with self.subTest(first=first, current=current):
                 self.commands = []
                 other = self.nested if first != self.nested else self.primary
                 self.rows = [self.entry(self.foreign), self.entry(first), self.entry(other)]
-                with mock.patch.object(CLAUDE, 'dependency_installs', return_value=[]), \
+                with mock.patch.object(registry, 'synchronize', return_value=[IDENTITY]) as synchronize, \
+                        mock.patch.object(CLAUDE, 'refresh_heads', return_value=set()), \
                         mock.patch.object(plugin_refresh, 'run', side_effect=self.native):
                     self.assertEqual([IDENTITY], REFRESH.refresh(CLAUDE, 'claude', current, {}, [IDENTITY]))
-                self.assertEqual(['old', 'new', 'old'], [row['version'] for row in self.rows])
-                self.assertEqual([first], [cwd for command, cwd in self.commands if command[2] == 'update'])
+                synchronize.assert_called_once_with([current], identities={IDENTITY}, force=True)
+                self.assertEqual([], self.commands)
 
     def test_admission_and_relaunch_use_the_same_registration_as_native_update(self):
         for first, current in ((self.primary, self.nested), (self.nested, self.primary),
@@ -203,21 +205,19 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
                                                 r'base@tj-agents \(project\): native installation did not persist enabled'):
                         CLAUDE.apply('claude', self.primary, [], [], dependencies=[dependency])
 
-    def test_current_plugin_still_installs_a_catalog_dependency(self):
-        dependency = ('base@tj-agents', 'project', self.primary)
+    def test_current_scoped_plugin_uses_the_batch_dependency_closure(self):
         with mock.patch.object(CLAUDE, 'selected', return_value=({}, [IDENTITY])), \
                 mock.patch.object(CLAUDE, 'installed_entries', return_value=[self.entry(self.primary)]), \
                 mock.patch.object(CLAUDE.plugin_autoupdate, 'read_contents', return_value={'heads': {}, 'attempts': {}}), \
                 mock.patch.object(CLAUDE, 'tj_agents_marketplaces', return_value={}), \
                 mock.patch.object(CLAUDE, 'catalog_publishers', return_value={}), \
-                mock.patch.object(CLAUDE, 'dependency_installs', return_value=[dependency]), \
+                mock.patch.object(registry, 'synchronize', return_value=['base@tj-agents']) as synchronize, \
                 mock.patch.object(CLAUDE.agent_cli, 'resolve_claude_executable', return_value='claude'), \
                 mock.patch.object(CLAUDE, 'refresh_marketplaces'), \
-                mock.patch.object(CLAUDE, 'apply', return_value=['base@tj-agents']) as apply:
+                mock.patch.object(CLAUDE, 'apply') as apply:
             self.assertEqual(['base@tj-agents'], CLAUDE.reconcile(self.primary))
-        self.assertEqual([], apply.call_args.args[2])
-        self.assertEqual([], apply.call_args.args[3])
-        self.assertEqual([dependency], apply.call_args.args[-1])
+        synchronize.assert_called_once_with([self.primary], identities={IDENTITY})
+        apply.assert_not_called()
 
     def test_dependency_identity_keeps_explicit_marketplaces(self):
         self.assertEqual('service@other', CLAUDE.dependency_identity({'name': 'service', 'marketplace': 'other'},

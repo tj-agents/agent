@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
+import tempfile
 
 import agent_cli
 from codex import hook_trust
@@ -35,7 +38,6 @@ MODEL_CONFIG_KEYS = frozenset({
     "model_verbosity", "service_tier", "personality",
 })
 NODE_SHIM_BYPASSED = True
-reconcile = None
 
 
 def resolve_executable() -> str:
@@ -121,7 +123,65 @@ def install_missing(executable: str, project: Path, missing) -> None:
 
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     install_missing(executable, project, plugins)
-    return []
+    return reconcile(project, executable=executable)
+
+
+def tree_digest(tree: dict[str, bytes]) -> str:
+    value = hashlib.sha256()
+    for name, body in sorted(tree.items()):
+        value.update(name.encode("utf-8") + b"\0" + str(len(body)).encode("ascii") + b"\0" + body)
+    return value.hexdigest()
+
+
+def reconcile(project: Path, executable: str | None = None) -> list[str]:
+    import reload_plugins
+
+    executable = executable or resolve_executable()
+    marketplaces, identities = plugin_refresh.selected(*selection(executable, project))
+    if not identities:
+        return []
+    receipt_path = plugin_autoupdate.state_directory() / "codex-plugin-bytes.json"
+    receipts = plugin_autoupdate.read_json(receipt_path)
+    contents = plugin_autoupdate.read_contents()
+    roots = required_plugins.inventory_roots(project, HOST, executable)
+    publishers, expected, stale, signatures = {}, {}, [], {}
+    with tempfile.TemporaryDirectory(prefix="codex-plugin-bytes-") as temporary:
+        for marketplace in marketplaces:
+            catalog = plugin_autoupdate.marketplace_manifest(marketplace)
+            entries = {entry["name"]: entry for entry in catalog.get("plugins", [])
+                       if isinstance(entry, dict) and isinstance(entry.get("name"), str)}
+            location = HOST.configuration_root / ".tmp/marketplaces" / marketplace
+            for identity in identities:
+                plugin, name = identity.rsplit("@", 1)
+                if name != marketplace:
+                    continue
+                if plugin not in entries:
+                    raise plugin_refresh.RefreshError(f"Selected plugin is not published: {identity}")
+                source = entries[plugin].get("source")
+                publisher = (plugin_autoupdate.publisher_key(source.get("url"), source.get("sha") or source.get("ref"))
+                             if isinstance(source, dict) and source.get("source") == "git-subdir" else None)
+                head = contents["heads"].get(publisher) if publisher else None
+                signature = json.dumps([source, head], sort_keys=True)
+                root = roots.get(identity)
+                actual = plugin_refresh.package_tree(root) if root is not None else None
+                saved = receipts.get(identity)
+                if (isinstance(saved, dict) and saved.get("source") == signature and actual is not None
+                        and tree_digest(actual) == saved.get("digest")):
+                    continue
+                frozen = {**source, "sha": head} if publisher and head else source
+                tree = reload_plugins.source_tree(frozen, location, project, Path(temporary), publishers)
+                expected[identity], signatures[identity] = tree, signature
+                if actual != tree:
+                    stale.append(identity)
+        if stale:
+            install_missing(executable, project, stale)
+            roots = required_plugins.inventory_roots(project, HOST, executable)
+        for identity, tree in expected.items():
+            if identity not in roots or plugin_refresh.package_tree(roots[identity]) != tree:
+                raise plugin_refresh.RefreshError(f"Native installed bytes differ from marketplace after update: {identity}")
+            receipts[identity] = {"source": signatures[identity], "digest": tree_digest(tree)}
+    plugin_autoupdate.write_json(receipt_path, receipts)
+    return stale
 
 
 def update(repositories: set[str] | None, project: Path, updated: set[str] | None = None) -> bool:

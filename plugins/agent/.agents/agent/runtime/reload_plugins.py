@@ -68,7 +68,7 @@ def repair_missing(host: Host, project: Path, missing, executable: str | None = 
 
 
 def source_tree(source: object, location: Path, project: Path, temporary: Path,
-                publishers: dict) -> dict[str, bytes]:
+                publishers: dict, modes: dict[str, int] | None = None) -> dict[str, bytes]:
     if isinstance(source, dict) and source.get("source") == "git-subdir":
         publisher = plugin_refresh.repository(source.get("url"))
         if not plugin_refresh.tj_agents(publisher):
@@ -93,7 +93,10 @@ def source_tree(source: object, location: Path, project: Path, temporary: Path,
     root = (location / source).resolve()
     if not root.is_relative_to(location.resolve()):
         raise RefreshError("Catalog package escapes its publisher")
-    return plugin_refresh.package_tree(root)
+    tree = plugin_refresh.package_tree(root)
+    if modes is not None:
+        modes.update({name: (root / name).stat().st_mode & 0o777 for name in tree})
+    return tree
 
 
 def verify(plugins: Plugins, executable: str, project: Path, marketplaces: dict, identities: list[str]) -> dict:
