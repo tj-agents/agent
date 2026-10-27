@@ -207,6 +207,12 @@ def load(path: Path, name: str):
     return module
 
 
+def caller_host() -> str | None:
+    register_session = load(utility_script("peer", "register_session.py"), "register_session")
+    _, host, _ = register_session.resolve_recorded_pid(os.getppid())
+    return host if host in {"claude", "codex"} else None
+
+
 def recovery_script(project: Path, installed: dict) -> Path:
     return HERE / "agent_recovery.py"
 
