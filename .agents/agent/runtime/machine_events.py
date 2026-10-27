@@ -130,11 +130,22 @@ def reconcile_policy(repository, run=subprocess.run):
 
 
 def refresh_plugins():
+    from claude import plugins as claude_plugins
+    from codex import plugins as codex_plugins
+
     arguments = ["--no-sweep", "--retry-failures"]
     managed_runtime = plugins.state_directory() / "bin" / ".agents" / "agent" / "runtime"
     if Path(plugins.__file__).resolve().parent != managed_runtime.resolve():
         arguments.append("--no-self-update")
-    return plugins.main(arguments)
+    result = plugins.main(arguments)
+    claude_plugins.update_registered()
+    config = plugins.load_codex_config()
+    executable = None
+    for project, declared in plugins.declarations(config):
+        if plugins.enabled_identities(declared):
+            executable = executable or codex_plugins.resolve_executable()
+            codex_plugins.reconcile(project, executable=executable)
+    return result
 
 
 class Reconciler:
@@ -158,7 +169,7 @@ class Reconciler:
             return
         if policy and policy != old.get("policy"):
             self.policy(repository)
-        if catalog and catalog != old.get("catalog") and refresh_plugins:
+        if catalog and (catalog != old.get("catalog") or repository.lower().startswith("tj-agents/")) and refresh_plugins:
             if self.refresh() != 0:
                 raise RuntimeError("plugin refresh failed")
         self.state[repository] = {"revision": revision, "policy": policy, "catalog": catalog}
@@ -186,24 +197,42 @@ def main(argv=None):
     if sys.version_info < (3, 11):
         raise RuntimeError("machine_events requires Python 3.11 or newer")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--repo")
+    mode.add_argument("--watch", action="store_true")
     parser.add_argument("--state-directory", type=Path)
+    parser.add_argument("--claude-home", type=Path)
+    parser.add_argument("--codex-home", type=Path)
+    parser.add_argument("--search-path")
     arguments = parser.parse_args(argv)
     if arguments.state_directory:
         os.environ["AGENT_STATE_DIRECTORY"] = str(arguments.state_directory.resolve())
+    for host in Host:
+        home = getattr(arguments, host.value + "_home")
+        if home:
+            os.environ[host.home_variable] = str(home.resolve())
+    if arguments.search_path is not None:
+        os.environ["PATH"] = arguments.search_path
     directory = plugins.state_directory()
     directory.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(directory / "machine-events.log", maxBytes=262144, backupCount=2,
                                   encoding="utf-8")
     LOG.addHandler(handler)
     LOG.setLevel(logging.INFO)
-    lock = plugins.acquire_lock(directory / "machine-events.lock")
+    lock = plugins.acquire_lock(directory / ("machine-events-watch.lock" if arguments.watch else "machine-events.lock"))
     if lock is None:
-        return 0
+        LOG.warning("Machine-event reconciliation is already running")
+        LOG.removeHandler(handler)
+        handler.close()
+        return 0 if arguments.watch else 1
     try:
         state_file = directory / "machine-events-state.json"
         reconciler = Reconciler(plugins.read_json(state_file))
         require_tommy()
+        if arguments.watch:
+            import event_watch
+
+            return event_watch.run(directory)
         failures = []
         if arguments.repo:
             if not valid_repository(arguments.repo):
@@ -215,6 +244,8 @@ def main(argv=None):
         return int(bool(failures))
     finally:
         lock.close()
+        LOG.removeHandler(handler)
+        handler.close()
 
 
 if __name__ == "__main__":
