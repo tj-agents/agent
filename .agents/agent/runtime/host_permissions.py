@@ -13,6 +13,8 @@ import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from claude import permissions as claude_permissions  # noqa: E402
+from codex import permissions as codex_permissions  # noqa: E402
 from host import Host  # noqa: E402
 
 CODEX_KEYS = frozenset({"approval_policy", "default_permissions", "sandbox_mode", "sandbox_workspace_write"})
@@ -50,6 +52,8 @@ def claude_settings(text: str, mode: str, *, project: bool = False) -> str:
         permissions.pop("defaultMode", None)
     else:
         permissions["defaultMode"] = MODES[mode][0]
+    if not project:
+        claude_permissions.deny(permissions)
     return json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -165,6 +169,11 @@ def plan(claude: Path, codex: Path, mode: str) -> dict[Path, str]:
         updated = render(text, mode)
         if updated != text:
             targets[path] = updated
+    rules = codex_permissions.rules_path(codex)
+    if rules.is_symlink() or rules.exists() and not rules.is_file():
+        raise ValueError(f"Native settings must be regular files: {rules}")
+    if (rules.read_text(encoding="utf-8-sig") if rules.is_file() else None) != codex_permissions.TEXT:
+        targets[rules] = codex_permissions.TEXT
     desktop = codex.parent / ".codex-global-state.json"
     if desktop.is_symlink() or desktop.exists() and not desktop.is_file():
         raise ValueError(f"Native settings must be regular files: {desktop}")

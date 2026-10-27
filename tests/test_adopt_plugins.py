@@ -7,7 +7,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / ".agents" / "agent" / "utility" / "plugins" / "scripts"
+SCRIPTS = ROOT / "plugins" / "agent" / ".agents" / "agent" / "utility" / "plugins" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 
