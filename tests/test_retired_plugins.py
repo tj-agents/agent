@@ -132,5 +132,21 @@ class RetiredPluginTests(unittest.TestCase):
         self.assertEqual(before, settings.read_bytes())
 
 
+    def test_claude_installations_the_marketplace_no_longer_publishes_are_uninstalled(self):
+        self.claude_marketplace("agent")
+        project = self.root / "repo"
+        project.mkdir()
+        write(self.root / "claude" / "plugins" / "installed_plugins.json", {"plugins": {
+            "agent@tj-agents": [{"scope": "user"}],
+            "machine@tj-agents": [{"scope": "user"}, {"scope": "project", "projectPath": str(project)},
+                                  {"scope": "project", "projectPath": str(self.root / "deleted")}],
+            "concertable@agents": [{"scope": "user"}]}})
+        commands = []
+        with mock.patch.object(CLAUDE.plugin_refresh, "run", lambda command, cwd: commands.append((command, cwd))):
+            CLAUDE.uninstall_unpublished("claude", {"tj-agents"})
+        self.assertEqual([(["claude", "plugin", "uninstall", "machine@tj-agents", "--scope", "user"], Path.home()),
+                          (["claude", "plugin", "uninstall", "machine@tj-agents", "--scope", "project"], project)],
+                         commands)
+
 if __name__ == "__main__":
     unittest.main()
