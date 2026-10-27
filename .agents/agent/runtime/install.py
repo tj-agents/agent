@@ -87,11 +87,11 @@ class Context:
 
     @property
     def claude_home(self) -> Path:
-        return self.path_from("CLAUDE_CONFIG_DIR", self.home / ".claude")
+        return self.path_from(Host.CLAUDE.home_variable, self.home / Host.CLAUDE.home_directory)
 
     @property
     def codex_home(self) -> Path:
-        return self.path_from("CODEX_HOME", self.home / ".codex")
+        return self.path_from(Host.CODEX.home_variable, self.home / Host.CODEX.home_directory)
 
     def checkout_path(self, *parts: str) -> Path:
         if self.checkout is None:
@@ -508,7 +508,7 @@ def permission_sync(context: Context) -> ModuleType:
 
 
 def permissions_environment(context: Context) -> dict:
-    return {**context.environ, "CLAUDE_CONFIG_DIR": str(context.claude_home), "CODEX_HOME": str(context.codex_home),
+    return {**context.environ, Host.CLAUDE.home_variable: str(context.claude_home), Host.CODEX.home_variable: str(context.codex_home),
             "AGENT_STATE_DIRECTORY": str(context.state_directory)}
 
 
