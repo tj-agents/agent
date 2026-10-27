@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and converge this machine's tj-agents environment (Python 3.11+).
+"""Install and converge this machine's tj-agents environment (Python 3.12+).
 
 Runs an ordered list of steps, each with a check and an apply. A step whose check reports no drift is
 left alone, so rerunning converges and writes nothing once the machine is current. `--check` reports
@@ -909,8 +909,8 @@ def machine_context() -> Context:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if sys.version_info < (3, 11):
-        print("install requires Python 3.11 or newer", file=sys.stderr)
+    if sys.version_info < (3, 12):
+        print("install requires Python 3.12 or newer", file=sys.stderr)
         return 2
     arguments = list(argv if argv is not None else sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)

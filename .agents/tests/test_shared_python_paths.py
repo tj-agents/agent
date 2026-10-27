@@ -20,6 +20,7 @@ def test_packaged_startup_imports_its_shipped_library_in_isolated_python(
         [
             sys.executable,
             "-I",
+            "-S",
             "-B",
             str(installed / ".agents/agent/runtime/startup_binding.py"),
             "--help",
