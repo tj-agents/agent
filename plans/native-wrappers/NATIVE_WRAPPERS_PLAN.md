@@ -4,11 +4,11 @@ Owner slice of the approved cross-repository `native-duplicates/migration` plan 
 
 ## Scope and resolved authoring brief
 
-Agent owns session behavior. Extend `agent:message` and `agent:peer` in their existing canonical utility directories. Replace the incorrect Codex memory utility with `agent:memory` at `.agents/agent/utility/memory/SKILL.md`; its shared intent is inspect or change the active host's memory controls. Remove the old entry rather than retain an alias. Each shared skill has one concrete example and two extended host entries declared in `.agents/plugins/payloads.json`. Template's ownership check precedes the loaded native creator. No new runtime engine or dependency is needed.
+Agent owns session behavior. Extend `agent:message` and `agent:peer` in their existing canonical utility directories for their additional recipient, delivery and registered-terminal requirements. Delete the incorrect Codex memory utility and its replacement `agent:memory`; native memory controls need no house wrapper. Retained shared skills have concrete examples and explicit host entries declared in `.agents/plugins/payloads.json`. Template's ownership check precedes the loaded native creator. No new runtime engine or dependency is needed.
 
 ```text
 agent:message -> Claude ListAgents/SendMessage; Codex codex queue
-agent:memory -> Claude /memory; Codex codex features list/enable/disable memories
+Memory settings -> use the active host's native controls directly; no house memory skill
 ```
 
 Message authorization, exact recipient selection and accurate status are shared. Native queue admission is `queued`, not proof of delivery. The installed Codex 0.163.0-alpha.1 loopback fixture observed only `thread/queue/add`; its success output lacks recipient-history correlation. Preserve the existing receipt/history and active-turn helper only for explicitly required verified delivery or active correction. Move it from shared skill siblings to `.codex/runtime/codex_followup.py`, packaged under `.agents/agent/runtime/codex/`. Only the Codex adapter references it. Preserve authorization, scope, idempotent receipts and nearest-package imports. Claude uses native tools exclusively.
@@ -39,7 +39,7 @@ Commit completed verified changes with Codex attribution, review the frozen cand
   "hosts": [
     {
       "host": "claude",
-      "behavior": "native message, peer and memory controls; receipt/history proof is Codex-only",
+      "behavior": "native message and peer operations with additional delivery and terminal requirements; no memory wrapper",
       "source": ".agents/plugins/adapters/claude/agent/message.md",
       "mapping": "Canonical Agent skills select explicit host adapters; Codex helper is authored in .codex/runtime.",
       "verification": {
@@ -50,7 +50,7 @@ Commit completed verified changes with Codex attribution, review the frozen cand
     },
     {
       "host": "codex",
-      "behavior": "native message, peer and memory controls; receipt/history proof is Codex-only",
+      "behavior": "native message and peer operations with additional delivery and terminal requirements; no memory wrapper",
       "source": ".agents/plugins/adapters/codex/agent/message.md",
       "mapping": "Canonical Agent skills select explicit host adapters; Codex helper is authored in .codex/runtime.",
       "verification": {

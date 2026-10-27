@@ -41,7 +41,7 @@ managed directory rather than modifying the repository or an installed plugin ca
 
 ## Skills
 
-- `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:memory`, `agent:open`, `agent:peer`, `agent:plugins`,
+- `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
   `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`, `agent:close`
 - `agent-store:inspect`
 - `codex:hooks`
