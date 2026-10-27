@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import re
@@ -13,7 +12,6 @@ import transcripts
 HOST = Host.CLAUDE
 FRONTEND_FROM_REGISTRATION = True
 FRONTEND_STATE: tuple[str, ...] = ()
-TRANSCRIPT_TAIL_BYTES = 256 * 1024
 VARIADIC = {"--add-dir", "--mcp-config", "--tools", "--allowedTools", "--allowed-tools",
             "--disallowedTools", "--disallowed-tools"}
 SINGLE = {"--settings", "--plugin-dir", "--setting-sources", "--permission-mode", "--model"}
@@ -169,34 +167,28 @@ def own_entry(nearest, cwd: Path, session_id: str | None, shared) -> dict | None
     return None
 
 
-def _tail_records(path: Path) -> list[dict]:
-    with path.open("rb") as stream:
-        stream.seek(max(0, path.stat().st_size - TRANSCRIPT_TAIL_BYTES))
-        raw = stream.read().splitlines()
-    records = []
-    for line in raw:
-        try:
-            value = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(value, dict):
-            records.append(value)
-    return records
-
-
 def _is_user(record: dict) -> bool:
-    if record.get("type") != "user" or record.get("isMeta") or record.get("isCompactSummary"):
+    if (record.get("type") != "user" or record.get("isSidechain") or record.get("isMeta")
+            or record.get("isCompactSummary")):
         return False
     content = (record.get("message") or {}).get("content")
     return isinstance(content, str) or (isinstance(content, list) and not any(
         isinstance(item, dict) and item.get("type") == "tool_result" for item in content))
 
 
+def _is_assistant(record: dict) -> bool:
+    return (record.get("type") == "assistant" and not record.get("isSidechain")
+            and not record.get("isMeta") and not record.get("isCompactSummary"))
+
+
 def user_turn(path: Path) -> str:
-    for record in reversed(_tail_records(path)):
-        token = record.get("uuid")
-        if _is_user(record) and isinstance(token, str) and token:
-            return token
+    token = None
+    for _number, record in transcripts.records(path):
+        if _is_user(record):
+            candidate = record.get("uuid")
+            token = candidate if isinstance(candidate, str) and candidate else None
+    if token:
+        return token
     raise ValueError("Claude transcript has no bounded, non-sidechain user turn")
 
 
@@ -220,22 +212,17 @@ def finished(state: dict, data: dict) -> bool:
     token = _text(state.get("claude_user_uuid"))
     if not supplied or not expected or not token or Path(supplied).resolve() != Path(expected).resolve():
         return False
-    records = _tail_records(Path(expected))
-    users = [record.get("uuid") for record in records if _is_user(record) and isinstance(record.get("uuid"), str)]
-    if not users or users[-1] != token:
-        return False
-    after = False
+    latest_user = None
     complete = False
-    for record in records:
-        if _is_user(record) and record.get("uuid") == token:
-            after = True
-            continue
-        if after and _is_user(record):
-            return False
-        if after and record.get("type") == "assistant":
+    for _number, record in transcripts.records(Path(expected)):
+        if _is_user(record):
+            candidate = record.get("uuid")
+            latest_user = candidate if isinstance(candidate, str) and candidate else None
+            complete = False
+        elif latest_user == token and _is_assistant(record):
             message = record.get("message")
             complete = isinstance(message, dict) and message.get("stop_reason") == "end_turn"
-    return complete
+    return latest_user == token and complete
 
 
 def completes(state: dict, data: dict, turn_id: str | None) -> bool:

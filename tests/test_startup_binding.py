@@ -154,6 +154,23 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual('exited', status['state'])
         self.assertEqual(terminal, status['terminal'])
 
+    def test_update_check_uses_the_calling_host_with_the_launch_check_signature(self):
+        directory = tempfile.TemporaryDirectory(prefix='startup update check ')
+        self.addCleanup(directory.cleanup)
+        calls = []
+
+        def check(project, fetch=None, update=None, now=None, hosts=tuple(Host), updated=None, *, recover=True):
+            calls.append((project, hosts))
+            return 'current'
+
+        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(None, None)), \
+                mock.patch.object(self.binding.launch_check, 'check', side_effect=check), \
+                mock.patch.object(self.binding, 'run_session', return_value=0):
+            result = self.binding.main(['--host', 'claude', '--project', directory.name, '--target', 'native-claude'])
+
+        self.assertEqual(0, result)
+        self.assertEqual([(Path(directory.name).resolve(), (Host.CLAUDE,))], calls)
+
     def test_claude_override_roster_is_passed_from_preflight_to_startup(self):
         directory = tempfile.TemporaryDirectory(prefix='startup claude override ')
         self.addCleanup(directory.cleanup)
