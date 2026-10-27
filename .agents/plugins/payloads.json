@@ -23,7 +23,11 @@
     {"skill": "agent:listen", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/listen.md"},
     {"skill": "agent:listen", "host": "claude", "source": ".agents/plugins/adapters/claude/agent/listen.md"},
     {"skill": "agent:refresh-plugins", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/refresh-plugins.md"},
-    {"skill": "agent:refresh-plugins", "host": "claude", "source": ".agents/plugins/adapters/claude/agent/refresh-plugins.md"}
+    {"skill": "agent:refresh-plugins", "host": "claude", "source": ".agents/plugins/adapters/claude/agent/refresh-plugins.md"},
+    {"skill": "agent:message", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/message.md"},
+    {"skill": "agent:message", "host": "claude", "source": ".agents/plugins/adapters/claude/agent/message.md"},
+    {"skill": "agent:peer", "host": "codex", "source": ".agents/plugins/adapters/codex/agent/peer.md"},
+    {"skill": "agent:peer", "host": "claude", "source": ".agents/plugins/adapters/claude/agent/peer.md"}
   ]
 }
 

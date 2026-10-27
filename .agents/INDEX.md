@@ -24,4 +24,3 @@ Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; a skill's n
 ## codex
 
 - `hooks` — utility — core — `.agents/codex/utility/hooks/SKILL.md`
-- `memory` — utility — core — `.agents/codex/utility/memory/SKILL.md`

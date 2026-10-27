@@ -610,10 +610,6 @@ def current_windows_user(kwargs, timeout):
     return user
 
 
-def start_observer(arguments):
-    return start_detached(Path(__file__).with_name("finish_reaper.py"), arguments)
-
-
 def _write_observer_store_receipt(staging):
     files = {}
     for name in OBSERVER_STORE_FILES:

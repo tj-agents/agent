@@ -11,7 +11,7 @@ Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 
 - `agent-store`: recorded sessions and execution state.
 - `agent`: host-neutral coordination, recovery, history, lanes and refresh.
-- `codex`: Codex-specific hooks and memory.
+- `codex`: Codex-specific hooks.
 
 The generated packages have no dependency on a Core checkout. Shared runtime is authored beneath
 `.agents/agent/runtime` and `.agents/agent-store/runtime`; generated payloads embed the canonical paths
@@ -44,7 +44,7 @@ managed directory rather than modifying the repository or an installed plugin ca
 - `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
   `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`, `agent:close`
 - `agent-store:inspect`
-- `codex:hooks`, `codex:memory`
+- `codex:hooks`
 
 ## Authoring and verification
 

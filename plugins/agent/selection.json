@@ -88,8 +88,7 @@
         "agent sessions"
       ],
       "requires": [
-        "python",
-        "codex app-server"
+        "native host"
       ],
       "provenance": [
         "house"
