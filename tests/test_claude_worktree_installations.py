@@ -12,9 +12,9 @@ from unittest import mock
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/agent/.agents/agent/runtime'
 sys.path.insert(0, str(SCRIPTS))
 from claude import plugins as CLAUDE  # noqa: E402
-from claude import registry
 import plugin_refresh  # noqa: E402
 import required_plugins  # noqa: E402
+from tj_agent.plugins import sources
 
 
 def load(name):
@@ -71,7 +71,7 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
                 'installPath': str(self.root / version), 'enabled': True, **extra}
 
     def test_repository_discovery_finds_nested_and_sibling_worktrees_only(self):
-        self.assertEqual({self.primary, self.nested, self.sibling}, set(registry.repository_projects([self.sibling])))
+        self.assertEqual({self.primary, self.nested, self.sibling}, set(CLAUDE.repository_projects([self.sibling])))
 
     def native(self, command, cwd):
         self.commands.append((command, Path(cwd)))
@@ -92,7 +92,7 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
                 self.commands = []
                 other = self.nested if first != self.nested else self.primary
                 self.rows = [self.entry(self.foreign), self.entry(first), self.entry(other)]
-                with mock.patch.object(registry, 'synchronize', return_value=[IDENTITY]) as synchronize, \
+                with mock.patch.object(CLAUDE, 'synchronize', return_value=[IDENTITY]) as synchronize, \
                         mock.patch.object(CLAUDE, 'refresh_heads', return_value=set()), \
                         mock.patch.object(plugin_refresh, 'run', side_effect=self.native):
                     self.assertEqual([IDENTITY], REFRESH.refresh(CLAUDE, 'claude', current, {}, [IDENTITY]))
@@ -214,7 +214,7 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
                 mock.patch.object(CLAUDE.plugin_autoupdate, 'read_contents', return_value={'heads': {}, 'attempts': {}}), \
                 mock.patch.object(CLAUDE, 'tj_agents_marketplaces', return_value={}), \
                 mock.patch.object(CLAUDE, 'catalog_publishers', return_value={}), \
-                mock.patch.object(registry, 'synchronize', return_value=['base@tj-agents']) as synchronize, \
+                mock.patch.object(CLAUDE, 'synchronize', return_value=['base@tj-agents']) as synchronize, \
                 mock.patch.object(CLAUDE.agent_cli, 'resolve_claude_executable', return_value='claude'), \
                 mock.patch.object(CLAUDE, 'refresh_marketplaces'), \
                 mock.patch.object(CLAUDE, 'apply') as apply:
@@ -246,7 +246,7 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
                 mock.patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': str(self.root)}), \
                 mock.patch.object(plugin_refresh, 'read_json', side_effect=lambda path: known if path.name == 'known_marketplaces.json'
                                   else json.loads(path.read_text(encoding='utf-8'))), \
-                mock.patch.object(REFRESH, 'source_tree', return_value={'marker': b'new'}), \
+                mock.patch.object(sources, 'tree', return_value={'marker': b'new'}), \
                 mock.patch.object(plugin_refresh, 'package_tree', side_effect=lambda path: {'marker': path.name.encode()}):
             report = REFRESH.verify_packages(CLAUDE, 'claude', self.nested,
                                             {'tj-agents': 'tj-agents/marketplace'}, [IDENTITY], self.root)
