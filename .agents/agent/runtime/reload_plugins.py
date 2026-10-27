@@ -268,8 +268,8 @@ def refresh_marketplaces(host: str, executable: str, project: Path, marketplaces
 def refresh(host: str, executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     refresh_marketplaces(host, executable, project, marketplaces)
     if host == "claude":
-        retired = retire_unpublished_user_plugins()
-        plugins = [identity for identity in plugins if identity not in retired or declared_scopes(identity, project)]
+        retired = retire_unpublished_user_plugins(marketplaces)
+        plugins =[identity for identity in plugins if identity not in retired or declared_scopes(identity, project)]
         return refresh_claude(executable, project, plugins) if plugins else []
     user_config = configuration_root(host) / "config.toml"
     user_enabled = plugin_autoupdate.enabled_identities(plugin_autoupdate.load_toml(user_config))
@@ -346,13 +346,13 @@ def published_plugins() -> dict[str, set[str]]:
     return published
 
 
-def retire_unpublished_user_plugins() -> list[str]:
+def retire_unpublished_user_plugins(refreshed) -> list[str]:
     path = configuration_root("claude") / "settings.json"
     settings = read_json(path)
     enabled = settings.get("enabledPlugins")
     if not isinstance(enabled, dict):
         return []
-    published = published_plugins()
+    published = {name: names for name, names in published_plugins().items() if name in refreshed}
     retired = sorted(identity for identity in enabled if identity.count("@") == 1
                      and identity.split("@")[1] in published and identity.split("@")[0] not in published[identity.split("@")[1]])
     if retired:
@@ -402,7 +402,7 @@ def attempt_key(identity: str, scope: str, owner: Path) -> str:
 
 def reconcile_claude(project: Path, event: bool = False, repositories: set[str] | None = None,
                      fresh: frozenset[str] = frozenset()) -> list[str]:
-    retire_unpublished_user_plugins()
+    retire_unpublished_user_plugins(fresh)
     marketplaces, plugins = selection("claude", "", project)
     installations = installed_entries()
     effective = required_plugins.claude_installations(project, installations)
