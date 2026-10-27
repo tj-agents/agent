@@ -539,7 +539,8 @@ def refresh_codex(executable: str, targets: dict[str, dict], recorded: dict, rev
                 recorded[plugin_key] = plugin_head
         if retired:
             recorded["retired:" + key] = sorted(retired)
-        retired = f" (no longer published, not installed: {', '.join(retired)})" if retired else ""
+            remove_user_plugins(codex_home() / "config.toml", set(retired))
+        retired = f" (no longer published, removed from user scope: {', '.join(retired)})" if retired else ""
         if refreshed:
             if None not in published:
                 recorded[key] = head
