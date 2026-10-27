@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 import agent_cli
+from claude import sessions
 from host import Host
 import plugin_autoupdate
 import plugin_refresh
@@ -30,6 +31,7 @@ MAINTENANCE_COMMANDS = frozenset({
     "plugin", "plugins", "auth", "doctor", "install", "setup-token", "update", "upgrade", "mcp",
 })
 GIT_TIMEOUT_SECONDS = 5
+NODE_SHIM_BYPASSED = False
 
 
 def resolve_executable() -> str:
@@ -489,7 +491,7 @@ def stale_plugins(pid: int, project: Path, identities: list[str], installed: dic
 
 
 def adopt(project: Path, updated: set[str], reason: str | None, allowed: bool) -> dict | None:
-    identity = session_relaunch.session_identity()
+    identity = sessions.session_identity()
     if identity is None:
         return None
     installed = plugin_refresh.read_json(HOST.configuration_root / "plugins/installed_plugins.json").get("plugins") or {}

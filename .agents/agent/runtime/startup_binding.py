@@ -21,9 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import launch_check
 import launch_status
-import cli_client
 from host import Host
 from host_plugins import PLUGINS
+from host_sessions import SESSIONS
 import required_plugins
 from terminal_command import command_for_target, without_binding_state
 
@@ -204,6 +204,9 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
     environment = without_binding_state(os.environ)
     if extra_environment:
         environment.update(without_binding_state(extra_environment))
+    inherited = {name for native in Host for name in SESSIONS[native].FRONTEND_STATE}
+    environment = {key: value for key, value in environment.items()
+                   if (key.upper() if os.name == "nt" else key) not in inherited}
     interpreter = launch_check.state_directory() / "bin" / "python"
     if os.name != "nt" and interpreter.is_file():
         environment["PATH"] = str(interpreter.parent) + os.pathsep + environment.get("PATH", "")
@@ -221,8 +224,8 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
         phase("starting-native")
         try:
             command = command_for_target(target, list(arguments))
-            arguments, environment, ticket = cli_client.prepare(
-                host, command[1:], project, environment, executable=command[0],
+            arguments, environment, ticket = SESSIONS[host].prepare_frontend(
+                command[1:], project, environment, executable=command[0],
             )
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             raise StartupBindingError(f"native {host} could not prepare: {error}") from error
@@ -233,7 +236,7 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
         except OSError as error:
             raise StartupBindingError(f"native {host} could not start: {error}") from error
         try:
-            cli_client.attach(ticket, process.pid)
+            SESSIONS[host].attach_frontend(ticket, process.pid)
             if require_session_start:
                 phase("waiting-session-start")
                 deadline = time.monotonic() + timeout
@@ -262,7 +265,7 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                     print(f"launch: native child cleanup failed: {error}", file=sys.stderr)
             raise
         finally:
-            cli_client.release(ticket)
+            SESSIONS[host].release_frontend(ticket)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -277,11 +280,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parsed.arguments[1:] if parsed.arguments[:1] == ["--"] else parsed.arguments
     status: dict[str, object] = {"pid": os.getpid(), "terminal": register_session.terminal_identity(),
                                  "title": os.environ.get(register_session.TITLE_ENV)}
-    if parsed.host == "claude" and parsed.require_session_start and parsed.status_file is not None:
-        if not any(value == "--debug-file" or value.startswith("--debug-file=") for value in arguments):
-            debug_log = parsed.status_file.resolve().parent / "native-debug.log"
-            arguments = ["--debug-file", str(debug_log), *arguments]
-            status["debug_log"] = str(debug_log)
+    if parsed.require_session_start and parsed.status_file is not None:
+        arguments, debug_log = SESSIONS[parsed.host].debug_arguments(arguments, parsed.status_file.resolve().parent)
+        if debug_log is not None:
+            status["debug_log"] = debug_log
 
     def report(state: str, **details: object) -> None:
         status.update(details, state=state, at=time.time())

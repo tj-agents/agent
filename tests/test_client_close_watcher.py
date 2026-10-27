@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from close_fixtures import CloseFixture, WATCHER, LIFECYCLE, session_close, cli_client
+from close_fixtures import CloseFixture, Host, WATCHER, LIFECYCLE, session_close, cli_client
 
 
 class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
@@ -170,7 +170,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
     def test_prompt_end_or_second_stop_keeps_cancellation_routing_until_outcome(self):
         self.arm()
         self.stop()
-        LIFECYCLE.run("stop", "codex", {"session_id": "one", "turn_id": "turn-one"})
+        LIFECYCLE.run("stop", Host.CODEX, {"session_id": "one", "turn_id": "turn-one"})
         self.assertTrue(WATCHER.canonical_path(self.request).exists())
         self.assertEqual(0, self.wait())
         self.assertEqual("cancelled", self.outcome()["status"])

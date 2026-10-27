@@ -13,10 +13,11 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
-import cli_client
+from codex import client as cli_client
 from codex import hook_trust
 import session_close
 import register_session
+from host import Host
 
 
 def load(name, relative):
@@ -65,7 +66,6 @@ class CloseFixture:
         self.patch(mock.patch.object(session_close.os, "getppid", return_value=20))
         self.patch(mock.patch.object(session_close.os, "getcwd", return_value=str(self.root)))
         self.patch(mock.patch.object(register_session, "read_host_names", return_value={"codex", "claude"}))
-        self.patch(mock.patch.object(session_close, "client_runtime", return_value=cli_client))
         self.native_input = "input-one"
         self.server = mock.Mock()
         self.server.request.side_effect = self.native_request
@@ -157,7 +157,7 @@ class CloseFixture:
         self.store.record_stop(self.connection, self.handle, self.root)
         if self.host == "codex":
             self.append_rollout({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-one"}})
-        LIFECYCLE.run("stop", self.host, {"session_id": "one", "turn_id": "turn-one",
+        LIFECYCLE.run("stop", Host(self.host), {"session_id": "one", "turn_id": "turn-one",
                                            "transcript_path": str(self.transcript)})
 
     def wait(self, during=None):

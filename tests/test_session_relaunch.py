@@ -32,6 +32,7 @@ REFRESH = load("reload_plugins_for_relaunch", SCRIPTS / "reload_plugins.py")
 REGISTER = load("register_session", PEER / "register_session.py")
 import agent_cli  # noqa: E402
 from claude import plugins as CLAUDE  # noqa: E402
+from claude import sessions as CLAUDE_SESSIONS  # noqa: E402
 from host import Host  # noqa: E402
 SESSION = "5ea1d656-3e27-42e1-afb3-0af687449f91"
 
@@ -58,7 +59,7 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(["--add-dir", "C:/a", "C:/b", "--settings", "s.json", "--model", "opus", "--mcp-config=m.json",
                           "--strict-mcp-config", "--plugin-dir", "C:/p", "--permission-mode", "plan",
                           "--dangerously-skip-permissions", "--mcp-config", "x.json", "y.json"],
-                         RELAUNCH.preserved_arguments(argv))
+                         CLAUDE_SESSIONS.native_arguments(argv))
 
     def test_a_dummy_process_command_line_is_read_back(self):
         process = subprocess.Popen([sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(30)",
@@ -69,7 +70,7 @@ class ArgumentTests(unittest.TestCase):
         self.addCleanup(process.kill)
         self.assertEqual("ready\n", process.stdout.readline())
         self.assertEqual(["--add-dir", "C:/extra dir", "--settings", "s.json"],
-                         RELAUNCH.preserved_arguments(RELAUNCH.host_arguments(process.pid)))
+                         CLAUDE_SESSIONS.native_arguments(RELAUNCH.host_arguments(process.pid)))
 
 
 class StalenessTests(State):
@@ -187,7 +188,7 @@ class ArmTests(State):
 
 class WatcherTests(State):
     def options(self, pid, started_at, recovery, record, token="t"):
-        return ["--session-id", SESSION, "--pid", str(pid), "--pid-started-at", repr(started_at), "--record", str(record),
+        return ["--host", "claude", "--session-id", SESSION, "--pid", str(pid), "--pid-started-at", repr(started_at), "--record", str(record),
                 "--token", token, "--recovery", str(recovery), "--title", "Work", "--prompt", "Continue.",
                 "--expected-cwd", str(self.root.resolve()), "--timeout", "60",
                 "--native-argument=--add-dir", "--native-argument=C:/extra"]

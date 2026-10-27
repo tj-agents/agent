@@ -84,7 +84,7 @@ class FrontendBindingTests(unittest.TestCase):
                    'recording_path': str(self.state / 'events.jsonl'), 'backend': None,
                    'profile': str(self.state / 'profile'), 'terminal': self.entry['terminal']}
 
-        def current(session_id, nearest):
+        def current(session_id, nearest, shared):
             self.assertEqual(self.processes[10], nearest)
             if session_id != 'own':
                 raise RuntimeError('the explicit native session has no attributable frontend')
@@ -92,14 +92,14 @@ class FrontendBindingTests(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {'CODEX_THREAD_ID': 'own'}), \
                 mock.patch.object(session_close.os, 'getppid', return_value=10), \
-                mock.patch.object(session_close, 'current_codex_client', side_effect=current) as selected:
+                mock.patch.object(session_close.host_sessions('codex'), 'current_client', side_effect=current) as selected:
             entry = session_close.own_host_and_entry(ROOT)
             self.assertEqual('own', entry['session_id'])
             self.assertEqual(client.pid, entry['pid'])
-            selected.assert_called_once_with('own', self.processes[10])
+            selected.assert_called_once_with('own', self.processes[10], session_close.SHARED)
         with mock.patch.dict(os.environ, {'CODEX_THREAD_ID': 'missing'}), \
                 mock.patch.object(session_close.os, 'getppid', return_value=10), \
-                mock.patch.object(session_close, 'current_codex_client', side_effect=current):
+                mock.patch.object(session_close.host_sessions('codex'), 'current_client', side_effect=current):
             with self.assertRaisesRegex(session_close.Refusal, 'explicit native session'):
                 session_close.own_host_and_entry(ROOT)
 

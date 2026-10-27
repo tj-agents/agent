@@ -10,22 +10,23 @@ import sys
 from typing import Mapping
 
 import agent_cli
+from host import Host
+from host_plugins import PLUGINS
 
 
-CLAUDE_NON_SESSION_COMMANDS = frozenset({
-    "agents", "attach", "auth", "auto-mode", "doctor", "gateway", "import", "install",
-    "kill", "logs", "mcp", "plugin", "plugins", "project", "rm", "setup-token", "stop",
-    "ultrareview", "update", "upgrade", "-h", "--help", "-v", "--version",
-})
+def native_host(name: str) -> Host | None:
+    try:
+        return Host(name)
+    except ValueError:
+        return None
 
 
-def native_shim_kind(target: str) -> str | None:
+def native_shim_kind(target: str) -> Host | None:
     """Return the supported CLI named by a Windows launcher shim, if any."""
     name = target.replace("\\", "/").rsplit("/", 1)[-1].casefold()
     if not name.endswith((".cmd", ".bat", ".ps1")):
         return None
-    stem = name.rsplit(".", 1)[0]
-    return stem if stem in {"claude", "codex"} else None
+    return native_host(name.rsplit(".", 1)[0])
 
 
 def native_target_for_shim(target: str) -> str:
@@ -36,10 +37,7 @@ def native_target_for_shim(target: str) -> str:
     if kind is None:
         return target
     try:
-        if kind == "claude":
-            return agent_cli.resolve_claude_executable()
-        resolved, _version = agent_cli.resolve_codex_executable()
-        return resolved
+        return PLUGINS[kind].resolve_executable()
     except agent_cli.LaunchError as error:
         raise OSError(f"{kind} launcher shim cannot run safely: {error}") from None
 
@@ -48,9 +46,10 @@ def command_for_target(target: str, arguments: list[str]) -> list[str]:
     """Build the platform-required argument list without changing the typed arguments."""
     suffix = Path(target).suffix.casefold()
     resolved_target = Path(shutil.which(target) or target)
-    if os.name != "nt" and Path(target).name == "codex" and resolved_target.resolve().suffix == ".js":
-        resolved, _version = agent_cli.resolve_codex_executable()
-        return [resolved, *arguments]
+    host = native_host(Path(target).name)
+    if (os.name != "nt" and host is not None and PLUGINS[host].NODE_SHIM_BYPASSED
+            and resolved_target.resolve().suffix == ".js"):
+        return [PLUGINS[host].resolve_executable(), *arguments]
     if os.name == "nt" and native_shim_kind(target):
         return [native_target_for_shim(target), *arguments]
     if os.name == "nt" and suffix == ".ps1":
@@ -87,17 +86,3 @@ def run_target(target: str, arguments: list[str], environment: Mapping[str, str]
 def flush_before_cli() -> None:
     sys.stdout.flush()
     sys.stderr.flush()
-
-
-def claude_label(project: Path) -> str:
-    label = project.name
-    try:
-        branch = subprocess.run(
-            ["git", "branch", "--show-current"], cwd=project, capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
-    except OSError:
-        return label
-    if branch.returncode == 0 and (name := branch.stdout.strip()):
-        return f"{label}/{name}"
-    return label

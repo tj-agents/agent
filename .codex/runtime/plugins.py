@@ -34,6 +34,7 @@ MODEL_CONFIG_KEYS = frozenset({
     "model", "model_provider", "model_reasoning_effort", "model_reasoning_summary",
     "model_verbosity", "service_tier", "personality",
 })
+NODE_SHIM_BYPASSED = True
 reconcile = None
 
 

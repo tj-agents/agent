@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('history', ROOT / 'plugins/agent/.agents/agent/runtime/history.py')
 HISTORY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HISTORY)
+from host import Host  # noqa: E402
 
 
 class HistoryTests(unittest.TestCase):
@@ -39,12 +40,12 @@ class HistoryTests(unittest.TestCase):
         self.write('codex/2026/worker.jsonl', [
             dict(type='session_meta', payload=dict(id='worker', cwd=str(self.cwd), source={'subagent':{}})),
             dict(type='response_item', payload=dict(type='message', role='user', content='worker data'))])
-        result = HISTORY.query(self.root / 'codex', 'codex', cwd=self.cwd)
+        result = HISTORY.query(self.root / 'codex', Host.CODEX, cwd=self.cwd)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['resume'], 'codex resume codex-id')
         self.assertEqual(result[0]['branch'], 'feature/test')
-        self.assertEqual(HISTORY.query(self.root / 'codex', 'codex', pattern='a.b')[0]['hits'], 1)
-        self.assertEqual(HISTORY.query(self.root / 'codex', 'codex', pattern='a.b', cwd=self.root), [])
+        self.assertEqual(HISTORY.query(self.root / 'codex', Host.CODEX, pattern='a.b')[0]['hits'], 1)
+        self.assertEqual(HISTORY.query(self.root / 'codex', Host.CODEX, pattern='a.b', cwd=self.root), [])
 
     def test_claude_format_and_literal_search(self):
         self.write('claude/project/session-id.jsonl', [
@@ -52,8 +53,8 @@ class HistoryTests(unittest.TestCase):
             dict(type='assistant', message={'content':[dict(type='text', text='answer')]}),
             dict(type='user', isSidechain=True, message={'content':'a.b hidden'})])
         self.write('claude/project/subagents/ignored.jsonl', [dict(type='user', message={'content':'a.b'})])
-        self.assertEqual(HISTORY.query(self.root / 'claude', 'claude', pattern='a.b'), [])
-        result = HISTORY.query(self.root / 'claude', 'claude', pattern='a.b', regex=True, show_lines=True)
+        self.assertEqual(HISTORY.query(self.root / 'claude', Host.CLAUDE, pattern='a.b'), [])
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, pattern='a.b', regex=True, show_lines=True)
         self.assertEqual(result[0]['resume'], 'claude --resume session-id')
         self.assertEqual(result[0]['matches'][0]['text'], 'Discuss axb')
 
@@ -67,14 +68,14 @@ class HistoryTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('No codex history directory', result.stderr)
         with self.assertRaisesRegex(ValueError, 'positive'):
-            HISTORY.query(self.root, 'codex', count=0)
+            HISTORY.query(self.root, Host.CODEX, count=0)
 
     def test_last_activity_uses_record_timestamp_not_mtime(self):
         self.write('claude/project/old-ts.jsonl', [
             dict(type='user', sessionId='old-ts', cwd=str(self.cwd), timestamp='2020-01-01T00:00:00Z',
                  message={'content': 'first'}),
             dict(type='assistant', timestamp='2020-01-01T00:05:00Z', message={'content': [dict(type='text', text='answer')]})])
-        result = HISTORY.query(self.root / 'claude', 'claude', cwd=self.cwd)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, cwd=self.cwd)
         self.assertEqual(result[0]['last_activity'], '2020-01-01T00:05:00Z')
         self.assertNotEqual(result[0]['last_activity'], result[0]['modified'])
 
@@ -83,7 +84,7 @@ class HistoryTests(unittest.TestCase):
         self.write('claude/project/cwd-match.jsonl', [
             dict(type='user', sessionId='cwd-match', cwd=str(worktree / 'nested'),
                  timestamp='2026-01-01T00:00:00Z', message={'content': 'working here'})])
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['session'], 'cwd-match')
         self.assertEqual(result[0]['matched_by'], 'cwd')
@@ -97,7 +98,7 @@ class HistoryTests(unittest.TestCase):
             dict(type='assistant', cwd=str(elsewhere), timestamp='2026-01-02T00:01:00Z',
                  message={'content': [dict(type='tool_use', name='Bash', id='t1',
                                             input={'command': f'git -C "{worktree}" status'})]})])
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['session'], 'tool-match')
         self.assertEqual(result[0]['matched_by'], 'tool')
@@ -113,7 +114,7 @@ class HistoryTests(unittest.TestCase):
             dict(type='response_item', payload=dict(type='message', role='user',
                                                       timestamp='2026-01-03T00:00:00Z',
                                                       content=[dict(type='input_text', text='look in that worktree')]))])
-        result = HISTORY.query(self.root / 'codex', 'codex', worktree=worktree)
+        result = HISTORY.query(self.root / 'codex', Host.CODEX, worktree=worktree)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['session'], 'codex-tool-match')
         self.assertEqual(result[0]['matched_by'], 'tool')
@@ -128,7 +129,7 @@ class HistoryTests(unittest.TestCase):
             dict(type='assistant', cwd=str(elsewhere), timestamp='2026-01-04T00:01:00Z',
                  message={'content': [dict(type='tool_use', name='Bash', id='t1',
                                             input={'command': f'git -C "{sibling}" status'})]})])
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual(result, [])
 
     def test_worktree_normalizes_case_and_separators_on_windows(self):
@@ -139,7 +140,7 @@ class HistoryTests(unittest.TestCase):
         self.write('claude/project/mixed-case.jsonl', [
             dict(type='user', sessionId='mixed-case', cwd=recorded_cwd, timestamp='2026-01-05T00:00:00Z',
                  message={'content': 'hello'})])
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=str(worktree).lower())
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=str(worktree).lower())
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]['session'], 'mixed-case')
 
@@ -155,7 +156,7 @@ class HistoryTests(unittest.TestCase):
         # last_activity from the records, not file mtime.
         os.utime(newer, (1, 1))
         os.utime(older, (2000000000, 2000000000))
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual([item['session'] for item in result], ['newer', 'older'])
 
     def test_worktree_resolves_relative_path(self):
@@ -167,7 +168,7 @@ class HistoryTests(unittest.TestCase):
         original = Path.cwd()
         self.addCleanup(os.chdir, original)
         os.chdir(worktree_abs)
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=Path('.'))
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=Path('.'))
         self.assertEqual([item['session'] for item in result], ['rel-match'])
 
     def test_worktree_keeps_the_given_spelling_when_resolve_changes_it(self):
@@ -176,7 +177,7 @@ class HistoryTests(unittest.TestCase):
             dict(type='user', sessionId='mapped', cwd=str(worktree), timestamp='2026-01-08T00:00:00Z',
                  message={'content': 'on the mapped drive'})])
         with mock.patch.object(HISTORY.Path, 'resolve', return_value=Path('//server/share/elsewhere')):
-            result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+            result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual([item['session'] for item in result], ['mapped'])
 
     def test_worktree_given_spelling_collapses_parent_segments(self):
@@ -189,7 +190,7 @@ class HistoryTests(unittest.TestCase):
         self.addCleanup(os.chdir, Path.cwd())
         os.chdir(start)
         with mock.patch.object(HISTORY.Path, 'resolve', return_value=Path('//server/share/elsewhere')):
-            result = HISTORY.query(self.root / 'claude', 'claude', worktree=Path('..') / 'Feature-Up')
+            result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=Path('..') / 'Feature-Up')
         self.assertEqual([item['session'] for item in result], ['up'])
 
     def test_worktree_matches_git_bash_drive_spelling_on_windows(self):
@@ -205,7 +206,7 @@ class HistoryTests(unittest.TestCase):
             dict(type='assistant', cwd=str(elsewhere), timestamp='2026-01-07T00:01:00Z',
                  message={'content': [dict(type='tool_use', name='Bash', id='t1',
                                             input={'command': f'git -C "{msys_path}" status'})]})])
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual([item['session'] for item in result], ['bash-match'])
 
     def test_worktree_boundary_matches_shell_punctuation(self):
@@ -223,7 +224,7 @@ class HistoryTests(unittest.TestCase):
                 dict(type='assistant', cwd=str(elsewhere), timestamp='2026-01-08T00:01:00Z',
                      message={'content': [dict(type='tool_use', name='Bash', id='t1',
                                                 input={'command': command})]})])
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual({item['session'] for item in result}, {'punct-0', 'punct-1', 'punct-2'})
 
     def test_worktree_boundary_excludes_dotted_sibling_file(self):
@@ -236,7 +237,7 @@ class HistoryTests(unittest.TestCase):
             dict(type='assistant', cwd=str(elsewhere), timestamp='2026-01-09T00:01:00Z',
                  message={'content': [dict(type='tool_use', name='Bash', id='t1',
                                             input={'command': f'cp "{backup}" /tmp'})]})])
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual(result, [])
 
     def test_worktree_sort_tolerates_naive_timestamp(self):
@@ -247,13 +248,13 @@ class HistoryTests(unittest.TestCase):
         self.write('claude/project/aware.jsonl', [
             dict(type='user', sessionId='aware', cwd=str(worktree), timestamp='2026-01-01T00:00:00Z',
                  message={'content': 'has an offset'})])
-        result = HISTORY.query(self.root / 'claude', 'claude', worktree=worktree)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, worktree=worktree)
         self.assertEqual([item['session'] for item in result], ['naive', 'aware'])
 
     def test_existing_selection_modes_unaffected_by_worktree_option(self):
         self.write('claude/project/plain.jsonl', [
             dict(type='user', sessionId='plain', cwd=str(self.cwd), message={'content': 'hi'})])
-        result = HISTORY.query(self.root / 'claude', 'claude', cwd=self.cwd)
+        result = HISTORY.query(self.root / 'claude', Host.CLAUDE, cwd=self.cwd)
         self.assertEqual(len(result), 1)
         self.assertNotIn('matched_by', result[0])
         self.assertIn('last_activity', result[0])

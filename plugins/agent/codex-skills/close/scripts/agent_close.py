@@ -15,8 +15,6 @@ import re
 import time
 
 
-TRANSCRIPT_TAIL_BYTES = 256 * 1024
-
 def read_object(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -69,47 +67,6 @@ def cli_capability_root(path: Path) -> Path:
     raise ValueError("declared cli:close capability does not ship process_identity.py")
 
 
-def _transcript_records(path: Path) -> list[dict]:
-    with path.open("rb") as stream:
-        stream.seek(max(0, path.stat().st_size - TRANSCRIPT_TAIL_BYTES))
-        raw = stream.read().splitlines()
-    records = []
-    for line in raw:
-        try:
-            value = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(value, dict):
-            records.append(value)
-    return records
-
-
-def _is_claude_user(record: dict) -> bool:
-    if record.get("type") != "user" or record.get("isMeta") or record.get("isCompactSummary"):
-        return False
-    content = (record.get("message") or {}).get("content")
-    return isinstance(content, str) or (isinstance(content, list) and not any(
-        isinstance(item, dict) and item.get("type") == "tool_result" for item in content))
-
-
-def claude_turn(path: Path) -> str:
-    for record in reversed(_transcript_records(path)):
-        token = record.get("uuid")
-        if _is_claude_user(record) and isinstance(token, str) and token:
-            return token
-    raise ValueError("Claude transcript has no bounded, non-sidechain user turn")
-
-
-def claude_transcript(session_id: str, supplied: Path | None) -> Path:
-    if supplied is not None:
-        return supplied.resolve()
-    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
-    matches = list(root.glob("*/" + session_id + ".jsonl")) if root.is_dir() else []
-    if len(matches) != 1:
-        raise ValueError("exact Claude transcript is unavailable")
-    return matches[0].resolve()
-
-
 def record_path(session_id: str) -> Path:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
         raise ValueError("session id must be one registry filename component")
@@ -120,19 +77,16 @@ def prepare(args: argparse.Namespace) -> int:
     record_path(args.session_id)
     record = read_object(args.record or record_path(args.session_id))
     shared = _session_close()
-    if record.get("host") == "codex":
-        record = shared.own_host_and_entry(session_id=args.session_id)
-    elif record.get("host") == "claude":
-        shared.verify_claude_receipt(record)
-    else:
-        raise ValueError("record has no supported native host")
+    try:
+        sessions = shared.host_sessions(record.get("host"))
+    except shared.Refusal:
+        raise ValueError("record has no supported native host") from None
+    record = sessions.prepared_record(record, args.session_id, shared)
     if (record.get("session_id") != args.session_id
             or shared.path_key(record.get("profile", "")) != shared.path_key(args.profile)):
         raise ValueError("record does not match the requested session and profile")
     target = target_from_record(record)
-    if record["host"] == "claude":
-        transcript = claude_transcript(args.session_id, args.transcript)
-        target.update({"transcript": str(transcript), "claude_user_uuid": claude_turn(transcript)})
+    target.update(sessions.close_target(args.session_id, args.transcript))
     write_object(args.target, target)
     print(json.dumps({"status": "prepared", "target": str(args.target)}))
     return 0
@@ -151,6 +105,7 @@ def arm(args: argparse.Namespace) -> int:
     cli_root = cli_capability_root(args.cli_close)
     shared = _session_close()
     shared.process_identity_runtime(cli_root)
+    sessions = shared.host_sessions(args.host)
     target = read_object(args.target)
     if target.get("schema_version") != 1:
         raise ValueError("target schema is unavailable")
@@ -164,16 +119,7 @@ def arm(args: argparse.Namespace) -> int:
         raise ValueError("target does not match the attributable frontend")
     if read_object(args.record or registry) != entry:
         raise ValueError("prepared session registration changed before arming")
-    if args.host == "codex":
-        if args.turn_id != entry.get("native_turn_id"):
-            raise ValueError("Codex arming requires the current native turn")
-        shared.revalidate_codex_client(entry)
-        native_completion = shared.client_runtime().NativeCompletion(entry)
-        native_completion.poll()
-    else:
-        shared.verify_claude_receipt(entry)
-        native_completion = None
-    activity = None if args.host == "codex" else shared.active_turn_activity(entry)
+    armed = sessions.arm_close(entry, args.turn_id, target, args.transcript, shared)
     request = state_root() / "client-close" / (token + ".json")
     result = state_root() / "client-close" / (token + ".result.json")
     completion, cancel = args.completion.resolve(), args.cancel.resolve()
@@ -182,18 +128,12 @@ def arm(args: argparse.Namespace) -> int:
         raise ValueError("close request paths must be distinct and unused")
     state = {
         "mode": "close", "entry": entry, "cli_root": str(cli_root), "armed_at": time.time(),
-        "working_activity": activity, "registry": str((args.record or registry).resolve()),
+        "registry": str((args.record or registry).resolve()),
         "host": args.host, "session_id": args.session_id, "turn_id": args.turn_id,
         "completion": str(completion), "cancel": str(cancel), "completion_token": token,
         "result": str(result.resolve()),
+        **armed,
     }
-    if native_completion is not None:
-        state["native_completion"] = native_completion.pin()
-    if args.host == "claude":
-        transcript = claude_transcript(args.session_id, args.transcript or Path(target["transcript"]))
-        if str(transcript) != target.get("transcript") or claude_turn(transcript) != target.get("claude_user_uuid"):
-            raise ValueError("Claude transcript or user changed after preparation")
-        state.update({"transcript": str(transcript), "claude_user_uuid": target["claude_user_uuid"]})
     raw = json.dumps(state, sort_keys=True).encode("utf-8") + b"\n"
     digest = hashlib.sha256(raw).hexdigest()
     published = []
@@ -258,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--target", type=Path, required=True)
     command.add_argument("--transcript", type=Path)
     command = commands.add_parser("arm")
-    command.add_argument("--host", choices=("claude", "codex"), required=True)
+    command.add_argument("--host", required=True)
     command.add_argument("--session-id", required=True)
     command.add_argument("--turn-id")
     command.add_argument("--transcript", type=Path)
