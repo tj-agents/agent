@@ -14,7 +14,6 @@
     "base@tj-agents": true,
     "cli@tj-agents": true,
     "engineering@tj-agents": true,
-    "machine@tj-agents": true,
     "template@tj-agents": true,
     "workflow@tj-agents": true
   },
