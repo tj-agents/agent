@@ -121,11 +121,32 @@ class InstallRecoveryTests(unittest.TestCase):
 
     def test_missing_required_plugins_repair_the_plugin_setup_step(self):
         missing = required_plugins.MissingRequiredPluginsError("missing", self.project, ["agent@tj-agents"])
-        with mock.patch.object(required_plugins, "check", side_effect=[missing, {}]), \
+        with mock.patch.object(required_plugins, "check", side_effect=[missing, {}]) as check, \
                 mock.patch.object(reload_plugins, "repair_missing", side_effect=RuntimeError("native install failed")), \
                 mock.patch.object(install, "repair", return_value=[]) as repair:
             self.assertEqual((self.project, {}), CHECK.prepare_launch_roots(self.project, "claude", "native", []))
+        self.assertEqual(2, check.call_count)
         repair.assert_called_once_with("plugin setup", self.project)
+
+    def test_failed_plugin_setup_recovery_reports_the_original_refresh_failure(self):
+        failure = reload_plugins.RefreshError("plugin install template@tj-agents: native install failed")
+        with mock.patch.object(reload_plugins, "prepare_required", side_effect=failure) as prepare, \
+                mock.patch.object(CHECK, "recover_install", side_effect=install.InstallError("machine setup is stale")) as recover, \
+                self.assertRaisesRegex(RuntimeError, "plugin install template@tj-agents: native install failed") as raised:
+            CHECK.prepare_launch_roots(self.project, "claude", "native", [])
+        self.assertIn("Automatic plugin setup recovery failed: machine setup is stale", str(raised.exception))
+        prepare.assert_called_once_with(self.project, "claude", "native", ())
+        recover.assert_called_once_with(self.project, "plugin setup")
+
+    def test_failed_plugin_setup_recovery_reports_the_original_os_error(self):
+        failure = OSError("native socket closed")
+        with mock.patch.object(reload_plugins, "prepare_required", side_effect=failure) as prepare, \
+                mock.patch.object(CHECK, "recover_install", side_effect=RuntimeError("machine setup is stale")) as recover, \
+                self.assertRaisesRegex(RuntimeError, "native socket closed") as raised:
+            CHECK.prepare_launch_roots(self.project, "claude", "native", [])
+        self.assertIn("Automatic plugin setup recovery failed: machine setup is stale", str(raised.exception))
+        prepare.assert_called_once_with(self.project, "claude", "native", ())
+        recover.assert_called_once_with(self.project, "plugin setup")
 
     def test_invalid_launch_input_never_runs_install_recovery(self):
         with mock.patch.object(CHECK, "recover_install") as recover:
