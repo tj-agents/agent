@@ -264,11 +264,11 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
     # selected recorded frontend to both identities below.
     backend = None if private else daemon_identity()
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import codex_hook_trust
+    from codex import hook_trust
 
     executable = arguments[0]
-    with codex_hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
-                                   existing=not private, timeout=15) as server:
+    with hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
+                             existing=not private, timeout=15) as server:
         submitted = current_input(server, session_id)
     state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
     matches = []

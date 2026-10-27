@@ -9,7 +9,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / ".agents/agent/runtime"
+RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(RUNTIME))
 import required_plugins as REQUIRED
 

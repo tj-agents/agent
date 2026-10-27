@@ -22,11 +22,11 @@ def load(name, path):
 
 class RuntimeReceiptUpdateTests(unittest.TestCase):
     def setUp(self):
-        runtime_directory = str(ROOT / ".agents/agent/runtime")
+        runtime_directory = str(ROOT / "plugins/agent/.agents/agent/runtime")
         sys.path.insert(0, runtime_directory)
         self.addCleanup(lambda: sys.path.remove(runtime_directory))
-        self.runtime = load("runtime_receipt_update", ROOT / ".agents/agent/runtime/plugin_autoupdate.py")
-        self.events = load("runtime_receipt_events", ROOT / ".agents/agent/runtime/machine_events.py")
+        self.runtime = load("runtime_receipt_update", ROOT / "plugins/agent/.agents/agent/runtime/plugin_autoupdate.py")
+        self.events = load("runtime_receipt_events", ROOT / "plugins/agent/.agents/agent/runtime/machine_events.py")
         temporary = tempfile.TemporaryDirectory(prefix="agent-receipt-update-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)

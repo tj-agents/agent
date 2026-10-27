@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-AGENT_CLI = ROOT / '.agents/agent/runtime/agent_cli.py'
+AGENT_CLI = ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py'
 
 # A plausible resolve_codex_executable() result: a (path, version) pair shaped like the real function's
 # return value, for a launch_codex.py test that never runs a real codex binary.

@@ -14,8 +14,8 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / '.agents/agent/resources/handoff/launch_claude.py'
-CLAUDE_LANES = json.loads((ROOT / '.agents/agent/resources/lanes/claude.json').read_text(encoding='utf-8'))
+SCRIPT = ROOT / 'plugins/agent/.agents/agent/resources/handoff/launch_claude.py'
+CLAUDE_LANES = json.loads((ROOT / 'plugins/agent/.agents/agent/resources/lanes/claude.json').read_text(encoding='utf-8'))
 
 _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:

@@ -12,7 +12,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / '.agents/agent/utility/peer/scripts'
+SCRIPTS = ROOT / 'plugins/agent/.agents/agent/utility/peer/scripts'
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 import session_close

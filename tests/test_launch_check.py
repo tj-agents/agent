@@ -9,7 +9,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / ".agents/agent/runtime"
+RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(RUNTIME))
 SPEC = importlib.util.spec_from_file_location("agent_launch_check_tests", RUNTIME / "launch_check.py")
 CHECK = importlib.util.module_from_spec(SPEC)

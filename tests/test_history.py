@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('history', ROOT / '.agents/agent/runtime/history.py')
+SPEC = importlib.util.spec_from_file_location('history', ROOT / 'plugins/agent/.agents/agent/runtime/history.py')
 HISTORY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HISTORY)
 
@@ -59,7 +59,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_packaged_cli_missing_root_and_invalid_pattern_are_clear(self):
         package = self.root / 'isolated package'
-        shutil.copytree(ROOT / '.agents/agent/runtime', package / '.agents/agent/runtime')
+        shutil.copytree(ROOT / 'plugins/agent/.agents/agent/runtime', package / '.agents/agent/runtime')
         script = package / '.agents/agent/runtime/history.py'
         result = subprocess.run([sys.executable, '-B', str(script), 'recent', '--host', 'codex',
                                  '--history-root', str(self.root / 'missing')], cwd=self.cwd,
@@ -260,7 +260,7 @@ class HistoryTests(unittest.TestCase):
 
 
     def test_search_skill_doc_does_not_contradict_worktree_tool_matching(self):
-        text = (ROOT / '.agents/agent/utility/search/SKILL.md').read_text(encoding='utf-8')
+        text = (ROOT / 'plugins/agent/.agents/agent/utility/search/SKILL.md').read_text(encoding='utf-8')
         self.assertNotIn('does not search tool payloads', text)
         self.assertIn('tool-call input', text)
 

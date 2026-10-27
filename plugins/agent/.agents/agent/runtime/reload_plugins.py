@@ -17,8 +17,8 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agent_cli
-import codex_hook_trust
-from codex_hook_trust import AppServer, github_repository
+from codex import hook_trust
+from codex.hook_trust import AppServer, github_repository
 import launch_check
 import plugin_autoupdate
 import required_plugins
@@ -653,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
             if "codex" in hosts and result in {"current", "updated", "offline"}:
                 try:
                     launch_check.ensure_hooks(project, running_session=caller == "codex")
-                except codex_hook_trust.RestartRequired as error:
+                except hook_trust.RestartRequired as error:
                     restart_reason = str(error)
                 except Exception as error:
                     summary["hook_readiness_error"] = str(error)
@@ -692,7 +692,7 @@ def main(argv: list[str] | None = None) -> int:
             if host == "codex" and not arguments.verify_only and not report["problems"]:
                 try:
                     launch_check.ensure_hooks(project, executable, running_session=caller == "codex")
-                except codex_hook_trust.RestartRequired as error:
+                except hook_trust.RestartRequired as error:
                     restart_reason = str(error)
         except (RefreshError, agent_cli.LaunchError, OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
             report = {"host": host, "problems": [str(error)]}

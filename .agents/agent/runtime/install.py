@@ -925,7 +925,7 @@ def repair(name: str, project: Path) -> list[str]:
 
 
 def canonical_script(checkout: Path) -> Path:
-    return checkout / ".agents" / "agent" / "runtime" / "install.py"
+    return checkout / "plugins" / "agent" / ".agents" / "agent" / "runtime" / "install.py"
 
 
 def reexec_if_not_main_checkout(checkout: Path | None, running: Path, argv: list[str],

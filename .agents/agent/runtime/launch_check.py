@@ -288,7 +288,7 @@ def prepare_launch(project, host, executable, arguments):
 
 def ensure_hooks(project: Path, executable: str | None = None, *, running_session=False) -> None:
     import agent_cli
-    import codex_hook_trust
+    from codex import hook_trust
     import required_plugins
 
     required = required_plugins.selected(required_plugins.project_root(project))
@@ -298,15 +298,15 @@ def ensure_hooks(project: Path, executable: str | None = None, *, running_sessio
     expected = {}
     roots = required_plugins.check(project, "codex", binary)
     for identity, root in (roots or {}).items():
-        definitions = codex_hook_trust.required_definitions(root, identity)
+        definitions = hook_trust.required_definitions(root, identity)
         if definitions:
             expected[identity] = definitions
-    codex_hook_trust.apply_trust(binary, project.resolve(), required=expected)
+    hook_trust.apply_trust(binary, project.resolve(), required=expected)
     if running_session:
         try:
-            codex_hook_trust.reload_running(binary, project.resolve(), required=expected)
+            hook_trust.reload_running(binary, project.resolve(), required=expected)
         except (OSError, RuntimeError) as error:
-            raise codex_hook_trust.RestartRequired(str(error)) from error
+            raise hook_trust.RestartRequired(str(error)) from error
 
 
 def main(argv: list[str] | None = None) -> int:
