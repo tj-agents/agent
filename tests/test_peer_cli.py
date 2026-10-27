@@ -7,7 +7,7 @@ import sys
 import unittest
 from unittest import mock
 
-PATH = Path(__file__).resolve().parents[1] / ".agents/agent/utility/peer/scripts/peer_cli.py"
+PATH = Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/utility/peer/scripts/peer_cli.py"
 sys.path.insert(0, str(PATH.parent))
 spec = importlib.util.spec_from_file_location("peer_cli", PATH); peer_cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(peer_cli)
 
@@ -95,7 +95,7 @@ class PeerCliTests(unittest.TestCase):
         with mock.patch.object(peer_cli.session_close.os, 'getppid', return_value=10), \
                 mock.patch.object(peer_cli.session_close, 'process_info', return_value=host), \
                 mock.patch.object(peer_cli.session_close.register_session, 'read_host_names', return_value={'codex'}), \
-                mock.patch.object(peer_cli.session_close, 'current_codex_client', side_effect=[
+                mock.patch.object(peer_cli.session_close.host_sessions('codex'), 'current_client', side_effect=[
                     (host, {'client_identity': 'managed-input'}), (host, {'client_identity': 'managed-input'}),
                 ]), \
                 mock.patch.object(peer_cli.session_close.register_session, 'record', side_effect=[own, peer]), \
@@ -106,7 +106,7 @@ class PeerCliTests(unittest.TestCase):
         with mock.patch.object(peer_cli.session_close.os, 'getppid', return_value=10), \
                 mock.patch.object(peer_cli.session_close, 'process_info', return_value=host), \
                 mock.patch.object(peer_cli.session_close.register_session, 'read_host_names', return_value={'codex'}), \
-                mock.patch.object(peer_cli.session_close, 'current_codex_client', side_effect=RuntimeError('unattributed')), \
+                mock.patch.object(peer_cli.session_close.host_sessions('codex'), 'current_client', side_effect=RuntimeError('unattributed')), \
                 mock.patch.dict(peer_cli.session_close.os.environ, {'CODEX_THREAD_ID': 'missing'}, clear=False):
             with self.assertRaisesRegex(peer_cli.session_close.Refusal, 'unattributed'):
                 peer_cli.session_close.own_host_and_entry(PATH.parents[4])

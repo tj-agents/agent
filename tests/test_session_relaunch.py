@@ -13,8 +13,8 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / ".agents/agent/runtime"
-PEER = ROOT / ".agents/agent/utility/peer/scripts"
+SCRIPTS = ROOT / "plugins/agent/.agents/agent/runtime"
+PEER = ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"
 for path in (SCRIPTS, PEER):
     sys.path.insert(0, str(path))
 
@@ -30,6 +30,10 @@ RELAUNCH = load("session_relaunch", SCRIPTS / "session_relaunch.py")
 WATCHER = load("relaunch_watcher", SCRIPTS / "relaunch_watcher.py")
 REFRESH = load("reload_plugins_for_relaunch", SCRIPTS / "reload_plugins.py")
 REGISTER = load("register_session", PEER / "register_session.py")
+import agent_cli  # noqa: E402
+from claude import plugins as CLAUDE  # noqa: E402
+from claude import sessions as CLAUDE_SESSIONS  # noqa: E402
+from host import Host  # noqa: E402
 SESSION = "5ea1d656-3e27-42e1-afb3-0af687449f91"
 
 
@@ -55,7 +59,7 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(["--add-dir", "C:/a", "C:/b", "--settings", "s.json", "--model", "opus", "--mcp-config=m.json",
                           "--strict-mcp-config", "--plugin-dir", "C:/p", "--permission-mode", "plan",
                           "--dangerously-skip-permissions", "--mcp-config", "x.json", "y.json"],
-                         RELAUNCH.preserved_arguments(argv))
+                         CLAUDE_SESSIONS.native_arguments(argv))
 
     def test_a_dummy_process_command_line_is_read_back(self):
         process = subprocess.Popen([sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(30)",
@@ -66,7 +70,7 @@ class ArgumentTests(unittest.TestCase):
         self.addCleanup(process.kill)
         self.assertEqual("ready\n", process.stdout.readline())
         self.assertEqual(["--add-dir", "C:/extra dir", "--settings", "s.json"],
-                         RELAUNCH.preserved_arguments(RELAUNCH.host_arguments(process.pid)))
+                         CLAUDE_SESSIONS.native_arguments(RELAUNCH.host_arguments(process.pid)))
 
 
 class StalenessTests(State):
@@ -86,16 +90,16 @@ class StalenessTests(State):
                      "react@tj-agents": [self.install("react", "v2")]}
         identities = sorted(installed)
         self.assertEqual(["work@tj-agents", "workflow@tj-agents"],
-                         RELAUNCH.stale_plugins(4242, self.root, identities, installed, {"work@tj-agents"}))
-        self.assertEqual(["work@tj-agents"], RELAUNCH.stale_plugins(0, self.root, identities, installed, {"work@tj-agents"}))
+                         CLAUDE.stale_plugins(4242, self.root, identities, installed, {"work@tj-agents"}))
+        self.assertEqual(["work@tj-agents"], CLAUDE.stale_plugins(0, self.root, identities, installed, {"work@tj-agents"}))
 
     def test_the_effective_installation_follows_claude_scope_precedence(self):
         project = self.root / "project"
         entries = [{"scope": "user", "installPath": "user"},
                    {"scope": "project", "projectPath": str(project), "installPath": "project"},
                    {"scope": "local", "projectPath": str(self.root / "other"), "installPath": "other"}]
-        self.assertEqual("project", RELAUNCH.effective_installation(entries, project / "src")["installPath"])
-        self.assertEqual("user", RELAUNCH.effective_installation(entries, self.root / "elsewhere")["installPath"])
+        self.assertEqual("project", CLAUDE.effective_installation(entries, project / "src")["installPath"])
+        self.assertEqual("user", CLAUDE.effective_installation(entries, self.root / "elsewhere")["installPath"])
 
 
 class CallerHostTests(State):
@@ -109,7 +113,7 @@ class CallerHostTests(State):
                 mock.patch.object(RELAUNCH, "load", return_value=REGISTER), \
                 mock.patch.object(REGISTER, "build_process_lookup", return_value=processes.get), \
                 mock.patch.object(RELAUNCH.os, "getppid", return_value=9001):
-            self.assertEqual("claude", RELAUNCH.caller_host())
+            self.assertIs(Host.CLAUDE, RELAUNCH.caller_host())
 
     def test_caller_host_returns_none_when_no_native_host_is_recorded(self):
         register = mock.Mock()
@@ -132,7 +136,7 @@ class Shared:
 
 class ArmTests(State):
     def arm(self, arm_close):
-        for patcher in (mock.patch.object(RELAUNCH.agent_cli, "resolve_claude_executable", return_value="claude"),
+        for patcher in (mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"),
                         mock.patch.object(RELAUNCH, "cli_close_capability", return_value=self.root / "close.py"),
                         mock.patch.object(RELAUNCH, "arm_client_close", side_effect=arm_close)):
             patcher.start()
@@ -141,7 +145,7 @@ class ArmTests(State):
     def test_the_watcher_starts_before_close_is_armed_and_carries_the_native_arguments(self):
         events = []
         self.arm(lambda *_: events.append(("close",)) or {"status": "armed"})
-        result = RELAUNCH.relaunch(self.root, {}, shared=Shared(events),
+        result = RELAUNCH.relaunch(self.root, {}, host=Host.CLAUDE, shared=Shared(events),
                                    arguments=lambda pid: ["--add-dir", "C:/extra", "--debug-file", "x"])
         self.assertEqual(["watcher", "close"], [event[0] for event in events])
         self.assertEqual("relaunch_watcher.py", events[0][1])
@@ -163,7 +167,7 @@ class ArmTests(State):
             with self.subTest(session=session, pid=pid), mock.patch.dict(os.environ, {
                     "CLAUDE_CODE_SESSION_ID": session, "CLAUDE_PID": pid}):
                 with self.assertRaisesRegex(RuntimeError, "does not match"):
-                    RELAUNCH.relaunch(self.root, {}, shared=Shared(events), arguments=lambda _: [])
+                    RELAUNCH.relaunch(self.root, {}, host=Host.CLAUDE, shared=Shared(events), arguments=lambda _: [])
             self.assertEqual([], events)
             self.assertFalse(RELAUNCH.record_path(SESSION).exists())
 
@@ -171,20 +175,20 @@ class ArmTests(State):
         events = []
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_LOG": str(self.root / "subagents/agent-child.jsonl")}):
             with self.assertRaisesRegex(RuntimeError, "subagent cannot"):
-                RELAUNCH.relaunch(self.root, {}, shared=Shared(events), arguments=lambda _: [])
+                RELAUNCH.relaunch(self.root, {}, host=Host.CLAUDE, shared=Shared(events), arguments=lambda _: [])
         self.assertEqual([], events)
         self.assertFalse(RELAUNCH.record_path(SESSION).exists())
 
     def test_a_refused_close_cancels_the_watcher(self):
         self.arm(RuntimeError("tab ownership could not be verified"))
         with self.assertRaisesRegex(RuntimeError, "tab ownership"):
-            RELAUNCH.relaunch(self.root, {}, shared=Shared([]), arguments=lambda pid: [])
+            RELAUNCH.relaunch(self.root, {}, host=Host.CLAUDE, shared=Shared([]), arguments=lambda pid: [])
         self.assertEqual("cancelled", json.loads(RELAUNCH.record_path(SESSION).read_text(encoding="utf-8"))["state"])
 
 
 class WatcherTests(State):
     def options(self, pid, started_at, recovery, record, token="t"):
-        return ["--session-id", SESSION, "--pid", str(pid), "--pid-started-at", repr(started_at), "--record", str(record),
+        return ["--host", "claude", "--session-id", SESSION, "--pid", str(pid), "--pid-started-at", repr(started_at), "--record", str(record),
                 "--token", token, "--recovery", str(recovery), "--title", "Work", "--prompt", "Continue.",
                 "--expected-cwd", str(self.root.resolve()), "--timeout", "60",
                 "--native-argument=--add-dir", "--native-argument=C:/extra"]
@@ -246,11 +250,10 @@ class SyncTests(State):
         relaunched = mock.Mock(return_value=relaunch or {"relaunch": "armed", "session_id": SESSION})
         with mock.patch.dict(os.environ, environment), \
                 mock.patch.object(REFRESH.launch_check, "check", return_value=result), \
-                mock.patch.object(REFRESH, "selection", return_value=({}, ["workflow@tj-agents"])), \
-                mock.patch.object(RELAUNCH, "stale_plugins", return_value=list(stale)), \
-                mock.patch.object(RELAUNCH, "relaunch", relaunched), \
-                mock.patch.dict(sys.modules, {"session_relaunch": RELAUNCH}), \
-                mock.patch.object(REFRESH, "calling_host", return_value="claude"), \
+                mock.patch.object(CLAUDE, "selected", return_value=({}, ["workflow@tj-agents"])), \
+                mock.patch.object(CLAUDE, "stale_plugins", return_value=list(stale)), \
+                mock.patch.object(CLAUDE.session_relaunch, "relaunch", relaunched), \
+                mock.patch.object(REFRESH, "calling_host", return_value=Host.CLAUDE), \
                 mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
             code = REFRESH.main(["--project", str(self.root)] + (["--no-relaunch"] if no_relaunch else []))
         output = "".join(call.args[0] for call in stdout.write.call_args_list)
@@ -285,11 +288,10 @@ class SyncTests(State):
         relaunched = mock.Mock(side_effect=RuntimeError("relaunch was not armed: refused"))
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": SESSION, "CLAUDE_PID": "4242"}), \
                 mock.patch.object(REFRESH.launch_check, "check", return_value="updated"), \
-                mock.patch.object(REFRESH, "selection", return_value=({}, ["workflow@tj-agents"])), \
-                mock.patch.object(RELAUNCH, "stale_plugins", return_value=["workflow@tj-agents"]), \
-                mock.patch.object(RELAUNCH, "relaunch", relaunched), \
-                mock.patch.dict(sys.modules, {"session_relaunch": RELAUNCH}), \
-                mock.patch.object(REFRESH, "calling_host", return_value="claude"), \
+                mock.patch.object(CLAUDE, "selected", return_value=({}, ["workflow@tj-agents"])), \
+                mock.patch.object(CLAUDE, "stale_plugins", return_value=["workflow@tj-agents"]), \
+                mock.patch.object(CLAUDE.session_relaunch, "relaunch", relaunched), \
+                mock.patch.object(REFRESH, "calling_host", return_value=Host.CLAUDE), \
                 mock.patch("sys.stdout"), mock.patch("sys.stderr"):
             self.assertEqual(1, REFRESH.main(["--project", str(self.root)]))
 

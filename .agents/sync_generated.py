@@ -288,15 +288,18 @@ def resource_source_parts(source: str) -> tuple[str | None, str]:
     if path.parts[1] == "hooks":
         return None, "hooks"
     if path.parts[0] in HOST_ROOTS:
+        if path.parts[1] == "runtime":
+            return None, "runtime"
         raise ValueError(
             ".agents/plugins/payloads.json: a host resource source must be below "
-            f"{path.parts[0]}/hooks"
+            f"{path.parts[0]}/hooks or {path.parts[0]}/runtime"
         )
     if len(path.parts) >= 3 and NAME.fullmatch(path.parts[1]):
         return path.parts[1], path.parts[2]
     raise ValueError(
         ".agents/plugins/payloads.json: resource source must be .agents/hooks, "
-        ".claude/hooks, .codex/hooks or a path below .agents/<plugin>"
+        ".claude/hooks, .claude/runtime, .codex/hooks, .codex/runtime or a path "
+        "below .agents/<plugin>"
     )
 
 

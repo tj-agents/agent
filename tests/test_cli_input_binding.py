@@ -13,9 +13,9 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / '.agents/agent/runtime'))
-import cli_client as client
-import codex_hook_trust
+sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
+from codex import client  # noqa: E402
+from codex import hook_trust
 
 
 def events(identity, stamp, *following):
@@ -43,7 +43,7 @@ class InputBindingTests(unittest.TestCase):
             mock.patch.object(client, 'daemon_identity', return_value=self.backend),
             mock.patch.object(client, 'process_context', side_effect=lambda pid: self.contexts.get(pid, {})),
             mock.patch.object(client, 'process_arguments', side_effect=lambda pid: self.commands[pid]),
-            mock.patch.object(codex_hook_trust, 'AppServer'),
+            mock.patch.object(hook_trust, 'AppServer'),
         ):
             patch.start()
             self.addCleanup(patch.stop)
@@ -57,7 +57,7 @@ class InputBindingTests(unittest.TestCase):
 
     def bind(self, pid=123, identity='own-input'):
         arguments, environment, ticket = client.prepare(
-            'codex', ['resume', 'thread'], self.root,
+            ['resume', 'thread'], self.root,
             {**os.environ, client.RECORD_ENV: '1', client.RECORD_PATH_ENV: 'parent-path'}, executable='codex')
         client.attach(ticket, pid)
         path = client.binding_path(ticket['token'])
@@ -142,7 +142,7 @@ class InputBindingTests(unittest.TestCase):
             self.resolve()
 
     def test_failed_attach_never_deletes_an_existing_record(self):
-        _, _, ticket = client.prepare('codex', [], self.root, os.environ, executable='codex')
+        _, _, ticket = client.prepare([], self.root, os.environ, executable='codex')
         path = client.binding_path(ticket['token'])
         path.write_text('existing', encoding='utf-8')
         with self.assertRaises(FileExistsError):
@@ -150,11 +150,10 @@ class InputBindingTests(unittest.TestCase):
         client.release(ticket)
         self.assertEqual('existing', path.read_text(encoding='utf-8'))
 
-    def test_other_hosts_and_maintenance_do_not_enable_recording(self):
-        for host, arguments in [('claude', []), ('codex', ['review']),
-                                ('codex', ['exec']), ('codex', ['app-server']), ('codex', ['--help'])]:
-            with self.subTest(host=host, arguments=arguments):
-                prepared, environment, ticket = client.prepare(host, arguments, self.root,
+    def test_maintenance_does_not_enable_recording(self):
+        for arguments in [['review'], ['exec'], ['app-server'], ['--help']]:
+            with self.subTest(arguments=arguments):
+                prepared, environment, ticket = client.prepare(arguments, self.root,
                     {client.RECORD_ENV: 'parent', client.RECORD_PATH_ENV: 'parent-path'})
                 self.assertEqual(arguments, prepared)
                 self.assertNotIn(client.RECORD_ENV, environment)
@@ -162,7 +161,7 @@ class InputBindingTests(unittest.TestCase):
                 self.assertIsNone(ticket)
 
     def test_private_frontend_requires_native_current_input_instead_of_ancestry(self):
-        arguments, environment, ticket = client.prepare('codex', ['--no-daemon'], self.root,
+        arguments, environment, ticket = client.prepare(['--no-daemon'], self.root,
                                                        os.environ, executable='codex')
         self.assertIsNone(ticket['backend'])
         self.assertEqual('1', environment[client.RECORD_ENV])
@@ -180,7 +179,7 @@ class InputBindingTests(unittest.TestCase):
             self.resolve()
         self.input.return_value = {'turn_id': 'turn', 'client_message_id': 'displayed-thread-input'}
         self.assertEqual(123, self.resolve()[0].pid)
-        self.assertFalse(codex_hook_trust.AppServer.call_args.kwargs['existing'])
+        self.assertFalse(hook_trust.AppServer.call_args.kwargs['existing'])
 
 
 class RecorderTests(unittest.TestCase):

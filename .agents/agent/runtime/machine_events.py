@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 
+from host import Host
 import plugin_autoupdate as plugins
 
 OWNERS = ("tj-agents", "Concertable", "tomjseery")
@@ -110,7 +111,7 @@ def catch_up_states(api=gh):
 def policy_script():
     config = plugins.load_codex_config()
     roots = [root for _, declaration in plugins.declarations(config)
-             for root in plugins.installed_plugin_roots("github-actions", plugins.claude_home(), declaration)]
+             for root in plugins.installed_plugin_roots("github-actions", Host.CLAUDE.configuration_root, declaration)]
     relative = Path(".agents/github-actions/utility/merge-policy/scripts/merge_policy.py")
     candidates = [root / relative for root in roots]
     candidates += [root / "skills/merge-policy/scripts/merge_policy.py" for root in roots]

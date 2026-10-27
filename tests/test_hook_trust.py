@@ -1,6 +1,6 @@
-import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 import subprocess
@@ -8,11 +8,8 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "codex_hook_trust", ROOT / ".agents/agent/runtime/codex_hook_trust.py",
-)
-TRUST = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(TRUST)
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
+from codex import hook_trust as TRUST
 
 
 class HookTrustTests(unittest.TestCase):

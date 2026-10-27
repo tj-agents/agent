@@ -26,10 +26,6 @@ TRUSTED_OWNER = "tj-agents"
 TIMEOUT = 45
 
 
-class RestartRequired(RuntimeError):
-    """Verified installed hooks need a fresh instance of the owning client."""
-
-
 def github_repository(source):
     match = GITHUB_SOURCE.fullmatch(source) if isinstance(source, str) else None
     if not match or match["repo"] in {".", ".."}:
@@ -56,7 +52,7 @@ def run(arguments, cwd, timeout=TIMEOUT):
 class AppServer:
     def __init__(self, executable, cwd, launch_args=(), environment=None, timeout=TIMEOUT, existing=False):
         if existing:
-            from codex_websocket import WebSocketStdio
+            from codex.websocket import WebSocketStdio
 
         self.timeout = timeout
         self.process = subprocess.Popen(

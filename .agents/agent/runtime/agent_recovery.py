@@ -16,6 +16,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from host import Host  # noqa: E402
+from host_sessions import SESSIONS  # noqa: E402
+
 SESSION_ID = re.compile(r"(?!-)[A-Za-z0-9_-]+\Z")
 TOKEN = re.compile(r"[a-z0-9]+")
 PICKUP_TIMEOUT_SECONDS = 480
@@ -81,7 +86,7 @@ def _registry(session_id):
 
 def liveness(item, process_lookup=None):
     session_id = item.get("session") or item.get("id")
-    current_id = os.environ.get("CODEX_THREAD_ID") if item["host"] == "codex" else os.environ.get("CLAUDE_CODE_SESSION_ID")
+    current_id = os.environ.get(Host(item["host"]).session_variable)
     if current_id and current_id == session_id:
         return "live"
     record = _registry(session_id)
@@ -110,12 +115,8 @@ def liveness(item, process_lookup=None):
     return "live" if current.started_at == started else "closed"
 
 
-def _profile(host, root):
+def _profile(root):
     return os.path.normcase(str(Path(root).parent.resolve()))
-
-
-def _is_default_claude_profile(profile):
-    return os.path.normcase(str(Path(profile).resolve())) == os.path.normcase(str((Path.home() / ".claude").resolve()))
 
 
 def _normalise(item, root):
@@ -124,19 +125,13 @@ def _normalise(item, root):
     return {
         "id": item["session"], "host": item["host"], "cwd": item.get("cwd"),
         "branch": item.get("branch"), "activity": item.get("last_activity"),
-        "preview": preview, "profile": _profile(item["host"], root),
+        "preview": preview, "profile": _profile(root),
         "status": liveness(item), "matched_by": item.get("matched_by"),
     }
 
 
 def _recoverable(item):
-    return item["host"] != "codex" or item.get("source") == "cli"
-
-
-def _roots(host, root):
-    if host == "codex":
-        return (root, root.parent / "archived_sessions")
-    return (root,)
+    return SESSIONS[Host(item["host"])].recoverable(item)
 
 
 def _title_index(root):
@@ -185,11 +180,12 @@ def _matches(item, topic, checkout, history, title):
 
 
 def _record_items(host, root, history):
+    sessions = SESSIONS[host]
     files = []
-    for directory in _roots(host, root):
+    for directory in sessions.history_roots(root):
         if not directory.is_dir():
             continue
-        files.extend(directory.rglob("*.jsonl") if host == "codex" else directory.glob("*/*.jsonl"))
+        files.extend(sessions.transcript_files(directory))
     for path in files:
         try:
             item = history.session(path, host)
@@ -233,7 +229,8 @@ def _store_rows(hosts, session_id=None):
         return [dict(row) for row in connection.execute(
             f"SELECT s.host, s.profile, s.last_activity_at, s.started_at, s.ended_at, w.status AS work_item_status, "
             f"{columns} FROM sessions s LEFT JOIN work_items w ON w.key = s.work_item "
-            f"WHERE s.host IN ({placeholders}){exact}", (*hosts, *((session_id,) if session_id else ())))]
+            f"WHERE s.host IN ({placeholders}){exact}",
+            (*(host.value for host in hosts), *((session_id,) if session_id else ())))]
     finally:
         connection.close()
 
@@ -277,23 +274,19 @@ def _finish_store_item(item):
     return item
 
 
-def _history_root(host, profile):
-    return Path(profile) / ("sessions" if host == "codex" else "projects")
-
-
 def _native_files(host, profile, cache):
     key = (host, str(profile))
     if key not in cache:
+        sessions = SESSIONS[host]
         files = {}
-        for directory in _roots(host, _history_root(host, profile)):
+        for directory in sessions.history_roots(Path(profile) / host.history_directory):
             try:
-                found = sorted(directory.rglob("*.jsonl") if host == "codex" else directory.glob("*/*.jsonl"))
+                found = sorted(sessions.transcript_files(directory))
             except OSError:
                 continue
             for path in found:
-                files.setdefault(path.stem, path)
-                if host == "codex" and len(path.stem) > 36:
-                    files.setdefault(path.stem[-36:], path)
+                for identity in sessions.transcript_ids(path):
+                    files.setdefault(identity, path)
         cache[key] = files
     return cache[key]
 
@@ -305,26 +298,11 @@ def _native_file(host, session_id, profile, cache):
     return next((path for stem, path in files.items() if stem.endswith("-" + session_id)), None)
 
 
-def _native_header(path, host, history):
-    for _number, event in history.records(path):
-        if host == "codex":
-            payload = event.get("payload")
-            if event.get("type") == "session_meta" and isinstance(payload, dict):
-                source = payload.get("source")
-                if isinstance(source, dict) and "subagent" in source:
-                    return None
-                return {"host": host, "session": payload.get("id"), "cwd": payload.get("cwd"), "source": source,
-                        "branch": (payload.get("git") or {}).get("branch")}
-        elif event.get("type") in ("user", "assistant") and not event.get("isSidechain") and event.get("cwd"):
-            return {"host": host, "session": event.get("sessionId") or path.stem, "cwd": event.get("cwd"),
-                    "branch": event.get("gitBranch")}
-    return None
-
-
 def _resumable(item, history, cache):
-    path = _native_file(item["host"], item["id"], item["profile"], cache)
+    host = Host(item["host"])
+    path = _native_file(host, item["id"], item["profile"], cache)
     try:
-        native = _native_header(path, item["host"], history) if path else None
+        native = SESSIONS[host].header(path) if path else None
     except (OSError, ValueError):
         native = None
     if not native or native.get("session") != item["id"] or not _recoverable(native):
@@ -360,7 +338,7 @@ def _native_matched_by(item, topic, title):
     return matched or ["message"]
 
 
-def search(hosts=("codex", "claude"), topic=None, checkout=None, count=10, roots=None, include_history=False):
+def search(hosts=tuple(Host), topic=None, checkout=None, count=10, roots=None, include_history=False):
     if count < 1:
         raise ValueError("--count must be positive")
     history = _load("history")
@@ -373,12 +351,12 @@ def search(hosts=("codex", "claude"), topic=None, checkout=None, count=10, roots
     found = {(item["host"], item["id"]) for item in results}
     for host in hosts if include_history or not stored else ():
         root = (roots or {}).get(host) if roots else None
-        root = Path(root) if root else history.history_root(host)
+        root = Path(root) if root else host.history_root
         if not root.is_dir():
             raise ValueError(f"No {host} history directory at {root}; select the correct profile or history root.")
         titles = _title_index(root)
         for item in _record_items(host, root, history):
-            if (host, item["session"]) in found:
+            if (host.value, item["session"]) in found:
                 continue
             title = titles.get(item["session"])
             if _matches(item, topic, checkout, history, title):
@@ -403,7 +381,7 @@ def _store_find(host, session_id, history):
 
 
 def find(host, session_id, roots=None):
-    if host not in ("codex", "claude") or not SESSION_ID.fullmatch(session_id):
+    if not SESSION_ID.fullmatch(session_id):
         raise ValueError("A host and native session id are required.")
     history = _load("history")
     item = None if roots else _store_find(host, session_id, history)
@@ -411,7 +389,7 @@ def find(host, session_id, roots=None):
         if not item["cwd"] or not Path(item["cwd"]).is_dir():
             raise ValueError("The recorded session directory is missing; refusing to resume it elsewhere.")
         return item
-    root = Path((roots or {}).get(host) or history.history_root(host))
+    root = Path((roots or {}).get(host) or host.history_root)
     if not root.is_dir():
         raise ValueError(f"No {host} history directory at {root}; select the correct profile or history root.")
     for item in _record_items(host, root, history):
@@ -421,15 +399,6 @@ def find(host, session_id, roots=None):
                 raise ValueError("The recorded session directory is missing; refusing to resume it elsewhere.")
             return item
     raise ValueError("The requested native session was not found in the selected profile history.")
-
-
-def _verify_codex_resume(executable):
-    try:
-        result = subprocess.run([executable, "resume", "--help"], text=True, capture_output=True, timeout=15)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ValueError(f"Could not verify native Codex resume support: {exc}") from None
-    if result.returncode or "SESSION_ID" not in result.stdout + result.stderr:
-        raise ValueError("The native Codex executable does not support exact `resume SESSION_ID [PROMPT]`.")
 
 
 def _session_lock(host, session_id):
@@ -518,7 +487,7 @@ def _attach_launch_binding(host, session_id, profile, receipt_path, wrapper):
         return
     path = _registry_root() / f"{session_id}.json"
     record = _registry(session_id)
-    if not (isinstance(record, dict) and record.get("session_id") == session_id and record.get("host") == host
+    if not (isinstance(record, dict) and record.get("session_id") == session_id and record.get("host") == host.value
             and record.get("profile") == profile):
         return
     record.update({"frontend": {"pid": child["pid"], "started_at": child["started_at"]},
@@ -589,7 +558,7 @@ def _claim(host, session_id, profile, confirm_closed=False):
             ended = _launch_ended(previous)
             settled = previous.get("state") != "pending" or time.time() - previous.get("created_at", 0) > PICKUP_TIMEOUT_SECONDS + WRAPPER_TIMEOUT_SECONDS
             if ended or (confirm_closed and ended is None and settled) or (
-                    registered and liveness({"host": host, "session": session_id}) == "closed"):
+                    registered and liveness({"host": host.value, "session": session_id}) == "closed"):
                 path.unlink()
         try:
             descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -597,7 +566,7 @@ def _claim(host, session_id, profile, confirm_closed=False):
             raise ValueError("A prior launch for that exact host session is pending or still running, or predates "
                              "launch tracking; check its terminal, and if no tab runs it, retry with --confirm-closed.") from None
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"host": host, "session": session_id, "profile": profile, "state": "pending",
+            json.dump({"host": host.value, "session": session_id, "profile": profile, "state": "pending",
                        "created_at": time.time(), "registry_fingerprint": _fingerprint(_registry(session_id))}, handle)
     return path
 
@@ -614,7 +583,7 @@ def _receipt_state(path, host, session_id, profile, state, wrapper=None, status_
     except (OSError, ValueError):
         previous = {}
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"host": host, "session": session_id, "profile": profile, "state": state,
+    temporary.write_text(json.dumps({"host": host.value, "session": session_id, "profile": profile, "state": state,
                                      "created_at": previous.get("created_at", time.time()),
                                      "registry_fingerprint": previous.get("registry_fingerprint"),
                                      "wrapper": wrapper,
@@ -666,7 +635,7 @@ def await_pickup(host, session_id, status_path, since, history_path=None, timeou
                  clock=time.monotonic, wait=time.sleep):
     store = _load("session_store")
     status_file = _load("launch_status")
-    handle = store.session_handle(host, session_id)
+    handle = store.session_handle(host.value, session_id)
     start = clock()
     history_before = _modified(history_path)
     connection = None
@@ -733,42 +702,11 @@ def open_session(host, session_id, prompt="Continue the requested work.", title=
             host, session_id, item["profile"])
         since = time.time()
         directory = cli.resolve_tab_directory(item["cwd"])
-        label = title or f"{host.title()} {session_id[:8]}"
+        label = title or f"{host.value.title()} {session_id[:8]}"
         instruction = cli.prompt_file_argument(prompt_path)[0] if prompt_path else prompt
-        if host == "claude":
-            # Claude reads ~/.claude.json only without CLAUDE_CONFIG_DIR; set to ~/.claude it starts first-run onboarding.
-            if _is_default_claude_profile(item["profile"]):
-                profile_environment = {"clear": ("CLAUDE_CONFIG_DIR",)}
-            else:
-                profile_environment = {"force": {"CLAUDE_CONFIG_DIR": item["profile"]}}
-            arguments = [*native_arguments, "--resume", session_id]
-            if dangerously_skip_permissions:
-                arguments.append("--dangerously-skip-permissions")
-            if model:
-                arguments += ["--model", model]
-            arguments.append(instruction)
-            cli.open_claude_tab(directory, label, arguments, status_file=status_path, **profile_environment)
-        else:
-            executable, _ = cli.resolve_codex_executable()
-            _verify_codex_resume(executable)
-            old_profile = os.environ.get("CODEX_HOME")
-            os.environ["CODEX_HOME"] = item["profile"]
-            arguments = [*native_arguments, "resume", session_id]
-            if model:
-                arguments += ["-m", model]
-            arguments.append(instruction)
-            try:
-                cli.launch_tab(
-                    directory, sys.executable, label,
-                    cli.bound_terminal_arguments("codex", directory, executable, arguments, status_path),
-                    clear=("TERM",),
-                    force={"CODEX_HOME": item["profile"]},
-                )
-            finally:
-                if old_profile is None:
-                    os.environ.pop("CODEX_HOME", None)
-                else:
-                    os.environ["CODEX_HOME"] = old_profile
+        SESSIONS[host].open_tab(cli, item, directory, label, instruction, status_path, model=model,
+                                native_arguments=native_arguments,
+                                dangerously_skip_permissions=dangerously_skip_permissions)
         launched = True
         try:
             evidence = await_pickup(host, session_id, status_path, since, history_path)
@@ -815,7 +753,7 @@ def focus_session(host, session_id):
                          + (result.stderr or result.stdout or "no detail").strip())
 
 
-def resolve_target(target, hosts=("codex", "claude"), roots=None, pick_latest=False):
+def resolve_target(target, hosts=tuple(Host), roots=None, pick_latest=False):
     if target and SESSION_ID.fullmatch(target):
         exact = []
         for host in hosts:
@@ -851,19 +789,19 @@ def resolve_target(target, hosts=("codex", "claude"), roots=None, pick_latest=Fa
     return item
 
 
-def reopen(target, hosts=("codex", "claude"), roots=None, pick_latest=False, focus=None, **options):
+def reopen(target, hosts=tuple(Host), roots=None, pick_latest=False, focus=None, **options):
     item = resolve_target(target, hosts, roots, pick_latest)
     if item["status"] == "live":
-        (focus or focus_session)(item["host"], item["id"])
+        (focus or focus_session)(Host(item["host"]), item["id"])
         return {**item, "action": "focused"}
-    opened = open_session(item["host"], item["id"], roots=roots, **options)
+    opened = open_session(Host(item["host"]), item["id"], roots=roots, **options)
     return {**opened, "action": "opened"}
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Search and safely reopen exact native Codex or Claude sessions.")
     parser.add_argument("operation", choices=("search", "open", "recover", "reopen"))
-    parser.add_argument("--host", choices=("codex", "claude", "both"), default="both")
+    parser.add_argument("--host", type=Host, choices=list(Host))
     parser.add_argument("--id")
     parser.add_argument("--target")
     parser.add_argument("--latest", action="store_true")
@@ -879,12 +817,12 @@ def main(argv=None):
     parser.add_argument("--select", action="append", default=[])
     parser.add_argument("--confirm-closed", action="store_true")
     parser.add_argument("--native-argument", action="append", default=[])
-    parser.add_argument("--codex-history-root")
-    parser.add_argument("--claude-history-root")
+    for host in Host:
+        parser.add_argument(f"--{host}-history-root", dest=f"{host}_history_root")
     args = parser.parse_args(argv)
     try:
-        hosts = ("codex", "claude") if args.host == "both" else (args.host,)
-        roots = {host: value for host, value in (("codex", args.codex_history_root), ("claude", args.claude_history_root)) if value}
+        hosts = (args.host,) if args.host else tuple(Host)
+        roots = {host: value for host in Host if (value := getattr(args, f"{host}_history_root"))}
         if args.operation == "search":
             print(json.dumps(search(hosts, args.topic, args.checkout, args.count, roots, args.include_history), indent=2))
             return 0
@@ -899,7 +837,7 @@ def main(argv=None):
                         candidates.extend(search((host,), args.topic, args.checkout, args.count, roots,
                                                  args.include_history))
                     except ValueError as exc:
-                        unavailable.append({"host": host, "unavailable": str(exc)})
+                        unavailable.append({"host": host.value, "unavailable": str(exc)})
             if not args.select:
                 print(json.dumps({"sessions": candidates, "unavailable": unavailable}, indent=2))
                 return 0
@@ -913,7 +851,7 @@ def main(argv=None):
                 if (host, session_id) in seen:
                     raise ValueError("Each --select host:id may appear only once.")
                 seen.add((host, session_id))
-                selected.append((host, session_id))
+                selected.append((Host(host), session_id))
             opened = []
             for host, session_id in selected:
                 try:

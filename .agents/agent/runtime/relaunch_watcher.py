@@ -1,4 +1,4 @@
-"""Reopen one armed Claude session after its old process has exited (Python 3.9+).
+"""Reopen one armed session after its old process has exited (Python 3.9+).
 
 Started detached by `session_relaunch.py`. A cancelled or replaced record, or the timeout, ends it without
 launching anything, so the conversation never has two writers.
@@ -24,15 +24,15 @@ SESSION_ENVIRONMENT = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CL
 
 def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", choices=("claude", "codex"), default="claude")
-    parser.add_argument("--profile", type=Path)
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--history-root", type=Path)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--pid", type=int, required=True)
     parser.add_argument("--pid-started-at", type=float, required=True)
     parser.add_argument("--record", type=Path, required=True)
     parser.add_argument("--token", required=True)
     parser.add_argument("--recovery", type=Path, required=True)
-    parser.add_argument("--title", default="Claude")
+    parser.add_argument("--title", required=True)
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--expected-cwd", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=960.0)
@@ -97,8 +97,7 @@ def launch_command(args):
     cwd = record.get("cwd")
     if not isinstance(cwd, str) or Path(cwd).resolve() != args.expected_cwd.resolve():
         raise ValueError("the recorded refresh checkout changed before relaunch")
-    profile = ([f"--{args.host}-history-root", str(args.profile / ("sessions" if args.host == "codex" else "projects"))]
-               if args.profile else [])
+    profile = [f"--{args.host}-history-root", str(args.history_root)] if args.history_root else []
     return [sys.executable, "-B", str(args.recovery), "open", "--host", args.host, "--id", args.session_id,
             "--title", args.title, "--prompt", args.prompt,
             "--expected-cwd", cwd,

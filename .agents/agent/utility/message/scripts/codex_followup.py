@@ -98,11 +98,11 @@ class Proxy:
         for root in Path(__file__).resolve().parents:
             markers = (root / '.git', root / '.codex-plugin' / 'plugin.json', root / '.claude-plugin' / 'plugin.json')
             if any(marker.exists() for marker in markers):
-                path = root / '.agents' / 'agent' / 'runtime' / 'codex_hook_trust.py'
+                path = root / '.agents' / 'agent' / 'runtime' / 'codex' / 'hook_trust.py'
                 if not path.is_file():
                     break
-                if str(path.parent) not in sys.path:
-                    sys.path.insert(0, str(path.parent))
+                if str(path.parents[1]) not in sys.path:
+                    sys.path.insert(0, str(path.parents[1]))
                 spec = importlib.util.spec_from_file_location('codex_followup_transport', path)
                 transport = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(transport)

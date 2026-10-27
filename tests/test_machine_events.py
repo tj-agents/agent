@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".agents/agent/runtime"))
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import machine_events as events
 import install
 
@@ -217,13 +217,13 @@ class InstallTests(unittest.TestCase):
 
     def test_installation_copies_the_complete_receipted_agent_runtime(self):
         with tempfile.TemporaryDirectory(prefix="runtime ü ") as directory:
-            script = install.install_runtime(Path(directory), ROOT)
+            script = install.install_runtime(Path(directory), install.ROOT)
             self.assertEqual(Path(directory) / '.agents/agent/runtime/startup_binding.py', script)
             installed_receipt = json.loads((Path(directory) / "source.json").read_text(encoding="utf-8"))
-            receipt = install.runtime_receipt(ROOT)
-            self.assertEqual(receipt, install.runtime_delivery.validate_receipt(installed_receipt, ROOT))
+            receipt = install.runtime_receipt(install.ROOT)
+            self.assertEqual(receipt, install.runtime_delivery.validate_receipt(installed_receipt, install.ROOT))
             for name in receipt["files"]:
-                self.assertEqual((ROOT / name).read_bytes(), (Path(directory) / name).read_bytes())
+                self.assertEqual((install.ROOT / name).read_bytes(), (Path(directory) / name).read_bytes())
             result = subprocess.run([sys.executable, "-I", "-B", str(script), "--help"], capture_output=True,
                                     text=True, timeout=30)
             self.assertEqual(0, result.returncode, result.stderr)

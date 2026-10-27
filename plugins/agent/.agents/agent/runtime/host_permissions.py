@@ -11,6 +11,9 @@ import subprocess
 import sys
 import tomllib
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from host import Host  # noqa: E402
 
 CODEX_KEYS = frozenset({"approval_policy", "default_permissions", "sandbox_mode", "sandbox_workspace_write"})
 MODES = {
@@ -111,7 +114,7 @@ def desktop_executables() -> list[Path]:
             if not process.name.isdigit():
                 continue
             try:
-                if (process / "comm").read_text(encoding="utf-8", errors="replace").strip().casefold() != "codex":
+                if (process / "comm").read_text(encoding="utf-8", errors="replace").strip().casefold() != Host.CODEX.value:
                     continue
                 paths.append((process / "exe").resolve(strict=True))
             except FileNotFoundError:
@@ -120,7 +123,7 @@ def desktop_executables() -> list[Path]:
     result = subprocess.run(["ps", "-axo", "comm="], capture_output=True, text=True,
                             encoding="utf-8", check=True, timeout=15)
     return [Path(line.strip()) for line in result.stdout.splitlines()
-            if Path(line.strip()).name.casefold() == "codex"]
+            if Path(line.strip()).name.casefold() == Host.CODEX.value]
 
 
 def desktop_running(executables=None) -> bool:

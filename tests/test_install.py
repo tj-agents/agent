@@ -13,7 +13,7 @@ if sys.version_info < (3, 11):
     raise unittest.SkipTest("install requires Python 3.11 or newer")
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / ".agents/agent/runtime"))
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import install  # noqa: E402
 import tomllib  # noqa: E402
 
@@ -561,7 +561,7 @@ class RuntimeTests(Machine):
         context = self.context(windows=False)
         self.converge(step("launch-check runtime"), context)
         installed = self.home / ".agents-state/bin"
-        self.assertEqual(install.runtime_receipt(ROOT), self.installed_receipt(context))
+        self.assertEqual(install.runtime_receipt(install.ROOT), self.installed_receipt(context))
         for relative in (Path('.agents/agent/runtime/startup_binding.py'),
                          Path('.agents/agent/runtime/install.py'),
                          Path('.agents/agent/resources/lanes/resolve.py'),
@@ -577,8 +577,8 @@ class RuntimeTests(Machine):
         context = self.context(windows=False)
         self.converge(step("launch-check runtime"), context)
         installed = context.state_directory / 'bin'
-        for name in install.runtime_receipt(ROOT)["files"]:
-            self.assertEqual((ROOT / name).read_bytes(), (installed / name).read_bytes())
+        for name in install.runtime_receipt(install.ROOT)["files"]:
+            self.assertEqual((install.ROOT / name).read_bytes(), (installed / name).read_bytes())
 
     def test_a_root_without_the_runtime_exports_fails_closed_without_writing(self):
         empty = self.root / "empty root"

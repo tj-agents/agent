@@ -7,10 +7,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PATH = ROOT / ".agents" / "agent" / "runtime" / "close_lifecycle.py"
+PATH = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime" / "close_lifecycle.py"
 spec = importlib.util.spec_from_file_location("close_lifecycle", PATH)
 LIFECYCLE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(LIFECYCLE)
+from host import Host  # noqa: E402
 
 
 class CloseLifecycleTests(unittest.TestCase):
@@ -53,19 +54,19 @@ class CloseLifecycleTests(unittest.TestCase):
 
     def test_new_input_cancels_matching_armed_turn(self):
         _completion, cancel = self.arm()
-        self.assertEqual(0, LIFECYCLE.run("prompt", "codex", {"session_id": "session", "turn_id": "next-turn"}))
+        self.assertEqual(0, LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "session", "turn_id": "next-turn"}))
         self.assertEqual({"cancelled": True, "reason": "new prompt"}, json.loads(cancel.read_text(encoding="utf-8")))
         self.assertTrue(LIFECYCLE._state_path("session").exists())
 
     def test_stale_stop_cannot_close_a_later_turn(self):
         completion, _cancel = self.arm("later")
-        self.assertEqual(0, LIFECYCLE.run("stop", "codex", {"session_id": "session", "turn_id": "earlier"}))
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CODEX, {"session_id": "session", "turn_id": "earlier"}))
         self.assertFalse(completion.exists())
         self.assertTrue(LIFECYCLE._state_path("session").exists())
-        self.assertEqual(0, LIFECYCLE.run("stop", "codex", {"session_id": "session", "turn_id": "later"}))
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CODEX, {"session_id": "session", "turn_id": "later"}))
         self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
         self.assertTrue(LIFECYCLE._state_path("session").exists())
-        self.assertEqual(0, LIFECYCLE.run("prompt", "codex", {"session_id": "session", "turn_id": "next"}))
+        self.assertEqual(0, LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "session", "turn_id": "next"}))
         self.assertTrue(LIFECYCLE._state_path("session").exists())
 
     def test_claude_stop_requires_terminal_assistant_after_bound_user(self):
@@ -73,21 +74,21 @@ class CloseLifecycleTests(unittest.TestCase):
         self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "close"}})
         completion, _cancel = self.arm_claude(transcript, "one")
         self.append(transcript, {"type": "assistant", "message": {"stop_reason": "tool_use"}})
-        self.assertEqual(0, LIFECYCLE.run("stop", "claude", {"session_id": "session", "transcript_path": str(transcript)}))
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
         self.assertFalse(completion.exists())
         self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.assertEqual(0, LIFECYCLE.run("stop", "claude", {"session_id": "session", "transcript_path": str(transcript)}))
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
         self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
 
     def test_claude_late_stop_cannot_complete_second_user_before_final_answer(self):
         transcript = self.state / "session.jsonl"
         self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "first"}})
         _completion, cancel = self.arm_claude(transcript, "one")
-        self.assertEqual(0, LIFECYCLE.run("prompt", "claude", {"session_id": "session"}))
+        self.assertEqual(0, LIFECYCLE.run("prompt", Host.CLAUDE, {"session_id": "session"}))
         self.assertTrue(cancel.exists())
         self.append(transcript, {"type": "user", "uuid": "two", "message": {"content": "second"}})
         completion, _cancel = self.arm_claude(transcript, "two")
-        self.assertEqual(0, LIFECYCLE.run("stop", "claude", {"session_id": "session", "transcript_path": str(transcript)}))
+        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
         self.assertFalse(completion.exists())
 
 
