@@ -99,6 +99,39 @@ class BatchPluginRefreshTests(unittest.TestCase):
         row = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY][0]
         self.assertEqual(updated, CLAUDE.plugin_refresh.package_tree(Path(row["installPath"])))
 
+    def test_a_fetched_remote_head_is_remembered_for_offline_launches(self):
+        source = {"source": "git-subdir", "url": "https://github.com/tj-agents/python.git",
+                  "ref": "main", "path": "plugins/python"}
+        self.catalog["plugins"][0]["source"] = source
+        (self.market / CLAUDE.CATALOG).write_text(json.dumps(self.catalog))
+        self.write([self.row(self.project)])
+        with mock.patch.object(reload_plugins, "resolved_head", return_value="b" * 40):
+            registry.synchronize([self.project])
+        self.fetch.reset_mock()
+        self.fetch.side_effect = OSError("offline")
+        self.assertEqual([], registry.synchronize([self.project]))
+        self.fetch.assert_not_called()
+
+    def test_all_repository_groups_keep_the_shared_payload_modes(self):
+        (self.other / ".claude").mkdir()
+        (self.other / ".claude/settings.json").write_text(json.dumps({"enabledPlugins": {IDENTITY: True}}))
+        self.write([self.row(self.project), self.row(self.other)])
+        source = {"source": "git-subdir", "url": "https://github.com/tj-agents/python.git",
+                  "ref": "main", "path": "plugins/python"}
+        self.catalog["plugins"][0]["source"] = source
+        (self.market / CLAUDE.CATALOG).write_text(json.dumps(self.catalog))
+        plugin_autoupdate.record_contents(heads={"tj-agents/python@main": "b" * 40})
+        def fetch(*args, **kwargs):
+            kwargs["modes"].update({name: 0o666 for name in TREE})
+            return TREE
+        self.fetch.side_effect = fetch
+        with mock.patch.object(CLAUDE, "selected", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])):
+            registry.synchronize([self.project, self.other])
+        rows = json.loads(self.registry.read_text())["plugins"][IDENTITY]
+        self.assertEqual(2, len(rows))
+        self.assertTrue(all(row["tjAgentsModes"] == {name: 0o666 for name in TREE} for row in rows))
+        self.fetch.assert_called_once()
+
     def test_local_scope_remains_local(self):
         (self.project / ".claude/settings.json").write_text("{}", encoding="utf-8")
         (self.project / ".claude/settings.local.json").write_text(json.dumps({"enabledPlugins": {IDENTITY: True}}), encoding="utf-8")
@@ -202,6 +235,26 @@ class BatchPluginRefreshTests(unittest.TestCase):
 
 
 class CodexStaleBytesTests(unittest.TestCase):
+    def test_a_fetched_remote_head_is_remembered_for_offline_reconciliation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installed = root / "local"
+            installed.mkdir()
+            tree = {"skill.txt": b"published"}
+            (installed / "skill.txt").write_bytes(tree["skill.txt"])
+            source = {"source": "git-subdir", "url": "https://github.com/tj-agents/python.git",
+                      "ref": "main", "path": "plugins/python"}
+            with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(root / "state")}), \
+                    mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
+                    mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": source}]}), \
+                    mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
+                    mock.patch.object(reload_plugins, "source_tree", return_value=tree) as fetch, \
+                    mock.patch.object(reload_plugins, "resolved_head", return_value="b" * 40):
+                self.assertEqual([], CODEX.reconcile(root, executable="codex"))
+                fetch.reset_mock()
+                fetch.side_effect = OSError("offline")
+                self.assertEqual([], CODEX.reconcile(root, executable="codex"))
+                fetch.assert_not_called()
     def test_launch_repairs_python_bytes_even_when_published_revision_was_recorded_current(self):
         with tempfile.TemporaryDirectory(prefix="codex stale bytes ") as temporary:
             root = Path(temporary)
@@ -265,7 +318,7 @@ class CodexStaleBytesTests(unittest.TestCase):
             source = {"source": "git-subdir", "url": "https://github.com/tj-agents/python.git",
                       "ref": "main", "path": "plugins/python"}
             key = "tj-agents/python@main"
-            def heads(*args):
+            def heads(*args, **kwargs):
                 plugin_autoupdate.record_contents(heads={key: "b" * 40})
                 return {key: "b" * 40}
             with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(root / "state")}), \

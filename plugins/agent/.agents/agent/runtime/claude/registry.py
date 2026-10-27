@@ -179,8 +179,13 @@ def synchronize(projects: list[Path], *, identities: set[str] | None = None, for
                             trees[identity] = (reload_plugins.source_tree(
                                 source, location, owners[group[1]], Path(temporary), publishers, modes=modes), modes)
                         local_tree, modes = trees[identity]
-                    revision = json.dumps([source, head, digest(local_tree) if local_tree is not None else None,
-                                           modes if local_tree is not None else None], sort_keys=True)
+                        resolved = reload_plugins.resolved_head(source, publishers) if publisher else None
+                        if resolved:
+                            head = resolved
+                            contents["heads"][publisher] = head
+                            plugin_autoupdate.record_contents(heads={publisher: head})
+                    revision = json.dumps([source, head, digest(local_tree) if publisher is None else None,
+                                           modes if publisher is None else None], sort_keys=True)
                     current = Path(row["installPath"]) if row and isinstance(row.get("installPath"), str) else None
                     if (not force and row and row.get("tjAgentsRevision") == revision and current and current.is_dir()
                             and row.get("tjAgentsDigest") == digest(plugin_refresh.package_tree(current))
@@ -196,8 +201,8 @@ def synchronize(projects: list[Path], *, identities: set[str] | None = None, for
                         if manifest.get("name") != plugin:
                             raise plugin_refresh.RefreshError(f"Published plugin manifest does not name {identity}")
                         installed = materialize(plugins.HOST.configuration_root / "plugins/cache" / marketplace / plugin, tree, modes)
-                        payloads[identity] = (installed, tree, manifest)
-                    installed, tree, manifest = payloads[identity]
+                        payloads[identity] = (installed, tree, manifest, modes)
+                    installed, tree, manifest, modes = payloads[identity]
                     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                     record = {**(row or {}), "scope": group[0], "projectPath": str(owners[group[1]]),
                               "installPath": str(installed), "version": manifest.get("version") or installed.name,

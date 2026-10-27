@@ -99,6 +99,19 @@ def source_tree(source: object, location: Path, project: Path, temporary: Path,
     return tree
 
 
+def resolved_head(source: object, publishers: dict) -> str | None:
+    if not isinstance(source, dict) or source.get("source") != "git-subdir":
+        return None
+    key = (plugin_refresh.repository(source.get("url")), source.get("sha") or source.get("ref") or "main")
+    checkout = publishers.get(key)
+    if checkout is None:
+        return None
+    head = (checkout / ".git/HEAD").read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise RefreshError("Fetched publisher is not at a detached commit")
+    return head
+
+
 def verify(plugins: Plugins, executable: str, project: Path, marketplaces: dict, identities: list[str]) -> dict:
     with tempfile.TemporaryDirectory(prefix="tj-agents-verify-") as temporary:
         return verify_packages(plugins, executable, project, marketplaces, identities, Path(temporary))
