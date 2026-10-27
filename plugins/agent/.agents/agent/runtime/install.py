@@ -33,6 +33,7 @@ from host import Host
 import launch_check
 import plugin_autoupdate
 import machine_events
+import event_service
 import host_permissions
 import required_plugins
 import runtime_delivery
@@ -822,12 +823,30 @@ def apply_plugin_setup(context: Context) -> list[str]:
     return []
 
 
+def background_receipt(context: Context) -> dict:
+    return event_service.receipt(context.state_directory, context.claude_home, context.codex_home)
+
+
+def check_background(context: Context) -> list[str]:
+    pending = event_service.check(context)
+    if plugin_autoupdate.read_json(context.state_directory / "machine-events-service.json") != background_receipt(context):
+        pending.append("record machine-event supervisor installation")
+    return pending
+
+
+def apply_background(context: Context) -> list[str]:
+    pending = event_service.apply(context)
+    plugin_autoupdate.write_json(context.state_directory / "machine-events-service.json", background_receipt(context))
+    return pending + ["machine-event supervisor installation verified"]
+
+
 STEPS = (
     Step("preconditions", check_preconditions, nothing, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("event channel and publishers", check_channel, apply_channel),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
     Step("launch-check runtime", check_runtime, apply_runtime),
+    Step("background machine events", check_background, apply_background),
     Step("shell profiles", check_profile, apply_profile),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
@@ -844,6 +863,9 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
     failed = False
     failed_steps = set()
     for step in steps:
+        if step.name == "background machine events" and failed_steps & {"event channel and publishers", "launch-check runtime"}:
+            print("n/a    background machine events: prerequisite install step failed", file=out)
+            continue
         if step.name == "plugin setup" and failed_steps & {"plugin and merge-policy catch-up", "harness permissions"}:
             print("n/a    plugin setup: prerequisite install step failed", file=out)
             continue
@@ -876,6 +898,8 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
 
 def selected_steps(names: set[str]) -> tuple[Step, ...]:
     selected = set(names)
+    if "background machine events" in selected:
+        selected.update({"launch-check runtime", "event channel and publishers"})
     if "shell profiles" in selected:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
