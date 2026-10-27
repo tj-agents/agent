@@ -19,6 +19,17 @@ they consume. Claude-only and Codex-only runtime is authored in `.claude/runtime
 and ships as the `claude` and `codex` packages inside `.agents/agent/runtime`, so runtime and tests run
 from the generated `plugins/agent` tree.
 
+Shared content hashing and publisher source loading live under the owner-qualified `tj_agent` package:
+
+```python
+from tj_agent import content
+from tj_agent.plugins import sources
+```
+
+Host adapters and runtime delivery import these implementations. Claude registration stays with its native
+plugin adapter, avoiding a second module that imports the adapter back. Generated payloads are delivery
+artifacts; edit the authored source and regenerate them.
+
 Maintainers refresh the offline Marketplace selection snapshot only with
 `.agents/agent/utility/plugins/scripts/update_marketplace_plugins.py --source <marketplace-checkout>`;
 the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.

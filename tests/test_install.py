@@ -496,6 +496,8 @@ class RuntimeTests(Machine):
         self.assertEqual(install.runtime_receipt(install.ROOT), self.installed_receipt(context))
         for relative in (Path('.agents/agent/runtime/startup_binding.py'),
                          Path('.agents/agent/runtime/install.py'),
+                         Path('.agents/agent/runtime/tj_agent/content.py'),
+                         Path('.agents/agent/runtime/tj_agent/plugins/sources.py'),
                          Path('.agents/agent/resources/lanes/resolve.py'),
                          Path('.agents/agent/utility/peer/scripts/register_session.py'),
                          Path('.agents/agent-store/runtime/session_store.py')):
