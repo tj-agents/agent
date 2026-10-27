@@ -151,7 +151,7 @@ def reconcile(project: Path, executable: str | None = None, *, refresh: bool = F
                 key = plugin_autoupdate.publisher_key(source.get("url"), source.get("sha") or source.get("ref"))
                 if key:
                     wanted.setdefault(key, set()).add(plugin_autoupdate.plugin_path(source))
-        heads = plugin_autoupdate.refresh_contents(wanted, {})
+        heads = plugin_autoupdate.refresh_contents(wanted, {}, revision=plugin_autoupdate.remote_revision)
         if set(wanted) - set(heads):
             raise plugin_refresh.RefreshError("Could not resolve the published Codex plugin heads")
     receipt_path = plugin_autoupdate.state_directory() / "codex-plugin-bytes.json"
@@ -177,7 +177,12 @@ def reconcile(project: Path, executable: str | None = None, *, refresh: bool = F
                 head = contents["heads"].get(publisher) if publisher else None
                 local_tree = (reload_plugins.source_tree(source, location, project, Path(temporary), publishers)
                               if not head else None)
-                signature = json.dumps([source, head, tree_digest(local_tree) if local_tree is not None else None], sort_keys=True)
+                resolved = reload_plugins.resolved_head(source, publishers) if publisher and not head else None
+                if resolved:
+                    head = resolved
+                    contents["heads"][publisher] = head
+                    plugin_autoupdate.record_contents(heads={publisher: head})
+                signature = json.dumps([source, head, tree_digest(local_tree) if publisher is None else None], sort_keys=True)
                 root = roots.get(identity)
                 actual = plugin_refresh.package_tree(root) if root is not None else None
                 saved = receipts.get(identity)
