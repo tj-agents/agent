@@ -51,13 +51,15 @@ managed directory rather than modifying the repository or an installed plugin ca
 ```powershell
 pwsh .agents/sync-generated.ps1
 pwsh .agents/sync-generated.ps1 -Check
-python -B -m unittest discover -s .agents/tests -p "test_*.py"
+uv sync --locked
+uv run pytest
 ```
 
-The runtime uses the standard library and retains Core's portable utility conventions. Use `python`
-on Windows and `python3` on Linux. The shared plugin CI discovers the migrated runtime suite through
-`.agents/tests`; generation is tooling, and these utilities do not introduce an application package or
-third-party runtime dependencies.
+The runtime requires Python 3.12 or newer and retains Core's portable utility conventions. Use `python`
+on Windows and `python3` on Linux. CLI owns shared PATH operations in `tj_cli.paths`; the locked `tj-cli`
+distribution ships inside Agent's generated runtime and managed installation. Launching does not require
+a CLI source checkout or a separate package install. The development environment and CI use uv to resolve
+that same dependency and run both the migrated runtime suite and packaging checks.
 
 The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).
 

@@ -10,8 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-if sys.version_info < (3, 11):
-    raise unittest.SkipTest("install requires Python 3.11 or newer")
+if sys.version_info < (3, 12):
+    raise unittest.SkipTest("install requires Python 3.12 or newer")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))

@@ -18,7 +18,8 @@ before delivery.
 
 Runtime scripts use Python's standard library on Windows and Linux, retaining the source utility
 conventions in [Core's CODE_CONVENTIONS.md](https://github.com/tj-agents/core/blob/main/CODE_CONVENTIONS.md).
-Run `python -B -m unittest discover -s .agents/tests -p "test_*.py"` on Windows or `python3` on Linux.
+Use `uv sync --locked` and `uv run pytest` for the complete development suite. Shared CLI library code
+ships through declared distribution resources; installation and managed launches require Python 3.12+.
 Keep native application packaging and dependencies out of this plugin publisher unless the work needs them.
 
 ```powershell
