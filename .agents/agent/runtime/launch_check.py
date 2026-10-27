@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -214,7 +215,7 @@ def ensure_subscriber(project: Path) -> None:
         return
     try:
         recover_install(project, "background machine events")
-    except (OSError, RuntimeError, ValueError) as error:
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         print(f"plugins: background subscriber setup will retry: {error}", file=sys.stderr)
         plugin_autoupdate.write_json(path, {"failed_at": time.time()})
 

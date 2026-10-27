@@ -824,7 +824,8 @@ def apply_plugin_setup(context: Context) -> list[str]:
 
 
 def background_receipt(context: Context) -> dict:
-    return event_service.receipt(context.state_directory, context.claude_home, context.codex_home)
+    return event_service.receipt(context.state_directory, context.claude_home, context.codex_home,
+                                 context.environ.get("PATH", os.defpath))
 
 
 def check_background(context: Context) -> list[str]:
@@ -846,7 +847,6 @@ STEPS = (
     Step("event channel and publishers", check_channel, apply_channel),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
     Step("launch-check runtime", check_runtime, apply_runtime),
-    Step("background machine events", check_background, apply_background),
     Step("shell profiles", check_profile, apply_profile),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
@@ -854,6 +854,7 @@ STEPS = (
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
+    Step("background machine events", check_background, apply_background),
 )
 
 
@@ -863,7 +864,9 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
     failed = False
     failed_steps = set()
     for step in steps:
-        if step.name == "background machine events" and failed_steps & {"event channel and publishers", "launch-check runtime"}:
+        if step.name == "background machine events" and failed_steps & {
+                "event channel and publishers", "launch-check runtime", "plugin and merge-policy catch-up",
+                "harness permissions", "plugin setup"}:
             print("n/a    background machine events: prerequisite install step failed", file=out)
             continue
         if step.name == "plugin setup" and failed_steps & {"plugin and merge-policy catch-up", "harness permissions"}:

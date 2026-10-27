@@ -248,6 +248,15 @@ class ServiceTests(unittest.TestCase):
             SERVICE.systemd_escape("/a\nb")
         self.assertEqual('"a\\\\b\\"c%%$$"', SERVICE.systemd_escape('a\\b"c%$'))
 
+    def test_shell_tool_search_path_survives_service_delivery(self):
+        context = self.context()
+        context.environ["PATH"] = "/home/user/.nvm/v22/bin:/home/user/tools % $ ü:/usr/bin"
+        expected = "--search-path=" + context.environ["PATH"]
+        self.assertIn(expected, SERVICE.arguments(context))
+        self.assertIn(SERVICE.systemd_escape(expected), SERVICE.unit_contents(context))
+        self.assertEqual(context.environ["PATH"], SERVICE.receipt(context.state_directory, context.claude_home,
+                         context.codex_home, context.environ["PATH"])["search_path"])
+
     def test_missing_runtime_does_not_register_anything(self):
         context = self.context()
         Path(SERVICE.arguments(context)[0]).unlink()
