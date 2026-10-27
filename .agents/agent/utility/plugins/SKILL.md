@@ -42,7 +42,7 @@ settings are current, not that native trust, installation or session loading suc
    "tj-agents": {"repository": "tj-agents/marketplace"},
    "agents": {"repository": "Concertable/agents"}},
  "plugins": ["agent@tj-agents", "agent-store@tj-agents", "base@tj-agents",
-             "engineering@tj-agents", "machine@tj-agents", "workflow@tj-agents",
+             "engineering@tj-agents", "workflow@tj-agents",
              "dotnet@tj-agents", "concertable@agents"]}
 ```
 

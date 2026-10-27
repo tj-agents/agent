@@ -171,17 +171,17 @@ class RefreshCliTests(unittest.TestCase):
 
     def test_default_uses_native_commands_without_verification_or_bound_launch(self):
         with mock.patch.object(REFRESH.agent_cli, "resolve_claude_executable", return_value="claude"), \
-                mock.patch.object(REFRESH, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, ["machine@tj-agents"])), \
+                mock.patch.object(REFRESH, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, ["workflow@tj-agents"])), \
                 mock.patch.object(REFRESH, "verify") as verify, \
                 mock.patch.object(REFRESH, "read_json", return_value={"tj-agents": {}}), \
                 mock.patch("sys.stdout"), mock.patch("sys.stderr"):
-            fake = FakeClaude([{"id": "machine@tj-agents", "scope": "user", "enabled": True, "version": "v1"}])
+            fake = FakeClaude([{"id": "workflow@tj-agents", "scope": "user", "enabled": True, "version": "v1"}])
             with mock.patch.object(REFRESH, "run", side_effect=fake):
                 self.assertEqual(0, REFRESH.main(["--host", "claude", "--all"]))
         self.assertEqual([command for command, _ in fake.commands], [
             ["claude", "plugin", "marketplace", "update", "tj-agents"],
             ["claude", "plugin", "list", "--json"],
-            ["claude", "plugin", "update", "machine@tj-agents", "--scope", "user", "--json"],
+            ["claude", "plugin", "update", "workflow@tj-agents", "--scope", "user", "--json"],
             ["claude", "plugin", "list", "--json"],
         ])
         verify.assert_not_called()
@@ -265,16 +265,16 @@ class RefreshCliTests(unittest.TestCase):
 
     def test_refresh_updates_applicable_claude_local_installations(self):
         fake = FakeClaude([
-            {"id": "machine@tj-agents", "scope": "local", "projectPath": str(ROOT), "enabled": True, "version": "v1"},
-            {"id": "machine@tj-agents", "scope": "local", "projectPath": str(ROOT / "other"), "enabled": True,
+            {"id": "workflow@tj-agents", "scope": "local", "projectPath": str(ROOT), "enabled": True, "version": "v1"},
+            {"id": "workflow@tj-agents", "scope": "local", "projectPath": str(ROOT / "other"), "enabled": True,
              "version": "v1"},
-            {"id": "machine@tj-agents", "scope": "user", "enabled": True, "version": "v1"}])
+            {"id": "workflow@tj-agents", "scope": "user", "enabled": True, "version": "v1"}])
         with mock.patch.object(REFRESH, "read_json", return_value={}), mock.patch.object(REFRESH, "run", side_effect=fake):
-            self.assertEqual(["machine@tj-agents"], REFRESH.refresh("claude", "claude", ROOT, {}, ["machine@tj-agents"]))
+            self.assertEqual(["workflow@tj-agents"], REFRESH.refresh("claude", "claude", ROOT, {}, ["workflow@tj-agents"]))
         self.assertEqual(fake.commands, [
             (["claude", "plugin", "list", "--json"], ROOT),
-            (["claude", "plugin", "update", "machine@tj-agents", "--scope", "local", "--json"], ROOT),
-            (["claude", "plugin", "update", "machine@tj-agents", "--scope", "user", "--json"], ROOT),
+            (["claude", "plugin", "update", "workflow@tj-agents", "--scope", "local", "--json"], ROOT),
+            (["claude", "plugin", "update", "workflow@tj-agents", "--scope", "user", "--json"], ROOT),
             (["claude", "plugin", "list", "--json"], ROOT),
         ])
         self.assertEqual("v1", fake.installations[1]["version"])
@@ -305,32 +305,32 @@ class RefreshCliTests(unittest.TestCase):
             project = Path(temporary)
             (project / ".claude").mkdir()
             (project / ".claude/settings.local.json").write_text(json.dumps({"enabledPlugins": {
-                "machine@tj-agents": True}}), encoding="utf-8")
+                "workflow@tj-agents": True}}), encoding="utf-8")
             fake = FakeClaude([
-                {"id": "machine@tj-agents", "scope": "user", "enabled": True, "version": "v1"},
-                {"id": "machine@tj-agents", "scope": "local", "projectPath": str(project), "enabled": True,
+                {"id": "workflow@tj-agents", "scope": "user", "enabled": True, "version": "v1"},
+                {"id": "workflow@tj-agents", "scope": "local", "projectPath": str(project), "enabled": True,
                  "version": "v1"}])
             with mock.patch.object(REFRESH, "run", side_effect=fake):
-                REFRESH.refresh("claude", "claude", project, {}, ["machine@tj-agents"])
-        self.assertIn(["claude", "plugin", "update", "machine@tj-agents", "--scope", "user", "--json"],
+                REFRESH.refresh("claude", "claude", project, {}, ["workflow@tj-agents"])
+        self.assertIn(["claude", "plugin", "update", "workflow@tj-agents", "--scope", "user", "--json"],
                       [command for command, _ in fake.commands])
         self.assertEqual(["v2", "v2"], [entry["version"] for entry in fake.installations])
 
     def test_an_update_that_reports_success_but_does_not_persist_fails(self):
-        fake = FakeClaude([{"id": "machine@tj-agents", "scope": "user", "enabled": True, "version": "v1"}], persist=False)
+        fake = FakeClaude([{"id": "workflow@tj-agents", "scope": "user", "enabled": True, "version": "v1"}], persist=False)
         with mock.patch.object(REFRESH, "read_json", return_value={}), mock.patch.object(REFRESH, "run", side_effect=fake), \
-                self.assertRaisesRegex(REFRESH.RefreshError, r"machine@tj-agents \(user\) update did not persist.*v1.*v2"):
-            REFRESH.refresh("claude", "claude", ROOT, {}, ["machine@tj-agents"])
+                self.assertRaisesRegex(REFRESH.RefreshError, r"workflow@tj-agents \(user\) update did not persist.*v1.*v2"):
+            REFRESH.refresh("claude", "claude", ROOT, {}, ["workflow@tj-agents"])
 
     def test_a_skipped_or_stale_catalog_update_is_a_failure_even_with_exit_code_zero(self):
         for output in (updated(outcome="skipped", message="Skipped - pinned"),
                        updated(outcome="up_to_date", refreshFailed=True), "Updated.\n"):
             def run(command, cwd, output=output):
                 return output if command[2] == "update" else json.dumps(
-                    [{"id": "machine@tj-agents", "scope": "user", "enabled": True, "version": "v1"}])
+                    [{"id": "workflow@tj-agents", "scope": "user", "enabled": True, "version": "v1"}])
             with self.subTest(output=output), mock.patch.object(REFRESH, "read_json", return_value={}), \
                     mock.patch.object(REFRESH, "run", side_effect=run), self.assertRaises(REFRESH.RefreshError):
-                REFRESH.refresh("claude", "claude", ROOT, {}, ["machine@tj-agents"])
+                REFRESH.refresh("claude", "claude", ROOT, {}, ["workflow@tj-agents"])
 
     def test_listed_plugin_errors_fail_the_refresh_loudly(self):
         dependency = 'Dependency "work@work-agents" is not installed'
@@ -345,11 +345,11 @@ class RefreshCliTests(unittest.TestCase):
 
     def test_main_reports_refresh_problems_on_stderr_and_fails(self):
         with mock.patch.object(REFRESH.agent_cli, "resolve_claude_executable", return_value="claude"), \
-                mock.patch.object(REFRESH, "selection", return_value=({}, ["machine@tj-agents"])), \
-                mock.patch.object(REFRESH, "refresh", side_effect=REFRESH.RefreshError("machine@tj-agents (user): broken")), \
+                mock.patch.object(REFRESH, "selection", return_value=({}, ["workflow@tj-agents"])), \
+                mock.patch.object(REFRESH, "refresh", side_effect=REFRESH.RefreshError("workflow@tj-agents (user): broken")), \
                 mock.patch("sys.stdout"), mock.patch("sys.stderr") as stderr:
             self.assertEqual(1, REFRESH.main(["--host", "claude", "--all"]))
-        self.assertIn("plugins: claude: machine@tj-agents (user): broken",
+        self.assertIn("plugins: claude: workflow@tj-agents (user): broken",
                       "".join(call.args[0] for call in stderr.write.call_args_list))
 
     def test_codex_refresh_removes_project_only_plugins_from_user_scope(self):
@@ -386,7 +386,7 @@ class RefreshCliTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
             (root / "settings.json").write_text(json.dumps({"enabledPlugins": {"base@tj-agents": True}}))
             (project / ".claude/settings.json").write_text(json.dumps({
-                "enabledPlugins": {"base@tj-agents": False, "machine@tj-agents": True, "other@foreign": True},
+                "enabledPlugins": {"base@tj-agents": False, "workflow@tj-agents": True, "other@foreign": True},
                 "extraKnownMarketplaces": {
                     "tj-agents": {"source": {"source": "github", "repo": "tj-agents/marketplace"}},
                     "foreign": {"source": {"source": "github", "repo": "elsewhere/plugin"}},
@@ -394,7 +394,7 @@ class RefreshCliTests(unittest.TestCase):
             with mock.patch.object(REFRESH, "configuration_root", return_value=root):
                 sources, enabled = REFRESH.selection("claude", "unused", project)
             self.assertEqual({"tj-agents": "tj-agents/marketplace"}, sources)
-            self.assertEqual(["machine@tj-agents"], enabled)
+            self.assertEqual(["workflow@tj-agents"], enabled)
 
     def test_verification_detects_stale_package_bytes_at_a_current_marketplace_revision(self):
         with tempfile.TemporaryDirectory() as temporary:
