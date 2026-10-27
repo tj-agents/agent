@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -176,7 +177,8 @@ class SubscriberTests(SubscriberFixture):
         ):
             lock = watch.plugins.acquire_lock(self.directory / "machine-events-watch.lock")
             arguments = ["--watch", "--state-directory", str(self.directory), "--claude-home",
-                         str(self.directory / "claude"), "--codex-home", str(self.directory / "codex")]
+                         str(self.directory / "claude"), "--codex-home", str(self.directory / "codex"),
+                         "--search-path=/shell/tools:/usr/bin"]
             try:
                 self.assertEqual(0, watch.machine_events.main(arguments))
                 run.assert_not_called()
@@ -186,6 +188,20 @@ class SubscriberTests(SubscriberFixture):
             run.assert_called_once_with(self.directory.resolve())
             identity.assert_called_once()
             self.assertEqual((self.directory / "codex").resolve(), Path(os.environ["CODEX_HOME"]))
+            self.assertEqual("/shell/tools:/usr/bin", os.environ["PATH"])
+
+    def test_busy_one_shot_cannot_report_a_successful_catch_up(self):
+        with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(self.directory)}), \
+                mock.patch.object(install.launch_check, "mark_current", return_value=False), \
+                mock.patch.object(watch.machine_events, "require_tommy"), \
+                mock.patch.object(watch.machine_events.Reconciler, "catch_up") as catch_up:
+            lock = watch.plugins.acquire_lock(self.directory / "machine-events.lock")
+            try:
+                with self.assertRaisesRegex(install.InstallError, "catch-up left failures"):
+                    install.apply_catch_up(mock.Mock())
+                catch_up.assert_not_called()
+            finally:
+                lock.close()
 
 
 class SubscriberBootstrapTests(SubscriberFixture):
@@ -221,6 +237,15 @@ class SubscriberBootstrapTests(SubscriberFixture):
         recover.assert_called_once()
         self.assertIn("failed_at", watch.plugins.read_json(self.service))
 
+    def test_precondition_subprocess_timeout_does_not_block_foreground_launch(self):
+        with mock.patch.object(self.launch, "recover_install", side_effect=subprocess.TimeoutExpired("gh", 60)) as recover, \
+                mock.patch.object(sys, "stderr"), mock.patch.object(self.launch, "settle", return_value="current"):
+            result = self.launch.check(self.directory, fetch=lambda _: b"", update=lambda *_: True, now=100)
+            self.assertIn(result, ("current", "updated"))
+            self.launch.ensure_subscriber(self.directory)
+        recover.assert_called_once()
+        self.assertIn("failed_at", watch.plugins.read_json(self.service))
+
     def test_invalid_backoff_does_not_prevent_repair_and_source_runtime_never_installs_a_service(self):
         self.write(self.service, {"failed_at": "invalid"})
         with mock.patch.object(self.launch, "recover_install") as recover:
@@ -232,7 +257,7 @@ class SubscriberBootstrapTests(SubscriberFixture):
             recover.assert_not_called()
 
     def test_installer_records_supervision_only_after_successful_registration(self):
-        context = mock.Mock(state_directory=self.directory, claude_home=self.directory / "claude",
+        context = mock.Mock(state_directory=self.directory, environ={"PATH": "/shell/tools"}, claude_home=self.directory / "claude",
                             codex_home=self.directory / "codex")
         with mock.patch.object(install.event_service, "apply", side_effect=RuntimeError("denied")):
             with self.assertRaises(RuntimeError):
@@ -241,3 +266,10 @@ class SubscriberBootstrapTests(SubscriberFixture):
         with mock.patch.object(install.event_service, "apply", return_value=["registered"]):
             install.apply_background(context)
         self.assertEqual(install.background_receipt(context), watch.plugins.read_json(self.service))
+
+    def test_failed_synchronous_catch_up_does_not_start_supervision(self):
+        failing = install.Step("plugin and merge-policy catch-up", mock.Mock(side_effect=RuntimeError("offline")), mock.Mock())
+        service = install.Step("background machine events", mock.Mock(return_value=["missing"]), mock.Mock())
+        self.assertEqual(2, install.run_steps([failing, service], mock.Mock(), False, io.StringIO(), io.StringIO()))
+        service.check.assert_not_called()
+        service.apply.assert_not_called()

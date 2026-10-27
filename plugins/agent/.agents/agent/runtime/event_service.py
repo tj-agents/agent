@@ -15,9 +15,10 @@ NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 TIMEOUT = 60
 
 
-def receipt(directory: Path, claude_home: Path, codex_home: Path) -> dict:
+def receipt(directory: Path, claude_home: Path, codex_home: Path, search_path: str | None = None) -> dict:
     return {"schema_version": 1, "runtime": str((directory / "bin/.agents/agent/runtime/machine_events.py").resolve()),
-            "claude_home": str(claude_home.resolve()), "codex_home": str(codex_home.resolve())}
+            "claude_home": str(claude_home.resolve()), "codex_home": str(codex_home.resolve()),
+            "search_path": os.environ.get("PATH", os.defpath) if search_path is None else search_path}
 
 
 class ServiceError(RuntimeError):
@@ -38,7 +39,8 @@ def marker(context) -> str:
 def arguments(context) -> list[str]:
     script = context.state_directory / "bin/.agents/agent/runtime/machine_events.py"
     return [str(script.resolve()), "--watch", "--state-directory", str(context.state_directory.resolve()),
-            "--claude-home", str(context.claude_home.resolve()), "--codex-home", str(context.codex_home.resolve())]
+            "--claude-home", str(context.claude_home.resolve()), "--codex-home", str(context.codex_home.resolve()),
+            "--search-path=" + context.environ.get("PATH", os.defpath)]
 
 
 def command(context, argv: list[str], *, allowed=(0,)):

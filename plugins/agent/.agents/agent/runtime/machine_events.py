@@ -203,6 +203,7 @@ def main(argv=None):
     parser.add_argument("--state-directory", type=Path)
     parser.add_argument("--claude-home", type=Path)
     parser.add_argument("--codex-home", type=Path)
+    parser.add_argument("--search-path")
     arguments = parser.parse_args(argv)
     if arguments.state_directory:
         os.environ["AGENT_STATE_DIRECTORY"] = str(arguments.state_directory.resolve())
@@ -210,6 +211,8 @@ def main(argv=None):
         home = getattr(arguments, host.value + "_home")
         if home:
             os.environ[host.home_variable] = str(home.resolve())
+    if arguments.search_path is not None:
+        os.environ["PATH"] = arguments.search_path
     directory = plugins.state_directory()
     directory.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(directory / "machine-events.log", maxBytes=262144, backupCount=2,
@@ -218,9 +221,10 @@ def main(argv=None):
     LOG.setLevel(logging.INFO)
     lock = plugins.acquire_lock(directory / ("machine-events-watch.lock" if arguments.watch else "machine-events.lock"))
     if lock is None:
+        LOG.warning("Machine-event reconciliation is already running")
         LOG.removeHandler(handler)
         handler.close()
-        return 0
+        return 0 if arguments.watch else 1
     try:
         state_file = directory / "machine-events-state.json"
         reconciler = Reconciler(plugins.read_json(state_file))
