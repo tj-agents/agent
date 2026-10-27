@@ -4,7 +4,8 @@ Repeated ``--hook <script> [arguments...]`` groups pass arguments to each script
 The host's sibling-hook merge is reproduced here, so one event costs one
 interpreter launch instead of one per gate. Each gate still runs as its own ``__main__`` with its
 own stdin, stdout and stderr. A leading ``--deadline <seconds>`` stays under the host timeout: a gate
-still running then is reported, and every finished gate's verdict is kept.
+still running then is reported, and every finished gate's verdict is kept. Only PreToolUse fails closed; for
+every other event a crashed, failing or overrunning gate is reported on stderr and contributes no output.
 """
 
 from __future__ import annotations
@@ -85,44 +86,27 @@ def merge(event: str, results: list[tuple[str, int, str, str]]) -> tuple[dict, s
     diagnostics: list[str] = []
 
     for name, code, stdout, stderr in results:
+        if code and event != "PreToolUse":
+            diagnostics.append(f"{name}: exited with status {code}" + (f"\n{stderr.strip()}" if stderr.strip() else ""))
+            continue
         data = parse(stdout)
         if stdout.strip() and data is None:
             if event == "SessionStart":
                 contexts.append(stdout.strip())
             else:
                 diagnostics.append(f"{name}: {stdout.strip()}")
-                if code == 0:
+                if event == "PreToolUse" and code == 0:
                     code = 1
         if code == BLOCKING_EXIT:
-            reason = stderr.strip() or f"{name} blocked this {event} event."
-            if event == "PreToolUse":
-                decisions.setdefault("deny", []).append(reason)
-            else:
-                blocks.append(reason)
+            decisions.setdefault("deny", []).append(stderr.strip() or f"{name} blocked this {event} event.")
         elif code:
-            failure = (
+            decisions.setdefault("deny", []).append(
                 f"hook-dispatch: {Path(name).name} failed with exit status {code}. "
                 f"Repair the gate and retry this {event} event."
             )
-            if event == "PreToolUse":
-                decisions.setdefault("deny", []).append(failure)
-            elif event == "Stop":
-                blocks.append(failure)
-            else:
-                stopped = True
-                stops.append(failure)
-            if stderr.strip():
-                diagnostics.append(f"{name}: {stderr.strip()}")
-            else:
-                diagnostics.append(f"{name}: exited with status {code}")
+            diagnostics.append(f"{name}: {stderr.strip()}" if stderr.strip() else f"{name}: exited with status {code}")
         elif stderr.strip():
             diagnostics.append(f"{name}: {stderr.strip()}")
-        if event == "SessionStart" and code not in (0, BLOCKING_EXIT):
-            notice = f"hook-dispatch: {name} failed with exit status {code}."
-            if stderr.strip():
-                notice += "\n" + stderr.strip()
-            messages.append(notice)
-            contexts.append(notice)
         if data is None:
             continue
 
@@ -189,7 +173,7 @@ def merge(event: str, results: list[tuple[str, int, str, str]]) -> tuple[dict, s
     return merged, "\n".join(diagnostics)
 
 
-def overrun_notice(event: str, merged: dict, deadline: float, unfinished: list[str]) -> dict:
+def overrun_notice(deadline: float, unfinished: list[str]) -> str:
     stalled, skipped = unfinished[0], unfinished[1:]
     notice = (
         f"hook-dispatch: {Path(stalled).name} did not finish within {deadline:g}s, so its verdict "
@@ -197,28 +181,20 @@ def overrun_notice(event: str, merged: dict, deadline: float, unfinished: list[s
     )
     if skipped:
         notice += "; these gates did not run: " + ", ".join(Path(name).name for name in skipped)
-    notice += "."
+    return notice + "."
+
+
+def deny_overrun(merged: dict, notice: str) -> dict:
     merged = dict(merged)
     message = merged.get("systemMessage")
     merged["systemMessage"] = f"{message}\n{notice}" if message else notice
-    if event == "Stop":
-        reason = merged.get("reason")
-        merged["decision"] = "block"
-        merged["reason"] = f"{reason}\n\n{notice}" if reason else notice
-    elif event == "PreToolUse":
-        specific = dict(merged.get("hookSpecificOutput") or {"hookEventName": event})
-        if specific.get("permissionDecision") != "deny":
-            specific["permissionDecision"] = "deny"
-            specific["permissionDecisionReason"] = notice + " Retry when every required hook can finish."
-        merged["hookSpecificOutput"] = specific
-    else:
-        merged["continue"] = False
-        merged["stopReason"] = notice + " Stop ordinary work until required hooks recover."
-    if event in ("SessionStart", "PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit"):
-        specific = dict(merged.get("hookSpecificOutput") or {"hookEventName": event})
-        context = specific.get("additionalContext")
-        specific["additionalContext"] = f"{context}\n\n{notice}" if context else notice
-        merged["hookSpecificOutput"] = specific
+    specific = dict(merged.get("hookSpecificOutput") or {"hookEventName": "PreToolUse"})
+    if specific.get("permissionDecision") != "deny":
+        specific["permissionDecision"] = "deny"
+        specific["permissionDecisionReason"] = notice + " Retry when every required hook can finish."
+    context = specific.get("additionalContext")
+    specific["additionalContext"] = f"{context}\n\n{notice}" if context else notice
+    merged["hookSpecificOutput"] = specific
     return merged
 
 
@@ -313,7 +289,10 @@ def main(argv: list[str]) -> int:
         overrun = len(finished) < len(names)
     merged, diagnostics = merge(event, finished)
     if overrun:
-        merged = overrun_notice(event, merged, deadline, names[len(finished):])
+        notice = overrun_notice(deadline, names[len(finished):])
+        diagnostics = f"{diagnostics}\n{notice}" if diagnostics else notice
+        if event == "PreToolUse":
+            merged = deny_overrun(merged, notice)
     succeeded = not overrun and not any(code for _, code, _, _ in finished) \
         and merged.get("continue") is not False and merged.get("decision") != "block"
     acknowledge(succeeded, diagnostics or merged.get('stopReason') or str(merged))

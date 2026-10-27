@@ -2,6 +2,7 @@
 """Single SQLite-backed store for session and work-item status, written by hooks (Python 3.9+)."""
 
 import argparse
+import functools
 import importlib.util
 import json
 import os
@@ -15,6 +16,7 @@ import uuid
 from pathlib import Path
 
 
+@functools.lru_cache(maxsize=None)
 def _load_repository_identity():
     path = Path(__file__).resolve().with_name("repository_identity.py")
     spec = importlib.util.spec_from_file_location("session_store_repository_identity", path)
@@ -24,9 +26,6 @@ def _load_repository_identity():
     spec.loader.exec_module(module)
     return module
 
-
-_repository_identity = _load_repository_identity()
-normalise_remote = _repository_identity.normalise_remote
 
 SCHEMA_VERSION = 4
 GIT_TIMEOUT = 3
@@ -251,7 +250,7 @@ def _rev_parse_probe(cwd, timeout):
 
 def _collect_checkout(cwd, timeout=HOOK_GIT_TIMEOUT):
     head, branch, _common_dir, toplevel = _rev_parse_probe(cwd, timeout)
-    repo = _repository_identity.repository_identity(
+    repo = _load_repository_identity().repository_identity(
         cwd,
         lambda directory, *arguments: _git(directory, *arguments, timeout=timeout),
     )

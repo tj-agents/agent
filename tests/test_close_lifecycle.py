@@ -12,6 +12,7 @@ spec = importlib.util.spec_from_file_location("close_lifecycle", PATH)
 LIFECYCLE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(LIFECYCLE)
 from host import Host  # noqa: E402
+from host_sessions import SESSIONS  # noqa: E402
 
 
 class CloseLifecycleTests(unittest.TestCase):
@@ -98,7 +99,7 @@ class CloseLifecycleTests(unittest.TestCase):
             {"type": "tool_result", "content": "x" * (256 * 1024 + 1)}]}})
         self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
         completion, _cancel = self.arm_claude(transcript, "one")
-        self.assertEqual("one", LIFECYCLE.SESSIONS[Host.CLAUDE].user_turn(transcript))
+        self.assertEqual("one", SESSIONS[Host.CLAUDE].user_turn(transcript))
         self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
         self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
 
@@ -119,7 +120,7 @@ class CloseLifecycleTests(unittest.TestCase):
         self.append(transcript, {"type": "user", "message": {"content": "second"}})
         self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
         with self.assertRaisesRegex(ValueError, "no bounded"):
-            LIFECYCLE.SESSIONS[Host.CLAUDE].user_turn(transcript)
+            SESSIONS[Host.CLAUDE].user_turn(transcript)
         self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
         self.assertFalse(completion.exists())
 

@@ -5,6 +5,7 @@
         "hooks": [
           {
             "type": "command",
+            "async": true,
             "timeout": 10,
             "command": "python",
             "args": [
@@ -15,16 +16,6 @@
               "--hook",
               "${CLAUDE_PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py"
             ]
-          },
-          {
-            "type": "command",
-            "timeout": 10,
-            "command": "python",
-            "args": [
-              "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/reap_orphans.py",
-              "--notice"
-            ]
           }
         ]
       }
@@ -34,6 +25,7 @@
         "hooks": [
           {
             "type": "command",
+            "async": true,
             "timeout": 15,
             "command": "python",
             "args": [
@@ -62,6 +54,7 @@
         "hooks": [
           {
             "type": "command",
+            "async": true,
             "timeout": 60,
             "command": "python",
             "args": [
@@ -90,6 +83,7 @@
         "hooks": [
           {
             "type": "command",
+            "async": true,
             "timeout": 10,
             "command": "python",
             "args": [
