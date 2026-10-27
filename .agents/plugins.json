@@ -11,7 +11,6 @@
     "base@tj-agents",
     "cli@tj-agents",
     "engineering@tj-agents",
-    "machine@tj-agents",
     "template@tj-agents",
     "workflow@tj-agents"
   ]

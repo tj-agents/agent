@@ -35,7 +35,7 @@ registrations; startup still requires successful native admission and hooks.
 
 ## Skills
 
-- `agent:clip`, `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
+- `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
   `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`, `agent:close`
 - `agent-store:inspect`
 - `codex:hooks`, `codex:memory`

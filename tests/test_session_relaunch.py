@@ -79,12 +79,12 @@ class StalenessTests(State):
         return {"scope": "user", "installPath": str(self.root / "cache" / plugin / versions[-1])}
 
     def test_a_session_holding_an_older_copy_is_stale_and_a_current_one_is_not(self):
-        installed = {"machine@tj-agents": [self.install("machine", "v1", "v2", loaded="v1")],
+        installed = {"workflow@tj-agents": [self.install("workflow", "v1", "v2", loaded="v1")],
                      "base@tj-agents": [self.install("base", "v1", "v2", loaded="v2")],
                      "work@tj-agents": [self.install("work", "v2")],
                      "react@tj-agents": [self.install("react", "v2")]}
         identities = sorted(installed)
-        self.assertEqual(["machine@tj-agents", "work@tj-agents"],
+        self.assertEqual(["work@tj-agents", "workflow@tj-agents"],
                          RELAUNCH.stale_plugins(4242, self.root, identities, installed, {"work@tj-agents"}))
         self.assertEqual(["work@tj-agents"], RELAUNCH.stale_plugins(0, self.root, identities, installed, {"work@tj-agents"}))
 
@@ -217,14 +217,14 @@ class WatcherTests(State):
 
 
 class SyncTests(State):
-    def run_sync(self, result="updated", stale=("machine@tj-agents",), child=False, relaunch=None, no_relaunch=False):
+    def run_sync(self, result="updated", stale=("workflow@tj-agents",), child=False, relaunch=None, no_relaunch=False):
         environment = {"CLAUDE_CODE_SESSION_ID": SESSION, "CLAUDE_PID": "4242"}
         if child:
             environment["CLAUDE_CODE_CHILD_SESSION"] = "1"
         relaunched = mock.Mock(return_value=relaunch or {"relaunch": "armed", "session_id": SESSION})
         with mock.patch.dict(os.environ, environment), \
                 mock.patch.object(REFRESH.launch_check, "check", return_value=result), \
-                mock.patch.object(REFRESH, "selection", return_value=({}, ["machine@tj-agents"])), \
+                mock.patch.object(REFRESH, "selection", return_value=({}, ["workflow@tj-agents"])), \
                 mock.patch.object(RELAUNCH, "stale_plugins", return_value=list(stale)), \
                 mock.patch.object(RELAUNCH, "relaunch", relaunched), \
                 mock.patch.dict(sys.modules, {"session_relaunch": RELAUNCH}), \
@@ -237,7 +237,7 @@ class SyncTests(State):
         code, summary, relaunched = self.run_sync()
         self.assertEqual(0, code)
         self.assertEqual("armed", summary["claude"]["relaunch"])
-        self.assertEqual(["machine@tj-agents"], summary["claude"]["stale"])
+        self.assertEqual(["workflow@tj-agents"], summary["claude"]["stale"])
         relaunched.assert_called_once()
 
     def test_a_current_session_is_left_alone(self):
@@ -262,8 +262,8 @@ class SyncTests(State):
         relaunched = mock.Mock(side_effect=RuntimeError("relaunch was not armed: refused"))
         with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": SESSION, "CLAUDE_PID": "4242"}), \
                 mock.patch.object(REFRESH.launch_check, "check", return_value="updated"), \
-                mock.patch.object(REFRESH, "selection", return_value=({}, ["machine@tj-agents"])), \
-                mock.patch.object(RELAUNCH, "stale_plugins", return_value=["machine@tj-agents"]), \
+                mock.patch.object(REFRESH, "selection", return_value=({}, ["workflow@tj-agents"])), \
+                mock.patch.object(RELAUNCH, "stale_plugins", return_value=["workflow@tj-agents"]), \
                 mock.patch.object(RELAUNCH, "relaunch", relaunched), \
                 mock.patch.dict(sys.modules, {"session_relaunch": RELAUNCH}), \
                 mock.patch("sys.stdout"), mock.patch("sys.stderr"):
