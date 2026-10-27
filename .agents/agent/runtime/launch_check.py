@@ -8,6 +8,7 @@ installs with the recorded publisher heads. A process starts only for an install
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -197,6 +198,27 @@ def settle(project: Path, hosts, updated: set[str] | None = None) -> str:
     return "updated"
 
 
+def ensure_subscriber(project: Path) -> None:
+    directory = state_directory()
+    if Path(__file__).resolve().parent != (directory / "bin/.agents/agent/runtime").resolve():
+        return
+    import event_service
+    import plugin_autoupdate
+
+    path = directory / "machine-events-service.json"
+    saved = read_json(path)
+    expected = event_service.receipt(directory, Host.CLAUDE.configuration_root, Host.CODEX.configuration_root)
+    failed_at = saved.get("failed_at")
+    if saved == expected or (isinstance(failed_at, (int, float)) and math.isfinite(failed_at)
+                             and 0 <= time.time() - failed_at < 3600):
+        return
+    try:
+        recover_install(project, "background machine events")
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"plugins: background subscriber setup will retry: {error}", file=sys.stderr)
+        plugin_autoupdate.write_json(path, {"failed_at": time.time()})
+
+
 def check(project: Path, fetch=https_get, update=update_host, now: float | None = None,
           hosts=tuple(Host), updated: set[str] | None = None, *, recover: bool = True) -> str:
     directory = state_directory()
@@ -207,6 +229,7 @@ def check(project: Path, fetch=https_get, update=update_host, now: float | None 
             return check(project, fetch, update, now, hosts, updated, recover=False)
         return "unconfigured"
     path = directory / "machine-events-cursor.json"
+    ensure_subscriber(project)
     cursor = read_json(path)
     since = cursor.get("since")
     if not isinstance(since, str) or not MESSAGE_ID.fullmatch(since):

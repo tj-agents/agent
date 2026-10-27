@@ -800,7 +800,7 @@ class RunStepsTests(Machine):
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
             "preconditions", "native permission defaults", "event channel and publishers",
-            "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
+            "Claude marketplace auto-update", "launch-check runtime", "background machine events", "shell profiles", "hidden Git Bash for Claude",
             "Codex profile agents", "plugin and merge-policy catch-up", "harness permissions",
             "plugin setup",
         ], [item.name for item in install.STEPS])
