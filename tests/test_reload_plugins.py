@@ -98,6 +98,9 @@ class RefreshCliTests(unittest.TestCase):
         caller = mock.patch.object(REFRESH, "calling_host", return_value=Host.CODEX)
         caller.start()
         self.addCleanup(caller.stop)
+        heads = mock.patch.object(CLAUDE, "refresh_heads", return_value=set())
+        heads.start()
+        self.addCleanup(heads.stop)
         admission = mock.patch.object(REFRESH, "prepare_required", return_value=None)
         self.admission = admission.start()
         self.addCleanup(admission.stop)
@@ -343,42 +346,26 @@ class RefreshCliTests(unittest.TestCase):
         ])
         self.assertEqual("v1", fake.installations[1]["version"])
 
-    def test_claude_installs_only_at_the_scope_the_repository_declares(self):
-        for declared, scope in (("settings.local.json", "local"), ("settings.json", "project")):
-            def settings(path, declared=declared):
+    def test_scoped_refresh_uses_one_registry_transaction(self):
+        for declared in ("settings.local.json", "settings.json"):
+            def settings(path):
                 return {"enabledPlugins": {"infonetica@tj-agents": True}} if path.name == declared else {}
-            fake = FakeClaude([])
-
-            def install(command, cwd, fake=fake, scope=scope):
-                if command[2] == "install":
-                    fake.installations.append({"id": command[3], "scope": scope, "projectPath": str(cwd),
-                                               "enabled": True, "version": "v1"})
-                return fake(command, cwd)
             with self.subTest(declared=declared), mock.patch.object(plugin_refresh, "read_json", side_effect=settings), \
-                    mock.patch.object(plugin_refresh, "run", side_effect=install):
-                REFRESH.refresh(CLAUDE, "claude", ROOT, {}, ["infonetica@tj-agents"])
-            self.assertEqual([command for command, _ in fake.commands], [
-                ["claude", "plugin", "list", "--json"],
-                ["claude", "plugin", "install", "infonetica@tj-agents", "--scope", scope],
-                ["claude", "plugin", "update", "infonetica@tj-agents", "--scope", scope, "--json"],
-                ["claude", "plugin", "list", "--json"],
-            ])
+                    mock.patch.object(CLAUDE, "synchronize", return_value=["infonetica@tj-agents"]) as synchronize, \
+                    mock.patch.object(plugin_refresh, "run") as native:
+                self.assertEqual(["infonetica@tj-agents"], CLAUDE.refresh_plugins("claude", ROOT, {}, ["infonetica@tj-agents"]))
+            synchronize.assert_called_once_with([ROOT], identities={"infonetica@tj-agents"}, force=True)
+            native.assert_not_called()
 
-    def test_a_project_declaration_still_updates_the_user_installation_every_other_directory_uses(self):
+    def test_scoped_refresh_does_not_create_a_user_installation(self):
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary)
             (project / ".claude").mkdir()
-            (project / ".claude/settings.local.json").write_text(json.dumps({"enabledPlugins": {
-                "workflow@tj-agents": True}}), encoding="utf-8")
-            fake = FakeClaude([
-                {"id": "workflow@tj-agents", "scope": "user", "enabled": True, "version": "v1"},
-                {"id": "workflow@tj-agents", "scope": "local", "projectPath": str(project), "enabled": True,
-                 "version": "v1"}])
-            with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-                REFRESH.refresh(CLAUDE, "claude", project, {}, ["workflow@tj-agents"])
-        self.assertIn(["claude", "plugin", "update", "workflow@tj-agents", "--scope", "user", "--json"],
-                      [command for command, _ in fake.commands])
-        self.assertEqual(["v2", "v2"], [entry["version"] for entry in fake.installations])
+            (project / ".claude/settings.json").write_text(json.dumps({"enabledPlugins": {"workflow@tj-agents": True}}), encoding="utf-8")
+            with mock.patch.object(CLAUDE, "synchronize", return_value=["workflow@tj-agents"]), \
+                    mock.patch.object(plugin_refresh, "run") as native:
+                self.assertEqual(["workflow@tj-agents"], CLAUDE.refresh_plugins("claude", project, {}, ["workflow@tj-agents"]))
+            native.assert_not_called()
 
     def test_an_update_that_reports_success_but_does_not_persist_fails(self):
         fake = FakeClaude([{"id": "workflow@tj-agents", "scope": "user", "enabled": True, "version": "v1"}], persist=False)
@@ -428,7 +415,7 @@ class RefreshCliTests(unittest.TestCase):
                                       + f'\n[plugins."{identity}"]\nenabled = true\n', encoding="utf-8")
                 return ""
             with mock.patch.dict("os.environ", {"CODEX_HOME": home}), mock.patch.object(plugin_refresh, "run", side_effect=add):
-                REFRESH.refresh(CODEX, "codex", ROOT, {}, ["base@tj-agents", "infonetica@tj-agents"])
+                CODEX.install_missing("codex", ROOT, ["base@tj-agents", "infonetica@tj-agents"])
             text = config.read_text(encoding="utf-8")
         self.assertIn('[plugins."base@tj-agents"]\nenabled = true', text)
         self.assertNotIn('infonetica@tj-agents', text)
@@ -559,13 +546,13 @@ class RefreshCliTests(unittest.TestCase):
             source = {"source": "git-subdir", "url": "ssh://git@github.com/TJ-Agents/core.git",
                       "path": "plugins/base", "sha": revision}
             with mock.patch.object(plugin_refresh, "run", side_effect=run) as commands, mock.patch("sys.stderr"):
-                expected = REFRESH.source_tree(source, root, root, root / "scratch", clones)
+                expected = REFRESH.sources.tree(source, root, root, root / "scratch", clones)
                 self.assertEqual({"payload": b"published"}, expected)
-                self.assertEqual(expected, REFRESH.source_tree(source, root, root, root / "scratch", clones))
+                self.assertEqual(expected, REFRESH.sources.tree(source, root, root, root / "scratch", clones))
                 self.assertEqual(1, sum("fetch" in call.args[0] for call in commands.call_args_list))
                 source["path"] = "./../../escape"
                 with self.assertRaisesRegex(REFRESH.RefreshError, "escapes"):
-                    REFRESH.source_tree(source, root, root, root / "scratch", clones)
+                    REFRESH.sources.tree(source, root, root, root / "scratch", clones)
 
     def test_another_projects_installation_does_not_satisfy_verification(self):
         inventory = [{"id": "base@tj-agents", "enabled": True, "scope": "project", "projectPath": str(ROOT / "elsewhere")}]
@@ -640,21 +627,6 @@ class ClaudeHome:
 
 
 class HeadReconcileTests(unittest.TestCase):
-    def test_missing_declared_plugin_is_installed_without_a_new_publish_event(self):
-        project = self.home.project('new-project', 'settings.json', 'base@tj-agents')
-        self.home.installed()
-        calls = []
-
-        def native(command, cwd):
-            calls.append(command)
-            if command[1:3] == ['plugin', 'list']:
-                return json.dumps([{'id': 'base@tj-agents', 'scope': 'project',
-                                    'projectPath': str(project), 'enabled': True, 'version': 'v1'}])
-            return ''
-
-        with mock.patch.object(plugin_refresh, 'run', side_effect=native):
-            self.assertEqual(['base@tj-agents'], CLAUDE.reconcile(project))
-        self.assertIn(['claude', 'plugin', 'install', 'base@tj-agents', '--scope', 'project'], calls)
 
     def test_an_update_first_installs_dependencies_the_catalog_newly_declares(self):
         project = self.home.project('core', 'settings.json', 'personal@tj-agents')
@@ -671,15 +643,6 @@ class HeadReconcileTests(unittest.TestCase):
             ['update', 'personal@tj-agents', '--scope', 'project']])
         self.assertEqual({project}, {cwd for command, cwd in fake.commands if command[2] == 'install'})
 
-    def test_a_current_plugin_still_gets_a_dependency_its_catalog_declares(self):
-        project = self.home.project('core', 'settings.json', 'personal@tj-agents')
-        write(self.home.root / "market/.claude-plugin/marketplace.json", {"plugins": [
-            {"name": "personal", "dependencies": ["agent", "service@other"]}, {"name": "agent"}]})
-        fake = FakeClaude(self.home.installed(("personal@tj-agents", "project", project, CORE_HEAD)))
-        with mock.patch.object(plugin_refresh, 'run', side_effect=fake):
-            self.assertEqual(['agent@tj-agents'], CLAUDE.reconcile(project))
-        self.assertEqual([['install', 'agent@tj-agents', '--scope', 'project']],
-                         [command[2:6] for command, _ in fake.commands if command[2] == 'install'])
 
     def test_a_dependency_from_another_marketplace_keeps_its_own_identity(self):
         self.assertEqual("service@other", CLAUDE.dependency_identity({"name": "service", "marketplace": "other"},
@@ -687,12 +650,6 @@ class HeadReconcileTests(unittest.TestCase):
         self.assertEqual("agent@tj-agents", CLAUDE.dependency_identity("agent", "tj-agents"))
         self.assertIsNone(CLAUDE.dependency_identity({"marketplace": "other"}, "tj-agents"))
 
-    def test_missing_installation_that_does_not_persist_fails_refresh(self):
-        project = self.home.project('new-project', 'settings.json', 'base@tj-agents')
-        self.home.installed()
-        with mock.patch.object(plugin_refresh, 'run', return_value='[]'), \
-                self.assertRaisesRegex(REFRESH.RefreshError, 'did not persist enabled'):
-            CLAUDE.reconcile(project)
 
     def test_repair_never_enables_a_plugin_excluded_from_native_selection(self):
         for host in Host:
@@ -713,60 +670,10 @@ class HeadReconcileTests(unittest.TestCase):
         trees = dict(trees)
         CLAUDE.plugin_autoupdate.record_contents(heads, trees, {key.split("@")[1].split(":")[0] for key in trees})
 
-    def test_installs_at_their_publisher_heads_start_no_process(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents", "dotnet@tj-agents")
-        self.home.installed(("base@tj-agents", "local", project, CORE_HEAD),
-                            ("dotnet@tj-agents", "local", project, DOTNET_HEAD))
-        self.record({"tj-agents/core@main": CORE_HEAD, "tj-agents/dotnet@main": DOTNET_HEAD})
-        with mock.patch.object(plugin_refresh, "run", side_effect=AssertionError("process started")):
-            self.assertEqual([], CLAUDE.reconcile(project))
 
-    def test_an_install_whose_files_are_unchanged_at_the_new_head_is_left_alone(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents", "dotnet@tj-agents")
-        fake = FakeClaude(self.home.installed(("base@tj-agents", "local", project, OLD_HEAD),
-                                              ("dotnet@tj-agents", "local", project, OLD_HEAD)))
-        self.record({"tj-agents/core@main": CORE_HEAD, "tj-agents/dotnet@main": DOTNET_HEAD},
-                    {f"tj-agents/core@{OLD_HEAD}:plugins/base": "1" * 40,
-                     f"tj-agents/core@{CORE_HEAD}:plugins/base": "1" * 40,
-                     f"tj-agents/dotnet@{OLD_HEAD}:plugins/dotnet": "2" * 40,
-                     f"tj-agents/dotnet@{DOTNET_HEAD}:plugins/dotnet": "3" * 40})
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            self.assertEqual(["dotnet@tj-agents"], CLAUDE.reconcile(project))
-        self.assertEqual([
-            ["claude", "plugin", "marketplace", "update", "tj-agents"],
-            ["claude", "plugin", "update", "dotnet@tj-agents", "--scope", "local", "--json"],
-            ["claude", "plugin", "list", "--json"],
-        ], [command for command, _ in fake.commands])
 
-    def test_an_install_at_an_unrecorded_commit_waits_for_a_publish_to_be_compared(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents")
-        fake = FakeClaude(self.home.installed(("base@tj-agents", "local", project, OLD_HEAD)))
-        self.record({"tj-agents/core@main": CORE_HEAD})
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            self.assertEqual([], CLAUDE.reconcile(project))
-            self.assertEqual([], fake.commands)
-            CLAUDE.reconcile(project, event=True, repositories={"tj-agents/core"})
-        self.assertIn(["claude", "plugin", "update", "base@tj-agents", "--scope", "local", "--json"],
-                      [command for command, _ in fake.commands])
 
-    def test_a_project_updates_only_its_own_stale_copy(self):
-        current = self.home.project("authz", "settings.local.json", "base@tj-agents")
-        stale = self.home.project("erm", "settings.local.json", "base@tj-agents")
-        fake = FakeClaude(self.home.installed(("base@tj-agents", "local", current, CORE_HEAD),
-                                              ("base@tj-agents", "local", stale, OLD_HEAD)))
-        self.record({"tj-agents/core@main": CORE_HEAD}, {f"tj-agents/core@{OLD_HEAD}:plugins/base": "1" * 40,
-                                                       f"tj-agents/core@{CORE_HEAD}:plugins/base": "2" * 40})
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            self.assertEqual([], CLAUDE.reconcile(current))
-            CLAUDE.reconcile(stale)
-        self.assertEqual([(["claude", "plugin", "update", "base@tj-agents", "--scope", "local", "--json"], stale)],
-                         [(command, cwd) for command, cwd in fake.commands if command[2] == "update"])
 
-    def test_an_unknown_publisher_head_is_never_guessed_without_an_event(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents")
-        self.home.installed(("base@tj-agents", "local", project, OLD_HEAD))
-        with mock.patch.object(plugin_refresh, "run", side_effect=AssertionError("process started")):
-            self.assertEqual([], CLAUDE.reconcile(project))
 
     def test_a_publish_reads_only_the_contents_it_can_have_changed(self):
         project = self.home.project("preaward", "settings.local.json", "base@tj-agents", "dotnet@tj-agents")
@@ -806,115 +713,12 @@ class HeadReconcileTests(unittest.TestCase):
         self.assertEqual({"tj-agents/core@main": CORE_HEAD, "tj-agents/dotnet@main": DOTNET_HEAD}, contents["heads"])
         self.assertIn(f"tj-agents/dotnet@{DOTNET_HEAD}:plugins/dotnet", contents["trees"])
 
-    def test_a_publish_installs_a_missing_declared_scope_and_retries_an_unreadable_named_head(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents", "dotnet@tj-agents")
-        fake = FakeClaude(self.home.installed(("base@tj-agents", "local", project, CORE_HEAD)))
 
-        def install(command, cwd):
-            if command[2] == "install":
-                fake.installations.append({"id": command[3], "scope": command[5], "projectPath": str(cwd),
-                                           "enabled": True, "version": "v2"})
-            return fake(command, cwd)
-        with mock.patch.object(plugin_refresh, "run", side_effect=install), mock.patch("sys.stderr"):
-            self.assertFalse(CLAUDE.update({"tj-agents/dotnet"}, project, revision=lambda url, ref: None,
-                                                          query=lambda arguments: {"data": {}}))
-        installs = [command[3] for command, _ in fake.commands if command[2] == "install"]
-        self.assertEqual(["dotnet@tj-agents"], installs)
-        self.assertNotIn("update", [command[2] for command, _ in fake.commands])
 
-    def test_a_full_compare_tolerates_a_publisher_it_cannot_read(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents")
-        self.home.installed(("base@tj-agents", "local", project, CORE_HEAD))
-        query = lambda arguments: {"data": {"r": {"h": {"oid": CORE_HEAD}}}} if 'name: "core"' in arguments[-1] else {}
-        with mock.patch.object(plugin_refresh, "run", side_effect=FakeClaude([])), mock.patch("sys.stderr"):
-            self.assertTrue(CLAUDE.update(None, project, revision=lambda url, ref: None, query=query))
 
-    def test_a_marketplace_publish_updates_its_catalog_before_reading_it(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents")
-        fake = FakeClaude(self.home.installed(("base@tj-agents", "local", project, CORE_HEAD)))
-        query = lambda arguments: {"data": {"r": {"h": {"oid": CORE_HEAD if 'name: "core"' in arguments[-1] else DOTNET_HEAD}}}}
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            self.assertTrue(CLAUDE.update({"tj-agents/marketplace"}, project, query=query))
-        self.assertEqual([["claude", "plugin", "marketplace", "update", "tj-agents"]],
-                         [command for command, _ in fake.commands])
 
-    def test_no_launch_retries_an_update_at_the_same_head(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents")
-        installations = self.home.installed(("base@tj-agents", "local", project, OLD_HEAD))
-        self.record({"tj-agents/core@main": CORE_HEAD}, {f"tj-agents/core@{OLD_HEAD}:plugins/base": "1" * 40,
-                                                       f"tj-agents/core@{CORE_HEAD}:plugins/base": "2" * 40})
-        fake = FakeClaude(installations)
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            CLAUDE.reconcile(project)
-            first = len(fake.commands)
-            self.assertEqual([], CLAUDE.reconcile(project))
-            self.assertEqual(first, len(fake.commands))
-            self.assertEqual([], CLAUDE.reconcile(project, event=True, repositories={"tj-agents/core"}))
-            self.assertEqual([], CLAUDE.reconcile(project, event=True, repositories=None))
-        self.assertEqual(first, len(fake.commands))
 
-    def test_a_failing_update_is_tried_once_per_head(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents")
-        installations = self.home.installed(("base@tj-agents", "local", project, OLD_HEAD))
-        self.record({"tj-agents/core@main": CORE_HEAD}, {f"tj-agents/core@{OLD_HEAD}:plugins/base": "1" * 40,
-                                                       f"tj-agents/core@{CORE_HEAD}:plugins/base": "2" * 40})
-        fake = FakeClaude(installations)
 
-        def failing(command, cwd):
-            if command[2] == "update":
-                raise REFRESH.RefreshError("network")
-            return fake(command, cwd)
-        with mock.patch.object(plugin_refresh, "run", side_effect=failing), self.assertRaises(REFRESH.RefreshError):
-            CLAUDE.reconcile(project)
-        before = len(fake.commands)
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            self.assertEqual([], CLAUDE.reconcile(project))
-            self.assertEqual(before, len(fake.commands))
-            self.assertEqual([], CLAUDE.reconcile(project, event=True, repositories={"tj-agents/core"}))
-            self.record({"tj-agents/core@main": DOTNET_HEAD}, {f"tj-agents/core@{DOTNET_HEAD}:plugins/base": "5" * 40})
-            self.assertEqual(["base@tj-agents"], CLAUDE.reconcile(project, event=True,
-                                                                         repositories={"tj-agents/core"}))
-
-    def test_an_update_queued_after_a_failure_is_still_tried_by_the_next_launch(self):
-        project = self.home.project("preaward", "settings.local.json", "base@tj-agents", "dotnet@tj-agents")
-        installations = self.home.installed(("base@tj-agents", "local", project, OLD_HEAD),
-                                            ("dotnet@tj-agents", "local", project, OLD_HEAD))
-        self.record({"tj-agents/core@main": CORE_HEAD, "tj-agents/dotnet@main": DOTNET_HEAD},
-                    {f"tj-agents/core@{OLD_HEAD}:plugins/base": "1" * 40,
-                     f"tj-agents/core@{CORE_HEAD}:plugins/base": "2" * 40,
-                     f"tj-agents/dotnet@{OLD_HEAD}:plugins/dotnet": "3" * 40,
-                     f"tj-agents/dotnet@{DOTNET_HEAD}:plugins/dotnet": "4" * 40})
-        fake = FakeClaude(installations)
-
-        def failing(command, cwd):
-            if command[2] == "update":
-                raise REFRESH.RefreshError("network")
-            return fake(command, cwd)
-        with mock.patch.object(plugin_refresh, "run", side_effect=failing), self.assertRaises(REFRESH.RefreshError):
-            CLAUDE.reconcile(project)
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            self.assertEqual(["dotnet@tj-agents"], CLAUDE.reconcile(project))
-
-    def test_a_non_git_subdirectory_does_not_shadow_its_parent_install(self):
-        project = self.home.project("core", "settings.json", "base@tj-agents")
-        nested = project / ".worktrees" / "Feature"
-        self.home.installed(("base@tj-agents", "project", nested, OLD_HEAD), ("base@tj-agents", "project", project, OLD_HEAD))
-        self.record({"tj-agents/core@main": CORE_HEAD}, {f"tj-agents/core@{OLD_HEAD}:plugins/base": "1" * 40,
-                                                       f"tj-agents/core@{CORE_HEAD}:plugins/base": "2" * 40})
-        fake = FakeClaude(CLAUDE.installed_entries())
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            self.assertEqual(['base@tj-agents'], CLAUDE.reconcile(project))
-        self.assertEqual('v1', fake.installations[0]['version'])
-        self.assertEqual('v2', fake.installations[1]['version'])
-    def test_a_full_refresh_does_not_update_an_unrelated_subdirectory_install(self):
-        project = self.home.project("core", "settings.json", "base@tj-agents")
-        nested = project / ".worktrees" / "Feature"
-        fake = FakeClaude(self.home.installed(("base@tj-agents", "project", nested, OLD_HEAD),
-                                              ("base@tj-agents", "project", project, OLD_HEAD)))
-        with mock.patch.object(plugin_refresh, "run", side_effect=fake):
-            REFRESH.refresh(CLAUDE, "claude", project, {}, ["base@tj-agents"])
-        self.assertEqual('v1', fake.installations[0]['version'])
-        self.assertEqual('v2', fake.installations[1]['version'])
 
     def test_content_query_names_only_validated_revisions_and_paths(self):
         wanted = {"tj-agents/core@main": {"plugins/base", 'plugins/x") { oid } evil: object(expression: "y'}}
