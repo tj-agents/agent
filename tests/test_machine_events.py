@@ -118,7 +118,7 @@ class ReconcileTests(unittest.TestCase):
                                     "project": Path.home(), "plugins": ["base@tj-agents"]}}
             return {"marketplaces": events.plugins.refresh_codex(
                 executable, target, recorded, revision=lambda *_: "b" * 40, run=lambda *_, **__: True,
-                busy=lambda: True, packages=lambda name: [{"snapshot_first": False}], preserve=lambda *_: None)}
+                busy=lambda: True)}
 
         with (
             tempfile.TemporaryDirectory() as state,

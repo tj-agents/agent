@@ -7,11 +7,12 @@ import json
 import os
 from pathlib import Path
 import sys
+from typing import TYPE_CHECKING
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from host import Host
-from host_sessions import SESSIONS
+if TYPE_CHECKING:
+    from host import Host
 
 
 def state_root() -> Path:
@@ -65,6 +66,8 @@ def _signal(path: str, value: dict) -> None:
 
 
 def run(event: str, host: Host, data: dict) -> int:
+    from host_sessions import SESSIONS
+
     session_id, turn_id = _identity(data)
     if not session_id:
         return 0
@@ -93,14 +96,16 @@ def run(event: str, host: Host, data: dict) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("event", choices=("prompt", "stop", "end"))
-    parser.add_argument("--host", type=Host, choices=list(Host), required=True)
-    args = parser.parse_args(argv)
     try:
+        from host import Host
+
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument("event", choices=("prompt", "stop", "end"))
+        parser.add_argument("--host", type=Host, choices=list(Host), required=True)
+        args = parser.parse_args(argv)
         return run(args.event, args.host, _payload())
-    except (OSError, ValueError):
-        # Hooks must not block host lifecycle due to close bookkeeping.
+    except Exception as error:
+        print(f"close_lifecycle: {type(error).__name__}: {error}", file=sys.stderr)
         return 0
 
 

@@ -12,9 +12,11 @@ Contract: exit 0 always. Bookkeeping must never stop a session starting.
 """
 
 import collections
+import functools
 import hashlib
 import importlib.util
 import json
+import ntpath
 import os
 import sys
 import time
@@ -34,6 +36,9 @@ OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "repository_i
 
 FILETIME_EPOCH_DELTA = 11644473600
 FILETIME_TICKS_PER_SECOND = 10_000_000
+WINDOWS_QUERY_LIMITED_INFORMATION = 0x1000
+WINDOWS_ERROR_INVALID_PARAMETER = 87
+WINDOWS_STILL_ACTIVE = 259
 
 ProcessInfo = collections.namedtuple("ProcessInfo", "pid ppid name started_at")
 
@@ -115,13 +120,93 @@ def resolve_recorded_pid(ppid, lookup=None, host_names=None, depth_cap=MAX_ANCES
     return ppid, None, started
 
 
-def _windows_process_table():
+@functools.lru_cache(maxsize=None)
+def _windows_api():
     import ctypes
     from ctypes import wintypes
 
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE, *(ctypes.POINTER(wintypes.FILETIME),) * 4]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                    ctypes.POINTER(wintypes.DWORD)]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    ntdll = ctypes.WinDLL("ntdll")
+    ntdll.NtQueryInformationProcess.argtypes = [wintypes.HANDLE, wintypes.ULONG, ctypes.c_void_p,
+                                                wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)]
+    ntdll.NtQueryInformationProcess.restype = wintypes.LONG
+    return ctypes, wintypes, kernel32, ntdll
+
+
+def _windows_started_at(handle):
+    ctypes, wintypes, kernel32, _ntdll = _windows_api()
+    creation, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+    if not kernel32.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exited),
+                                    ctypes.byref(kernel), ctypes.byref(user)):
+        return None
+    ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+    if not ticks:
+        return None
+    return ticks / FILETIME_TICKS_PER_SECOND - FILETIME_EPOCH_DELTA
+
+
+def _windows_lookup(pid):
+    if not isinstance(pid, int) or isinstance(pid, bool) or not 0 < pid <= 0xFFFFFFFF:
+        return None
+    ctypes, wintypes, kernel32, ntdll = _windows_api()
+
+    class ProcessBasicInformation(ctypes.Structure):
+        _fields_ = [
+            ("exit_status", ctypes.c_void_p),
+            ("peb", ctypes.c_void_p),
+            ("affinity", ctypes.c_size_t),
+            ("priority", ctypes.c_void_p),
+            ("pid", ctypes.c_size_t),
+            ("ppid", ctypes.c_size_t),
+        ]
+
+    handle = kernel32.OpenProcess(WINDOWS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == WINDOWS_ERROR_INVALID_PARAMETER:
+            return None
+        raise OSError(error, f"cannot open process {pid}")
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            raise OSError(ctypes.get_last_error(), f"cannot read process {pid} state")
+        if code.value != WINDOWS_STILL_ACTIVE:
+            return None
+        basic = ProcessBasicInformation()
+        status = ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(basic), ctypes.sizeof(basic), None)
+        if status:
+            raise OSError(status & 0xFFFFFFFF, f"cannot read process {pid} parent")
+        size = wintypes.DWORD(32768)
+        image = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)):
+            raise OSError(ctypes.get_last_error(), f"cannot read process {pid} image")
+        return ProcessInfo(pid=pid, ppid=int(basic.ppid), name=ntpath.basename(image.value),
+                           started_at=_windows_started_at(handle))
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _windows_process_table():
+    ctypes, wintypes, kernel32, _ntdll = _windows_api()
     MAX_PATH = 260
     TH32CS_SNAPPROCESS = 0x00000002
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     INVALID_HANDLE_VALUE = -1
     ERROR_NO_MORE_FILES = 18
 
@@ -139,41 +224,12 @@ def _windows_process_table():
             ("szExeFile", ctypes.c_wchar * MAX_PATH),
         ]
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-    kernel32.Process32FirstW.restype = wintypes.BOOL
-    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-    kernel32.Process32NextW.restype = wintypes.BOOL
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    kernel32.GetProcessTimes.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(wintypes.FILETIME),
-        ctypes.POINTER(wintypes.FILETIME),
-        ctypes.POINTER(wintypes.FILETIME),
-        ctypes.POINTER(wintypes.FILETIME),
-    ]
-    kernel32.GetProcessTimes.restype = wintypes.BOOL
-
     def started_at(pid):
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        handle = kernel32.OpenProcess(WINDOWS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return None
         try:
-            creation, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
-            if not kernel32.GetProcessTimes(
-                handle, ctypes.byref(creation), ctypes.byref(exited),
-                ctypes.byref(kernel), ctypes.byref(user),
-            ):
-                return None
-            ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
-            if not ticks:
-                return None
-            return ticks / FILETIME_TICKS_PER_SECOND - FILETIME_EPOCH_DELTA
+            return _windows_started_at(handle)
         finally:
             kernel32.CloseHandle(handle)
 
@@ -286,7 +342,7 @@ def _ps_lookup(pid):
 
 def build_process_lookup():
     if os.name == "nt":
-        return _windows_process_table().get
+        return _windows_lookup
     if sys.platform == "linux":
         return _linux_lookup
     return _ps_lookup
