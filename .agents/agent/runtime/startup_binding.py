@@ -308,16 +308,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             report("preparing", phase=name)
             print(f"launch: {parsed.host} startup: {name}", flush=True)
 
+    degraded = False
+
+    def degrade(message: str) -> None:
+        nonlocal degraded
+        degraded = True
+        print(message, file=sys.stderr)
+        print(f"launch: starting {parsed.host} without verified plugins.", file=sys.stderr)
+
     phase("checking-plugins")
     try:
         effective_project, hook_roots = launch_check.prepare_launch_roots(
             parsed.project.resolve(), parsed.host, parsed.target, arguments,
         )
     except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
-        message = f"launch: {error}"
-        print(message, file=sys.stderr)
-        report("failed", error=message)
-        return 1
+        degrade(f"launch: {error}")
+        effective_project, hook_roots = None, None
     try:
         result = launch_check.check(effective_project or parsed.project.resolve(), hosts=(parsed.host,))
     except Exception as error:
@@ -328,37 +334,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             launch_check.require_update_check(result)
         except RuntimeError as error:
-            message = f"launch: {error}"
-            print(message, file=sys.stderr)
-            report("failed", error=message)
-            return 1
+            degrade(f"launch: {error}")
 
-    if effective_project is not None:
+    if effective_project is not None and not degraded:
         phase("verifying-required-hooks")
         try:
             PLUGINS[parsed.host].ensure_hooks(effective_project, parsed.target)
         except Exception as error:
-            message = f"launch: required hook readiness failed: {error}"
-            print(message, file=sys.stderr)
-            report("failed", error=message)
-            return 1
+            degrade(f"launch: required hook readiness failed: {error}")
 
-    if parsed.require_session_start:
+    if parsed.require_session_start and not degraded:
         try:
             _fresh_project, hook_roots = launch_check.prepare_launch_roots(
                 parsed.project.resolve(), parsed.host, parsed.target, arguments,
             )
         except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
-            message = f"launch: {error}"
-            print(message, file=sys.stderr)
-            report("failed", error=message)
-            return 1
+            degrade(f"launch: {error}")
+    require_session_start = parsed.require_session_start and not degraded
 
     try:
         terminal = _prelaunch_terminal()
         if terminal is not None:
             status["terminal"] = terminal
-        options = {"require_session_start": True, "hook_roots": hook_roots, "terminal": terminal} if parsed.require_session_start else {
+        options = {"require_session_start": True, "hook_roots": hook_roots, "terminal": terminal} if require_session_start else {
             "terminal": terminal,
         }
         if parsed.status_file is not None:
