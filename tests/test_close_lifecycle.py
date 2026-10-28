@@ -109,6 +109,14 @@ class CloseLifecycleTests(unittest.TestCase):
         self.assertEqual({"cancelled": True, "reason": "new prompt"}, json.loads(cancel.read_text(encoding="utf-8")))
         self.assertTrue(LIFECYCLE._state_path("session").exists())
 
+    def test_canceled_request_does_not_cover_a_new_input_assessment(self):
+        completion, cancel = self.arm("old")
+        self.assertEqual(0, LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "session", "turn_id": "new"}))
+        self.assertTrue(cancel.exists())
+        self.assertEqual("block", self.stop_output({"session_id": "session", "turn_id": "new"})["decision"])
+        self.assertFalse(completion.exists())
+        self.assertEqual("old", json.loads(LIFECYCLE._state_path("session").read_text())["turn_id"])
+
     def test_stale_stop_cannot_close_a_later_turn(self):
         completion, _cancel = self.arm("later")
         self.assertEqual(0, LIFECYCLE.run("stop", Host.CODEX, {"session_id": "session", "turn_id": "earlier"}))

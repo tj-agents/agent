@@ -111,6 +111,9 @@ def run(event: str, host: Host, data: dict) -> int:
             _signal(state["cancel"], {"cancelled": True, "reason": "new prompt"})
         return 0
     if event == "stop":
+        if owned and _armed(state) and Path(state["cancel"]).exists():
+            request_assessment(host, session_id, turn_id, data)
+            return 0
         if owned and _armed(state) and Path(state["completion"]).exists():
             _signal(state["cancel"], {"cancelled": True, "reason": "another stop"})
             return 0
