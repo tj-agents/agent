@@ -28,6 +28,9 @@ enabled = true
 [plugins."python@tj-agents"]
 enabled = true
 
+[plugins."skill@tj-agents"]
+enabled = true
+
 [plugins."template@tj-agents"]
 enabled = true
 
