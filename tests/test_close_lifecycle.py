@@ -1,4 +1,6 @@
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -52,6 +54,54 @@ class CloseLifecycleTests(unittest.TestCase):
     def append(self, path, record):
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record) + "\n")
+
+    def stop_output(self, data, host=Host.CODEX):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(0, LIFECYCLE.run("stop", host, data))
+        return json.loads(output.getvalue()) if output.getvalue() else None
+
+    def test_omitted_close_selection_requests_assessment_without_arming(self):
+        result = self.stop_output({"session_id": "session", "turn_id": "merged-template53"})
+        self.assertEqual("block", result["decision"])
+        self.assertIn("agent:close", result["reason"])
+        self.assertIn("unfinished", result["reason"])
+        self.assertFalse(LIFECYCLE._state_path("session").exists())
+        self.assertEqual([], list(self.state.rglob("*")))
+
+    def test_current_assessment_permits_keep_open_without_a_close_request(self):
+        LIFECYCLE.record_assessment({"host": "codex", "session_id": "session", "turn_id": "question"})
+        self.assertIsNone(self.stop_output({"session_id": "session", "turn_id": "question"}))
+        self.assertFalse(LIFECYCLE._state_path("session").exists())
+
+    def test_prior_input_assessment_does_not_cover_a_later_input(self):
+        LIFECYCLE.record_assessment({"host": "codex", "session_id": "session", "turn_id": "earlier"})
+        self.assertEqual("block", self.stop_output({"session_id": "session", "turn_id": "later"})["decision"])
+
+    def test_reentrant_stop_does_not_loop_when_assessment_is_unavailable(self):
+        self.assertIsNone(self.stop_output({"session_id": "session", "turn_id": "turn", "stop_hook_active": True}))
+        self.assertEqual([], list(self.state.rglob("*")))
+
+    def test_stop_without_native_input_does_not_infer_completion(self):
+        self.assertIsNone(self.stop_output({"session_id": "session", "cwd": "merged-worktree"}))
+
+    def test_disarmed_state_does_not_hide_an_omitted_assessment(self):
+        LIFECYCLE._write(LIFECYCLE._state_path("session"), {"host": "codex", "session_id": "session"})
+        self.assertEqual("block", self.stop_output({"session_id": "session", "turn_id": "turn"})["decision"])
+
+    def test_claude_assessment_covers_only_the_exact_transcript_user(self):
+        transcript = self.state / "session.jsonl"
+        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "question"}})
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        data = {"session_id": "session", "transcript_path": str(transcript)}
+        self.assertEqual("block", self.stop_output(data, Host.CLAUDE)["decision"])
+        LIFECYCLE.record_assessment({"host": "claude", "session_id": "session", "turn_id": None,
+                                     "transcript": str(transcript), "claude_user_uuid": "one"})
+        self.assertIsNone(self.stop_output(data, Host.CLAUDE))
+        self.assertFalse(LIFECYCLE._state_path("session").exists())
+        self.append(transcript, {"type": "user", "uuid": "two", "message": {"content": "continue"}})
+        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
+        self.assertEqual("block", self.stop_output(data, Host.CLAUDE)["decision"])
 
     def test_new_input_cancels_matching_armed_turn(self):
         _completion, cancel = self.arm()
