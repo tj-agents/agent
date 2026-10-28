@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 import plugin_autoupdate
 
@@ -49,7 +48,6 @@ def selected(sources: dict[str, str | None], enabled: list[str]) -> tuple[dict[s
 
 
 def run(command: list[str], project: Path) -> str:
-    print("Refreshing: " + " ".join(command[1:]), file=sys.stderr, flush=True)
     result = subprocess.run(command, cwd=project, capture_output=True, text=True,
                             encoding="utf-8", errors="replace", timeout=TIMEOUT)
     if result.returncode:
