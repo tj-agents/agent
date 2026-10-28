@@ -28,7 +28,7 @@ pwsh .agents/sync-generated.ps1
 pwsh .agents/sync-generated.ps1 -Check
 ```
 
-For new skills load `skill:create`; for edits, splitting, renaming or consolidation load `skill:update`.
+For new skills load `skill:new`; for edits, splitting, renaming or consolidation load `skill:update`.
 Both require the current host's native creator and a complete cutover without retired names or aliases.
 The project selects Template in `.agents/plugins.json`; after Git initialization, use Core's
 `agent:plugins` to generate both hosts and complete native admission and installation.
