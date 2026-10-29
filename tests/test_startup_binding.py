@@ -78,6 +78,27 @@ class StartupBindingTests(unittest.TestCase):
                 self.binding.run_session(Host.CODEX, sys.executable, root, [str(script)], require_session_start=True)
         self.assertFalse(survived.exists())
 
+    def test_native_still_starts_when_session_binding_cannot_prepare(self):
+        process = mock.Mock(pid=72)
+        process.wait.return_value = 0
+        timeout = self.binding.subprocess.TimeoutExpired(['powershell.exe'], 10)
+        with mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn, \
+                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', side_effect=timeout), \
+                mock.patch.object(SESSIONS[Host.CODEX], 'attach_frontend') as attach:
+            self.assertEqual(0, self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), ('resume',)))
+        self.assertEqual(['native.exe', 'resume'], spawn.call_args.args[0])
+        attach.assert_called_once_with(None, 72)
+
+    def test_native_keeps_running_when_session_binding_cannot_attach(self):
+        process = mock.Mock(pid=72)
+        process.wait.return_value = 0
+        process.poll.return_value = None
+        with mock.patch.object(self.binding.subprocess, 'Popen', return_value=process), \
+                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', return_value=([], {}, None)), \
+                mock.patch.object(SESSIONS[Host.CODEX], 'attach_frontend', side_effect=OSError('busy')):
+            self.assertEqual(0, self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), ()))
+        process.terminate.assert_not_called()
+
     def test_every_host_launch_drops_inherited_frontend_recording_state(self):
         process = mock.Mock(pid=72)
         process.wait.return_value = 0
