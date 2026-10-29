@@ -1,54 +1,66 @@
+import contextlib
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
 import os
-from pathlib import Path
 import re
 import runpy
 import shutil
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import NoReturn
 
 MARKER = ".snapshot-digest"
 RETENTION_SECONDS = 3 * 24 * 60 * 60
 SNAPSHOT_NAME = re.compile(r"[0-9a-f]{64}(\.[0-9a-f]{32})?")
 
 
-def fail(message):
+def fail(message: str) -> NoReturn:
     print(message, file=sys.stderr)
     raise SystemExit(2)
 
 
-def digest_tree(root):
+def digest_tree(root: Path) -> str:
     excluded = {"hooks/codex.json"}
-    files = []
-    directories = [(root, "")]
+    entries: list[tuple[str, str]] = []
+    directories = [(str(root), "")]
     while directories:
         directory, prefix = directories.pop()
-        with os.scandir(directory) as entries:
-            for entry in entries:
+        with os.scandir(directory) as children:
+            for entry in children:
                 relative = prefix + entry.name
                 if entry.is_symlink():
                     fail("Codex hook package contains a symbolic link")
                 if entry.is_dir(follow_symlinks=False):
                     directories.append((entry.path, relative + "/"))
                 elif entry.is_file(follow_symlinks=False):
-                    files.append((relative, entry.path))
+                    entries.append((relative, entry.path))
                 else:
                     fail("Codex hook package contains an unsupported entry")
-    files = [(relative, Path(path)) for relative, path in sorted(files) if relative not in excluded]
+    files = [
+        (relative, Path(path))
+        for relative, path in sorted(entries)
+        if relative not in excluded
+    ]
     digest = hashlib.sha256()
     if files:
         with ThreadPoolExecutor(max_workers=min(16, len(files))) as reader:
             for start in range(0, len(files), 16):
-                batch = files[start:start + 16]
-                for (relative, _), content in zip(batch, reader.map(Path.read_bytes, [path for _, path in batch])):
+                batch = files[start : start + 16]
+                contents = reader.map(Path.read_bytes, [path for _, path in batch])
+                for (relative, _), content in zip(batch, contents, strict=True):
                     try:
                         text = content.decode("utf-8")
                     except UnicodeDecodeError:
                         pass
                     else:
-                        content = text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+                        content = (
+                            text.replace("\r\n", "\n")
+                            .replace("\r", "\n")
+                            .encode("utf-8")
+                        )
                     digest.update(relative.encode("utf-8"))
                     digest.update(b"\0")
                     digest.update(str(len(content)).encode("ascii"))
@@ -57,79 +69,87 @@ def digest_tree(root):
     return "sha256:" + digest.hexdigest()
 
 
-def verified(root, expected):
+def verified(root: Path, expected: str) -> None:
     if not root.is_dir() or root.is_symlink() or digest_tree(root) != expected:
         fail("Codex hook package integrity check failed")
 
 
-def current(snapshot, expected):
-    marker = snapshot / MARKER
-    try:
-        if snapshot.is_symlink() or marker.read_text(encoding="utf-8") != expected:
+@dataclass(frozen=True, slots=True)
+class Snapshot:
+    package: Path
+    digest: str
+    path: Path
+
+    @classmethod
+    def for_package(cls, package: Path, digest: str, snapshots: Path) -> "Snapshot":
+        key = hashlib.sha256((str(package) + "\0" + digest).encode("utf-8")).hexdigest()
+        return cls(package, digest, snapshots / key)
+
+    @property
+    def marker(self) -> Path:
+        return self.path / MARKER
+
+    def reuse(self) -> bool:
+        try:
+            if (
+                self.path.is_symlink()
+                or self.marker.read_text(encoding="utf-8") != self.digest
+            ):
+                return False
+        except OSError:
             return False
-    except OSError:
-        return False
-    try:
-        os.utime(marker)
-    except OSError:
-        pass
-    return True
+        with contextlib.suppress(OSError):
+            os.utime(self.marker)
+        return True
 
-
-def create(root, expected, snapshot_dir, key):
-    snapshot = snapshot_dir / key
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    temporary = snapshot_dir / (key + "." + uuid.uuid4().hex)
-    try:
-        shutil.copytree(root, temporary, symlinks=True)
-        if digest_tree(temporary) != expected:
-            raise OSError("Codex hook snapshot copy differs from its package")
-        (temporary / MARKER).write_text(expected, encoding="utf-8")
+    def create(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.sibling()
         try:
-            temporary.rename(snapshot)
-        except OSError:
-            if current(snapshot, expected):
-                return
-            snapshot.rename(snapshot_dir / (key + "." + uuid.uuid4().hex))
-            temporary.rename(snapshot)
-    finally:
-        shutil.rmtree(temporary, ignore_errors=True)
+            shutil.copytree(self.package, temporary, symlinks=True)
+            if digest_tree(temporary) != self.digest:
+                raise OSError("Codex hook snapshot copy differs from its package")
+            (temporary / MARKER).write_text(self.digest, encoding="utf-8")
+            try:
+                temporary.rename(self.path)
+            except OSError:
+                if self.reuse():
+                    return
+                self.path.rename(self.sibling())
+                temporary.rename(self.path)
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
 
+    def sibling(self) -> Path:
+        return self.path.with_name(self.path.name + "." + uuid.uuid4().hex)
 
-def prune(snapshot_dir, key):
-    cutoff = time.time() - RETENTION_SECONDS
-    for entry in snapshot_dir.iterdir():
-        if entry.name == key or not SNAPSHOT_NAME.fullmatch(entry.name):
-            continue
+    def prune_siblings(self) -> None:
+        cutoff = time.time() - RETENTION_SECONDS
+        for entry in self.path.parent.iterdir():
+            if entry.name == self.path.name or not SNAPSHOT_NAME.fullmatch(entry.name):
+                continue
+            try:
+                marker = entry / MARKER
+                if (marker if marker.is_file() else entry).stat().st_mtime < cutoff:
+                    marker.unlink(missing_ok=True)
+                    shutil.rmtree(entry)
+            except OSError:
+                pass
+
+    def resolve(self) -> Path:
+        if self.reuse():
+            return self.path
+        verified(self.package, self.digest)
         try:
-            marker = entry / MARKER
-            if (marker if marker.is_file() else entry).stat().st_mtime < cutoff:
-                marker.unlink(missing_ok=True)
-                shutil.rmtree(entry)
+            self.create()
         except OSError:
-            pass
+            return self.package
+        with contextlib.suppress(OSError):
+            self.prune_siblings()
+        return self.path
 
 
-def snapshot_root(root, expected, snapshot_dir):
-    root = Path(root)
-    snapshot_dir = Path(snapshot_dir)
-    key = hashlib.sha256((str(root) + "\0" + expected).encode("utf-8")).hexdigest()
-    snapshot = snapshot_dir / key
-    if current(snapshot, expected):
-        return snapshot
-    verified(root, expected)
-    try:
-        create(root, expected, snapshot_dir, key)
-    except OSError:
-        return root
-    try:
-        prune(snapshot_dir, key)
-    except OSError:
-        pass
-    return snapshot
-
-
-def main():
+def main() -> None:
     root = Path(sys.argv[1])
     expected = sys.argv[2]
     plugin = sys.argv[3]
@@ -140,8 +160,12 @@ def main():
     data = os.environ.get("PLUGIN_DATA")
     configured = os.environ.get("TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY")
     if data or configured:
-        snapshot_dir = Path(configured).resolve() if configured else Path(data).resolve() / "hook-snapshots"
-        selected = snapshot_root(root, expected, snapshot_dir)
+        snapshots = (
+            Path(configured).resolve()
+            if configured
+            else Path(data or "").resolve() / "hook-snapshots"
+        )
+        selected = Snapshot.for_package(root, expected, snapshots).resolve()
     else:
         verified(root, expected)
         selected = root
@@ -149,7 +173,10 @@ def main():
     if not target.is_file():
         fail("Codex hook script is unavailable")
     sys.path.insert(0, str(target.parent))
-    sys.argv = [str(target), *(value.replace(str(root), str(selected), 1) for value in sys.argv[5:])]
+    sys.argv = [
+        str(target),
+        *(value.replace(str(root), str(selected), 1) for value in sys.argv[5:]),
+    ]
     runpy.run_path(str(target), run_name="__main__")
 
 
@@ -158,5 +185,5 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         fail("Codex hook snapshot failed: " + str(error))
