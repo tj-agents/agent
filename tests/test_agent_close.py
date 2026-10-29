@@ -12,6 +12,14 @@ class AgentCloseTests(CloseFixture, unittest.TestCase):
     def setUp(self):
         self.setup_close()
 
+    def test_preparation_records_current_input_without_starting_a_watcher(self):
+        self.assertEqual(0, self.prepare())
+        assessment = self.root / "close-lifecycle/assessments/one.json"
+        self.assertEqual({"host": "codex", "session_id": "one", "turn_id": "turn-one"},
+                         json.loads(assessment.read_text(encoding="utf-8")))
+        self.assertFalse((self.root / "close-lifecycle/one.json").exists())
+        self.spawn.assert_not_called()
+
     def test_new_codex_registration_is_attributed_before_active_turn_arm(self):
         before = self.row()
         self.assertNotIn("client_identity", json.loads(self.registry.read_text(encoding="utf-8")))

@@ -86,8 +86,16 @@ def prepare(args: argparse.Namespace) -> int:
             or shared.path_key(record.get("profile", "")) != shared.path_key(args.profile)):
         raise ValueError("record does not match the requested session and profile")
     target = target_from_record(record)
-    target.update(sessions.close_target(args.session_id, args.transcript))
+    native = sessions.close_target(args.session_id, args.transcript)
+    target.update(native)
     write_object(args.target, target)
+    import close_lifecycle
+
+    close_lifecycle.record_assessment({
+        "host": record["host"], "session_id": args.session_id,
+        "turn_id": record.get("native_turn_id"),
+        **native,
+    })
     print(json.dumps({"status": "prepared", "target": str(args.target)}))
     return 0
 

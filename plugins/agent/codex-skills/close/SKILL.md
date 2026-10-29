@@ -1,6 +1,6 @@
 ---
 name: close
-description: Complete the current agent turn and request closure only after every owned outcome is finished. Do not use for another session.
+description: Assess the current session before its final reply, keeping unfinished work open and requesting closure only after every owned outcome is finished. Do not use for another session.
 kind: utility
 domain: agent
 profile: core

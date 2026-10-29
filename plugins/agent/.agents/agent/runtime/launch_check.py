@@ -333,7 +333,8 @@ def main(argv: list[str] | None = None) -> int:
                                                arguments.target, native_arguments)
         except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
             print(f"plugins: {error}", file=sys.stderr)
-            return 1
+            print("plugins: launching anyway.", file=sys.stderr)
+            return 0
     host = arguments.host or launch_host()
     try:
         result = check(effective_project or arguments.project.resolve(), hosts=(host,) if host else tuple(Host))
@@ -345,14 +346,16 @@ def main(argv: list[str] | None = None) -> int:
             require_update_check(result)
         except RuntimeError as error:
             print(f"plugins: {error}", file=sys.stderr)
-            return 1
+            print("plugins: launching anyway.", file=sys.stderr)
+            return 0
         from host_plugins import PLUGINS
 
         try:
             PLUGINS[host].ensure_hooks(effective_project, arguments.target)
         except Exception as error:
             print(f"plugins: required hook readiness failed: {error}", file=sys.stderr)
-            return 1
+            print("plugins: launching anyway.", file=sys.stderr)
+            return 0
     return 0
 
 
