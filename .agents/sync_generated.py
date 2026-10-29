@@ -70,7 +70,6 @@ GENERATED_ROOTS = (
     ".agents/plugins/marketplace.json",
     ".agents/INDEX.md",
 )
-TIER_MATCHERS = ("files", "globs", "content", "remote")
 PAYLOAD_FIELDS = {
     "payloads",
     "dependencies",
@@ -919,7 +918,7 @@ def publication_aliases(package: str, aliases: JSONObject) -> JSONObject:
     }
 
 
-def validate_tiers(root: Path, plugins: Plugins, repository: str) -> None:
+def validate_tiers(root: Path, plugins: Plugins) -> None:
     tier_dir = root / ".agents/tiers"
     present = (
         sorted(path.name for path in tier_dir.iterdir()) if tier_dir.is_dir() else []
@@ -932,14 +931,19 @@ def validate_tiers(root: Path, plugins: Plugins, repository: str) -> None:
         tier = load(root / source)
         if not isinstance(tier, dict):
             raise ValueError(f"{source}: must be a JSON object")
-        if tier.get("schema_version") not in (1, 2, 3):
-            raise ValueError(f"{source}: schema_version must be 1, 2 or 3")
+        unknown = set(tier) - {
+            "tier",
+            "applies",
+            "stack",
+            "detect",
+            "fact_definitions",
+            "employer",
+            "session_context",
+        }
+        if unknown:
+            raise ValueError(f"{source}: unknown tier fields {sorted(unknown)}")
         if tier.get("tier") != plugin:
             raise ValueError(f"{source}: tier must be {plugin}")
-        owners = tier.get("owner_repository")
-        owners = [owners] if isinstance(owners, str) else owners or []
-        if repository.lower() not in {str(owner).lower() for owner in owners}:
-            raise ValueError(f"{source}: owner_repository must name {repository}")
         detect = tier.get("detect")
         if tier.get("applies") == "always":
             if detect is not None:
@@ -947,22 +951,9 @@ def validate_tiers(root: Path, plugins: Plugins, repository: str) -> None:
                     f"{source}: an always-applicable tier declares no detect markers"
                 )
         elif tier.get("applies") == "stack-present":
-            if tier.get("schema_version") == 3:
-                if not isinstance(detect, dict) or not detect:
-                    raise ValueError(
-                        f"{source}: a stack-present tier needs a detect predicate"
-                    )
-                continue
-            if not isinstance(detect, dict) or not any(
-                detect.get(field) for field in TIER_MATCHERS
-            ):
+            if not isinstance(detect, dict) or len(detect) != 1:
                 raise ValueError(
-                    f"{source}: a stack-present tier needs at least one detect marker"
-                )
-            if set(detect) - set(TIER_MATCHERS):
-                unknown_matchers = sorted(set(detect) - set(TIER_MATCHERS))
-                raise ValueError(
-                    f"{source}: unknown detect matchers {unknown_matchers}"
+                    f"{source}: a stack-present tier needs one detect predicate"
                 )
         else:
             raise ValueError(f"{source}: applies must be always or stack-present")
@@ -1400,7 +1391,7 @@ def build(root: Path) -> dict[str, bytes]:
     publications = validate_payloads(payloads, plugins)
     resources = validate_resources(root, payloads, publications, plugins)
     host_adapters = validate_host_adapters(root, payloads, plugins)
-    validate_tiers(root, plugins, repository)
+    validate_tiers(root, plugins)
     manifests, templates = load_manifests(root, publications, repository)
     validate_skill_references(plugins)
     aliases = payloads.get("compatibilitySkillAliases", {})
