@@ -260,6 +260,33 @@ class HookTrustTests(unittest.TestCase):
 
     @patch.object(TRUST, "AppServer")
     @patch.object(TRUST, "run")
+    def test_manual_trust_never_writes_and_still_requires_ready_hooks(self, runner, server_class):
+        settings = self.cwd / ".agents/settings.json"
+        settings.parent.mkdir()
+        (self.cwd / ".agents/plugins.json").write_text("{}", encoding="utf-8")
+        settings.write_text(json.dumps({"configuration": {"core": {"trust_hooks": False}}}), encoding="utf-8")
+        nested = self.cwd / "nested"
+        nested.mkdir()
+        server = server_class.return_value.__enter__.return_value
+        for state in ("modified", "trusted"):
+            with self.subTest(state=state):
+                server.request.reset_mock()
+                hook = dict(self.hook, trustStatus=state)
+                server.request.side_effect = lambda method, params: (
+                    {"config": {}} if method == "config/read" else
+                    {"data": [{"cwd": str(nested), "hooks": [hook]}]}
+                )
+                required = {hook["pluginId"]: [TRUST.signature(hook)]}
+                if state == "modified":
+                    with self.assertRaisesRegex(RuntimeError, "not ready"):
+                        TRUST.apply_trust("codex", nested, required=required)
+                else:
+                    self.assertEqual({}, TRUST.apply_trust("codex", nested, required=required))
+                self.assertEqual(["config/read", "hooks/list"], [call.args[0] for call in server.request.call_args_list])
+        runner.assert_not_called()
+
+    @patch.object(TRUST, "AppServer")
+    @patch.object(TRUST, "run")
     def test_preview_does_not_write_config(self, runner, server_class):
         runner.return_value = json.dumps({"installed": []})
         server = server_class.return_value.__enter__.return_value

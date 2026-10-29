@@ -58,6 +58,44 @@ Shell profiles load the packaged shell resources from the managed runtime in `~/
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
 managed directory rather than modifying the repository or an installed plugin cache.
 
+## Permission and hook configuration
+
+Repository preferences are defined once in `.agents/settings.json`:
+
+```json
+{
+  "configuration": {
+    "core": {
+      "permissions": "bypass",
+      "trust_hooks": true
+    }
+  }
+}
+```
+
+`permissions` is an enum: `bypass` (the default) or `standard`. `trust_hooks` is a boolean and defaults
+to `true`. Install reads the permission preference from the project where it runs; repository settings
+generation reads the same declaration. The shared preference is translated independently by each host:
+
+| Preference | Claude | Codex |
+| --- | --- | --- |
+| `bypass` | User `permissions.defaultMode = bypassPermissions` | `approval_policy = never`, `default_permissions = :danger-full-access` |
+| `standard` | `permissions.defaultMode = default` | `approval_policy = on-request`, `default_permissions = :workspace` |
+
+Claude configuration is authored in `.claude/runtime/permissions.py`; Codex configuration is authored
+in `.codex/runtime/permissions.py`. Install and repository generation dispatch to these modules. The
+PowerShell and shell install entry points invoke the same shared installer on Windows and Linux.
+Claude's project settings inherit the installed user default for bypass mode because the native host
+ignores a project-level bypass default. Codex's module also owns its execution rules and desktop defaults.
+Close Codex Desktop before install needs to update its saved local mode.
+
+On Codex launch and refresh, `trust_hooks: true` automatically trusts current hook hashes for enabled,
+selected tj-agents plugins after verifying their installed bytes against the publisher. Disabled hooks,
+managed policy and project trust keep their native controls. `false` prevents automatic trust writes;
+required hooks must already be trusted manually in `/hooks` before readiness succeeds. Existing saved
+trust is preserved. Claude uses its native project and plugin approval flow and has no equivalent
+per-hook hash trust store for this setting to update.
+
 ## Skills
 
 - `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
