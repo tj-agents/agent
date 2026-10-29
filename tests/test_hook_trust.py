@@ -42,6 +42,29 @@ class HookTrustTests(unittest.TestCase):
         self.archive.start()
         self.addCleanup(self.archive.stop)
 
+    def test_packaged_standalone_cli_resolves_shared_configuration_in_isolated_python(self):
+        server = self.cwd / "app-server"
+        server.write_text(
+            'import json, os, sys\n'
+            'for line in sys.stdin:\n'
+            '    message = json.loads(line)\n'
+            '    if "id" not in message:\n'
+            '        continue\n'
+            '    result = {"config": {}} if message["method"] == "config/read" else '
+            '{"data": [{"cwd": os.getcwd(), "hooks": []}]}\n'
+            '    print(json.dumps({"id": message["id"], "result": result}), flush=True)\n',
+            encoding="utf-8",
+        )
+        settings = self.cwd / ".agents/settings.json"
+        settings.parent.mkdir()
+        settings.write_text('{"configuration":{"core":{"trust_hooks":false}}}', encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(Path(TRUST.__file__)),
+             "--codex", sys.executable, "--project", str(self.cwd)],
+            cwd=self.cwd, capture_output=True, text=True, encoding="utf-8", timeout=30,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     @patch.object(TRUST, "AppServer")
     def test_live_reload_rejects_unloaded_or_wrong_checkout_without_writing(self, app):
         for loaded, directory in (([], self.cwd), (["current"], self.cwd / "other")):
