@@ -171,6 +171,24 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertEqual([(Path(directory.name).resolve(), (Host.CLAUDE,))], calls)
 
+    def test_failed_plugin_setup_still_starts_the_host_without_the_session_start_handshake(self):
+        directory = tempfile.TemporaryDirectory(prefix='startup degraded ')
+        self.addCleanup(directory.cleanup)
+        calls = []
+
+        def run_session(*_args, **kwargs):
+            calls.append(kwargs)
+            return 0
+
+        failure = RuntimeError('Required plugin setup failed: react@tj-agents needs machine@tj-agents')
+        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=failure),                 mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='failed'),                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
+            result = self.binding.main(['--host', 'claude', '--project', directory.name, '--target', 'native-claude',
+                                        '--require-session-start'])
+
+        self.assertEqual(0, result)
+        self.assertEqual(1, len(calls))
+        self.assertNotIn('require_session_start', calls[0])
+
     def test_claude_override_roster_is_passed_from_preflight_to_startup(self):
         directory = tempfile.TemporaryDirectory(prefix='startup claude override ')
         self.addCleanup(directory.cleanup)
