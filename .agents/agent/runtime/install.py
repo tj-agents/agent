@@ -232,7 +232,9 @@ def powershell_block(python: str, script: Path, loader: Path | None, newline: st
             f"    $tjAgentsTarget = Get-Command {name} -CommandType Application, ExternalScript"
             " -ErrorAction SilentlyContinue | Select-Object -First 1",
             f"    if (-not $tjAgentsTarget) {{ Write-Error '{name} was not found on PATH'; return }}",
-            f"    if (-not (Test-Path -LiteralPath {quoted(python)})) {{ Write-Error 'Standards verifier Python is unavailable'; $global:LASTEXITCODE = 1; return }}",
+            f"    $tjAgentsBypass = $args -contains '{launch_check.BYPASS_FLAG}'",
+            f"    if (-not $tjAgentsBypass -and -not (Test-Path -LiteralPath {quoted(python)})) {{ Write-Warning 'tj-agents Python is unavailable; starting {name} without tj-agents'; $tjAgentsBypass = $true }}",
+            f"    if ($tjAgentsBypass) {{ & $tjAgentsTarget.Source @($args | Where-Object {{ $_ -ne '{launch_check.BYPASS_FLAG}' }}); return }}",
             f"    try {{ $env:{launch_check.HOST_VARIABLE} = '{name}';"
             f" & {quoted(python)} -I -B {quoted(script)} --host {name} --project (Get-Location).Path"
             " --target $tjAgentsTarget.Source --require-session-start -- @args }"
@@ -248,7 +250,9 @@ def posix_block(python: str, script: Path) -> str:
 
     runtime_bin = script.parents[3] if len(script.parents) > 3 else script.parent
     return "\n".join([PROFILE_START, f'export PATH={quoted(runtime_bin)}:"$PATH"', *(
-        f'{name}() {{ [ -x {quoted(python)} ] || {{ printf "%s\\n" "Standards verifier Python is unavailable" >&2; return 1; }}; '
+        f'{name}() {{ _tj_bypass=; for _tj_arg in "$@"; do shift; if [ "$_tj_arg" = {launch_check.BYPASS_FLAG} ]; then _tj_bypass=1; else set -- "$@" "$_tj_arg"; fi; done; '
+        f'if [ -z "$_tj_bypass" ] && [ ! -x {quoted(python)} ]; then printf "%s\\n" "tj-agents Python is unavailable; starting {name} without tj-agents" >&2; _tj_bypass=1; fi; '
+        f'if [ -n "$_tj_bypass" ]; then command {name} "$@"; return; fi; '
         f'{launch_check.HOST_VARIABLE}={name} {quoted(python)} -I -B {quoted(script)} --host {name} --project "$PWD" --target "$(command -v {name})" --require-session-start -- "$@"; }}'
         for name in map(str, Host)), PROFILE_END])
 
