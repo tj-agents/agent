@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import contextlib
+from datetime import datetime, timezone
 import functools
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 import agent_cli
 from claude import sessions
 from host import Host
 import plugin_autoupdate
 import plugin_refresh
+import prune_plugin_cache
 import required_plugins
+import runtime_delivery
 import session_relaunch
+from tj_agent import content
+from tj_agent.plugins import sources
 
 HOST = Host.CLAUDE
 CATALOG = ".claude-plugin/marketplace.json"
@@ -296,19 +302,232 @@ def refresh_marketplaces(executable: str, project: Path, marketplaces: dict) -> 
         plugin_refresh.run([executable, "plugin", "marketplace", "update", name], project)
 
 
+def repository_key(project: Path) -> str:
+    return git_common_directory(project) or plugin_refresh.path_key(project)
+
+
+def repository_projects(projects: list[Path]) -> list[Path]:
+    discovered, seen = set(projects), set()
+    for project in projects:
+        key = repository_key(project)
+        if key in seen or not project.is_dir():
+            continue
+        seen.add(key)
+        result = subprocess.run(["git", "-C", str(project), "worktree", "list", "--porcelain", "-z"],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+                                creationflags=plugin_autoupdate.NO_WINDOW)
+        if result.returncode == 0:
+            discovered.update(Path(field.removeprefix("worktree ")) for field in result.stdout.split("\0")
+                              if field.startswith("worktree "))
+    return sorted(path.resolve() for path in discovered if path.is_dir())
+
+
+def materialize(root: Path, tree: dict[str, bytes], modes: dict[str, int] | None = None) -> Path:
+    if any(runtime_delivery.is_reparse(path) for path in (root, *root.parents) if path.exists()):
+        raise plugin_refresh.RefreshError(f"Plugin cache traverses a link: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    modes = modes or {}
+    destination = root / content.digest({**tree, "\0modes": json.dumps(modes, sort_keys=True).encode()})
+    if os.path.lexists(destination) and runtime_delivery.is_reparse(destination):
+        raise plugin_refresh.RefreshError(f"Plugin cache destination is a link: {destination}")
+    if (destination.is_dir() and plugin_refresh.package_tree(destination) == tree
+            and all((destination / name).stat().st_mode & 0o777 == mode for name, mode in modes.items())):
+        return destination
+    with tempfile.TemporaryDirectory(prefix="stage-", dir=root) as temporary:
+        stage = Path(temporary) / "package"
+        stage.mkdir()
+        for name, body in tree.items():
+            path = stage / name
+            if not path.resolve().is_relative_to(stage.resolve()):
+                raise plugin_refresh.RefreshError(f"Plugin file escapes package: {name}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+            if name in modes:
+                path.chmod(modes[name])
+        if destination.exists():
+            destination = root / (destination.name + "-" + Path(temporary).name)
+        stage.rename(destination)
+    return destination
+
+
+def synchronize(projects: list[Path], *, identities: set[str] | None = None, force: bool = False) -> list[str]:
+    path = HOST.configuration_root / "plugins/installed_plugins.json"
+    lock = plugin_autoupdate.acquire_lock(path.with_suffix(".lock"))
+    if lock is None:
+        raise plugin_refresh.RefreshError("Claude plugin registrations are already being updated")
+    try:
+        original = path.read_bytes() if path.is_file() else None
+        document = plugin_refresh.read_json(path) if original is not None else {"version": 2, "plugins": {}}
+        if not isinstance(document.get("plugins"), dict):
+            raise plugin_refresh.RefreshError("Claude plugin registry has no plugins object")
+        wanted, owners, settings_targets = {}, {}, {}
+        projects = repository_projects(projects)
+        for project in projects:
+            project = project.resolve()
+            if not project.is_dir():
+                continue
+            key = repository_key(project)
+            owners.setdefault(key, project)
+            _, enabled = selected(project)
+            for identity in enabled:
+                if not required_plugins.IDENTITY.fullmatch(identity):
+                    raise plugin_refresh.RefreshError(f"Invalid plugin identity: {identity}")
+                if identities is not None and identity not in identities:
+                    continue
+                for scope in declared_scopes(identity, project):
+                    wanted.setdefault(identity, set()).add((scope, key))
+                    settings_targets.setdefault(identity, set()).add((scope, project))
+        catalogs = {name: (location, {entry["name"]: entry for entry in plugin_refresh.read_json(
+            location / CATALOG).get("plugins", []) if isinstance(entry, dict) and isinstance(entry.get("name"), str)})
+            for name, (_, location) in tj_agents_marketplaces().items()}
+        contents = plugin_autoupdate.read_contents()
+        pending = list(wanted)
+        dependencies = {f"{plugin}@{marketplace}": [dependency_identity(value, marketplace)
+                         for value in entry.get("dependencies") or []]
+                        for marketplace, (_, catalog) in catalogs.items() for plugin, entry in catalog.items()}
+        for identity in wanted:
+            missing_dependencies(identity, "project", projects[0], dependencies, [])
+        while pending:
+            identity = pending.pop()
+            plugin, _, marketplace = identity.partition("@")
+            entry = catalogs.get(marketplace, (None, {}))[1].get(plugin, {})
+            for value in entry.get("dependencies") or []:
+                dependency = dependency_identity(value, marketplace)
+                if dependency is None or not required_plugins.IDENTITY.fullmatch(dependency) or dependency == identity:
+                    raise plugin_refresh.RefreshError(f"Invalid dependency of {identity}")
+                added = wanted[identity] - wanted.get(dependency, set())
+                extra = settings_targets[identity] - settings_targets.get(dependency, set())
+                if added or extra:
+                    wanted.setdefault(dependency, set()).update(added)
+                    settings_targets.setdefault(dependency, set()).update(extra)
+                    pending.append(dependency)
+        unknown = {identity for identity in wanted if identity.rsplit("@", 1)[1] not in catalogs}
+        if unknown:
+            raise plugin_refresh.RefreshError("Dependency marketplace is unavailable: " + ", ".join(sorted(unknown)))
+        settings = {}
+        for identity, targets in settings_targets.items():
+            for scope, project in targets:
+                target = project / ".claude" / ("settings.local.json" if scope == "local" else "settings.json")
+                if target not in settings:
+                    settings[target] = (target.read_bytes() if target.is_file() else None, plugin_refresh.read_json(target))
+                settings[target][1].setdefault("enabledPlugins", {})[identity] = True
+        publishers, payloads, trees, changed = {}, {}, {}, set()
+        with tempfile.TemporaryDirectory(prefix="tj-agents-packages-") as temporary:
+            for identity in sorted(set(document["plugins"]) | set(wanted)):
+                plugin, _, marketplace = identity.partition("@")
+                if marketplace not in catalogs or not required_plugins.IDENTITY.fullmatch(identity):
+                    continue
+                rows = document["plugins"].get(identity, [])
+                if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                    raise plugin_refresh.RefreshError(f"Invalid Claude registrations for {identity}")
+                kept, groups = [], {}
+                for row in rows:
+                    scope, owner = row.get("scope"), row.get("projectPath")
+                    if scope not in {"project", "local"}:
+                        kept.append(row)
+                        continue
+                    if not isinstance(owner, str) or not Path(owner).is_dir():
+                        continue
+                    key = repository_key(Path(owner))
+                    if key not in owners:
+                        kept.append(row)
+                        continue
+                    groups.setdefault((scope, key), row)
+                location, catalog = catalogs[marketplace]
+                entry = catalog.get(plugin)
+                for group in sorted(set(groups) | wanted.get(identity, set())):
+                    row = groups.get(group)
+                    if group not in wanted.get(identity, set()):
+                        if row is not None:
+                            kept.append(row)
+                        continue
+                    if entry is None:
+                        raise plugin_refresh.RefreshError(f"Selected plugin is not published: {identity}")
+                    source = entry.get("source")
+                    publisher = (plugin_autoupdate.publisher_key(source.get("url"), source.get("sha") or source.get("ref"))
+                                 if isinstance(source, dict) and source.get("source") == "git-subdir" else None)
+                    head = contents["heads"].get(publisher) if publisher else None
+                    modes, local_tree = {}, None
+                    if not head:
+                        if identity not in trees:
+                            trees[identity] = (sources.tree(
+                                source, location, owners[group[1]], Path(temporary), publishers, modes=modes), modes)
+                        local_tree, modes = trees[identity]
+                        resolved = sources.resolved_head(source, publishers) if publisher else None
+                        if resolved:
+                            head = resolved
+                            contents["heads"][publisher] = head
+                            plugin_autoupdate.record_contents(heads={publisher: head})
+                    revision = json.dumps([source, head, content.digest(local_tree) if publisher is None else None,
+                                           modes if publisher is None else None], sort_keys=True)
+                    current = Path(row["installPath"]) if row and isinstance(row.get("installPath"), str) else None
+                    if (not force and row and row.get("tjAgentsRevision") == revision and current and current.is_dir()
+                            and row.get("tjAgentsDigest") == content.digest(plugin_refresh.package_tree(current))
+                            and all((current / name).stat().st_mode & 0o777 == mode
+                                    for name, mode in row.get("tjAgentsModes", {}).items())):
+                        kept.append(row)
+                        continue
+                    if identity not in payloads:
+                        frozen = {**source, "sha": head} if publisher and head else source
+                        tree = (local_tree if local_tree is not None else sources.tree(
+                            frozen, location, owners[group[1]], Path(temporary), publishers, modes=modes))
+                        manifest = json.loads(tree.get(".claude-plugin/plugin.json", b"{}"))
+                        if manifest.get("name") != plugin:
+                            raise plugin_refresh.RefreshError(f"Published plugin manifest does not name {identity}")
+                        installed = materialize(HOST.configuration_root / "plugins/cache" / marketplace / plugin, tree, modes)
+                        payloads[identity] = (installed, tree, manifest, modes)
+                    installed, tree, manifest, modes = payloads[identity]
+                    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    record = {**(row or {}), "scope": group[0], "projectPath": str(owners[group[1]]),
+                              "installPath": str(installed), "version": manifest.get("version") or installed.name,
+                              "installedAt": (row or {}).get("installedAt", now), "lastUpdated": now,
+                              "tjAgentsRevision": revision, "tjAgentsDigest": content.digest(tree), "tjAgentsModes": modes}
+                    if head:
+                        record["gitCommitSha"] = head
+                    kept.append(record)
+                    if row != record:
+                        changed.add(identity)
+                if kept:
+                    document["plugins"][identity] = kept
+                else:
+                    document["plugins"].pop(identity, None)
+        if (path.read_bytes() if path.is_file() else None) != original:
+            raise plugin_refresh.RefreshError("Claude changed plugin registrations during refresh; retry")
+        for target, (before, _) in settings.items():
+            if (target.read_bytes() if target.is_file() else None) != before:
+                raise plugin_refresh.RefreshError(f"Claude plugin selection changed during refresh: {target}; retry")
+        for target, (before, selection) in settings.items():
+            prior = json.loads(before.decode("utf-8-sig")) if before is not None else {}
+            if prior != selection:
+                plugin_autoupdate.write_json(target, selection)
+        encoded = (json.dumps(document, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        if encoded != original:
+            plugin_autoupdate.write_json(path, document)
+        return sorted(changed)
+    finally:
+        lock.close()
+
+
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     retired = retire_unpublished_user_plugins(marketplaces)
     retired.extend(uninstall_unpublished(executable, marketplaces))
     plugins = [identity for identity in plugins if identity not in retired or declared_scopes(identity, project)]
     if not plugins:
         return []
+    scoped = {identity for identity in plugins if declared_scopes(identity, project)}
+    if scoped:
+        refresh_heads(None)
+    changed = synchronize([project], identities=scoped, force=True) if scoped else []
+    plugins = [identity for identity in plugins if identity not in scoped]
+    if not plugins:
+        return changed
     inventory = json.loads(plugin_refresh.run([executable, "plugin", "list", "--json"], project))
     effective = installations(project, inventory)
     installs = [(identity, scope) for identity in plugins for scope in declared_scopes(identity, project)
                 if not any(entry.get('id') == identity and entry.get('scope') == scope for entry in effective)]
     updates = [(identity, scope, owner) for identity in plugins
                for scope, owner in update_targets(identity, project, inventory)]
-    return apply(executable, project, installs, updates)
+    return sorted(set(changed + apply(executable, project, installs, updates)))
 
 
 def install_missing(executable: str, project: Path, missing) -> None:
@@ -421,6 +640,9 @@ def reconcile(project: Path, event: bool = False, repositories: set[str] | None 
               fresh: frozenset[str] = frozenset()) -> list[str]:
     retire_unpublished_user_plugins(fresh)
     marketplaces, plugins = selected(project)
+    scoped = {identity for identity in plugins if declared_scopes(identity, project)}
+    changed = synchronize([project], identities=scoped) if scoped else []
+    plugins = [identity for identity in plugins if identity not in scoped]
     inventory = installed_entries()
     effective = installations(project, inventory)
     contents = plugin_autoupdate.read_contents()
@@ -447,7 +669,7 @@ def reconcile(project: Path, event: bool = False, repositories: set[str] | None 
                     attempts[attempt_key(identity, scope, owner)] = head
     dependencies = dependency_installs(present)
     if not installs and not updates and not dependencies:
-        return []
+        return changed
     touched = {work[0].rsplit("@", 1)[1] for work in installs + updates + dependencies}
     native = resolve_executable()
     refresh_marketplaces(native, project, {name: repo for name, repo in marketplaces.items() if name in touched - fresh})
@@ -457,7 +679,7 @@ def reconcile(project: Path, event: bool = False, repositories: set[str] | None 
             with contextlib.suppress(OSError):
                 plugin_autoupdate.record_contents(attempts={key: attempts[key]})
 
-    return apply(native, project, installs, updates, starting, dependencies)
+    return sorted(set(changed + apply(native, project, installs, updates, starting, dependencies)))
 
 
 
@@ -474,6 +696,23 @@ def update(repositories: set[str] | None, project: Path, updated: set[str] | Non
     if updated is not None:
         updated.update(changed)
     return repositories is None or not any(key.rsplit("@", 1)[0] in repositories for key in unresolved)
+
+
+def update_registered(repositories: set[str] | None = None) -> list[str]:
+    projects = sorted({Path(entry["projectPath"]).resolve() for entry in installed_entries()
+                       if entry.get("scope") in {"project", "local"} and isinstance(entry.get("projectPath"), str)
+                       and Path(entry["projectPath"]).is_dir()})
+    if not projects:
+        return synchronize([])
+    marketplaces = {name: repo for name, (repo, _) in tj_agents_marketplaces().items()}
+    refresh_marketplaces(resolve_executable(), projects[0], marketplaces)
+    unresolved = refresh_heads(repositories)
+    if unresolved:
+        raise plugin_refresh.RefreshError("Could not resolve plugin publishers: " + ", ".join(sorted(unresolved)))
+    changed = synchronize(projects)
+    if prune_plugin_cache.main(["--apply"]):
+        raise plugin_refresh.RefreshError("Claude plugin cache reconciliation failed")
+    return changed
 
 
 def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False) -> str | None:

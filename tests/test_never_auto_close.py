@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "plugins" / "agent"
 SESSION = "22176c14-5e45-4d73-a2fb-c906e0147dea"
 CLOSE_STATE = ("close-lifecycle", "client-close", "session-close")
-LIFECYCLE_SCRIPTS = {"close_lifecycle.py", "hook_dispatch.py", "loader.py", "reap_orphans.py",
+LIFECYCLE_SCRIPTS = {"close_lifecycle.py", "hook_dispatch.py", "loader.py",
                      "register_session.py", "session_store.py", "snapshot.py"}
 
 
@@ -69,12 +69,16 @@ class NeverAutoCloseTests(unittest.TestCase):
     def dispatch(self, event, **payload):
         hooks = claude_hooks(event)
         self.assertTrue(hooks)
+        responses = []
         for hook in hooks:
             completed = subprocess.run(command(hook), input=json.dumps({
                 "session_id": SESSION, "transcript_path": str(self.transcript), "cwd": str(self.worktree),
                 "hook_event_name": event, **payload,
             }), capture_output=True, text=True, cwd=self.worktree, env=self.environment, timeout=hook["timeout"])
             self.assertEqual(0, completed.returncode, completed.stderr)
+            if completed.stdout.strip():
+                responses.append(json.loads(completed.stdout))
+        return responses
 
     def close_requests(self):
         return sorted(str(path.relative_to(self.state)) for name in CLOSE_STATE
@@ -93,8 +97,11 @@ class NeverAutoCloseTests(unittest.TestCase):
         self.append(record("user", "u3", "what are you doing"),
                     record("assistant", "a2", [{"type": "text", "text": "Stopping. Here is what happened."}],
                            stop_reason="end_turn"))
-        self.dispatch("Stop", stop_hook_active=False)
-        self.dispatch("Stop", stop_hook_active=False)
+        responses = self.dispatch("Stop", stop_hook_active=False)
+        self.assertTrue(any(value.get("decision") == "block" and "agent:close" in value.get("reason", "")
+                            for value in responses))
+        self.assertFalse(any(value.get("decision") == "block"
+                             for value in self.dispatch("Stop", stop_hook_active=True)))
         self.assertEqual([], self.close_requests())
 
     def test_shipped_hooks_run_only_the_session_lifecycle_scripts(self):
