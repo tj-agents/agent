@@ -65,6 +65,37 @@ def _signal(path: str, value: dict) -> None:
     _write(Path(path), value)
 
 
+def record_assessment(state: dict) -> None:
+    path = state_root() / "assessments" / _state_path(state["session_id"]).name
+    _write(path, state)
+
+
+def assessed(host: Host, session_id: str, turn_id: str | None, data: dict) -> bool:
+    from host_sessions import SESSIONS
+
+    path = state_root() / "assessments" / _state_path(session_id).name
+    state = _read(path)
+    return (isinstance(state, dict) and state.get("host") == host.value
+            and state.get("session_id") == session_id and SESSIONS[host].completes(state, data, turn_id))
+
+
+def request_assessment(host: Host, session_id: str, turn_id: str | None, data: dict) -> None:
+    from host_sessions import SESSIONS
+
+    if data.get("stop_hook_active") is True or assessed(host, session_id, turn_id, data):
+        return
+    supplied = _text(data.get("transcript_path") or data.get("transcriptPath"))
+    native = {"turn_id": turn_id, **SESSIONS[host].close_target(session_id, Path(supplied) if supplied else None)}
+    if not SESSIONS[host].completes(native, data, turn_id):
+        return
+    print(json.dumps({"decision": "block", "reason": (
+        "Apply agent:close to this input before finishing. Run its prepare step to record the completion "
+        "assessment, then arm only if every owned outcome is complete. Keep the session open for unfinished "
+        "work, user questions, approval, cleanup or an explicit keep-open request. A merged PR or this Stop "
+        "does not authorize closure. If preparation is unavailable, report its reason and preserve the session."
+    )}))
+
+
 def run(event: str, host: Host, data: dict) -> int:
     from host_sessions import SESSIONS
 
@@ -80,12 +111,17 @@ def run(event: str, host: Host, data: dict) -> int:
             _signal(state["cancel"], {"cancelled": True, "reason": "new prompt"})
         return 0
     if event == "stop":
-        if owned and Path(state["completion"]).exists():
+        if owned and _armed(state) and Path(state["cancel"]).exists():
+            request_assessment(host, session_id, turn_id, data)
+            return 0
+        if owned and _armed(state) and Path(state["completion"]).exists():
             _signal(state["cancel"], {"cancelled": True, "reason": "another stop"})
             return 0
         # Stop is synchronous while the final reply's native turn is still identifiable.
         if owned and _armed(state) and SESSIONS[host].completes(state, data, turn_id):
             _signal(state["completion"], {"token": state["completion_token"]})
+        elif not owned or not _armed(state):
+            request_assessment(host, session_id, turn_id, data)
         return 0
     if event == "end":
         # Session end can never complete a later turn. Cancel this exact pending request instead.
