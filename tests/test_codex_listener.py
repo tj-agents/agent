@@ -1,9 +1,12 @@
 import json
 import os
 from pathlib import Path
+import queue
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -12,6 +15,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
 from codex import listener
+if os.name == 'nt':
+    from codex import listener_windows
 
 
 THREAD = '00000000-0000-4000-8000-000000000041'
@@ -73,8 +78,21 @@ class CodexListenerTests(unittest.TestCase):
                                                  return_value=dict(BACKEND)))
         self.arguments = self.patch(mock.patch.object(listener.client, 'process_arguments',
                                                     return_value=[sys.executable, 'app-server']))
+        if os.name == 'nt':
+            self.windows_daemon_executable = listener_windows.daemon_executable
+
+            def executable(_profile, backend):
+                if backend != self.daemon.return_value:
+                    raise RuntimeError('The pinned native Codex daemon or executable changed')
+                return self.arguments.return_value[0]
+
+            self.patch(mock.patch.object(listener_windows, 'daemon_executable', side_effect=executable))
         self.verify_capability = listener.verify_capability
         self.capability = self.patch(mock.patch.object(listener, 'verify_capability'))
+        self.verify_running_version = listener.verify_running_version
+        self.version = self.patch(mock.patch.object(listener, 'verify_running_version'))
+        self.verify_mapped_image = listener.verify_mapped_image
+        self.patch(mock.patch.object(listener, 'verify_mapped_image'))
         self.server = NativeServer(self.thread_cwd)
         self.connection = self.patch(mock.patch.object(listener, 'connection', return_value=self.server))
         self.launch = self.patch(mock.patch.object(listener, 'detach', side_effect=listener.worker))
@@ -153,21 +171,36 @@ class CodexListenerTests(unittest.TestCase):
                          (result['status'], result['outcome'], result['returncode']))
         self.assertEqual(3, len(self.server.submissions()))
 
-    def test_timeout_kills_a_command_that_ignores_termination(self):
-        target = listener.Target(THREAD, str(self.profile), str(self.thread_cwd),
-                                 dict(BACKEND), sys.executable)
-        request = listener.Request(target, 'stubborn-command', 'Bound a stuck command',
-                                   str(self.command_cwd), .1, ('stubborn-command',))
-        process = mock.Mock(returncode=-9)
-        process.wait.side_effect = [subprocess.TimeoutExpired(request.command, .1),
-                                    subprocess.TimeoutExpired(request.command, 2), -9]
-        with mock.patch.object(listener.subprocess, 'Popen', return_value=process):
-            result = listener.run_command(request, self.root / 'output.log')
-        self.assertEqual({'outcome': 'timeout', 'returncode': -9}, result)
-        process.terminate.assert_called_once_with()
-        process.kill.assert_called_once_with()
-        self.assertEqual([mock.call(timeout=.1), mock.call(timeout=2), mock.call(timeout=5)],
-                         process.wait.call_args_list)
+    def test_timeout_terminates_a_real_descendant_before_it_can_write_later(self):
+        child = self.command_cwd / 'descendant.py'
+        child.write_text(
+            "import os, signal, time\nfrom pathlib import Path\n"
+            "if os.name != 'nt': signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "Path('child-ready').touch()\ntime.sleep(3)\nPath('escaped-child').touch()\n",
+            encoding='utf-8')
+        command = self.command(
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-B', 'descendant.py'])\ntime.sleep(30)\n")
+        result = self.start(command, timeout=2)
+        self.assertEqual(('accepted', 'timeout'), (result['status'], result['outcome']))
+        self.assertTrue((self.command_cwd / 'child-ready').exists())
+        time.sleep(3.2)
+        self.assertFalse((self.command_cwd / 'escaped-child').exists())
+
+    def test_successful_parent_cannot_leave_an_owned_background_descendant(self):
+        child = self.command_cwd / 'descendant.py'
+        child.write_text("import time\nfrom pathlib import Path\nPath('child-ready').touch()\n"
+                         "time.sleep(3)\nPath('escaped-child').touch()\n", encoding='utf-8')
+        command = self.command(
+            "import subprocess, sys, time\nfrom pathlib import Path\n"
+            "subprocess.Popen([sys.executable, '-B', 'descendant.py'])\n"
+            "deadline = time.monotonic() + 5\n"
+            "while not Path('child-ready').exists() and time.monotonic() < deadline: time.sleep(.01)\n"
+            "sys.exit(0 if Path('child-ready').exists() else 2)\n")
+        result = self.start(command, timeout=8)
+        self.assertEqual(('accepted', 'success'), (result['status'], result['outcome']))
+        time.sleep(3.2)
+        self.assertFalse((self.command_cwd / 'escaped-child').exists())
 
     def test_active_and_idle_use_only_tool_output_and_survive_new_user_input(self):
         command = self.command('print("complete")\n')
@@ -176,8 +209,8 @@ class CodexListenerTests(unittest.TestCase):
                 self.server.thread['status'] = {'type': state}
                 original = listener.run_command
 
-                def run_and_update(request, path):
-                    result = original(request, path)
+                def run_and_update(request, path, environment=None):
+                    result = original(request, path, environment)
                     self.record['client_message_id'] = 'new-user-input'
                     self.record['native_turn_id'] = 'new-active-turn'
                     self.write_registration()
@@ -268,8 +301,8 @@ class CodexListenerTests(unittest.TestCase):
     def test_backend_executable_change_before_callback_prevents_submission(self):
         original = listener.run_command
 
-        def run_and_replace(request, output):
-            result = original(request, output)
+        def run_and_replace(request, output, environment=None):
+            result = original(request, output, environment)
             self.arguments.return_value = [str(self.root / 'replacement-codex'), 'app-server']
             return result
 
@@ -281,8 +314,8 @@ class CodexListenerTests(unittest.TestCase):
     def test_target_change_before_callback_prevents_submission(self):
         original = listener.run_command
 
-        def run_and_replace(request, output):
-            result = original(request, output)
+        def run_and_replace(request, output, environment=None):
+            result = original(request, output, environment)
             self.server.thread['cwd'] = str(self.command_cwd)
             return result
 
@@ -324,6 +357,211 @@ class CodexListenerTests(unittest.TestCase):
             supported = False
             with self.assertRaisesRegex(RuntimeError, 'does not support toolOutput'):
                 self.verify_capability(target)
+
+    def test_running_native_version_must_match_the_schema_executable(self):
+        target = listener.Target(THREAD, str(self.profile), str(self.thread_cwd), dict(BACKEND), sys.executable)
+        native = mock.Mock(initialization={'userAgent': 'listener/0.163.0-alpha.1 (Windows)',
+                                          'codexHome': str(self.profile)})
+        with mock.patch.object(listener.subprocess, 'run', return_value=mock.Mock(
+                stdout='codex-cli 0.163.0-alpha.1\n')) as process:
+            self.verify_running_version(native, target)
+            process.return_value.stdout = 'codex-cli 0.164.0\n'
+            with self.assertRaisesRegex(RuntimeError, 'versions differ'):
+                self.verify_running_version(native, target)
+            process.return_value.stdout = 'codex-cli 0.163.0-alpha.1\n'
+            native.initialization['codexHome'] = str(self.root / 'foreign-profile')
+            with self.assertRaisesRegex(RuntimeError, 'version or profile'):
+                self.verify_running_version(native, target)
+
+    def test_running_version_change_during_schema_probe_prevents_command(self):
+        self.version.side_effect = [None, RuntimeError('Native daemon and executable versions differ')]
+        with self.assertRaisesRegex(RuntimeError, 'versions differ'):
+            self.start(self.command('print("never")\n'))
+        self.launch.assert_not_called()
+
+    def test_windows_command_line_reader_checks_lengths_encoding_and_complete_reads(self):
+        text = '"C:\\native path\\codex.exe" app-server "café 雪"'
+        raw = text.encode('utf-16-le')
+
+        def descriptor(length, maximum, address=4096):
+            return length.to_bytes(2, 'little') + maximum.to_bytes(2, 'little') + bytes(4) + address.to_bytes(8, 'little')
+
+        read = mock.Mock(side_effect=[descriptor(len(raw), len(raw) + 2), raw])
+        self.assertEqual(text, listener.client.windows_command_line(read, 8192))
+        self.assertEqual([mock.call(8192 + 0x70, 16), mock.call(4096, len(raw))], read.call_args_list)
+        for length, maximum, address in ((0, 2, 4096), (3, 4, 4096), (4, 3, 4096),
+                                         (4, 65535, 4096), (65535, 65535, 4096), (4, 4, 0)):
+            with self.subTest(length=length, maximum=maximum, address=address):
+                with self.assertRaisesRegex(RuntimeError, 'length or address'):
+                    listener.client.windows_command_line(mock.Mock(return_value=descriptor(length, maximum, address)), 8192)
+        with self.assertRaisesRegex(RuntimeError, 'metadata is incomplete'):
+            listener.client.windows_command_line(mock.Mock(return_value=bytes(15)), 8192)
+        with self.assertRaisesRegex(RuntimeError, 'command line is incomplete'):
+            listener.client.windows_command_line(mock.Mock(side_effect=[descriptor(4, 4), bytes(2)]), 8192)
+        with self.assertRaises(UnicodeDecodeError):
+            listener.client.windows_command_line(mock.Mock(side_effect=[descriptor(2, 2), b'\x00\xd8']), 8192)
+        with self.assertRaisesRegex(RuntimeError, 'embedded terminator'):
+            listener.client.windows_command_line(mock.Mock(side_effect=[descriptor(2, 2), bytes(2)]), 8192)
+
+    @unittest.skipIf(os.name == 'nt', 'Linux verifies the mapped image through /proc; Windows uses native version')
+    def test_linux_mapped_image_must_be_the_same_file_as_the_schema_executable(self):
+        self.verify_mapped_image(os.getpid(), sys.executable)
+        replacement = self.root / 'replacement-python'
+        shutil.copyfile(sys.executable, replacement)
+        with self.assertRaisesRegex(RuntimeError, 'replaced on disk'):
+            self.verify_mapped_image(os.getpid(), str(replacement))
+
+    def test_transient_sharing_failures_preserve_uncertainty_without_replay(self):
+        original_replace = os.replace
+        original_read = Path.read_text
+        replacements = 3
+        reads = 2
+
+        def sharing_error():
+            error = PermissionError(13, 'A concurrent status reader holds the state')
+            error.winerror = 32
+            return error
+
+        def replace(source, destination):
+            nonlocal replacements
+            if Path(destination).name == 'state.json' and replacements:
+                replacements -= 1
+                raise sharing_error()
+            return original_replace(source, destination)
+
+        def read(path, *args, **kwargs):
+            nonlocal reads
+            if path == self.job() / 'state.json' and reads:
+                reads -= 1
+                raise sharing_error()
+            return original_read(path, *args, **kwargs)
+
+        self.server.submission_error = RuntimeError('Disconnected after submission')
+        command = self.command('print("finished")\n')
+        with mock.patch.object(listener.os, 'replace', side_effect=replace), mock.patch.object(
+                Path, 'read_text', read):
+            result = self.start(command)
+            self.assertEqual('delivery-unknown', result['status'])
+            self.assertEqual('delivery-unknown', self.start(command)['status'])
+            self.assertEqual('delivery-unknown', listener.worker(self.job())['status'])
+        self.assertEqual((0, 0), (reads, replacements))
+        self.assertEqual(1, len(self.server.submissions()))
+        self.assertEqual(1, self.launch.call_count)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows sharing semantics; portable retry/no-replay coverage runs above')
+    def test_atomic_state_replacement_waits_for_a_real_windows_reader(self):
+        import ctypes
+
+        kernel, _security = listener_windows.api()
+        path = self.root / 'held-state.json'
+        listener.write_json(path, {'status': 'running'})
+        handle = kernel.CreateFileW(str(path), 0x80000000, 1, None, 3, 0, None)
+        self.assertNotEqual(ctypes.c_void_p(-1).value, handle)
+        release = threading.Thread(target=lambda: (time.sleep(.15), kernel.CloseHandle(handle)))
+        release.start()
+        try:
+            listener.write_json(path, {'status': 'accepted'})
+        finally:
+            release.join(2)
+        self.assertEqual('accepted', listener.read_json(path)['status'])
+
+    @unittest.skipUnless(os.name == 'nt', 'Task Scheduler environment transfer is Windows-only')
+    def test_windows_environment_transfer_is_private_bounded_and_memory_only(self):
+        result = queue.Queue()
+        environment = {'GH_TOKEN': 'private-test-token-雪', 'PATH': str(self.command_cwd),
+                       'PYTHONPATH': 'caller-module-path'}
+        with listener_windows.EnvironmentPipe() as pipe:
+            worker = threading.Thread(target=lambda: result.put(listener_windows.receive_environment(pipe.name)))
+            worker.start()
+            pipe.send(environment)
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(environment, result.get_nowait())
+        self.assertEqual([], list(self.root.rglob('*private-test-token*')))
+        with self.assertRaisesRegex(RuntimeError, 'local private'):
+            listener_windows.receive_environment('\\\\remote\\pipe\\agent-listener-' + 'a' * 48)
+        with listener_windows.EnvironmentPipe() as pipe:
+            with self.assertRaisesRegex(RuntimeError, 'timed out'):
+                pipe.send(environment, timeout=.05)
+
+    @unittest.skipUnless(os.name == 'nt', 'Documented Windows process identity checks')
+    def test_windows_daemon_identity_checks_live_start_image_and_profile_without_cim(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel, _security = listener_windows.api()
+
+        def identity(pid):
+            process = listener_windows.checked(kernel.OpenProcess(0x1000, False, pid))
+            try:
+                creation, exited, system, user = (wintypes.FILETIME() for _ in range(4))
+                listener_windows.checked(kernel.GetProcessTimes(process, ctypes.byref(creation), ctypes.byref(exited),
+                                                                 ctypes.byref(system), ctypes.byref(user)))
+                return {'pid': pid,
+                        'process_start_time': str((creation.dwHighDateTime << 32) | creation.dwLowDateTime)}
+            finally:
+                kernel.CloseHandle(process)
+
+        script = self.root / 'app-server'
+        script.write_text("import time\nfrom pathlib import Path\nPath('role-ready').touch()\ntime.sleep(30)\n",
+                          encoding='utf-8')
+        environment = dict(os.environ, **{listener.client.RECORD_ENV: '', listener.client.RECORD_PATH_ENV: ''})
+        process = subprocess.Popen([sys.executable, 'app-server', 'two words', 'café 雪'], cwd=self.root,
+                                   env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+        self.addCleanup(lambda: (process.terminate(), process.wait(timeout=5)) if process.poll() is None else None)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not (self.root / 'role-ready').exists():
+            time.sleep(.01)
+        self.assertTrue((self.root / 'role-ready').exists())
+        backend = identity(process.pid)
+        path = self.profile / 'app-server-daemon' / 'daemon.pid'
+        path.parent.mkdir()
+        native = {'pid': backend['pid'], 'processStartTime': backend['process_start_time']}
+        path.write_text(json.dumps(native), encoding='utf-8')
+        with mock.patch.dict(os.environ, {listener.client.RECORD_ENV: '', listener.client.RECORD_PATH_ENV: ''}):
+            executable = self.windows_daemon_executable(str(self.profile), backend)
+            self.assertEqual(listener.path_key(sys.executable), listener.path_key(executable))
+            self.arguments.assert_not_called()
+            context = listener.client.process_context(process.pid, include_command_line=True)
+            self.assertEqual(['two words', 'café 雪'], context['arguments'][-2:])
+            own = identity(os.getpid())
+            path.write_text(json.dumps({'pid': own['pid'], 'processStartTime': own['process_start_time']}),
+                            encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeError, 'not an app-server daemon'):
+                self.windows_daemon_executable(str(self.profile), own)
+            path.write_text(json.dumps(native), encoding='utf-8')
+            stale = {**backend, 'process_start_time': str(int(backend['process_start_time']) + 1)}
+            path.write_text(json.dumps({**native, 'processStartTime': stale['process_start_time']}),
+                            encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeError, 'stale or reused'):
+                self.windows_daemon_executable(str(self.profile), stale)
+            path.write_text(json.dumps(native), encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeError, 'metadata changed'):
+                self.windows_daemon_executable(str(self.profile), {**backend, 'pid': backend['pid'] + 1})
+            other_profile = self.root / 'foreign-profile'
+            other_path = other_profile / 'app-server-daemon' / 'daemon.pid'
+            other_path.parent.mkdir(parents=True)
+            other_path.write_text(json.dumps(native), encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeError, 'profile or recording'):
+                self.windows_daemon_executable(str(other_profile), backend)
+            with mock.patch.object(listener_windows, 'daemon_executable',
+                                   side_effect=self.windows_daemon_executable):
+                target = listener.Target(THREAD, str(self.profile), str(self.thread_cwd), backend,
+                                         str(self.root / 'different-native-executable'))
+                with self.assertRaisesRegex(RuntimeError, 'daemon or executable changed'):
+                    listener.verify_backend(target)
+
+    def test_command_environment_is_explicit_and_never_persisted(self):
+        command = self.command("import os, sys\nsys.exit(0 if os.environ.get('CALLER_SECRET') "
+                               "== 'temporary-test-value' else 2)\n")
+        environment = dict(os.environ, CALLER_SECRET='temporary-test-value')
+        self.launch.side_effect = lambda job: listener.worker(job, environment)
+        result = self.start(command)
+        self.assertEqual(('accepted', 'success'), (result['status'], result['outcome']))
+        for path in self.job().iterdir():
+            self.assertNotIn('temporary-test-value', path.read_text(encoding='utf-8'))
+
 
 
 if __name__ == '__main__':
