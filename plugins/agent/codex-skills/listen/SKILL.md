@@ -14,41 +14,37 @@ provenance: house
 Read and follow the [canonical definition](../../.agents/agent/utility/listen/SKILL.md) in full.
 This discovery entry is generated; edit the referenced `.agents/` definition.
 
-Use the background execution and result-delivery tools advertised by the current Codex surface.
-An `exec_command` response containing `session_id` supplies a running command handle; it does not,
-by itself, establish a completion notification.
+Use the shipped Codex listener at `<agent-package>/.agents/agent/runtime/codex/listener.py`.
+Resolve `<agent-package>` from this installed Agent discovery entry: it is the directory containing
+`codex-skills/` and `.agents/`. From its `codex-skills/listen/` directory, the runtime is
+`../../.agents/agent/runtime/codex/listener.py`. Keep the caller's command directory explicit.
 
-On a surface exposing `functions.exec`, `notify` and nested process tools, keep an awaited relay in
-one running cell. Start the caller's command once, retain each returned `session_id`, and use
-`write_stdin` inside that cell until the command exits. Call `notify` with the compact result. This
-waits in deterministic code while the conversation can continue, without model polling.
+The listener requires Python 3.11+, `CODEX_THREAD_ID`, this session's registered frontend/profile/backend binding,
+and the connected native server's `turn/start.toolOutput` capability. `start` verifies these before
+running the command. Report its concrete prerequisite failure; a process handle or queued user message
+does not provide this callback.
 
-```javascript
-// @exec: {"yield_time_ms": 1000, "max_output_tokens": 1000}
-try {
-  let result = await tools.exec_command({
-    cmd: "python -B -m unittest discover -s tests -p test_example.py",
-    workdir: repositoryRoot,
-    max_output_tokens: 1000
-  });
-  while (result.session_id) {
-    result = await tools.write_stdin({
-      session_id: result.session_id,
-      chars: "",
-      max_output_tokens: 1000
-    });
-  }
-  notify({ purpose: "focused regression tests", result });
-} catch (error) {
-  notify({ purpose: "focused regression tests", error: String(error) });
-}
+Use a stable identity for the exact job, including the watched commit or run where relevant. Retain
+the returned job directory and reuse that listener for the same identity. Run an executable with its
+argument list; use the caller's existing bounded watcher or capture script for more complex commands.
+
+```text
+Windows:
+python -B "<agent-package>/.agents/agent/runtime/codex/listener.py" start --identity "tests:<full-commit-sha>:runtime" --purpose "Runtime regression tests" --cwd "<repository-root>" --timeout 900 -- python -B -m unittest discover -s .agents/tests -p test_runtime_suite.py
+
+Linux:
+python3 -B "<agent-package>/.agents/agent/runtime/codex/listener.py" start --identity "tests:<full-commit-sha>:runtime" --purpose "Runtime regression tests" --cwd "<repository-root>" --timeout 900 -- python3 -B -m unittest discover -s .agents/tests -p test_runtime_suite.py
+
+Inspect an existing listener, using python3 on Linux:
+python -B "<agent-package>/.agents/agent/runtime/codex/listener.py" status --job "<returned-job-directory>"
 ```
 
-Replace `repositoryRoot` and the example command with the caller's exact directory and bounded command.
-Use its existing capture wrapper when output must be preserved. Retain the running cell ID as well as
-the process handle, and consume its terminal result. Do not leave an unawaited promise: it is discarded
-when the cell ends. For a command already running, begin the relay with its existing process handle.
+The runtime owns the bounded command, captured output and terminal callback through the existing
+native connection. It sends `turn/start` with empty `input` and `toolOutput`, preserving the result
+as tool output during an active turn or starting generation when idle. Independent work and new user
+input do not cancel the listener.
 
-Other surfaces must use their own documented native notification primitive. If this session exposes
-only process handles and foreground polling, report that completion delivery is unavailable here;
-the shared definition owns that capability boundary.
+A delivery acknowledgement proves native acceptance; it does not prove the owner has observed or
+handled the result. Consume the exact completion once through the shared definition. If delivery is
+unknown, inspect the recorded job and conversation without retrying the callback or restarting the
+command. A native capability missing from this session remains a reported prerequisite failure.

@@ -11,5 +11,7 @@ on completion. The shell tool owns background execution; do not append shell bac
 {"command":"python -B -m unittest discover -s tests -p test_example.py","description":"Run the focused regression tests","run_in_background":true}
 ```
 
+The example uses `python` on Windows; use `python3` for the command on Linux.
+
 Check the tools exposed by this session before invoking them. The [Claude Code tools reference](https://code.claude.com/docs/en/tools-reference#monitor-tool)
 documents Monitor events, native shell background execution and their lifetime limits.
