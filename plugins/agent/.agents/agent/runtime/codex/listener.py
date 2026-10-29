@@ -10,17 +10,26 @@ import json
 import math
 import os
 from pathlib import Path
+import re
+import signal
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol, TypeVar
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from codex import client, hook_trust
 import package_root
+
+
+T = TypeVar('T')
+if sys.platform == 'win32':
+    HIDDEN_PROCESS_FLAGS = subprocess.CREATE_NO_WINDOW
+else:
+    HIDDEN_PROCESS_FLAGS = 0
 
 
 class Server(Protocol):
@@ -56,10 +65,21 @@ def state_directory() -> Path:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding='utf-8'))
+    value = json.loads(retry_sharing(lambda: path.read_text(encoding='utf-8')))
     if not isinstance(value, dict):
         raise RuntimeError(f'Invalid listener record: {path}')
     return value
+
+
+def retry_sharing(operation: Callable[[], T]) -> T:
+    deadline = time.monotonic() + 3
+    while True:
+        try:
+            return operation()
+        except OSError as error:
+            if getattr(error, 'winerror', None) not in (5, 32, 33) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
 
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
@@ -70,9 +90,9 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
             stream.write('\n')
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(staging, path)
+        retry_sharing(lambda: os.replace(staging, path))
     finally:
-        Path(staging).unlink(missing_ok=True)
+        retry_sharing(lambda: Path(staging).unlink(missing_ok=True))
 
 
 def path_key(value: str | Path) -> str:
@@ -92,11 +112,52 @@ def registration(state: Path, session_id: str, profile: str) -> dict[str, Any]:
 
 
 def verify_backend(target: Target) -> None:
+    if os.name == 'nt':
+        executable = native_executable(target.profile, target.backend)
+        if path_key(executable) != path_key(target.executable):
+            raise RuntimeError('The pinned native Codex daemon or executable changed')
+        return
     backend = client.daemon_identity({'CODEX_HOME': target.profile})
-    arguments = client.process_arguments(backend['pid'])
-    if (backend != target.backend or not arguments
-            or path_key(arguments[0]) != path_key(target.executable)):
+    executable = native_executable(target.profile, backend)
+    if backend != target.backend or path_key(executable) != path_key(target.executable):
         raise RuntimeError('The pinned native Codex daemon or executable changed')
+    verify_mapped_image(backend['pid'], target.executable)
+
+
+def native_executable(profile: str, backend: dict[str, Any]) -> str:
+    if os.name == 'nt':
+        from codex import listener_windows
+
+        return listener_windows.daemon_executable(profile, backend)
+    arguments = client.process_arguments(backend['pid'])
+    if not arguments:
+        raise RuntimeError('The native Codex daemon executable is unavailable')
+    return str(Path(arguments[0]).resolve(strict=True))
+
+
+def verify_mapped_image(pid: int, executable: str) -> None:
+    if os.name != 'nt':
+        running = (Path('/proc') / str(pid) / 'exe').stat()
+        installed = Path(executable).stat()
+        if (running.st_dev, running.st_ino) != (installed.st_dev, installed.st_ino):
+            raise RuntimeError('The native daemon still maps an executable that has been replaced on disk')
+
+
+def verify_running_version(server: hook_trust.AppServer, target: Target) -> None:
+    initialized = server.initialization
+    user_agent = initialized.get('userAgent')
+    version = re.match(r'[^\s/]+/([^\s]+)\s', user_agent) if isinstance(user_agent, str) else None
+    home = initialized.get('codexHome')
+    if (version is None or not isinstance(home, str)
+            or path_key(home) != path_key(target.profile)):
+        raise RuntimeError('The running Codex daemon version or profile could not be verified')
+    output = subprocess.run([target.executable, '--version'], cwd=target.cwd,
+                            env=dict(os.environ, CODEX_HOME=target.profile),
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8',
+                            timeout=10, check=True,
+                            creationflags=HIDDEN_PROCESS_FLAGS).stdout.strip()
+    if output != 'codex-cli ' + version.group(1):
+        raise RuntimeError('The running Codex daemon and on-disk native executable versions differ')
 
 
 def verify_target(server: Server, target: Target, state: Path) -> None:
@@ -148,7 +209,7 @@ def verify_capability(target: Target) -> None:
             cwd=target.cwd, env=dict(os.environ, CODEX_HOME=target.profile),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=15, check=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+            creationflags=HIDDEN_PROCESS_FLAGS,
         )
         schema = read_json(Path(directory) / 'v2' / 'TurnStartParams.json')
         if not isinstance(schema.get('properties'), dict) or 'toolOutput' not in schema['properties']:
@@ -161,17 +222,26 @@ def capture_target(state: Path) -> Target:
         raise RuntimeError('CODEX_THREAD_ID is required; no listener command was started')
     profile = str(client.profile_directory())
     value = registration(state, session_id, profile)
-    backend = client.daemon_identity({'CODEX_HOME': profile})
-    arguments = client.process_arguments(backend['pid'])
-    if value.get('backend') != backend or not arguments:
+    if os.name == 'nt':
+        backend = value.get('backend')
+        if (not isinstance(backend, dict) or type(backend.get('pid')) is not int or backend['pid'] <= 0
+                or not isinstance(backend.get('process_start_time'), str) or not backend['process_start_time']):
+            raise RuntimeError('The session has no pinned native Codex daemon identity')
+    else:
+        backend = client.daemon_identity({'CODEX_HOME': profile})
+    if value.get('backend') != backend:
         raise RuntimeError('The session does not identify this native Codex daemon')
-    executable = Path(arguments[0]).resolve(strict=True)
+    executable = Path(native_executable(profile, backend)).resolve(strict=True)
     if not executable.is_file():
         raise RuntimeError('The native daemon executable is unavailable')
     target = Target(session_id, profile, str(Path(value['cwd']).resolve()), dict(backend), str(executable))
+    with connection(target) as server:
+        verify_target(server, target, state)
+        verify_running_version(server, target)
     verify_capability(target)
     with connection(target) as server:
         verify_target(server, target, state)
+        verify_running_version(server, target)
     return target
 
 
@@ -223,7 +293,15 @@ def detach(job: Path) -> None:
     sys.path.insert(0, str(path.parent))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.start_agent_watcher(Path(__file__).resolve(), ['worker', '--job', str(job)])
+    arguments = ['worker', '--job', str(job)]
+    if os.name == 'nt':
+        from codex import listener_windows
+
+        with listener_windows.EnvironmentPipe() as pipe:
+            module.start_agent_watcher(Path(__file__).resolve(), [*arguments, '--environment-pipe', pipe.name])
+            pipe.send(dict(os.environ))
+    else:
+        module.start_agent_watcher(Path(__file__).resolve(), arguments)
 
 
 def start(identity: str, purpose: str, cwd: Path, timeout: float,
@@ -271,29 +349,43 @@ def output_tail(path: Path) -> str:
         return stream.read(8192).decode('utf-8', errors='replace')
 
 
-def run_command(request: Request, output: Path) -> dict[str, Any]:
+def run_command(request: Request, output: Path, environment: dict[str, str] | None = None) -> dict[str, Any]:
+    environment = dict(os.environ) if environment is None else environment
     with output.open('wb') as stream:
         try:
-            process = subprocess.Popen(request.command, cwd=request.cwd, stdin=subprocess.DEVNULL,
-                                       stdout=stream, stderr=subprocess.STDOUT, shell=False,
-                                       creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-            try:
-                returncode = process.wait(timeout=request.timeout)
-                return {'outcome': 'success' if returncode == 0 else 'failed', 'returncode': returncode}
-            except subprocess.TimeoutExpired:
-                process.terminate()
+            if sys.platform == 'win32':
+                from codex import listener_windows
+
+                returncode, timed_out = listener_windows.run(request.command, request.cwd,
+                                                             request.timeout, stream, environment)
+                return {'outcome': 'timeout' if timed_out else ('success' if returncode == 0 else 'failed'),
+                        'returncode': returncode}
+            else:
+                process = subprocess.Popen(request.command, cwd=request.cwd, stdin=subprocess.DEVNULL,
+                                           stdout=stream, stderr=subprocess.STDOUT, shell=False,
+                                           env=environment, start_new_session=True)
                 try:
-                    process.wait(timeout=2)
+                    returncode = process.wait(timeout=request.timeout)
+                    return {'outcome': 'success' if returncode == 0 else 'failed', 'returncode': returncode}
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
-                return {'outcome': 'timeout', 'returncode': process.returncode}
-        except (OSError, subprocess.SubprocessError) as error:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=5)
+                    return {'outcome': 'timeout', 'returncode': process.returncode}
+                finally:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             stream.write(str(error).encode('utf-8', errors='replace'))
             return {'outcome': 'failed', 'returncode': None}
 
 
-def worker(job: Path) -> dict[str, Any]:
+def worker(job: Path, environment: dict[str, str] | None = None) -> dict[str, Any]:
     request = load_request(job)
     try:
         with (job / 'execution.json').open('x', encoding='utf-8') as stream:
@@ -305,11 +397,13 @@ def worker(job: Path) -> dict[str, Any]:
     try:
         with connection(request.target) as server:
             verify_target(server, request.target, state)
+            verify_running_version(server, request.target)
         value['status'] = 'running'
         write_json(job / 'state.json', value)
-        value.update(run_command(request, job / 'output.log'))
+        value.update(run_command(request, job / 'output.log', environment))
         with connection(request.target) as server:
             verify_target(server, request.target, state)
+            verify_running_version(server, request.target)
             payload = {'identity': request.identity, 'purpose': request.purpose,
                        'outcome': value['outcome'], 'returncode': value['returncode'],
                        'output': str(job / 'output.log'), 'tail': output_tail(job / 'output.log')}
@@ -350,6 +444,8 @@ def main(argv: list[str] | None = None) -> int:
     for operation in ('status', 'worker'):
         command = commands.add_parser(operation, help=argparse.SUPPRESS if operation == 'worker' else None)
         command.add_argument('--job', required=True, type=Path)
+        if operation == 'worker':
+            command.add_argument('--environment-pipe')
     arguments = parser.parse_args(argv)
     try:
         if arguments.operation == 'start':
@@ -357,7 +453,14 @@ def main(argv: list[str] | None = None) -> int:
             result = start(arguments.identity, arguments.purpose, arguments.cwd,
                            arguments.timeout, tuple(command))
         elif arguments.operation == 'worker':
-            result = worker(arguments.job.resolve(strict=True))
+            environment = None
+            if os.name == 'nt':
+                from codex import listener_windows
+
+                if not arguments.environment_pipe:
+                    raise RuntimeError('The detached listener requires its private command environment')
+                environment = listener_windows.receive_environment(arguments.environment_pipe)
+            result = worker(arguments.job.resolve(strict=True), environment)
         else:
             result = status(arguments.job.resolve(strict=True))
         print(json.dumps(result, ensure_ascii=False))

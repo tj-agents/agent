@@ -118,7 +118,7 @@ class AppServer:
 
     def __enter__(self):
         try:
-            self.request("initialize", {
+            self.initialization = self.request("initialize", {
                 "clientInfo": {"name": "tj_agents_hook_trust", "version": "1.0.0"},
                 "capabilities": {"experimentalApi": True},
             })
