@@ -99,6 +99,14 @@ class StartupBindingTests(unittest.TestCase):
             self.assertEqual(0, self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), ()))
         process.terminate.assert_not_called()
 
+    def test_bypass_flag_starts_the_native_target_without_any_checks(self):
+        with mock.patch.object(self.binding.subprocess, 'call', return_value=0) as call,                 mock.patch.object(self.binding.launch_check, 'prepare_launch_roots') as roots:
+            self.assertEqual(0, self.binding.main(['--host', 'codex', '--project', str(Path.cwd()),
+                                                   '--target', 'native.exe', '--require-session-start',
+                                                   '--', 'resume', '--no-tj']))
+        self.assertEqual(['native.exe', 'resume'], call.call_args.args[0])
+        roots.assert_not_called()
+
     def test_every_host_launch_drops_inherited_frontend_recording_state(self):
         process = mock.Mock(pid=72)
         process.wait.return_value = 0

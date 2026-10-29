@@ -286,6 +286,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     parsed = parser.parse_args(argv)
     arguments = parsed.arguments[1:] if parsed.arguments[:1] == ["--"] else parsed.arguments
+    if launch_check.BYPASS_FLAG in arguments:
+        native = [argument for argument in arguments if argument != launch_check.BYPASS_FLAG]
+        return subprocess.call(command_for_target(parsed.target, native), cwd=parsed.project)
     status: dict[str, object] = {"pid": os.getpid(), "terminal": register_session.terminal_identity(),
                                  "title": os.environ.get(register_session.TITLE_ENV)}
     if parsed.require_session_start and parsed.status_file is not None:
