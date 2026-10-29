@@ -430,6 +430,7 @@ def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
 
 
 def main(argv=None):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     parser = argparse.ArgumentParser()
     parser.add_argument("--codex", required=True)
     parser.add_argument("--project", type=Path, default=Path.cwd())

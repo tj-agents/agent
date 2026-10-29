@@ -355,6 +355,10 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
                 timeout=None, required=None):
     if required == {}:
         return {}
+    import repository_configuration
+    import required_plugins
+
+    automatic = repository_configuration.trust_hooks(required_plugins.project_root(cwd))
     limit = TIMEOUT if timeout is None else timeout
     if limit <= 0:
         raise RuntimeError("Codex hook trust deadline expired")
@@ -370,6 +374,9 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
             listing = {"data": [dict(entry, hooks=[hook for hook in entry.get("hooks", [])
                                                    if hook.get("pluginId") in required])
                                 for entry in listing.get("data", [])]}
+        if not automatic:
+            require_ready(listing, cwd, required)
+            return {}
         if not any(
             hook.get("source") == "plugin" and hook.get("enabled")
             and hook.get("trustStatus") in {"untrusted", "modified"}
@@ -423,6 +430,7 @@ def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
 
 
 def main(argv=None):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     parser = argparse.ArgumentParser()
     parser.add_argument("--codex", required=True)
     parser.add_argument("--project", type=Path, default=Path.cwd())
