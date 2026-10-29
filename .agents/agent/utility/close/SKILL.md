@@ -1,6 +1,6 @@
 ---
 name: close
-description: Complete the current agent turn and request closure only after every owned outcome is finished. Do not use for another session.
+description: Assess the current session before its final reply, keeping unfinished work open and requesting closure only after every owned outcome is finished. Do not use for another session.
 kind: utility
 domain: agent
 profile: core
@@ -12,6 +12,9 @@ provenance: house
 # Close the current session
 
 Owns the completion decision and exact registry/launch binding for this session, not terminal control.
+Select this skill before every final reply and run `prepare` for the current input. Preparation records
+that the completion decision was selected; it does not arm closure. For a question, unfinished work,
+pending approval, cleanup or an explicit keep-open request, leave the session unarmed.
 Close only when delivery, validation, and authorized handoffs are complete and no user answer, approval,
 or check remains. Respect an explicit keep-open request; a question about a missed close-out is a repair
 outcome, not authorization to close.
@@ -46,3 +49,7 @@ For linked-worktree removal, Agent or Engineering separately creates fresh (at m
 eligibility binding the exact worktree, branch, head, remote base and base OID, with positive merged/no-other-owner
 evidence and provenance. If prepare or the native capability refuses, keep the session open and report the reason.
 Never close a peer; use `agent:peer`.
+
+The Stop adapter requests a missing assessment once when the native input can be identified. Its
+reentrant pass permits reporting unavailable preparation without a reminder loop. The reminder never
+arms closure or treats a merged worktree as completion evidence.

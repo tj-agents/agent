@@ -496,6 +496,8 @@ class RuntimeTests(Machine):
         self.assertEqual(install.runtime_receipt(install.ROOT), self.installed_receipt(context))
         for relative in (Path('.agents/agent/runtime/startup_binding.py'),
                          Path('.agents/agent/runtime/install.py'),
+                         Path('.agents/agent/runtime/tj_agent/content.py'),
+                         Path('.agents/agent/runtime/tj_agent/plugins/sources.py'),
                          Path('.agents/agent/resources/lanes/resolve.py'),
                          Path('.agents/agent/utility/peer/scripts/register_session.py'),
                          Path('.agents/agent-store/runtime/session_store.py')):
@@ -686,9 +688,9 @@ class ChannelTests(Machine):
                 return None
             repository = arguments[0].split("/actions/")[0].removeprefix("repos/")
             if "/actions/variables" in arguments[0]:
-                return {"variables": [{"name": "MACHINE_EVENTS_TOPIC", "value": variables[repository]}]
+                return {"variables": [{"name": "UPDATE_TOPIC", "value": variables[repository]}]
                         if repository in variables else []}
-            return {"secrets": [{"name": "MACHINE_EVENTS_TOPIC"}] if repository in stored else []}
+            return {"secrets": [{"name": "UPDATE_TOPIC"}] if repository in stored else []}
 
         def secret(repository, topic):
             writes.append(repository)
@@ -802,7 +804,7 @@ class RunStepsTests(Machine):
             "preconditions", "native permission defaults", "event channel and publishers",
             "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
             "Codex profile agents", "plugin and merge-policy catch-up", "harness permissions",
-            "plugin setup",
+            "plugin setup", "background machine events",
         ], [item.name for item in install.STEPS])
 
 

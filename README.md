@@ -19,6 +19,17 @@ they consume. Claude-only and Codex-only runtime is authored in `.claude/runtime
 and ships as the `claude` and `codex` packages inside `.agents/agent/runtime`, so runtime and tests run
 from the generated `plugins/agent` tree.
 
+Shared content hashing and publisher source loading live under the owner-qualified `tj_agent` package:
+
+```python
+from tj_agent import content
+from tj_agent.plugins import sources
+```
+
+Host adapters and runtime delivery import these implementations. Claude registration stays with its native
+plugin adapter, avoiding a second module that imports the adapter back. Generated payloads are delivery
+artifacts; edit the authored source and regenerate them.
+
 Maintainers refresh the offline Marketplace selection snapshot only with
 `.agents/agent/utility/plugins/scripts/update_marketplace_plugins.py --source <marketplace-checkout>`;
 the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.
@@ -26,7 +37,7 @@ the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.
 ## Install
 
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
-the machine event channel, the launch runtime in `~/.agents-state/bin`, packaged shell profiles, Codex
+the machine event channel, a supervised background subscriber, the launch runtime in `~/.agents-state/bin`, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
@@ -34,6 +45,14 @@ Managed launches and refresh repair only the failing install step and retry read
 unconfigured event channel, a failed plugin update (catch-up) or missing required plugins (plugin setup).
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
+
+The subscriber runs as a hidden current-user scheduled task on Windows or a systemd user service on
+Linux. It reads the existing event channel, verifies repository hints against GitHub, and updates every
+registered repository while sessions remain open. Repository registrations share a Git common directory
+across linked worktrees and retain project/local scope. Successful revisions are recorded once; failed
+updates retry without acknowledging the event. After a long disconnection, an authoritative catch-up
+restores convergence. Managed launches install the subscriber on existing machines after the runtime
+updates; unavailable supervision leaves foreground update checks working and retries setup later.
 
 Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`.
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that

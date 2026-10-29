@@ -21,13 +21,16 @@ conventions in [Core's CODE_CONVENTIONS.md](https://github.com/tj-agents/core/bl
 Use `uv sync --locked` and `uv run pytest` for the complete development suite. Shared CLI library code
 ships through declared distribution resources; installation and managed launches require Python 3.12+.
 Keep native application packaging and dependencies out of this plugin publisher unless the work needs them.
+`.agents/agent/runtime` stays host-neutral: anything naming one host's tools, settings, rule syntax or paths
+lives in `.claude/runtime/` or `.codex/runtime/` and is reached through `Host` or the `claude`/`codex` packages.
 
 ```powershell
 pwsh .agents/sync-generated.ps1
 pwsh .agents/sync-generated.ps1 -Check
 ```
 
-For skill creation, splitting, renaming or consolidation, load `template:new-skill` before the native creator.
+For new skills load `skill:new`; for edits, splitting, renaming or consolidation load `skill:update`.
+Both require the current host's native creator and a complete cutover without retired names or aliases.
 The project selects Template in `.agents/plugins.json`; after Git initialization, use Core's
 `agent:plugins` to generate both hosts and complete native admission and installation.
 

@@ -142,7 +142,7 @@ class StartupBindingTests(unittest.TestCase):
             return 0
 
         with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(None, None)), \
-                mock.patch.object(self.binding.launch_check, 'check', return_value='not-applicable'), \
+                mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='not-applicable'), \
                 mock.patch.object(self.binding, '_prelaunch_terminal', side_effect=lambda: calls.append(('capture', terminal)) or terminal), \
                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
             result = self.binding.main(['--host', 'codex', '--project', directory.name, '--target', 'native.exe',
@@ -171,6 +171,24 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertEqual([(Path(directory.name).resolve(), (Host.CLAUDE,))], calls)
 
+    def test_failed_plugin_setup_still_starts_the_host_without_the_session_start_handshake(self):
+        directory = tempfile.TemporaryDirectory(prefix='startup degraded ')
+        self.addCleanup(directory.cleanup)
+        calls = []
+
+        def run_session(*_args, **kwargs):
+            calls.append(kwargs)
+            return 0
+
+        failure = RuntimeError('Required plugin setup failed: react@tj-agents needs machine@tj-agents')
+        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=failure),                 mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='failed'),                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
+            result = self.binding.main(['--host', 'claude', '--project', directory.name, '--target', 'native-claude',
+                                        '--require-session-start'])
+
+        self.assertEqual(0, result)
+        self.assertEqual(1, len(calls))
+        self.assertNotIn('require_session_start', calls[0])
+
     def test_claude_override_roster_is_passed_from_preflight_to_startup(self):
         directory = tempfile.TemporaryDirectory(prefix='startup claude override ')
         self.addCleanup(directory.cleanup)
@@ -188,7 +206,7 @@ class StartupBindingTests(unittest.TestCase):
             '--plugin-dir', 'plugins', '--plugin-url=https://example.test/plugin', '--', '--settings', 'literal prompt',
         ]
         with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(root, roots)) as prepare, \
-                mock.patch.object(self.binding.launch_check, 'check', return_value='current'), \
+                mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='current'), \
                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
             result = self.binding.main([
                 '--host', 'claude', '--project', directory.name, '--target', 'native-claude',
@@ -236,7 +254,7 @@ class StartupBindingTests(unittest.TestCase):
             return argv, environment, None
 
         with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=prepare_launch_roots) as preflight, \
-                mock.patch.object(self.binding.launch_check, 'check', side_effect=update_roster), \
+                mock.patch.object(self.binding.launch_check, 'check', autospec=True, side_effect=update_roster), \
                 mock.patch.object(SESSIONS[Host.CLAUDE], 'prepare_frontend', side_effect=native_prepare), \
                 mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn, \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \

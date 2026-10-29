@@ -10,6 +10,8 @@ import re
 import secrets
 import time
 
+from tj_agent import content
+
 
 REPOSITORY = "tj-agents/agent"
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -78,13 +80,6 @@ def _safe(root: Path, name: str, *, allow_missing=True) -> Path:
     if not allow_missing and not current.exists():
         raise DeliveryError(f"managed runtime file is unavailable: {current}")
     return current
-
-
-def digest(contents: dict[str, bytes]) -> str:
-    value = hashlib.sha256()
-    for name, body in sorted(contents.items()):
-        value.update(name.encode("utf-8") + b"\0" + str(len(body)).encode("ascii") + b"\0" + body)
-    return value.hexdigest()
 
 
 def closure(root: Path, exports: list[str]) -> dict[str, bytes]:
@@ -166,7 +161,7 @@ def validate_receipt(value: object, source: Path | None = None) -> dict:
     if source is not None:
         contents = closure(source, result["exports"])
         hashes = {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}
-        if hashes != files or digest(contents) != aggregate:
+        if hashes != files or content.digest(contents) != aggregate:
             raise DeliveryError("runtime receipt does not match its exact source closure")
     return result
 
@@ -338,7 +333,7 @@ def native_receipt(target_receipt: dict, source: Path) -> dict:
     contents = closure(source, target["exports"])
     files = {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}
     current = {"repository": REPOSITORY, "revision": target["revision"], "exports": target["exports"],
-               "sha256": digest(contents), "files": files}
+               "sha256": content.digest(contents), "files": files}
     if current["sha256"] == target["sha256"] and files == target["files"]:
         return target
     current["revision"] = "native:" + current["sha256"]

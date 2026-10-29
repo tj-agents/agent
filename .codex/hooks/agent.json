@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\" --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/reap_orphans.py\" --notice",
-            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\" --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/reap_orphans.py\" --notice",
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
             "timeout": 10
           }
         ]
