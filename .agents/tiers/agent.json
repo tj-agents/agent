@@ -1,9 +1,5 @@
 {
-  "schema_version": 1,
   "tier": "agent",
   "stack": "Agent",
-  "applies": "always",
-  "owner_repository": [
-    "tj-agents/agent"
-  ]
+  "applies": "always"
 }

@@ -1,1 +1,5 @@
-{"schema_version": 1, "tier": "codex", "stack": "Agent", "applies": "always", "owner_repository": ["tj-agents/agent"]}
+{
+  "tier": "codex",
+  "stack": "Agent",
+  "applies": "always"
+}
