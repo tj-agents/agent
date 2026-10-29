@@ -7,7 +7,7 @@ from pathlib import Path
 
 SETTINGS_PATH = Path(".agents") / "settings.json"
 NAMESPACE_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
-CORE_KEYS = frozenset({"auto_merge", "auto_approve", "permissions"})
+CORE_KEYS = frozenset({"auto_merge", "auto_approve", "permissions", "trust_hooks"})
 AUTO_APPROVE_KEYS = frozenset({"all", "design"})
 PERMISSION_MODES = frozenset({"bypass", "standard"})
 
@@ -98,6 +98,8 @@ def core(root):
     if "permissions" in value and (not isinstance(value["permissions"], str)
                                     or value["permissions"] not in PERMISSION_MODES):
         raise ConfigurationViolation("core permissions must be bypass or standard")
+    if "trust_hooks" in value and type(value["trust_hooks"]) is not bool:
+        raise ConfigurationViolation("core trust_hooks must be a boolean")
     if "auto_approve" in value:
         auto_approve = value["auto_approve"]
         if not isinstance(auto_approve, dict):
@@ -123,6 +125,11 @@ def auto_merge(root):
 def permissions(root):
     settings = core(root)
     return "bypass" if settings is None else settings.get("permissions", "bypass")
+
+
+def trust_hooks(root):
+    settings = core(root)
+    return True if settings is None else settings.get("trust_hooks", True)
 
 
 def auto_approve_design(root):
