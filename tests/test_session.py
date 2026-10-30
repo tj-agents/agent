@@ -1,22 +1,11 @@
-import importlib.util
 from pathlib import Path
+import sys
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".agents/agent-store/runtime"))
 
-RUNTIME = Path(__file__).resolve().parents[1] / ".agents/agent-store/runtime"
-
-
-def _load(name):
-    spec = importlib.util.spec_from_file_location(f"test_session_{name}", RUNTIME / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-SESSION = _load("session")
-CHECKOUT = _load("checkout")
-Session = SESSION.Session
-Checkout = CHECKOUT.Checkout
+from tj_agent_store import Checkout, ClientRegistration, Session, prompt_title  # noqa: E402
+from tj_agent_store._session import PROMPT_TITLE_LENGTH  # noqa: E402
 
 
 def started(host="claude", session_id="one", **changes):
@@ -31,11 +20,11 @@ class PromptTitleTests(unittest.TestCase):
     def test_commands_markup_and_blank_prompts_have_no_title(self):
         for prompt in (None, 3, "   ", "/recover", "<command>x</command>"):
             with self.subTest(prompt=prompt):
-                self.assertIsNone(SESSION.prompt_title(prompt))
+                self.assertIsNone(prompt_title(prompt))
 
     def test_long_prompts_are_cut_at_a_word_boundary(self):
-        title = SESSION.prompt_title("word " * 40)
-        self.assertLessEqual(len(title), SESSION.PROMPT_TITLE_LENGTH + 1)
+        title = prompt_title("word " * 40)
+        self.assertLessEqual(len(title), PROMPT_TITLE_LENGTH + 1)
         self.assertTrue(title.endswith("word…"))
 
 
@@ -155,10 +144,10 @@ class SessionOwnershipTests(unittest.TestCase):
 
 class ClientIdentityTests(unittest.TestCase):
     def test_a_registration_entry_keeps_only_title_and_process_identity(self):
-        registration = SESSION.ClientRegistration.from_entry(
+        registration = ClientRegistration.from_entry(
             {"title": "Tab", "pid": 4, "pid_started_at": 4.5, "cwd": "/elsewhere", "host": "claude"},
         )
-        self.assertEqual(SESSION.ClientRegistration("Tab", 4, 4.5), registration)
+        self.assertEqual(ClientRegistration("Tab", 4, 4.5), registration)
 
     def test_client_identity_needs_both_pid_and_start_time(self):
         self.assertFalse(started().has_client_identity)

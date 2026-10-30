@@ -11,27 +11,23 @@ if sys.path and Path(sys.path[0]).resolve() == HERE:
     sys.path.pop(0)
 
 import argparse
-import importlib.util
 import json
 
 
-def _reader_path():
+def _store_root():
     for root in HERE.parents:
         markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        path = root / ".agents" / "agent-store" / "runtime" / "reader.py"
-        if path.is_file() and any(marker.exists() for marker in markers):
-            return path
+        runtime = root / ".agents" / "agent-store" / "runtime"
+        if (runtime / "tj_agent_store" / "__init__.py").is_file() and any(marker.exists() for marker in markers):
+            return runtime
     raise RuntimeError("agent-store inspect cannot locate the shipped read-only store")
 
 
-def _reader():
-    path = _reader_path()
-    spec = importlib.util.spec_from_file_location("agent_store_reader", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("agent-store inspect cannot load the shipped read-only store")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _agent_store():
+    sys.path.insert(0, str(_store_root()))
+    import tj_agent_store
+
+    return tj_agent_store
 
 
 def arguments(argv=None):
@@ -46,8 +42,8 @@ def arguments(argv=None):
 def main(argv=None):
     args = arguments(argv)
     try:
-        reader = _reader()
-        result = reader.ReadOnlyWorkItemStore(args.database).inspect(
+        store = _agent_store()
+        result = store.ReadOnlyWorkItemStore(args.database).inspect(
             execution_key=args.execution_key,
             repository=args.repository,
         )

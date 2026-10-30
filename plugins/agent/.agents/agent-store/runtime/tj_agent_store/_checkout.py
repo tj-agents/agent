@@ -1,24 +1,12 @@
 """Git checkout probing for the session store (Python 3.9+)."""
 
 from dataclasses import dataclass
-import hashlib
-import importlib.util
 import os
 from pathlib import Path
 import subprocess
-import sys
 from typing import Optional
 
-_LOADER_PATH = Path(__file__).resolve().with_name("agent_store_loader.py")
-_LOADER_KEY = f"agent_store_loader_{hashlib.sha256(str(_LOADER_PATH).encode('utf-8')).hexdigest()[:16]}"
-if _LOADER_KEY not in sys.modules:
-    _spec = importlib.util.spec_from_file_location(_LOADER_KEY, _LOADER_PATH)
-    _loader = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_loader)
-    sys.modules[_LOADER_KEY] = _loader
-load_sibling = sys.modules[_LOADER_KEY].load_sibling
-
-_identity = load_sibling(__file__, "repository_identity")
+from tj_agent_store._repository_identity import repository_identity
 
 GIT_TIMEOUT = 3
 HOOK_GIT_TIMEOUT = 2
@@ -48,7 +36,7 @@ def git(cwd, *args, timeout=GIT_TIMEOUT):
 
 
 def identify_repository(cwd, timeout=GIT_TIMEOUT):
-    return _identity.repository_identity(
+    return repository_identity(
         cwd, lambda directory, *arguments: git(directory, *arguments, timeout=timeout),
     )
 

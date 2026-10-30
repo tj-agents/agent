@@ -2,50 +2,14 @@
 
 import contextlib
 from dataclasses import fields
-import hashlib
-import importlib.util
 import os
 from pathlib import Path
 import socket
 import sqlite3
-import sys
 import time
 
-_LOADER_PATH = Path(__file__).resolve().with_name("agent_store_loader.py")
-_LOADER_KEY = f"agent_store_loader_{hashlib.sha256(str(_LOADER_PATH).encode('utf-8')).hexdigest()[:16]}"
-if _LOADER_KEY not in sys.modules:
-    _spec = importlib.util.spec_from_file_location(_LOADER_KEY, _LOADER_PATH)
-    _loader = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_loader)
-    sys.modules[_LOADER_KEY] = _loader
-load_sibling = sys.modules[_LOADER_KEY].load_sibling
-
-_checkout = load_sibling(__file__, "checkout")
-_session = load_sibling(__file__, "session")
-_work_item = load_sibling(__file__, "work_item")
-
-Checkout = _checkout.Checkout
-GIT_TIMEOUT = _checkout.GIT_TIMEOUT
-HOOK_GIT_TIMEOUT = _checkout.HOOK_GIT_TIMEOUT
-git = _checkout.git
-identify_repository = _checkout.identify_repository
-ClientRegistration = _session.ClientRegistration
-Session = _session.Session
-OWNER = _session.OWNER
-session_handle = _session.session_handle
-prompt_title = _session.prompt_title
-WorkItem = _work_item.WorkItem
-WorkItemReference = _work_item.WorkItemReference
-work_item_key = _work_item.work_item_key
-validate_execution_key = _work_item.validate_execution_key
-normalise_work_item_reference = _work_item.normalise_work_item_reference
-
-__all__ = [
-    "Checkout", "ClientRegistration", "GIT_TIMEOUT", "HOOK_GIT_TIMEOUT", "OWNER", "SCHEMA_VERSION", "Session",
-    "SessionStore", "WorkItem", "WorkItemReference", "current_machine", "database_path", "git",
-    "identify_repository", "normalise_work_item_reference", "profile_directory", "prompt_title", "session_handle",
-    "state_directory", "validate_execution_key", "work_item_key",
-]
+from tj_agent_store._session import OWNER, Session, session_handle
+from tj_agent_store._work_item import WorkItem, WorkItemReference, normalise_work_item_reference
 
 SCHEMA_VERSION = 4
 _LOCK_RETRY_DELAY = 0.05

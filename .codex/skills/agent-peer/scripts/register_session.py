@@ -14,7 +14,6 @@ Contract: exit 0 always. Bookkeeping must never stop a session starting.
 import collections
 import functools
 import hashlib
-import importlib.util
 import json
 import ntpath
 import os
@@ -32,8 +31,7 @@ MAX_ANCESTOR_DEPTH = 10
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "agent_store_loader.py", "checkout.py",
-                        "repository_identity.py", "session.py", "work_item.py")
+STORE_PACKAGE = "tj_agent_store"
 
 FILETIME_EPOCH_DELTA = 11644473600
 FILETIME_TICKS_PER_SECOND = 10_000_000
@@ -431,18 +429,28 @@ def _staged_agent_root(root):
             and isinstance(receipt.get("exports"), (list, dict)) and bool(receipt["exports"]))
 
 
-def _observer_session_store_path():
+def _has_store_package(root):
+    return (root / STORE_PACKAGE / "__init__.py").is_file()
+
+
+def observer_store_files(directory):
+    modules = sorted(path.relative_to(directory).as_posix() for path in (directory / STORE_PACKAGE).glob("*.py"))
+    return ("register_session.py", *modules)
+
+
+def _observer_store_root():
     receipt_path = HERE / OBSERVER_STORE_RECEIPT
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     files = receipt.get("files") if isinstance(receipt, dict) else None
+    expected = observer_store_files(HERE)
     if (not isinstance(receipt, dict) or receipt.get("kind") != OBSERVER_STORE_KIND
-            or receipt.get("version") != OBSERVER_STORE_VERSION
-            or not isinstance(files, dict) or set(files) != set(OBSERVER_STORE_FILES)):
+            or receipt.get("version") != OBSERVER_STORE_VERSION or not _has_store_package(HERE)
+            or not isinstance(files, dict) or set(files) != set(expected)):
         return None
-    for name in OBSERVER_STORE_FILES:
+    for name in expected:
         digest = files.get(name)
         path = HERE / name
         try:
@@ -451,45 +459,36 @@ def _observer_session_store_path():
             return None
         if (not isinstance(digest, str) or len(digest) != 64 or actual != digest):
             return None
-    return HERE / "session_store.py"
+    return HERE
 
 
-def session_store_path():
-    staged = _observer_session_store_path()
+def agent_store_root():
+    staged = _observer_store_root()
     if staged is not None:
         return staged
     for root in HERE.parents:
         markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
         runtime = root / ".agents" / "agent-store" / "runtime"
-        path = runtime / "session_store.py"
         if any(marker.exists() for marker in markers) or _staged_agent_root(root):
-            return path if path.is_file() else None
+            return runtime if _has_store_package(runtime) else None
     return None
 
 
-def _store_loader(runtime):
-    path = (runtime / "agent_store_loader.py").resolve()
-    key = f"agent_store_loader_{hashlib.sha256(str(path).encode('utf-8')).hexdigest()[:16]}"
-    if key not in sys.modules:
-        spec = importlib.util.spec_from_file_location(key, path)
-        loader = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(loader)
-        sys.modules[key] = loader
-    return sys.modules[key]
-
-
-def _load_session_store():
-    path = session_store_path()
-    if path is None:
+def agent_store():
+    root = agent_store_root()
+    if root is None:
         return None
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     try:
-        return _store_loader(path.parent).load_sibling(path, "session_store")
+        import tj_agent_store
     except Exception:
         return None
+    return tj_agent_store
 
 
 def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, preserve_turn=False):
-    module = _load_session_store()
+    module = agent_store()
     if module is None:
         return
     try:

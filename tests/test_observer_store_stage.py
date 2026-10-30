@@ -48,7 +48,8 @@ class ObserverStoreStageTests(unittest.TestCase):
         staging = self.start_stage()
         staged = load_register(staging / 'register_session.py', 'receipted_staged_register_session')
 
-        store = staged._load_session_store()
+        self.assertEqual(staging.resolve(), staged.agent_store_root())
+        store = staged.agent_store()
 
         self.assertIsNotNone(store)
         self.assertTrue(hasattr(store.SessionStore, 'delete_session'))
@@ -58,16 +59,14 @@ class ObserverStoreStageTests(unittest.TestCase):
     def test_unmarked_or_tampered_sibling_store_is_refused(self):
         unmarked = Path(self.temporary.name) / 'unmarked'
         unmarked.mkdir()
-        store_runtime = session_close.register_session.session_store_path().parent
-        for name in ('register_session.py',):
-            shutil.copy2(SCRIPTS / name, unmarked / name)
-        for name in session_close.OBSERVER_STORE_FILES[1:]:
-            shutil.copy2(store_runtime / name, unmarked / name)
-        self.assertIsNone(load_register(unmarked / 'register_session.py', 'unmarked_register_session')._load_session_store())
+        store_runtime = session_close.register_session.agent_store_root()
+        shutil.copy2(SCRIPTS / 'register_session.py', unmarked / 'register_session.py')
+        shutil.copytree(store_runtime / 'tj_agent_store', unmarked / 'tj_agent_store')
+        self.assertIsNone(load_register(unmarked / 'register_session.py', 'unmarked_register_session').agent_store())
 
         staging = self.start_stage()
-        (staging / 'session_store.py').write_text('tampered\n', encoding='utf-8')
-        self.assertIsNone(load_register(staging / 'register_session.py', 'tampered_register_session')._load_session_store())
+        (staging / 'tj_agent_store' / '_store.py').write_text('tampered', encoding='utf-8')
+        self.assertIsNone(load_register(staging / 'register_session.py', 'tampered_register_session').agent_store())
 
     def test_detached_launcher_restores_explicit_state_and_profiles(self):
         launcher = SCRIPTS / 'detached_launch.py'
