@@ -13,7 +13,7 @@ PACKAGE = ROOT / "plugins" / "agent"
 SESSION = "22176c14-5e45-4d73-a2fb-c906e0147dea"
 CLOSE_STATE = ("close-lifecycle", "client-close", "session-close")
 LIFECYCLE_SCRIPTS = {"close_lifecycle.py", "hook_dispatch.py", "loader.py",
-                     "register_session.py", "session_store.py", "snapshot.py"}
+                     "register_session.py", "session_hook.py", "snapshot.py"}
 
 
 def manifest(host):

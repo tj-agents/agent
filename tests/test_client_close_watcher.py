@@ -147,8 +147,8 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         native = self.native_request
         def request(method, params):
             if method == "thread/items/list":
-                self.store.record_prompt(self.handle)
-                self.store.record_stop(self.handle, self.root)
+                self.store.update_session(self.handle, lambda session: session.prompted())
+                self.store.record_stop(self.handle, self.store_module.Checkout.probe(self.root))
             return native(method, params)
         self.server.request.side_effect = request
         self.assertEqual(0, self.wait())

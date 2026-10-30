@@ -310,8 +310,8 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
         runtime = store.parents[2] / "agent" / "runtime"
         runtime.mkdir(parents=True)
         shutil.copy2(ROOT / "plugins/agent/.agents/agent/runtime/host.py", runtime / "host.py")
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/session_store.py", store)
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/repository_identity.py", store.with_name("repository_identity.py"))
+        for name in register_session.OBSERVER_STORE_FILES[1:]:
+            shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime" / name, store.with_name(name))
         if layout == "source":
             LoadSessionStoreTests._staged_receipt(root)
         else:

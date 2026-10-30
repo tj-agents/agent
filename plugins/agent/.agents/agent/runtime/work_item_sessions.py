@@ -165,7 +165,7 @@ def _validate_role(role):
 
 
 def _default_branch(cwd, current_branch):
-    output = _session_store()._git(cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    output = _session_store().git(cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
     if output:
         return output.split("/", 1)[1] if output.startswith("origin/") else output
     if current_branch in ("main", "master"):
@@ -180,22 +180,22 @@ def _branch_to_record(cwd, branch):
 
 
 def _require_repo(cwd):
-    repo = _session_store().repo_identity(cwd)
+    repo = _session_store().repository_identity(cwd)
     if not repo:
         raise ValueError(f"could not determine a git repository identity from {cwd}")
     return repo
 
 
-def _require_repo_branch_head(cwd):
+def _require_checkout(cwd):
     module = _session_store()
-    repo, branch, head = module._collect_repo_branch_head(cwd, timeout=module.GIT_TIMEOUT)
-    if not repo:
+    checkout = module.Checkout.probe(cwd, timeout=module.GIT_TIMEOUT)
+    if not checkout.repo:
         raise ValueError(f"could not determine a git repository identity from {cwd}")
-    return repo, branch, head
+    return checkout
 
 
 def _repository_root(cwd):
-    root = _session_store()._git(cwd, "rev-parse", "--show-toplevel")
+    root = _session_store().git(cwd, "rev-parse", "--show-toplevel")
     if not root:
         raise ValueError(f"could not determine the repository root from {cwd}")
     return Path(root).resolve()
@@ -287,7 +287,7 @@ def _worktree_status(session):
     worktree = session.cwd
     if not worktree or not Path(worktree).is_dir():
         return "stale"
-    branch = _session_store()._git(worktree, "branch", "--show-current")
+    branch = _session_store().git(worktree, "branch", "--show-current")
     if branch is None:
         return "unknown"
     if branch != session.branch:
@@ -361,8 +361,9 @@ def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=Non
     role = _validate_role(role)
     title = _validate_title(title)
     plan_path = _validate_plan_path(plan_path, cwd)
-    repo, branch, head = _require_repo_branch_head(cwd)
-    record_branch = _branch_to_record(cwd, branch)
+    checkout = _require_checkout(cwd)
+    repo = checkout.repo
+    record_branch = _branch_to_record(cwd, checkout.branch)
     with module.SessionStore() as store:
         kind, value = selector
         reference = None
@@ -391,9 +392,9 @@ def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=Non
         session_id, registration = _registered_current_session(store, host, cwd)
         handle = module.session_handle(host.value, session_id)
         removed = store.claim_registered_work_item(
-            host.value, session_id, cwd, key, work_item_repo, repo, feature, item, role,
-            status=status, branch=item_branch, session_branch=branch, head=head,
-            title=title, plan_path=plan_path, predecessor=predecessor, registration=registration,
+            host.value, session_id, cwd, checkout, key, work_item_repo, feature, item, role,
+            status=status, branch=item_branch, title=title, plan_path=plan_path, predecessor=predecessor,
+            registration=registration,
             require_existing_binding=kind == "reference",
         )
         result = _result_item(store.get_work_item(key), reference)
@@ -492,7 +493,7 @@ def cmd_resume(work_item=None, handle=None, execution_key=None, provider=None, s
 
 def cmd_interrupted(resume_handles=None, cwd=None):
     module = _session_store()
-    repo = module.repo_identity(cwd or Path.cwd())
+    repo = module.repository_identity(cwd or Path.cwd())
     with module.SessionStore() as store:
         candidates = store.interrupted_candidates(repo=repo)
         item_names = {}
@@ -545,7 +546,7 @@ def cmd_end(host, reason, successor=None):
     session_id = _require_session_id(host)
     handle = module.session_handle(host.value, session_id)
     with module.SessionStore() as store:
-        store.end_session(handle, reason, successor=successor)
+        store.update_session(handle, lambda session: session.end(reason, successor=successor))
     return {"handle": handle, "reason": reason}
 
 
@@ -556,8 +557,9 @@ def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, e
     selector = _selector(work_item, execution_key, provider, scope, native_id)
     title = _validate_title(title)
     plan_path = _validate_plan_path(plan_path, cwd)
-    repo, branch, _head = _require_repo_branch_head(cwd)
-    record_branch = _branch_to_record(cwd, branch)
+    checkout = _require_checkout(cwd)
+    repo = checkout.repo
+    record_branch = _branch_to_record(cwd, checkout.branch)
     with module.SessionStore() as store:
         kind, value = selector
         reference = None
@@ -599,11 +601,11 @@ def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, e
 def cmd_register(provider, scope, native_id, cwd=None):
     module = _session_store()
     cwd = cwd or Path.cwd()
-    repo, branch, _head = _require_repo_branch_head(cwd)
+    checkout = _require_checkout(cwd)
     provider, scope, native_id = module.normalise_work_item_reference(provider, scope, native_id)
     with module.SessionStore() as store:
         selected, created = store.resolve_or_create_work_item_reference(
-            provider, scope, native_id, repo, branch=_branch_to_record(cwd, branch),
+            provider, scope, native_id, checkout.repo, branch=_branch_to_record(cwd, checkout.branch),
         )
     result = _result_item(selected, {"provider": provider, "scope": scope, "native_id": native_id})
     result["created"] = created

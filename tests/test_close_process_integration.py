@@ -31,7 +31,9 @@ class DisposableCloseIntegration(CloseFixture, unittest.TestCase):
         value = json.loads(receipt.read_text(encoding="utf-8"))
         value["wrapper"]["child"] = frontend
         self.write(receipt, value)
-        self.store.attach_session_client(self.handle, info.pid, info.started_at, self.root)
+        self.store.update_session(
+            self.handle, lambda session: session.attach_client(info.pid, info.started_at, self.root),
+        )
 
     def cleanup_children(self):
         for process in self.children:

@@ -61,7 +61,7 @@ class ObserverStoreStageTests(unittest.TestCase):
         store_runtime = session_close.register_session.session_store_path().parent
         for name in ('register_session.py',):
             shutil.copy2(SCRIPTS / name, unmarked / name)
-        for name in ('session_store.py', 'repository_identity.py'):
+        for name in session_close.OBSERVER_STORE_FILES[1:]:
             shutil.copy2(store_runtime / name, unmarked / name)
         self.assertIsNone(load_register(unmarked / 'register_session.py', 'unmarked_register_session')._load_session_store())
 
