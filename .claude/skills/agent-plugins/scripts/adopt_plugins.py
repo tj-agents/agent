@@ -7,7 +7,9 @@ import argparse
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
+import tempfile
 
 import lock_io
 import plugin_selection
@@ -18,8 +20,8 @@ LOCK = Path(__file__).resolve().parent / "marketplace_plugins.lock.json"
 STACKS = Path(__file__).resolve().parent / "plugin_stacks.json"
 
 
-def load_roster() -> dict:
-    snapshot = lock_io.load_json(LOCK)
+def load_roster(snapshot: dict | None = None) -> dict:
+    snapshot = lock_io.load_json(LOCK) if snapshot is None else snapshot
     revision = snapshot.get("revision")
     if (set(snapshot) != {"repository", "revision", "marketplace"}
             or snapshot["repository"] != plugin_selection.MARKETPLACE_REPOSITORY
@@ -141,11 +143,11 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
     return document
 
 
-def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = ()) -> tuple[dict[Path, str | None], Path]:
+def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None) -> tuple[dict[Path, str | None], Path]:
     root = root.expanduser().resolve()
     if root.exists() and not root.is_dir():
         raise lock_io.LockError(f"Repository root is not a directory: {root}")
-    roster = load_roster()
+    roster = load_roster() if roster is None else roster
     names, foreign = requested_plugins(stacks, plugins, roster)
     declared = {}
     for value in marketplaces:
@@ -160,13 +162,44 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
     return targets, root
 
 
-def run(root: Path, stacks: list[str], plugins: list[str], mode: str, scope: str | None = None, marketplaces: list[str] = (), removals: list[str] = ()) -> list[str]:
-    targets, root = plan(root, stacks, plugins, removals, scope, marketplaces)
+def run(root: Path, stacks: list[str], plugins: list[str], mode: str, scope: str | None = None, marketplaces: list[str] = (), removals: list[str] = (), *, roster: dict | None = None) -> list[str]:
+    targets, root = plan(root, stacks, plugins, removals, scope, marketplaces, roster=roster)
     changed = {path: value for path, value in targets.items() if repo_config.text_at(path) != value}
     drift = [path.relative_to(root).as_posix() for path in changed]
     if mode == "write":
         repo_config.write_batch(changed)
     return drift
+
+
+def current_roster() -> dict:
+    import update_marketplace_plugins
+
+    with tempfile.TemporaryDirectory(prefix="tj-agents-marketplace-") as directory:
+        source = Path(directory) / "marketplace"
+        result = subprocess.run(
+            ["git", "clone", "--quiet", "--depth=1", "--branch", "main",
+             "https://github.com/tj-agents/marketplace.git", str(source)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
+        )
+        if result.returncode:
+            raise lock_io.LockError("Cannot confirm unpublished plugins against Marketplace main: "
+                                    + (result.stderr or result.stdout).strip())
+        return load_roster(json.loads(update_marketplace_plugins.snapshot(source)))
+
+
+def reconcile(root: Path, mode: str) -> list[str]:
+    root = root.expanduser().resolve()
+    selection = plugin_selection.resolve(root)
+    if not selection.is_file():
+        return []
+    _, identities = plugin_selection.validate(lock_io.load_json(selection))
+    roster = load_roster()
+    unknown = [identity for identity in identities
+               if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
+               and plugin_selection.split(identity)[0] not in roster["plugins"]]
+    if unknown:
+        roster = current_roster()
+    return run(root, [], [], mode, roster=roster)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -178,10 +211,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--remove-plugin", action="append", default=[])
     parser.add_argument("--scope", choices=("project", "local"))
     parser.add_argument("--mode", required=True, choices=("preview", "check", "write"))
+    parser.add_argument("--converge-existing", action="store_true")
     arguments = parser.parse_args(argv)
     try:
-        drift = run(arguments.root, arguments.stack, arguments.plugin, arguments.mode, arguments.scope, arguments.marketplace, arguments.remove_plugin)
-    except (lock_io.LockError, OSError, UnicodeError, ValueError) as error:
+        if arguments.converge_existing:
+            if arguments.stack or arguments.plugin or arguments.remove_plugin or arguments.marketplace or arguments.scope:
+                raise lock_io.LockError("--converge-existing cannot change the requested selection or scope")
+            drift = reconcile(arguments.root, arguments.mode)
+        else:
+            drift = run(arguments.root, arguments.stack, arguments.plugin, arguments.mode, arguments.scope, arguments.marketplace, arguments.remove_plugin)
+    except (lock_io.LockError, OSError, UnicodeError, ValueError, subprocess.SubprocessError) as error:
         print(f"Plugin adoption failed: {error}", file=sys.stderr)
         return 1
     if drift:
