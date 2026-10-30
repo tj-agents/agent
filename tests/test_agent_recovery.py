@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -384,13 +385,14 @@ Observed blocker: no send was attempted."""
                                                       "content": [{"type": "input_text", "text": "policy"}]}},
             ]
             rollout.write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
-        store = RECOVERY._load("session_store")
-        connection = store.connect()
-        try:
+        module = RECOVERY._load("session_store")
+        with module.SessionStore() as store:
             if work_title:
-                store.upsert_work_item(connection, "github.com/tj-agents/docs:problem-management/personal-policy",
+                store.upsert_work_item("github.com/tj-agents/docs:problem-management/personal-policy",
                                        "github.com/tj-agents/docs", "problem-management", "personal-policy",
                                        status="active", title=work_title, plan_path="plans/problem-management/PLAN.md")
+        connection = sqlite3.connect(module.database_path())
+        try:
             connection.execute(
                 "INSERT OR REPLACE INTO sessions (handle, host, session_id, profile, title, cwd, repo, branch, work_item, "
                 "started_at, last_activity_at) VALUES (?, 'codex', ?, ?, ?, ?, 'github.com/tj-agents/docs', 'main', ?, ?, ?)",

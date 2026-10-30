@@ -12,6 +12,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from git_isolation import without_git_config
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(SCRIPTS))
@@ -30,8 +32,8 @@ ISOLATION = []
 def setUpModule():
     home = tempfile.TemporaryDirectory(prefix="sync plugins home ")
     ISOLATION.append(home)
-    environment = {key: value for key, value in os.environ.items() if key not in SESSION_VARIABLES}
-    environment.update(GIT_CONFIG_COUNT='0', CLAUDE_CONFIG_DIR=str(Path(home.name) / "claude"), CODEX_HOME=str(Path(home.name) / "codex"),
+    environment = {key: value for key, value in without_git_config(os.environ).items() if key not in SESSION_VARIABLES}
+    environment.update(CLAUDE_CONFIG_DIR=str(Path(home.name) / "claude"), CODEX_HOME=str(Path(home.name) / "codex"),
                        AGENT_STATE_DIRECTORY=str(Path(home.name) / "state"), TJ_AGENTS_INSTALL_RECOVERY="1")
     patcher = mock.patch.dict(os.environ, environment, clear=True)
     patcher.start()
@@ -520,7 +522,7 @@ class RefreshCliTests(unittest.TestCase):
                             REFRESH.selection(CLAUDE, "claude", root)
 
     def test_external_publisher_packages_are_verified_at_the_declared_revision(self):
-        clean_git = {key: value for key, value in os.environ.items() if not key.startswith('GIT_CONFIG_')}
+        clean_git = without_git_config(os.environ)
         environment = mock.patch.dict(os.environ, clean_git, clear=True)
         environment.start()
         self.addCleanup(environment.stop)

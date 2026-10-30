@@ -91,11 +91,11 @@ class CloseFixture:
                              cli_client.RECORD_PATH_ENV: str(self.recording)}}
         self.patch(mock.patch.object(cli_client, "process_arguments", side_effect=self.commands.get))
         self.patch(mock.patch.object(cli_client, "process_context", side_effect=lambda pid: self.contexts.get(pid, {})))
-        self.store = register_session._load_session_store()
-        self.connection = self.store.connect()
-        self.addCleanup(self.connection.close)
+        self.store_module = register_session._load_session_store()
+        self.store = self.store_module.SessionStore()
+        self.addCleanup(self.store.close)
         initial_pid = 10 if host == "codex" else 20
-        self.handle = self.store.start_session(self.connection, host, "one", self.root,
+        self.handle = self.store.start_session(host, "one", self.root,
                                                pid=initial_pid, pid_started_at=float(initial_pid))
         entry = {"host": host, "session_id": "one", "cwd": str(self.root), "pid": initial_pid,
                  "pid_started_at": float(initial_pid), "started_at": 30.0,
@@ -154,7 +154,7 @@ class CloseFixture:
     def stop(self):
         if self.host == "claude":
             self.append({"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.store.record_stop(self.connection, self.handle, self.root)
+        self.store.record_stop(self.handle, self.store_module.Checkout.probe(self.root))
         if self.host == "codex":
             self.append_rollout({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-one"}})
         LIFECYCLE.run("stop", Host(self.host), {"session_id": "one", "turn_id": "turn-one",
@@ -170,7 +170,7 @@ class CloseFixture:
                             clock=lambda: elapsed[0], sleep=sleep)
 
     def row(self):
-        return self.store.get_session(self.connection, self.handle)
+        return self.store.get_session(self.handle)
 
     def outcome(self):
         return json.loads(Path(self.request["result"]).read_text(encoding="utf-8"))
