@@ -206,7 +206,8 @@ class DependencyInstallationIntegration(unittest.TestCase):
             return json.loads(plugin_refresh.run(["fixture", "plugin", "list", "--json"], project))
 
         updated = set()
-        with mock.patch.object(required_plugins, "inventory", side_effect=inventory):
+        with mock.patch.object(required_plugins, "inventory", side_effect=inventory), \
+                mock.patch.object(required_plugins, "reconcile_selection", return_value=[]):
             roots = REFRESH.prepare_required(self.root, Host.CLAUDE, "fixture", updated=updated)
         self.assertEqual({identity: self.home / "payloads/agent"}, roots)
         self.assertEqual({identity}, updated)
