@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from git_isolation import isolate_git_config
+
 if sys.version_info < (3, 11):
     raise unittest.SkipTest("install requires Python 3.11 or newer")
 
@@ -58,9 +60,7 @@ class Machine(unittest.TestCase):
             self.assertEqual('hook-interpreter-ready', result.stdout.strip())
 
     def setUp(self):
-        environment = mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "0"})
-        environment.start()
-        self.addCleanup(environment.stop)
+        isolate_git_config()
         temp = tempfile.TemporaryDirectory(prefix="install machine ü ")
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)

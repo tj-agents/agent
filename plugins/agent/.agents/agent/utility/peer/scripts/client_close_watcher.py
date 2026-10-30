@@ -56,14 +56,12 @@ def final_local_guard(request, path, digest, activity):
 
 
 def _record_end(entry):
-    store = session_close.register_session._load_session_store()
-    if store is None:
+    module = session_close.register_session._load_session_store()
+    if module is None:
         raise session_close.Refusal("session store is unavailable")
-    connection = store.connect()
-    try:
-        store.end_session(connection, store.session_handle(entry["host"], entry["session_id"]), "closed")
-    finally:
-        connection.close()
+    with module.SessionStore() as store:
+        store.update_session(module.session_handle(entry["host"], entry["session_id"]),
+                             lambda session: session.end("closed"))
 
 
 def closed_after_stop(entry, guard, cli_root):
