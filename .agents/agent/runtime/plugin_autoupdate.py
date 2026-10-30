@@ -557,8 +557,12 @@ def refresh_declared(executable: str, config: dict, recorded: dict, previous: li
     return {"marketplaces": outcomes, "ignored": ignored, "project_only": sorted(project_only)}
 
 
-def load_codex_config() -> dict:
-    return load_toml(Host.CODEX.configuration_root / "config.toml")
+def load_codex_config(project: Path | None = None) -> dict:
+    configured = load_toml(Host.CODEX.configuration_root / "config.toml")
+    if project is not None:
+        local = load_toml(project / ".codex/config.toml")
+        configured["plugins"] = {**configured.get("plugins", {}), **local.get("plugins", {})}
+    return configured
 
 
 def installed_plugin_roots(plugin: str, claude_config: Path, codex_config: dict) -> list[Path]:
@@ -679,19 +683,33 @@ def packaged_copies(codex_config: dict) -> list[Path]:
     return [root for root in native_agent_roots(codex_config) if _native_agent_source(root)]
 
 
+def published_agent_tree() -> dict[str, bytes]:
+    from tj_agent.plugins import sources
+
+    with tempfile.TemporaryDirectory(prefix="tj-agent-runtime-source-") as temporary:
+        return sources.tree({"source": "git-subdir", "url": "https://github.com/tj-agents/agent.git",
+                             "path": "./plugins/agent", "ref": "main"},
+                            Path.cwd(), Path.cwd(), Path(temporary), {})
+
+
 def self_update(current: Path, codex_config: dict) -> bool:
+    import plugin_refresh
+
     target = _receipt_root(current)
     if target is None:
         return False
     candidates = [root for root in packaged_copies(codex_config) if root.resolve() != target.resolve()]
     if not candidates:
         return False
-    source = max(candidates, key=lambda root: (root / ".agents" / "agent" / "runtime" / SCRIPT_NAME).stat().st_mtime)
     delivery = delivery_runtime()
     try:
         receipt = delivery.validate_receipt(json.loads((target / "source.json").read_text(encoding="utf-8")))
         if receipt.get("pending"):
             raise delivery.DeliveryError("managed runtime delivery is incomplete")
+        published = published_agent_tree()
+        source = next((root for root in candidates if plugin_refresh.package_tree(root) == published), None)
+        if source is None:
+            return False
         desired = delivery.native_receipt(receipt, source)
         if desired == receipt and not delivery.check(target, source, receipt):
             return False
@@ -699,7 +717,7 @@ def self_update(current: Path, codex_config: dict) -> bool:
         if errors:
             raise delivery.DeliveryError("; ".join(errors))
         return True
-    except (OSError, ValueError, delivery.DeliveryError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError, plugin_refresh.RefreshError, delivery.DeliveryError) as error:
         raise RuntimeError(f"managed Agent runtime self-update failed: {error}") from error
 
 

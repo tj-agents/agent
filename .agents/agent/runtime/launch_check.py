@@ -159,7 +159,7 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
         runtime_updated = False
         if work and Path(__file__).resolve().parent == (state_directory() / "bin/.agents/agent/runtime").resolve():
             runtime_updated = plugin_autoupdate.self_update(Path(plugin_autoupdate.__file__),
-                                                            plugin_autoupdate.load_codex_config())
+                                                              plugin_autoupdate.load_codex_config(project))
     finally:
         lock.close()
     if runtime_updated and not os.environ.get(INSTALL_RECOVERY):
