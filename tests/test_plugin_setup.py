@@ -36,6 +36,9 @@ class PluginSetupTests(unittest.TestCase):
         self.assertTrue(self.state.exists())
 
     def setUp(self):
+        reconciliation = mock.patch.object(required_plugins, "reconcile_selection", return_value=[])
+        reconciliation.start()
+        self.addCleanup(reconciliation.stop)
         temporary = tempfile.TemporaryDirectory(prefix="plugin setup ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)

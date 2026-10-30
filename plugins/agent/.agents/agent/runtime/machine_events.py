@@ -224,7 +224,7 @@ def main(argv=None):
         LOG.warning("Machine-event reconciliation is already running")
         LOG.removeHandler(handler)
         handler.close()
-        return 0 if arguments.watch else 1
+        return 1
     try:
         state_file = directory / "machine-events-state.json"
         reconciler = Reconciler(plugins.read_json(state_file))
