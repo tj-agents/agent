@@ -37,8 +37,16 @@ class SessionHookTests(unittest.TestCase):
             for group in groups:
                 for hook in group["hooks"]:
                     with self.subTest(command=hook["command"][:60]):
-                        self.assertTrue(hook["command"].startswith("python3 -I -B -c "))
-                        self.assertTrue(hook["commandWindows"].startswith("python -I -B -c "))
+                        self.assertTrue(hook["command"].startswith("tj_hook -- python3 -I -B -c "))
+                        self.assertTrue(hook["commandWindows"].startswith("tj_hook -- python -I -B -c "))
+
+    def test_claude_hooks_use_the_native_launcher(self):
+        for groups in hooks("claude").values():
+            for group in groups:
+                for hook in group["hooks"]:
+                    with self.subTest(hook=hook):
+                        self.assertEqual("tj_hook", hook["command"])
+                        self.assertEqual(["--", "python", "-B"], hook["args"][:3])
 
 
 if __name__ == "__main__":
