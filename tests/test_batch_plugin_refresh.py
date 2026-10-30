@@ -92,6 +92,23 @@ class BatchPluginRefreshTests(unittest.TestCase):
         self.assertEqual([], CLAUDE.synchronize([self.project, self.sibling]))
         self.fetch.assert_called_once()
 
+    def test_a_registration_in_an_unreadable_worktree_is_kept_without_failing(self):
+        unreadable = self.root / "sandbox-owned"
+        unreadable.mkdir()
+        stranded = self.row(unreadable)
+        self.write([self.row(self.project), stranded])
+
+        def common_directory(project):
+            if project == unreadable:
+                raise CLAUDE.required_plugins.RequiredPluginsError("detected dubious ownership")
+            return str(self.project / ".git")
+
+        with mock.patch.object(CLAUDE, "git_common_directory", side_effect=common_directory):
+            self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project]))
+        rows = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY]
+        self.assertIn(stranded, rows)
+        self.assertEqual(2, len(rows))
+
     def test_local_source_changes_at_the_same_path_refresh_without_a_new_catalog(self):
         self.write([self.row(self.project)])
         CLAUDE.synchronize([self.project])

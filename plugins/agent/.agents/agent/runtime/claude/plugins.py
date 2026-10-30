@@ -439,7 +439,11 @@ def synchronize(projects: list[Path], *, identities: set[str] | None = None, for
                         continue
                     if not isinstance(owner, str) or not Path(owner).is_dir():
                         continue
-                    key = repository_key(Path(owner))
+                    try:
+                        key = repository_key(Path(owner))
+                    except required_plugins.RequiredPluginsError:
+                        kept.append(row)
+                        continue
                     if key not in owners:
                         kept.append(row)
                         continue
