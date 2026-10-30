@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import sys
+from typing import Callable
 
 from codex import hook_trust
 from host import Host
@@ -419,9 +420,6 @@ def process_arguments(pid):
     if os.name != "nt":
         return [value.decode("utf-8", errors="surrogateescape")
                 for value in (Path("/proc") / str(pid) / "cmdline").read_bytes().split(b"\0") if value]
-    import ctypes
-    from ctypes import wintypes
-
     result = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
          "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
@@ -431,6 +429,15 @@ def process_arguments(pid):
     line = json.loads(result.stdout)
     if not isinstance(line, str):
         raise RuntimeError("Native client command line is unavailable")
+    return windows_arguments(line)
+
+
+def windows_arguments(line: str) -> list[str]:
+    if sys.platform != 'win32':
+        raise RuntimeError('Windows command-line parsing requires Windows')
+    import ctypes
+    from ctypes import wintypes
+
     api = ctypes.WinDLL("shell32", use_last_error=True)
     api.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
     api.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
@@ -446,14 +453,35 @@ def process_arguments(pid):
         kernel.LocalFree(values)
 
 
-def process_context(pid):
-    if os.name != "nt":
+def windows_command_line(read: Callable[[int, int], bytes], parameters: int) -> str:
+    metadata = read(parameters + 0x70, 16)
+    if len(metadata) != 16:
+        raise RuntimeError('Native client command-line metadata is incomplete')
+    length = int.from_bytes(metadata[:2], 'little')
+    maximum = int.from_bytes(metadata[2:4], 'little')
+    address = int.from_bytes(metadata[8:], 'little')
+    if not address or not 0 < length <= maximum <= 65534 or length % 2 or maximum % 2:
+        raise RuntimeError('Native client command-line length or address is invalid')
+    raw = read(address, length)
+    if len(raw) != length:
+        raise RuntimeError('Native client command line is incomplete')
+    text = raw.decode('utf-16-le')
+    if '\0' in text:
+        raise RuntimeError('Native client command line contains an embedded terminator')
+    return text
+
+
+def process_context(pid, *, include_command_line=False):
+    if sys.platform != 'win32':
         entries = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
         values = dict(entry.split(b"=", 1) for entry in entries if b"=" in entry)
-        return {'profile': str(Path(os.fsdecode(values.get(HOST.home_variable.encode(),
-                                                            os.fsencode(Path.home() / HOST.home_directory)))).resolve()),
-                RECORD_ENV: os.fsdecode(values.get(RECORD_ENV.encode(), b'')),
-                RECORD_PATH_ENV: os.fsdecode(values.get(RECORD_PATH_ENV.encode(), b''))}
+        result = {'profile': str(Path(os.fsdecode(values.get(HOST.home_variable.encode(),
+                                                           os.fsencode(Path.home() / HOST.home_directory)))).resolve()),
+                  RECORD_ENV: os.fsdecode(values.get(RECORD_ENV.encode(), b'')),
+                  RECORD_PATH_ENV: os.fsdecode(values.get(RECORD_PATH_ENV.encode(), b''))}
+        if include_command_line:
+            result['arguments'] = process_arguments(pid)
+        return result
     import ctypes
     from ctypes import wintypes
 
@@ -488,11 +516,13 @@ def process_context(pid):
         if native.NtQueryInformationProcess(handle, 0, ctypes.byref(basic), ctypes.sizeof(basic), None):
             raise RuntimeError("Native client process information is unavailable")
 
-        def read(address, size):
+        def read(address: int, size: int) -> bytes:
             buffer = ctypes.create_string_buffer(size)
             done = ctypes.c_size_t()
             if not kernel.ReadProcessMemory(handle, address, buffer, size, ctypes.byref(done)):
                 raise ctypes.WinError(ctypes.get_last_error())
+            if done.value != size:
+                raise RuntimeError('Native client process memory read is incomplete')
             return buffer.raw[:done.value]
 
         parameters = int.from_bytes(read(basic.peb + 0x20, 8), "little")
@@ -512,9 +542,12 @@ def process_context(pid):
             key, separator, value = entry.partition('=')
             if separator:
                 values[key.casefold()] = value
-        return {'profile': str(Path(values.get(HOST.home_variable.casefold()) or Path.home() / HOST.home_directory).resolve()),
-                RECORD_ENV: values.get(RECORD_ENV.casefold(), ''),
-                RECORD_PATH_ENV: values.get(RECORD_PATH_ENV.casefold(), '')}
+        result = {'profile': str(Path(values.get(HOST.home_variable.casefold()) or Path.home() / HOST.home_directory).resolve()),
+                  RECORD_ENV: values.get(RECORD_ENV.casefold(), ''),
+                  RECORD_PATH_ENV: values.get(RECORD_PATH_ENV.casefold(), '')}
+        if include_command_line:
+            result['arguments'] = windows_arguments(windows_command_line(read, parameters))
+        return result
     finally:
         kernel.CloseHandle(handle)
 
