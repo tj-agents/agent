@@ -27,6 +27,9 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         sys.path.insert(0, runtime_directory)
         self.addCleanup(lambda: sys.path.remove(runtime_directory))
         self.runtime = load("runtime_receipt_update", ROOT / "plugins/agent/.agents/agent/runtime/plugin_autoupdate.py")
+        published = mock.patch.object(self.runtime, "published_agent_tree")
+        self.published = published.start()
+        self.addCleanup(published.stop)
         self.events = load("runtime_receipt_events", ROOT / "plugins/agent/.agents/agent/runtime/machine_events.py")
         from tj_agent import content
         import runtime_delivery
@@ -66,6 +69,8 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         manifest = root / ".codex-plugin/plugin.json"
         manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({"name": "agent", "repository": repository}), encoding="utf-8")
+        import plugin_refresh
+        self.published.return_value = plugin_refresh.package_tree(root)
         return root
 
     def test_self_update_replaces_the_receipted_nested_agent_closure(self):
@@ -85,6 +90,59 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         with mock.patch.object(self.runtime, "native_agent_roots", return_value=[source]):
             self.assertFalse(self.runtime.self_update(target / ".agents/agent/runtime/plugin_autoupdate.py", {}))
         self.assertEqual(b"old runtime", (target / ".agents/agent/runtime/plugin_autoupdate.py").read_bytes())
+
+    def test_older_native_cache_cannot_roll_back_a_repaired_runtime(self):
+        target = self.receipt_root("repaired", b"repaired runtime", b"repaired resource")
+        stale = self.native_root("stale", b"broken runtime", b"broken resource")
+        current = self.native_root("current", b"current runtime", b"current resource")
+        os.utime(stale / ".agents/agent/runtime/plugin_autoupdate.py", (2000000000, 2000000000))
+        script = target / ".agents/agent/runtime/plugin_autoupdate.py"
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[stale]):
+            self.assertFalse(self.runtime.self_update(script, {}))
+        self.assertEqual(b"repaired runtime", script.read_bytes())
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[stale, current]):
+            self.assertTrue(self.runtime.self_update(script, {}))
+        self.assertEqual(b"current runtime", script.read_bytes())
+
+    def test_offline_publisher_lookup_preserves_the_installed_runtime(self):
+        target = self.receipt_root("repaired", b"repaired runtime", b"repaired resource")
+        stale = self.native_root("stale", b"broken runtime", b"broken resource")
+        script = target / ".agents/agent/runtime/plugin_autoupdate.py"
+        self.published.side_effect = OSError("offline")
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[stale]), \
+                self.assertRaisesRegex(RuntimeError, "offline"):
+            self.runtime.self_update(script, {})
+        self.assertEqual(b"repaired runtime", script.read_bytes())
+
+    def test_native_cache_replacement_after_verification_cannot_change_installed_bytes(self):
+        target = self.receipt_root("old", b"old runtime", b"old resource")
+        source = self.native_root("current", b"published runtime", b"published resource")
+        receipt = self.delivery.native_receipt
+
+        def replaced_cache(target_receipt, selected_source):
+            (source / ".agents/agent/runtime/plugin_autoupdate.py").write_bytes(b"unverified replacement")
+            return receipt(target_receipt, selected_source)
+
+        script = target / ".agents/agent/runtime/plugin_autoupdate.py"
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[source]), \
+                mock.patch.object(self.runtime, "delivery_runtime", return_value=self.delivery), \
+                mock.patch.object(self.delivery, "native_receipt", side_effect=replaced_cache) as replaced:
+            self.assertTrue(self.runtime.self_update(script, {}))
+        replaced.assert_called_once()
+        self.assertEqual(b"unverified replacement", (source / ".agents/agent/runtime/plugin_autoupdate.py").read_bytes())
+        self.assertEqual(b"published runtime", script.read_bytes())
+
+    def test_project_codex_selection_can_supply_the_current_native_source(self):
+        source = self.native_root("codex/plugins/cache/tj-agents/agent/local", b"runtime", b"resource")
+        project = self.root / "project"
+        (project / ".codex").mkdir(parents=True)
+        (project / ".git").mkdir()
+        (project / ".codex/config.toml").write_text('[plugins."agent@tj-agents"]\nenabled = true\n', encoding="utf-8")
+        with mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex"),
+                                          "CLAUDE_CONFIG_DIR": str(self.root / "claude")}):
+            self.assertEqual([], self.runtime.native_agent_roots(self.runtime.load_codex_config()))
+            self.assertEqual([source], self.runtime.native_agent_roots(self.runtime.load_codex_config(project)))
+            self.assertEqual([source], self.runtime.native_agent_roots(self.runtime.load_codex_config(project / "src")))
 
     def test_identical_native_package_keeps_the_core_git_receipt(self):
         target = self.receipt_root("core", b"same runtime", b"same resource")
