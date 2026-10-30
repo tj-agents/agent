@@ -114,6 +114,21 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
             self.runtime.self_update(script, {})
         self.assertEqual(b"repaired runtime", script.read_bytes())
 
+    def test_native_cache_replacement_after_verification_cannot_change_installed_bytes(self):
+        target = self.receipt_root("old", b"old runtime", b"old resource")
+        source = self.native_root("current", b"published runtime", b"published resource")
+        receipt = self.delivery.native_receipt
+
+        def replaced_cache(target_receipt, selected_source):
+            (source / ".agents/agent/runtime/plugin_autoupdate.py").write_bytes(b"unverified replacement")
+            return receipt(target_receipt, selected_source)
+
+        script = target / ".agents/agent/runtime/plugin_autoupdate.py"
+        with mock.patch.object(self.runtime, "native_agent_roots", return_value=[source]), \
+                mock.patch.object(self.delivery, "native_receipt", side_effect=replaced_cache):
+            self.assertTrue(self.runtime.self_update(script, {}))
+        self.assertEqual(b"published runtime", script.read_bytes())
+
     def test_project_codex_selection_can_supply_the_current_native_source(self):
         source = self.native_root("codex/plugins/cache/tj-agents/agent/local", b"runtime", b"resource")
         project = self.root / "project"
