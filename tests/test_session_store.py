@@ -561,16 +561,18 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertEqual(branch, self._row("claude:main-id").branch)
         self.assertIsNone(self._row("claude:main-id").work_item)
 
-    def test_origin_head_makes_main_a_work_branch_and_names_the_default(self):
-        main = _run_git(self.repo, "branch", "--show-current")
+    def test_main_stays_default_beside_the_origin_head_branch(self):
         self.assertTrue(STORE.Checkout.probe(self.repo).is_default)
         _run_git(self.repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
         _run_git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
         on_main = STORE.Checkout.probe(self.repo)
-        self.assertEqual((False, main), (on_main.is_default, on_main.work_branch))
+        self.assertEqual((True, None), (on_main.is_default, on_main.work_branch))
         _run_git(self.repo, "checkout", "-q", "-b", "develop")
         on_develop = STORE.Checkout.probe(self.repo)
         self.assertEqual((True, None), (on_develop.is_default, on_develop.work_branch))
+        _run_git(self.repo, "checkout", "-q", "-b", "Feature/Work")
+        on_feature = STORE.Checkout.probe(self.repo)
+        self.assertEqual((False, "Feature/Work"), (on_feature.is_default, on_feature.work_branch))
 
     def test_origin_head_names_the_default_branch(self):
         _run_git(self.repo, "checkout", "-q", "-b", "develop")
@@ -946,11 +948,12 @@ class BranchWorkItemRuleTests(unittest.TestCase):
             "SELECT key FROM work_items WHERE branch = ?", (branch,),
         ).fetchall()]
 
-    def test_a_branch_whose_only_item_is_done_gets_no_new_automatic_item(self):
+    def test_a_branch_whose_only_item_is_done_gets_a_fresh_automatic_item(self):
         automatic = self._stopped("a", "topic")
         self.store.upsert_work_item(automatic, "repo", None, None, status="done")
-        self.assertIsNone(self._stopped("b", "topic"))
-        self.assertEqual([automatic], self._items_on("topic"))
+        fresh = self._stopped("b", "topic")
+        self.assertNotIn(fresh, (None, automatic))
+        self.assertEqual({automatic, fresh}, set(self._items_on("topic")))
 
     def test_an_open_item_still_attaches_beside_a_done_one(self):
         self.store.upsert_work_item("repo:f/old", "repo", "f", "old", status="done", branch="topic", title="Old")
@@ -986,6 +989,22 @@ class BranchWorkItemRuleTests(unittest.TestCase):
         self.assertEqual(("owner", "repo:f/i", "Codex tab", 7),
                          (claimant.role, claimant.work_item, claimant.title, claimant.pid))
 
+    def test_only_owner_claims_absorb_the_branch_item(self):
+        automatic = self._stopped("a", "topic")
+        self.store.claim_registered_work_item(
+            "codex", "c", self.temp.name, self._checkout("topic"), "repo:f/i", "repo", "f", "i", "bounded: docs",
+            branch="topic", title="Named", registration=STORE.ClientRegistration("Codex tab", 7, 7.0),
+        )
+        self.assertEqual("topic", self.store.get_work_item("repo:f/i").branch)
+        self.assertEqual(automatic, self.store.get_session("claude:a").work_item)
+        self.store.start_session("claude", "d")
+        self.store.claim_work_item("claude:d", "repo:f/i", "bounded: review", branch="topic")
+        self.assertIsNotNone(self.store.get_work_item(automatic))
+        self.store.start_session("claude", "e")
+        self.store.claim_work_item("claude:e", "repo:f/i", "owner", branch="topic")
+        self.assertIsNone(self.store.get_work_item(automatic))
+        self.assertEqual("repo:f/i", self.store.get_session("claude:a").work_item)
+
     def test_sessions_on_hosts_come_with_their_work_items(self):
         automatic = self._stopped("a", "topic")
         self.store.start_session("claude", "b")
@@ -1004,6 +1023,17 @@ class RuntimeLoaderTests(unittest.TestCase):
         self.assertIs(STORE.Session, again.Session)
         self.assertIs(STORE.Checkout, HOOK.load_sibling(STORE.__file__, "checkout").Checkout)
         self.assertEqual(STORE.Session("claude:x", "claude", "x"), again.Session("claude:x", "claude", "x"))
+
+    def test_a_packaged_copy_keeps_its_own_loader_and_modules(self):
+        packaged_runtime = ROOT / "plugins/agent/.agents/agent-store/runtime"
+        spec = importlib.util.spec_from_file_location(
+            "test_packaged_session_store", packaged_runtime / "session_store.py",
+        )
+        packaged = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(packaged)
+        self.assertIsNot(STORE.Session, packaged.Session)
+        loaders = {Path(sys.modules[module.load_sibling.__module__].__file__).parent for module in (STORE, packaged)}
+        self.assertEqual({RUNTIME.resolve(), packaged_runtime.resolve()}, loaders)
 
 if __name__ == "__main__":
     unittest.main()

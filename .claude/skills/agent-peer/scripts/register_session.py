@@ -32,7 +32,6 @@ MAX_ANCESTOR_DEPTH = 10
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-_SESSION_STORES = {}
 OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "agent_store_loader.py", "checkout.py",
                         "repository_identity.py", "session.py", "work_item.py")
 
@@ -468,21 +467,25 @@ def session_store_path():
     return None
 
 
+def _store_loader(runtime):
+    path = (runtime / "agent_store_loader.py").resolve()
+    key = f"agent_store_loader_{hashlib.sha256(str(path).encode('utf-8')).hexdigest()[:16]}"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, path)
+        loader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loader)
+        sys.modules[key] = loader
+    return sys.modules[key]
+
+
 def _load_session_store():
     path = session_store_path()
     if path is None:
         return None
-    identity = str(path.resolve())
-    if identity in _SESSION_STORES:
-        return _SESSION_STORES[identity]
     try:
-        spec = importlib.util.spec_from_file_location(f"register_session_session_store_{len(_SESSION_STORES)}", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        return _store_loader(path.parent).load_sibling(path, "session_store")
     except Exception:
         return None
-    _SESSION_STORES[identity] = module
-    return module
 
 
 def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, preserve_turn=False):

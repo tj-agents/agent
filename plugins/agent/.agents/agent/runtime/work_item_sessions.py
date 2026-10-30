@@ -498,10 +498,9 @@ def cmd_interrupted(resume_handles=None, cwd=None):
     grouped = {}
     for session in dead:
         label = item_names.get(session.work_item, "(unclaimed)")
-        last_activity = session.last_activity_at
         grouped.setdefault(label, []).append({
             "handle": session.handle, "title": session.title, "cwd": session.cwd, "branch": session.branch,
-            "last_activity": _agent_recovery().iso_timestamp(last_activity) if last_activity else None,
+            "last_activity": _agent_recovery().iso_timestamp(session.last_activity_at),
             "turn_state": session.turn_state, "status": statuses[session.handle],
         })
     result = {"interrupted": grouped}

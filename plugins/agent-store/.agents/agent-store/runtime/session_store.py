@@ -2,6 +2,8 @@
 
 import contextlib
 from dataclasses import fields
+import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import socket
@@ -9,12 +11,14 @@ import sqlite3
 import sys
 import time
 
-_RUNTIME = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _RUNTIME)
-try:
-    from agent_store_loader import load_sibling
-finally:
-    sys.path.remove(_RUNTIME)
+_LOADER_PATH = Path(__file__).resolve().with_name("agent_store_loader.py")
+_LOADER_KEY = f"agent_store_loader_{hashlib.sha256(str(_LOADER_PATH).encode('utf-8')).hexdigest()[:16]}"
+if _LOADER_KEY not in sys.modules:
+    _spec = importlib.util.spec_from_file_location(_LOADER_KEY, _LOADER_PATH)
+    _loader = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_loader)
+    sys.modules[_LOADER_KEY] = _loader
+load_sibling = sys.modules[_LOADER_KEY].load_sibling
 
 _checkout = load_sibling(__file__, "checkout")
 _session = load_sibling(__file__, "session")
@@ -127,10 +131,10 @@ _SAVE_SESSION = _upsert_statement("sessions", _SESSION_COLUMNS, "handle")
 _SAVE_WORK_ITEM = _upsert_statement("work_items", _WORK_ITEM_COLUMNS, "key")
 
 
-def _from_row(record_type, row):
+def _from_row(record_type, row, prefix=""):
     if row is None:
         return None
-    return record_type(**{name: row[name] for name in _columns(record_type)})
+    return record_type(**{name: row[f"{prefix}{name}"] for name in _columns(record_type)})
 
 
 def _values(record, columns):
@@ -267,9 +271,7 @@ class SessionStore:
         return [
             (
                 _from_row(Session, row),
-                None if row["work_item_key"] is None else WorkItem(
-                    **{column: row[f"work_item_{column}"] for column in _WORK_ITEM_COLUMNS}
-                ),
+                None if row["work_item_key"] is None else _from_row(WorkItem, row, prefix="work_item_"),
             )
             for row in rows
         ]
@@ -359,11 +361,10 @@ class SessionStore:
     def _attach_branch_work_item(self, session, repo, branch, create):
         if not session.unattached:
             return
-        items = self._work_items_on_branch(repo, branch)
-        matches = [item for item in items if item.is_open]
+        matches = [item for item in self._work_items_on_branch(repo, branch) if item.is_open]
         if len(matches) == 1:
             key = matches[0].key
-        elif not items and create:
+        elif not matches and create:
             item = WorkItem.for_branch(repo, branch, title=session.title or branch)
             self._save_work_item(item)
             key = item.key
@@ -471,6 +472,8 @@ class SessionStore:
             if item is not None:
                 item.record_branch(branch)
                 self._save_work_item(item)
+        if role == OWNER:
+            self._absorb_branch_work_items(key)
         return removed
 
     def claim_registered_work_item(
@@ -501,6 +504,4 @@ class SessionStore:
                 key, work_item_repo, feature, item, status=status, branch=item_branch, title=title,
                 plan_path=plan_path,
             )
-            removed = self._claim(session, key, role, predecessor, branch, require_existing_binding)
-            self._absorb_branch_work_items(key)
-            return removed
+            return self._claim(session, key, role, predecessor, branch, require_existing_binding)

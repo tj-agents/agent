@@ -8,7 +8,7 @@ import sys
 
 def load_sibling(anchor, name):
     path = Path(anchor).resolve().with_name(f"{name}.py")
-    key = f"agent_store_{name}_{hashlib.sha256(str(path).encode('utf-8')).hexdigest()[:16]}"
+    key = f"{name}_{hashlib.sha256(str(path).encode('utf-8')).hexdigest()[:16]}"
     module = sys.modules.get(key)
     if module is not None:
         return module
