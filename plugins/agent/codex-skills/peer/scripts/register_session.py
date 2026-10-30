@@ -32,7 +32,8 @@ MAX_ANCESTOR_DEPTH = 10
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "repository_identity.py")
+OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "agent_store_loader.py", "checkout.py",
+                        "repository_identity.py", "session.py", "work_item.py")
 
 FILETIME_EPOCH_DELTA = 11644473600
 FILETIME_TICKS_PER_SECOND = 10_000_000
@@ -466,37 +467,51 @@ def session_store_path():
     return None
 
 
+def _store_loader(runtime):
+    path = (runtime / "agent_store_loader.py").resolve()
+    key = f"agent_store_loader_{hashlib.sha256(str(path).encode('utf-8')).hexdigest()[:16]}"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, path)
+        loader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loader)
+        sys.modules[key] = loader
+    return sys.modules[key]
+
+
 def _load_session_store():
     path = session_store_path()
     if path is None:
         return None
     try:
-        spec = importlib.util.spec_from_file_location("register_session_session_store", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
+        return _store_loader(path.parent).load_sibling(path, "session_store")
     except Exception:
         return None
 
 
 def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, preserve_turn=False):
-    store = _load_session_store()
-    if store is None:
+    module = _load_session_store()
+    if module is None:
         return
     try:
-        connection = store.connect()
+        store = module.SessionStore()
     except Exception:
         return
-    try:
-        handle = store.session_handle(host, session_id)
-        if preserve_turn and store.get_session(connection, handle) is not None:
-            store.attach_session_client(connection, handle, pid, pid_started_at, cwd)
-        else:
-            store.start_session(connection, host, session_id, cwd, title=title, pid=pid, pid_started_at=pid_started_at)
-    except Exception:
-        pass
-    finally:
-        connection.close()
+    with store:
+        try:
+            handle = module.session_handle(host, session_id)
+            if preserve_turn and store.get_session(handle) is not None:
+                store.update_session(handle, lambda session: session.attach_client(pid, pid_started_at, cwd))
+            else:
+                store.start_session(host, session_id, cwd, module.Checkout.probe(cwd), title=title, pid=pid,
+                                    pid_started_at=pid_started_at)
+        except Exception:
+            pass
+
+
+def launcher_title(data):
+    if data.get("source") == "clear":
+        return None
+    return os.environ.get(TITLE_ENV)
 
 
 def record(data, lookup=None, host_names=None, client=None):
@@ -510,7 +525,7 @@ def record(data, lookup=None, host_names=None, client=None):
     else:
         pid, host, pid_started_at = client["pid"], client["host"], client["pid_started_at"]
     cwd = data.get("cwd") or os.getcwd()
-    title = (client.get("title") if client is not None else os.environ.get(TITLE_ENV)) or None
+    title = (client.get("title") if client is not None else launcher_title(data)) or None
     entry = {
         "session_id": str(session),
         "title": title,
