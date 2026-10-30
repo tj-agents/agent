@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from git_isolation import isolate_git_config
+
 if sys.version_info < (3, 12):
     raise unittest.SkipTest("install requires Python 3.12 or newer")
 
@@ -58,9 +60,7 @@ class Machine(unittest.TestCase):
             self.assertEqual('hook-interpreter-ready', result.stdout.strip())
 
     def setUp(self):
-        environment = mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "0"})
-        environment.start()
-        self.addCleanup(environment.stop)
+        isolate_git_config()
         temp = tempfile.TemporaryDirectory(prefix="install machine ü ")
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
@@ -224,6 +224,45 @@ class ProfileTests(Machine):
         block = install.posix_block("/opt/it's/python3", PurePosixPath("/home/o'neil/launch_check.py"))
         self.assertIn("'/opt/it'\\''s/python3'", block)
         self.assertIn("'/home/o'\\''neil/launch_check.py'", block)
+
+    def native_fixture(self, name):
+        directory = Path(tempfile.mkdtemp(prefix="bypass "))
+        self.addCleanup(shutil.rmtree, directory, True)
+        if os.name == "nt":
+            (directory / f"{name}.cmd").write_text("@echo native %*\r\n", encoding="utf-8")
+        else:
+            native = directory / name
+            native.write_text('#!/bin/sh\necho native "$@"\n', encoding="utf-8")
+            native.chmod(0o755)
+        return directory
+
+    def test_powershell_bypass_flag_and_missing_python_start_the_native_host_directly(self):
+        shell = shutil.which("pwsh")
+        if shell is None:
+            self.skipTest("pwsh is unavailable")
+        directory = self.native_fixture("codex")
+        for python, arguments in ((sys.executable, "--no-tj a b"), (str(directory / "missing-python"), "a b")):
+            with self.subTest(python=python):
+                block = install.powershell_block(python, directory / "missing-launcher.py", None, "\n")
+                result = subprocess.run(
+                    [shell, "-NoProfile", "-NonInteractive", "-Command",
+                     f"$env:PATH = '{directory}' + [IO.Path]::PathSeparator + $env:PATH\n{block}\ncodex {arguments}"],
+                    capture_output=True, text=True, timeout=60, check=False)
+                self.assertIn("native a b", result.stdout, result.stderr)
+                self.assertNotIn("--no-tj", result.stdout)
+
+    def test_posix_bypass_flag_and_missing_python_start_the_native_host_directly(self):
+        shell = shutil.which("bash")
+        if shell is None or os.name == "nt":
+            self.skipTest("POSIX bash is unavailable")
+        directory = self.native_fixture("codex")
+        for python, arguments in ((sys.executable, "--no-tj a b"), (str(directory / "missing-python"), "a b")):
+            with self.subTest(python=python):
+                block = install.posix_block(python, directory / "missing-launcher.py")
+                result = subprocess.run(
+                    [shell, "-c", f"PATH='{directory}':\"$PATH\"\n{block}\ncodex {arguments}"],
+                    capture_output=True, text=True, timeout=60, check=False)
+                self.assertIn("native a b", result.stdout, result.stderr)
 
     def test_linux_creates_bashrc_when_no_profile_exists(self):
         self.converge(step("shell profiles"), self.context(windows=False))

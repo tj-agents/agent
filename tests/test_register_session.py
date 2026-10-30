@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from git_isolation import without_git_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "plugins/agent/.agents/agent/utility/peer/scripts/register_session.py"
@@ -28,11 +30,7 @@ ProcessInfo = register_session.ProcessInfo
 
 
 def _git_environment():
-    environment = os.environ.copy()
-    for name in tuple(environment):
-        if name == "GIT_CONFIG_COUNT" or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-            environment.pop(name)
-    return environment
+    return without_git_config(os.environ)
 
 
 class ResolveRecordedPidTests(unittest.TestCase):
@@ -196,10 +194,15 @@ class MainTests(unittest.TestCase):
 
 
 class LoadSessionStoreTests(unittest.TestCase):
+    def test_the_store_loads_once_per_process(self):
+        first = register_session._load_session_store()
+        self.assertIsNotNone(first)
+        self.assertIs(first, register_session._load_session_store())
 
     def _write_store_stub(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("MARKER = 'session-store-stub'\n", encoding="utf-8")
+        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/agent_store_loader.py", path.parent)
 
     def _load_from(self, script_path):
         spec = importlib.util.spec_from_file_location("register_session_under_test", script_path)
@@ -312,8 +315,8 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
         runtime = store.parents[2] / "agent" / "runtime"
         runtime.mkdir(parents=True)
         shutil.copy2(ROOT / "plugins/agent/.agents/agent/runtime/host.py", runtime / "host.py")
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/session_store.py", store)
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/repository_identity.py", store.with_name("repository_identity.py"))
+        for name in register_session.OBSERVER_STORE_FILES[1:]:
+            shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime" / name, store.with_name(name))
         if layout == "source":
             LoadSessionStoreTests._staged_receipt(root)
         else:
@@ -408,6 +411,17 @@ class ProcessLookupSafetyTests(unittest.TestCase):
         with mock.patch("subprocess.run", return_value=malformed):
             with self.assertRaises(ValueError):
                 register_session._ps_lookup(101)
+
+
+class LauncherTitleTests(unittest.TestCase):
+    def test_a_cleared_session_does_not_inherit_the_tab_title(self):
+        module = load_module()
+        with mock.patch.dict(os.environ, {module.TITLE_ENV: "Launched work"}, clear=False):
+            for source, expected in ((None, "Launched work"), ("startup", "Launched work"),
+                                     ("resume", "Launched work"), ("compact", "Launched work"), ("clear", None)):
+                with self.subTest(source=source):
+                    payload = {"session_id": "id"} if source is None else {"session_id": "id", "source": source}
+                    self.assertEqual(expected, module.launcher_title(payload))
 
 
 if __name__ == "__main__":
