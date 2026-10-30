@@ -710,12 +710,18 @@ def self_update(current: Path, codex_config: dict) -> bool:
         source = next((root for root in candidates if plugin_refresh.package_tree(root) == published), None)
         if source is None:
             return False
-        desired = delivery.native_receipt(receipt, source)
-        if desired == receipt and not delivery.check(target, source, receipt):
-            return False
-        errors = delivery.apply(target, source, desired)
-        if errors:
-            raise delivery.DeliveryError("; ".join(errors))
+        with tempfile.TemporaryDirectory(prefix="tj-agent-verified-runtime-") as temporary:
+            frozen = Path(temporary)
+            for name, body in published.items():
+                path = frozen / delivery.relative(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(body)
+            desired = delivery.native_receipt(receipt, frozen)
+            if desired == receipt and not delivery.check(target, frozen, receipt):
+                return False
+            errors = delivery.apply(target, frozen, desired)
+            if errors:
+                raise delivery.DeliveryError("; ".join(errors))
         return True
     except (OSError, ValueError, subprocess.SubprocessError, plugin_refresh.RefreshError, delivery.DeliveryError) as error:
         raise RuntimeError(f"managed Agent runtime self-update failed: {error}") from error
