@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from git_isolation import isolate_git_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
@@ -36,9 +38,10 @@ class BatchPluginRefreshTests(unittest.TestCase):
         self.codex = self.root / "codex"
         self.state = self.root / "state"
         environment = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config),
-            "CODEX_HOME": str(self.codex), "AGENT_STATE_DIRECTORY": str(self.state), "GIT_CONFIG_COUNT": "0"})
+            "CODEX_HOME": str(self.codex), "AGENT_STATE_DIRECTORY": str(self.state)})
         environment.start()
         self.addCleanup(environment.stop)
+        isolate_git_config()
         self.registry = self.config / "plugins/installed_plugins.json"
         self.registry.parent.mkdir(parents=True)
         self.market = self.root / "market"
