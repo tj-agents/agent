@@ -66,6 +66,11 @@ Shell profiles load the packaged shell resources from the managed runtime in `~/
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
 managed directory rather than modifying the repository or an installed plugin cache.
 
+Runtime self-update accepts only enabled native Agent package bytes that match the current published
+Agent tree. Cache timestamps cannot select an older runtime. Launch updates include the current
+project's Codex selection when locating that native package; publisher lookup failure preserves the
+installed runtime and reports the update failure.
+
 ## Skills
 
 - `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
