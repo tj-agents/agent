@@ -25,8 +25,10 @@ def claude_hooks(event):
 
 
 def command(hook):
-    executable = sys.executable if hook["command"] == "python" else hook["command"]
-    return [executable, *(argument.replace("${CLAUDE_PLUGIN_ROOT}", str(PACKAGE)) for argument in hook["args"])]
+    arguments = [argument.replace("${CLAUDE_PLUGIN_ROOT}", str(PACKAGE)) for argument in hook["args"]]
+    if arguments[:2] == ["--", "python"]:
+        arguments[1] = sys.executable
+    return [hook["command"], *arguments]
 
 
 def git(cwd, *arguments):

@@ -36,6 +36,10 @@ the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.
 
 ## Install
 
+Install [TJ CLI](https://github.com/tj-agents/cli#install) first and keep `tj_hook` on `PATH`.
+Generated Claude and Codex command hooks run through this native launcher. Template's generator owns
+the wrapping; authored hook manifests keep the payload executable and arguments.
+
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
 the machine event channel, a supervised background subscriber, the launch runtime in `~/.agents-state/bin`, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
