@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,9 @@ LockError = ADOPT.lock_io.LockError
 
 class RemovePluginTests(unittest.TestCase):
     def setUp(self):
+        live = mock.patch.object(ADOPT, "current_roster", side_effect=ADOPT.load_roster)
+        live.start()
+        self.addCleanup(live.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name) / "project"
@@ -65,6 +69,63 @@ class RemovePluginTests(unittest.TestCase):
         ADOPT.run(self.root, [], [], "write")
         self.assertIn("cli@tj-agents", self.selected())
         self.assertNotIn("machine@tj-agents", self.selected())
+
+    def test_automatic_reconciliation_checks_then_repairs_both_hosts_and_is_idempotent(self):
+        self.write_selection(["engineering@tj-agents", "machine@tj-agents", "python@tj-agents"])
+        before = (self.root / ".agents/plugins.json").read_bytes()
+        with mock.patch.object(ADOPT, "current_roster", return_value=ADOPT.load_roster()):
+            self.assertIn(".agents/plugins.json", ADOPT.reconcile(self.root, "check"))
+            self.assertEqual(before, (self.root / ".agents/plugins.json").read_bytes())
+            self.assertFalse((self.root / ".codex").exists())
+            ADOPT.reconcile(self.root, "write")
+        for identity in ("agent@tj-agents", "cli@tj-agents", "python@tj-agents"):
+            self.assertIn(identity, self.selected())
+        for path in (".agents/plugins.json", ".claude/settings.json", ".codex/config.toml"):
+            self.assertNotIn("machine@tj-agents", (self.root / path).read_text(encoding="utf-8"))
+        before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                  for path in self.root.rglob("*") if path.is_file()}
+        self.assertEqual([], ADOPT.reconcile(self.root, "write"))
+        self.assertEqual(before, {path: (path.read_bytes(), path.stat().st_mtime_ns)
+                                  for path in self.root.rglob("*") if path.is_file()})
+
+    def test_automatic_reconciliation_does_not_drop_newer_published_plugins(self):
+        self.write_selection(["base@tj-agents", "new-plugin@tj-agents"])
+        roster = ADOPT.load_roster()
+        roster["plugins"]["new-plugin"] = ["base"]
+        with mock.patch.object(ADOPT, "current_roster", return_value=roster) as current:
+            ADOPT.reconcile(self.root, "write")
+        current.assert_called_once()
+        self.assertIn("new-plugin@tj-agents", self.selected())
+
+    def test_unreachable_marketplace_does_not_remove_unknown_selection(self):
+        self.write_selection(["base@tj-agents", "machine@tj-agents"])
+        before = (self.root / ".agents/plugins.json").read_bytes()
+        with mock.patch.object(ADOPT, "current_roster", side_effect=LockError("offline")), \
+                self.assertRaisesRegex(LockError, "offline"):
+            ADOPT.reconcile(self.root, "write")
+        self.assertEqual(before, (self.root / ".agents/plugins.json").read_bytes())
+        self.assertFalse((self.root / ".codex").exists())
+
+    def test_automatic_reconciliation_does_not_enroll_an_unconfigured_project(self):
+        self.assertEqual([], ADOPT.reconcile(self.root, "write"))
+        self.assertFalse((self.root / ".agents/plugins.json").exists())
+
+    def test_retirement_after_the_bundled_snapshot_is_reconciled(self):
+        self.write_selection(["base@tj-agents", "docs@tj-agents"])
+        roster = ADOPT.load_roster()
+        self.assertIn("docs", roster["plugins"])
+        del roster["plugins"]["docs"]
+        with mock.patch.object(ADOPT, "current_roster", return_value=roster):
+            ADOPT.reconcile(self.root, "write")
+        self.assertEqual(["base@tj-agents"], self.selected())
+
+    def test_live_roster_does_not_require_bundled_stack_presets_to_remain_valid(self):
+        snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK)
+        snapshot["marketplace"]["plugins"] = [entry for entry in snapshot["marketplace"]["plugins"]
+                                                if entry["name"] != "gpp"]
+        roster = ADOPT.load_roster(snapshot)
+        self.assertNotIn("gpp", roster["plugins"])
+        self.assertEqual({}, roster["stacks"])
 
     def test_removal_of_remaining_prerequisite_refuses_without_writing(self):
         self.write_selection(["agent@tj-agents", "base@tj-agents", "cli@tj-agents"])

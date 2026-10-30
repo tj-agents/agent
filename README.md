@@ -46,8 +46,17 @@ unconfigured event channel, a failed plugin update (catch-up) or missing require
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
 
+Before checking native installations, launch, refresh and installer plugin setup reconcile an existing
+repository selection and regenerate both hosts' settings through the same scope and ownership checks
+as explicit adoption. The current Marketplace `main` dependency graph adds missing dependencies and
+removes retired TJ Agents packages, including retirements after the bundled offline snapshot.
+An unreachable marketplace leaves repository files untouched and reports the failure.
+Unconfigured projects are not enrolled. Installer `--check` reports
+selection drift without changing repository files, and a converged rerun writes nothing.
+
 The subscriber runs as a hidden current-user scheduled task on Windows or a systemd user service on
-Linux. It reads the existing event channel, verifies repository hints against GitHub, and updates every
+Linux. Watcher lock contention exits as a failure so the supervisor retries after the previous watcher
+releases ownership, including during runtime upgrades. It reads the existing event channel, verifies repository hints against GitHub, and updates every
 registered repository while sessions remain open. Repository registrations share a Git common directory
 across linked worktrees and retain project/local scope. Successful revisions are recorded once; failed
 updates retry without acknowledging the event. After a long disconnection, an authoritative catch-up
@@ -57,6 +66,11 @@ updates; unavailable supervision leaves foreground update checks working and ret
 Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`.
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
 managed directory rather than modifying the repository or an installed plugin cache.
+
+Runtime self-update accepts only enabled native Agent package bytes that match the current published
+Agent tree. Cache timestamps cannot select an older runtime. Launch updates include the current
+project's Codex selection when locating that native package; publisher lookup failure preserves the
+installed runtime and reports the update failure.
 
 ## Permission and hook configuration
 

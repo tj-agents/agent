@@ -35,7 +35,8 @@ GITHUB_OWNER = re.compile(r"github\.com[:/]+([^/]+)/", re.IGNORECASE)
 
 def repo_owners() -> frozenset[str]:
     for parent in Path(__file__).resolve().parents:
-        markers = (parent / ".git", parent / ".codex-plugin" / "plugin.json", parent / ".claude-plugin" / "plugin.json")
+        markers = (parent / ".git", parent / ".codex-plugin" / "plugin.json", parent / ".claude-plugin" / "plugin.json",
+                   parent / "source.json")
         candidate = parent / ".agents" / "agent" / "resources" / OWNERS_FILE
         if candidate.is_file() and any(marker.exists() for marker in markers):
             owners = lock_io.load_json(candidate).get("owners", [])
