@@ -85,11 +85,12 @@ def windows_action(context) -> tuple[str, str]:
 
 def windows_snapshot(context) -> dict:
     name = ps_literal(identity(context))
-    script = ("$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;"
+    script = ("$identity=[Security.Principal.WindowsIdentity]::GetCurrent();"
+              "$sid=$identity.User.Value;$account=$identity.Name;"
               f"$task=Get-ScheduledTask -TaskPath '\\' -TaskName {name} -ErrorAction SilentlyContinue;"
               "$xml=$null;$state=$null;if($task){"
               f"$xml=Export-ScheduledTask -TaskPath '\\' -TaskName {name};$state=[string]$task.State" + "};"
-              "@{sid=$sid;xml=$xml;state=$state}|ConvertTo-Json -Compress")
+              "@{sid=$sid;account=$account;xml=$xml;state=$state}|ConvertTo-Json -Compress")
     result = command(context, ps_command(context, script))
     try:
         snapshot = json.loads(result.stdout.lstrip("\ufeff"))
@@ -154,6 +155,14 @@ def windows_drift(context, snapshot) -> list[str]:
     if actual.get("/Task/RegistrationInfo/Description") != marker(context):
         raise ServiceError(f"refusing to replace unowned scheduled task {identity(context)}")
     expected, expected_counts = xml_values(task_xml(context, snapshot["sid"]))
+    defaults = {"/Task/Triggers/LogonTrigger/Enabled": "true",
+                "/Task/Principals/Principal/RunLevel": "LeastPrivilege",
+                "/Task/Settings/Enabled": "true"}
+    for key, value in defaults.items():
+        actual.setdefault(key, value)
+    for key in ("/Task/Triggers/LogonTrigger/UserId", "/Task/Principals/Principal/UserId"):
+        if snapshot.get("account") and actual.get(key) == snapshot["account"]:
+            actual[key] = snapshot["sid"]
     drift = []
     if counts != expected_counts or any(actual.get(key) != value for key, value in expected.items()):
         drift.append("machine-event scheduled task command or settings differ")
