@@ -32,6 +32,17 @@ def _kept(value, current):
     return current if value is None else value
 
 
+@dataclass(frozen=True)
+class ClientRegistration:
+    title: Optional[str] = None
+    pid: Optional[int] = None
+    pid_started_at: Optional[float] = None
+
+    @classmethod
+    def from_entry(cls, entry):
+        return cls(entry.get("title"), entry.get("pid"), entry.get("pid_started_at"))
+
+
 @dataclass(eq=False)
 class Session:
     handle: str
@@ -100,6 +111,10 @@ class Session:
     @property
     def claimed(self):
         return self.role is not None
+
+    @property
+    def has_client_identity(self):
+        return self.pid is not None and self.pid_started_at is not None
 
     def attach_client(self, pid, pid_started_at, cwd):
         if self.ended:

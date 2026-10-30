@@ -218,10 +218,7 @@ def _store_rows(hosts, session_id=None):
     if not module.database_path().is_file():
         return []
     with module.SessionStore() as store:
-        return [
-            (session, store.get_work_item(session.work_item) if session.work_item else None)
-            for session in store.sessions_on_hosts([host.value for host in hosts], session_id)
-        ]
+        return store.sessions_with_work_items_on_hosts([host.value for host in hosts], session_id)
 
 
 def _store_fields(session, work_item):
@@ -247,7 +244,7 @@ def _store_match(session, work_item, topic):
     return [name for name, tokens in fields.items() if tokens & wanted]
 
 
-def _iso(epoch):
+def iso_timestamp(epoch):
     if isinstance(epoch, bool) or not isinstance(epoch, (int, float)) or not math.isfinite(epoch):
         return None
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -256,7 +253,7 @@ def _iso(epoch):
 def _store_item(session, work_item, matched_by):
     item = {
         "id": session.session_id, "host": session.host, "cwd": session.cwd, "branch": session.branch,
-        "activity": _iso(session.last_activity_at or session.started_at),
+        "activity": iso_timestamp(session.last_activity_at or session.started_at),
         "preview": session.title or (work_item.title if work_item else None) or "(no title)",
         "profile": session.profile, "matched_by": matched_by, "title": session.title, "source": "sessions.db",
     }

@@ -2,33 +2,30 @@
 
 import contextlib
 from dataclasses import fields
-import importlib.util
 import os
 from pathlib import Path
 import socket
 import sqlite3
+import sys
 import time
 
+_RUNTIME = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _RUNTIME)
+try:
+    from agent_store_loader import load_sibling
+finally:
+    sys.path.remove(_RUNTIME)
 
-def _load_sibling(name):
-    path = Path(__file__).resolve().with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(f"agent_store_{name}", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"The Agent Store {name}.py module was not found in {path.parent}.")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_checkout = _load_sibling("checkout")
-_session = _load_sibling("session")
-_work_item = _load_sibling("work_item")
+_checkout = load_sibling(__file__, "checkout")
+_session = load_sibling(__file__, "session")
+_work_item = load_sibling(__file__, "work_item")
 
 Checkout = _checkout.Checkout
 GIT_TIMEOUT = _checkout.GIT_TIMEOUT
 HOOK_GIT_TIMEOUT = _checkout.HOOK_GIT_TIMEOUT
 git = _checkout.git
 identify_repository = _checkout.identify_repository
+ClientRegistration = _session.ClientRegistration
 Session = _session.Session
 OWNER = _session.OWNER
 session_handle = _session.session_handle
@@ -40,10 +37,10 @@ validate_execution_key = _work_item.validate_execution_key
 normalise_work_item_reference = _work_item.normalise_work_item_reference
 
 __all__ = [
-    "Checkout", "GIT_TIMEOUT", "HOOK_GIT_TIMEOUT", "OWNER", "SCHEMA_VERSION", "Session", "SessionStore", "WorkItem",
-    "WorkItemReference", "current_machine", "database_path", "git", "normalise_work_item_reference",
-    "identify_repository", "profile_directory", "prompt_title", "session_handle", "state_directory",
-    "validate_execution_key", "work_item_key",
+    "Checkout", "ClientRegistration", "GIT_TIMEOUT", "HOOK_GIT_TIMEOUT", "OWNER", "SCHEMA_VERSION", "Session",
+    "SessionStore", "WorkItem", "WorkItemReference", "current_machine", "database_path", "git",
+    "identify_repository", "normalise_work_item_reference", "profile_directory", "prompt_title", "session_handle",
+    "state_directory", "validate_execution_key", "work_item_key",
 ]
 
 SCHEMA_VERSION = 4
@@ -255,12 +252,27 @@ class SessionStore:
     def live_owners(self, key):
         return [session for session in self.sessions_for_work_item(key) if session.is_live_owner]
 
-    def sessions_on_hosts(self, hosts, session_id=None):
+    def sessions_with_work_items_on_hosts(self, hosts, session_id=None):
         placeholders = ", ".join("?" for _ in hosts)
-        exact = " AND session_id = ?" if session_id else ""
-        return self._sessions(
-            f"WHERE host IN ({placeholders}){exact}", (*hosts, *((session_id,) if session_id else ())),
+        exact = " AND s.session_id = ?" if session_id else ""
+        selected = ", ".join(
+            [f"s.{column}" for column in _SESSION_COLUMNS]
+            + [f"w.{column} AS work_item_{column}" for column in _WORK_ITEM_COLUMNS]
         )
+        rows = self._connection.execute(
+            f"SELECT {selected} FROM sessions s LEFT JOIN work_items w ON w.key = s.work_item "
+            f"WHERE s.host IN ({placeholders}){exact}",
+            (*hosts, *((session_id,) if session_id else ())),
+        ).fetchall()
+        return [
+            (
+                _from_row(Session, row),
+                None if row["work_item_key"] is None else WorkItem(
+                    **{column: row[f"work_item_{column}"] for column in _WORK_ITEM_COLUMNS}
+                ),
+            )
+            for row in rows
+        ]
 
     def interrupted_candidates(self, repo=None):
         if repo:
@@ -347,10 +359,11 @@ class SessionStore:
     def _attach_branch_work_item(self, session, repo, branch, create):
         if not session.unattached:
             return
-        matches = [item for item in self._work_items_on_branch(repo, branch) if item.is_open]
+        items = self._work_items_on_branch(repo, branch)
+        matches = [item for item in items if item.is_open]
         if len(matches) == 1:
             key = matches[0].key
-        elif not matches and create:
+        elif not items and create:
             item = WorkItem.for_branch(repo, branch, title=session.title or branch)
             self._save_work_item(item)
             key = item.key
@@ -368,8 +381,11 @@ class SessionStore:
             )
         ]
 
-    def _absorb_branch_work_items(self, key, repo, branch):
-        for absorbed in self._absorbable_branch_items(repo, branch, keep=key):
+    def _absorb_branch_work_items(self, key):
+        item = self.get_work_item(key)
+        if item is None or not item.absorbs_branch_items:
+            return
+        for absorbed in self._absorbable_branch_items(item.repo, item.branch, keep=key):
             for session in self.sessions_for_work_item(absorbed.key):
                 session.transfer_work_item(key)
                 self._save_session(session)
@@ -392,8 +408,7 @@ class SessionStore:
             self._put_work_item(
                 key, repo, feature, item, status=status, branch=branch, pr=pr, title=title, plan_path=plan_path,
             )
-            if feature is not None and branch:
-                self._absorb_branch_work_items(key, repo, branch)
+            self._absorb_branch_work_items(key)
 
     def _bind_reference(self, key, provider, scope, native_id):
         reference = WorkItemReference.bind(key, provider, scope, native_id)
@@ -471,8 +486,7 @@ class SessionStore:
                     raise ValueError(f"{handle} is not a registered current native session")
                 session = Session.start(
                     host, session_id, current_machine(), profile_directory(host), cwd=cwd, checkout=checkout,
-                    title=registration.get("title"), pid=registration.get("pid"),
-                    pid_started_at=registration.get("pid_started_at"),
+                    title=registration.title, pid=registration.pid, pid_started_at=registration.pid_started_at,
                 )
                 self._save_session(session)
             else:
@@ -487,4 +501,6 @@ class SessionStore:
                 key, work_item_repo, feature, item, status=status, branch=item_branch, title=title,
                 plan_path=plan_path,
             )
-            return self._claim(session, key, role, predecessor, branch, require_existing_binding)
+            removed = self._claim(session, key, role, predecessor, branch, require_existing_binding)
+            self._absorb_branch_work_items(key)
+            return removed
