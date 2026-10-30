@@ -28,7 +28,7 @@ Checkout = _checkout.Checkout
 GIT_TIMEOUT = _checkout.GIT_TIMEOUT
 HOOK_GIT_TIMEOUT = _checkout.HOOK_GIT_TIMEOUT
 git = _checkout.git
-repository_identity = _checkout.repository_identity
+identify_repository = _checkout.identify_repository
 Session = _session.Session
 OWNER = _session.OWNER
 session_handle = _session.session_handle
@@ -42,7 +42,7 @@ normalise_work_item_reference = _work_item.normalise_work_item_reference
 __all__ = [
     "Checkout", "GIT_TIMEOUT", "HOOK_GIT_TIMEOUT", "OWNER", "SCHEMA_VERSION", "Session", "SessionStore", "WorkItem",
     "WorkItemReference", "current_machine", "database_path", "git", "normalise_work_item_reference",
-    "profile_directory", "prompt_title", "repository_identity", "session_handle", "state_directory",
+    "identify_repository", "profile_directory", "prompt_title", "session_handle", "state_directory",
     "validate_execution_key", "work_item_key",
 ]
 
