@@ -560,7 +560,9 @@ def refresh_declared(executable: str, config: dict, recorded: dict, previous: li
 def load_codex_config(project: Path | None = None) -> dict:
     configured = load_toml(Host.CODEX.configuration_root / "config.toml")
     if project is not None:
-        local = load_toml(project / ".codex/config.toml")
+        import required_plugins
+
+        local = load_toml(required_plugins.project_root(project) / ".codex/config.toml")
         configured["plugins"] = {**configured.get("plugins", {}), **local.get("plugins", {})}
     return configured
 
