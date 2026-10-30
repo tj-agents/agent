@@ -31,7 +31,7 @@ class DisposableCloseIntegration(CloseFixture, unittest.TestCase):
         value = json.loads(receipt.read_text(encoding="utf-8"))
         value["wrapper"]["child"] = frontend
         self.write(receipt, value)
-        self.store.attach_session_client(self.connection, self.handle, info.pid, info.started_at, self.root)
+        self.store.attach_session_client(self.handle, info.pid, info.started_at, self.root)
 
     def cleanup_children(self):
         for process in self.children:
@@ -46,14 +46,14 @@ class DisposableCloseIntegration(CloseFixture, unittest.TestCase):
         with self.assertRaisesRegex(session_close.Refusal, "cancelled at signal"):
             session_close.stop_cli_client(entry, cancelled, CLOSE.cli_capability_root(self.capability))
         self.assertTrue(all(child.poll() is None for child in self.children))
-        self.assertIsNone(self.row()["ended_at"])
+        self.assertIsNone(self.row().ended_at)
         self.arm()
         self.stop()
         self.assertEqual(0, self.wait())
         self.children[0].wait(timeout=10)
         self.assertIsNone(self.children[1].poll())
         self.assertTrue(self.root.is_dir())
-        self.assertEqual("closed", self.row()["end_reason"])
+        self.assertEqual("closed", self.row().end_reason)
 
 
 if __name__ == "__main__":
