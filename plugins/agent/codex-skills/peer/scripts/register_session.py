@@ -32,7 +32,8 @@ MAX_ANCESTOR_DEPTH = 10
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "checkout.py", "session.py", "work_item.py")
+OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "checkout.py", "repository_identity.py",
+                        "session.py", "work_item.py")
 
 FILETIME_EPOCH_DELTA = 11644473600
 FILETIME_TICKS_PER_SECOND = 10_000_000

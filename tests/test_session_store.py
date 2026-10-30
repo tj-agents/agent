@@ -268,78 +268,78 @@ class RepoIdentityTests(unittest.TestCase):
 
     def test_https_remote_normalises_to_host_and_owner_name(self):
         repo = _init_repo(self.root / "https-repo", origin="https://github.com/tj-agents/core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.repository_identity(repo))
+        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
 
     def test_ssh_scp_remote_normalises_to_host_and_owner_name(self):
         repo = _init_repo(self.root / "ssh-repo", origin="git@github.com:tj-agents/core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.repository_identity(repo))
+        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
 
     def test_ssh_url_remote_normalises_to_host_and_owner_name(self):
         repo = _init_repo(self.root / "ssh-url-repo", origin="ssh://git@github.com/tj-agents/core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.repository_identity(repo))
+        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
 
     def test_github_https_ssh_and_scp_remotes_are_the_same_identity(self):
         https = _init_repo(self.root / "gh-https", origin="https://github.com/tj-agents/core.git")
         ssh_url = _init_repo(self.root / "gh-ssh-url", origin="ssh://git@github.com/tj-agents/core.git")
         scp = _init_repo(self.root / "gh-scp", origin="git@github.com:tj-agents/core.git")
-        identities = {CHECKOUT.repository_identity(https), CHECKOUT.repository_identity(ssh_url), CHECKOUT.repository_identity(scp)}
+        identities = {CHECKOUT.identify_repository(https), CHECKOUT.identify_repository(ssh_url), CHECKOUT.identify_repository(scp)}
         self.assertEqual({"github.com/tj-agents/core"}, identities)
 
     def test_azure_devops_https_and_ssh_remotes_are_the_same_identity(self):
         https = _init_repo(self.root / "ado-https", origin="https://org@dev.azure.com/org/project/_git/repo")
         ssh = _init_repo(self.root / "ado-ssh", origin="git@ssh.dev.azure.com:v3/org/project/repo")
-        self.assertEqual(CHECKOUT.repository_identity(https), CHECKOUT.repository_identity(ssh))
-        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.repository_identity(https))
+        self.assertEqual(CHECKOUT.identify_repository(https), CHECKOUT.identify_repository(ssh))
+        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.identify_repository(https))
 
     def test_same_path_on_different_hosts_is_a_different_identity(self):
         github = _init_repo(self.root / "gh-collide", origin="https://github.com/tj-agents/core.git")
         gitlab = _init_repo(self.root / "gl-collide", origin="https://gitlab.com/tj-agents/core.git")
-        self.assertNotEqual(CHECKOUT.repository_identity(github), CHECKOUT.repository_identity(gitlab))
+        self.assertNotEqual(CHECKOUT.identify_repository(github), CHECKOUT.identify_repository(gitlab))
 
     def test_userinfo_and_port_are_stripped_from_the_identity(self):
         repo = _init_repo(self.root / "port-repo", origin="https://user:token@github.com:443/tj-agents/core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.repository_identity(repo))
+        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
 
     def test_no_remote_falls_back_to_absolute_git_common_dir(self):
         repo = _init_repo(self.root / "no-remote-repo")
-        identity = CHECKOUT.repository_identity(repo)
+        identity = CHECKOUT.identify_repository(repo)
         self.assertEqual(str((repo / ".git").resolve()), identity)
 
     def test_non_git_directory_returns_none(self):
         directory = self.root / "not-a-repo"
         directory.mkdir()
-        self.assertIsNone(CHECKOUT.repository_identity(directory))
+        self.assertIsNone(CHECKOUT.identify_repository(directory))
 
     def test_legacy_visualstudio_https_remote_normalises_like_dev_azure_com(self):
         repo = _init_repo(
             self.root / "legacy-vso-https",
             origin="https://org@ORG.visualstudio.com/DefaultCollection/Project/_git/Repo",
         )
-        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.repository_identity(repo))
+        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.identify_repository(repo))
 
     def test_legacy_visualstudio_https_remote_without_defaultcollection(self):
         repo = _init_repo(
             self.root / "legacy-vso-https-no-dc", origin="https://org.visualstudio.com/project/_git/repo",
         )
-        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.repository_identity(repo))
+        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.identify_repository(repo))
 
     def test_legacy_vs_ssh_remote_normalises_like_ssh_dev_azure_com(self):
         repo = _init_repo(self.root / "legacy-vso-ssh", origin="git@vs-ssh.visualstudio.com:v3/org/project/repo")
-        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.repository_identity(repo))
+        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.identify_repository(repo))
 
     def test_legacy_visualstudio_short_form_without_defaultcollection_uses_repo_as_project(self):
         repo = _init_repo(self.root / "legacy-vso-short", origin="https://org.visualstudio.com/_git/repo")
-        self.assertEqual("dev.azure.com/org/repo/_git/repo", CHECKOUT.repository_identity(repo))
+        self.assertEqual("dev.azure.com/org/repo/_git/repo", CHECKOUT.identify_repository(repo))
 
     def test_legacy_visualstudio_short_form_with_defaultcollection_uses_repo_as_project(self):
         repo = _init_repo(
             self.root / "legacy-vso-short-dc", origin="https://org.visualstudio.com/DefaultCollection/_git/repo",
         )
-        self.assertEqual("dev.azure.com/org/repo/_git/repo", CHECKOUT.repository_identity(repo))
+        self.assertEqual("dev.azure.com/org/repo/_git/repo", CHECKOUT.identify_repository(repo))
 
     def test_identity_is_fully_case_folded(self):
         repo = _init_repo(self.root / "case-fold-repo", origin="https://GitHub.com/Tj-Agents/Core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.repository_identity(repo))
+        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
 
     def test_unborn_head_keeps_repo_identity_via_git_common_dir_fallback(self):
         directory = self.root / "unborn-repo"
@@ -347,7 +347,7 @@ class RepoIdentityTests(unittest.TestCase):
         _run_git(directory, "init")
         _run_git(directory, "config", "user.email", "test@example.com")
         _run_git(directory, "config", "user.name", "Test User")
-        identity = CHECKOUT.repository_identity(directory)
+        identity = CHECKOUT.identify_repository(directory)
         self.assertEqual(str((directory / ".git").resolve()), identity)
 
     def test_ambiguous_tag_and_branch_name_still_records_the_branch(self):

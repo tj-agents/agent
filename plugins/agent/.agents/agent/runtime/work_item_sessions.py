@@ -180,7 +180,7 @@ def _branch_to_record(cwd, branch):
 
 
 def _require_repo(cwd):
-    repo = _session_store().repository_identity(cwd)
+    repo = _session_store().identify_repository(cwd)
     if not repo:
         raise ValueError(f"could not determine a git repository identity from {cwd}")
     return repo
@@ -493,7 +493,7 @@ def cmd_resume(work_item=None, handle=None, execution_key=None, provider=None, s
 
 def cmd_interrupted(resume_handles=None, cwd=None):
     module = _session_store()
-    repo = module.repository_identity(cwd or Path.cwd())
+    repo = module.identify_repository(cwd or Path.cwd())
     with module.SessionStore() as store:
         candidates = store.interrupted_candidates(repo=repo)
         item_names = {}
