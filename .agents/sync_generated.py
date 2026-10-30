@@ -1353,14 +1353,10 @@ def snapshot_command(command: str, prefix: str, wrapped: str, field: str) -> str
 def claude_command_hook(hook: JSONObject, package: str) -> None:
     command = hook.get("command")
     arguments = hook.get("args")
-    if (
-        not isinstance(command, str)
-        or not command
-        or any(character.isspace() for character in command)
-    ):
+    if not isinstance(command, str) or not command or "\0" in command:
         raise ValueError(
-            f"{package}: Claude command hook command must be one executable; "
-            "move arguments into args"
+            f"{package}: Claude command hook command must be a nonempty string "
+            "without NUL"
         )
     if not isinstance(arguments, list) or any(
         not isinstance(argument, str) or "\0" in argument for argument in arguments
