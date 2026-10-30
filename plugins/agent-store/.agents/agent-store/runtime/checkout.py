@@ -1,18 +1,22 @@
 """Git checkout probing for the session store (Python 3.9+)."""
 
 from dataclasses import dataclass
+import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import sys
 from typing import Optional
 
-_RUNTIME = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _RUNTIME)
-try:
-    from agent_store_loader import load_sibling
-finally:
-    sys.path.remove(_RUNTIME)
+_LOADER_PATH = Path(__file__).resolve().with_name("agent_store_loader.py")
+_LOADER_KEY = f"agent_store_loader_{hashlib.sha256(str(_LOADER_PATH).encode('utf-8')).hexdigest()[:16]}"
+if _LOADER_KEY not in sys.modules:
+    _spec = importlib.util.spec_from_file_location(_LOADER_KEY, _LOADER_PATH)
+    _loader = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_loader)
+    sys.modules[_LOADER_KEY] = _loader
+load_sibling = sys.modules[_LOADER_KEY].load_sibling
 
 _identity = load_sibling(__file__, "repository_identity")
 
@@ -95,8 +99,7 @@ def _origin_default_branch(cwd, common_dir):
 def _is_default_branch(cwd, common_dir, branch):
     if not branch:
         return False
-    default = _origin_default_branch(cwd, common_dir)
-    return branch in DEFAULT_BRANCHES if default is None else branch == default
+    return branch in DEFAULT_BRANCHES or branch == _origin_default_branch(cwd, common_dir)
 
 
 @dataclass(frozen=True)

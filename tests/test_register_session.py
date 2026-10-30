@@ -202,6 +202,7 @@ class LoadSessionStoreTests(unittest.TestCase):
     def _write_store_stub(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("MARKER = 'session-store-stub'\n", encoding="utf-8")
+        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/agent_store_loader.py", path.parent)
 
     def _load_from(self, script_path):
         spec = importlib.util.spec_from_file_location("register_session_under_test", script_path)
