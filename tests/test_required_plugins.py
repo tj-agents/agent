@@ -82,6 +82,20 @@ class RequiredPluginInventoryTests(unittest.TestCase):
         self.assertIn("cli@tj-agents", roots)
         self.assertEqual(["native-codex", "plugin", "list", "--json"], run.call_args.args[0])
 
+    def test_update_inventory_does_not_query_unrelated_marketplaces(self):
+        entry = self.entry("agent@tj-agents")
+
+        def query(command, **_options):
+            if "--marketplace" not in command:
+                raise subprocess.TimeoutExpired(command, 20)
+            self.assertEqual("tj-agents", command[command.index("--marketplace") + 1])
+            return subprocess.CompletedProcess(command, 0, json.dumps({"installed": [entry]}), "")
+
+        with mock.patch.object(REQUIRED.subprocess, "run", side_effect=query):
+            roots = REQUIRED.inventory_roots(self.project, Host.CODEX, "native-codex",
+                                             identities=["agent@tj-agents"])
+        self.assertEqual({"agent@tj-agents"}, roots.keys())
+
     def test_claude_launch_roots_reuse_overrides_until_the_delimiter(self):
         roots = {"agent@tj-agents": self.root / "override-agent"}
         arguments = [

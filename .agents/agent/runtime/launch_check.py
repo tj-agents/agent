@@ -27,6 +27,7 @@ POLL_TIMEOUT_SECONDS = 3
 MAX_RESPONSE = 1 << 20
 EXPIRY_SECONDS = 11 * 60 * 60
 HOST_VARIABLE = "TJ_AGENTS_LAUNCH_HOST"
+BYPASS_FLAG = "--no-tj"
 INSTALL_RECOVERY = "TJ_AGENTS_INSTALL_RECOVERY"
 TOPIC = re.compile(r"[A-Za-z0-9_-]{32,128}")
 MESSAGE_ID = re.compile(r"[A-Za-z0-9]{1,64}")
@@ -155,10 +156,17 @@ def apply(envelopes: list[dict], cursor: dict, path: Path, project: Path, update
             if isinstance(cursor.get("since_at"), (int, float)):
                 saved["since_at"] = cursor["since_at"]
             plugin_autoupdate.write_json(path, saved)
-        if work and Path(__file__).resolve().parent == (state_directory() / "bin").resolve():
-            plugin_autoupdate.self_update(Path(plugin_autoupdate.__file__), plugin_autoupdate.load_codex_config())
+        runtime_updated = False
+        if work and Path(__file__).resolve().parent == (state_directory() / "bin/.agents/agent/runtime").resolve():
+            runtime_updated = plugin_autoupdate.self_update(Path(plugin_autoupdate.__file__),
+                                                              plugin_autoupdate.load_codex_config(project))
     finally:
         lock.close()
+    if runtime_updated and not os.environ.get(INSTALL_RECOVERY):
+        try:
+            recover_install(project, "shell profiles")
+        except Exception as error:
+            print(f"plugins: shell profile refresh will retry on the next update: {error}", file=sys.stderr)
     if not work:
         return "current"
     failed = sorted(host.value for host, succeeded in results.items() if not succeeded)

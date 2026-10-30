@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from git_isolation import isolate_git_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
@@ -36,9 +38,10 @@ class BatchPluginRefreshTests(unittest.TestCase):
         self.codex = self.root / "codex"
         self.state = self.root / "state"
         environment = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.config),
-            "CODEX_HOME": str(self.codex), "AGENT_STATE_DIRECTORY": str(self.state), "GIT_CONFIG_COUNT": "0"})
+            "CODEX_HOME": str(self.codex), "AGENT_STATE_DIRECTORY": str(self.state)})
         environment.start()
         self.addCleanup(environment.stop)
+        isolate_git_config()
         self.registry = self.config / "plugins/installed_plugins.json"
         self.registry.parent.mkdir(parents=True)
         self.market = self.root / "market"
@@ -88,6 +91,23 @@ class BatchPluginRefreshTests(unittest.TestCase):
         self.fetch.reset_mock()
         self.assertEqual([], CLAUDE.synchronize([self.project, self.sibling]))
         self.fetch.assert_called_once()
+
+    def test_a_registration_in_an_unreadable_worktree_is_kept_without_failing(self):
+        unreadable = self.root / "sandbox-owned"
+        unreadable.mkdir()
+        stranded = self.row(unreadable)
+        self.write([self.row(self.project), stranded])
+
+        def common_directory(project):
+            if project == unreadable:
+                raise CLAUDE.required_plugins.RequiredPluginsError("detected dubious ownership")
+            return str(self.project / ".git")
+
+        with mock.patch.object(CLAUDE, "git_common_directory", side_effect=common_directory):
+            self.assertEqual([IDENTITY], CLAUDE.synchronize([self.project]))
+        rows = json.loads(self.registry.read_text(encoding="utf-8"))["plugins"][IDENTITY]
+        self.assertIn(stranded, rows)
+        self.assertEqual(2, len(rows))
 
     def test_local_source_changes_at_the_same_path_refresh_without_a_new_catalog(self):
         self.write([self.row(self.project)])
@@ -246,10 +266,11 @@ class CodexStaleBytesTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(root / "state")}), \
                     mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
                     mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": source}]}), \
-                    mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
+                    mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}) as inventory, \
                     mock.patch.object(sources, "tree", return_value=tree) as fetch, \
                     mock.patch.object(sources, "resolved_head", return_value="b" * 40):
                 self.assertEqual([], CODEX.reconcile(root, executable="codex"))
+                inventory.assert_called_once_with(root, CODEX.HOST, "codex", identities=[IDENTITY])
                 fetch.reset_mock()
                 fetch.side_effect = OSError("offline")
                 self.assertEqual([], CODEX.reconcile(root, executable="codex"))

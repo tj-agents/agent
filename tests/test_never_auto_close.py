@@ -13,7 +13,7 @@ PACKAGE = ROOT / "plugins" / "agent"
 SESSION = "22176c14-5e45-4d73-a2fb-c906e0147dea"
 CLOSE_STATE = ("close-lifecycle", "client-close", "session-close")
 LIFECYCLE_SCRIPTS = {"close_lifecycle.py", "hook_dispatch.py", "loader.py",
-                     "register_session.py", "session_store.py", "snapshot.py"}
+                     "register_session.py", "session_hook.py", "snapshot.py"}
 
 
 def manifest(host):
@@ -25,8 +25,10 @@ def claude_hooks(event):
 
 
 def command(hook):
-    executable = sys.executable if hook["command"] == "python" else hook["command"]
-    return [executable, *(argument.replace("${CLAUDE_PLUGIN_ROOT}", str(PACKAGE)) for argument in hook["args"])]
+    arguments = [argument.replace("${CLAUDE_PLUGIN_ROOT}", str(PACKAGE)) for argument in hook["args"]]
+    if arguments[:2] == ["--", "python"]:
+        arguments[1] = sys.executable
+    return [hook["command"], *arguments]
 
 
 def git(cwd, *arguments):

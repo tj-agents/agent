@@ -54,6 +54,15 @@ class InstallRecoveryTests(unittest.TestCase):
         stderr.__enter__()
         self.addCleanup(stderr.__exit__, None, None, None)
 
+    def test_launch_runtime_self_update_refreshes_shell_profiles(self):
+        managed = self.state / "bin/.agents/agent/runtime"
+        managed.mkdir(parents=True)
+        envelopes = [{"id": "m1", "event": "message", "message": "x"}]
+        with mock.patch.object(CHECK, "__file__", str(managed / "launch_check.py")),                 mock.patch.object(plugin_autoupdate, "self_update", return_value=True),                 mock.patch.object(plugin_autoupdate, "load_codex_config", return_value={}),                 mock.patch.object(CHECK, "recover_install") as recover:
+            CHECK.apply(envelopes, {}, self.state / "machine-events-cursor.json", self.project,
+                        lambda *_: True, 1.0, expired=True)
+        recover.assert_called_once_with(self.project, "shell profiles")
+
     def configure_channel(self, *_):
         (self.state / "machine-events.json").write_text(json.dumps(TOPIC), encoding="utf-8")
         return ["channel configured"]
@@ -197,7 +206,8 @@ class DependencyInstallationIntegration(unittest.TestCase):
             return json.loads(plugin_refresh.run(["fixture", "plugin", "list", "--json"], project))
 
         updated = set()
-        with mock.patch.object(required_plugins, "inventory", side_effect=inventory):
+        with mock.patch.object(required_plugins, "inventory", side_effect=inventory), \
+                mock.patch.object(required_plugins, "reconcile_selection", return_value=[]):
             roots = REFRESH.prepare_required(self.root, Host.CLAUDE, "fixture", updated=updated)
         self.assertEqual({identity: self.home / "payloads/agent"}, roots)
         self.assertEqual({identity}, updated)

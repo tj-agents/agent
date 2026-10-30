@@ -276,12 +276,12 @@ def close_monitor(request: dict, shared):
 
 
 def settled(request: dict, monitor, completed: bool, shared):
-    row = shared.session_activity(request["entry"])
+    session = shared.session_activity(request["entry"])
     if completed:
-        if row["turn_state"] != "awaiting_input" or row["last_activity_at"] <= request["armed_at"]:
+        if session.turn_state != "awaiting_input" or session.last_activity_at <= request["armed_at"]:
             raise shared.Cancelled("completed turn is no longer awaiting input")
-        return row["last_activity_at"]
-    if row["last_activity_at"] != request["working_activity"] and row["turn_state"] != "awaiting_input":
+        return session.last_activity_at
+    if session.last_activity_at != request["working_activity"] and session.turn_state != "awaiting_input":
         raise shared.Cancelled("the armed working turn changed")
     return None
 

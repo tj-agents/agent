@@ -180,7 +180,7 @@ class SubscriberTests(SubscriberFixture):
                          str(self.directory / "claude"), "--codex-home", str(self.directory / "codex"),
                          "--search-path=/shell/tools:/usr/bin"]
             try:
-                self.assertEqual(0, watch.machine_events.main(arguments))
+                self.assertEqual(1, watch.machine_events.main(arguments))
                 run.assert_not_called()
             finally:
                 lock.close()
