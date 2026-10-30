@@ -48,9 +48,10 @@ registrations; startup still requires successful native admission and hooks.
 
 Before checking native installations, launch, refresh and installer plugin setup reconcile an existing
 repository selection and regenerate both hosts' settings through the same scope and ownership checks
-as explicit adoption. Missing dependencies are added; unknown TJ Agents names are checked against
-Marketplace `main` before retired packages are removed. An unreachable marketplace leaves those names
-untouched and reports the failure. Unconfigured projects are not enrolled. Installer `--check` reports
+as explicit adoption. The current Marketplace `main` dependency graph adds missing dependencies and
+removes retired TJ Agents packages, including retirements after the bundled offline snapshot.
+An unreachable marketplace leaves repository files untouched and reports the failure.
+Unconfigured projects are not enrolled. Installer `--check` reports
 selection drift without changing repository files, and a converged rerun writes nothing.
 
 The subscriber runs as a hidden current-user scheduled task on Windows or a systemd user service on

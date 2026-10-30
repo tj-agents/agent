@@ -21,6 +21,7 @@ STACKS = Path(__file__).resolve().parent / "plugin_stacks.json"
 
 
 def load_roster(snapshot: dict | None = None) -> dict:
+    live = snapshot is not None
     snapshot = lock_io.load_json(LOCK) if snapshot is None else snapshot
     revision = snapshot.get("revision")
     if (set(snapshot) != {"repository", "revision", "marketplace"}
@@ -44,6 +45,8 @@ def load_roster(snapshot: dict | None = None) -> dict:
     for name, required in plugins.items():
         if any(dependency not in plugins for dependency in required):
             raise lock_io.LockError(f"{LOCK}: unknown dependency in {name}")
+    if live:
+        return {"plugins": plugins, "stacks": {}}
     stacks = lock_io.load_json(STACKS)
     if stacks.get("schema_version") != 1 or set(stacks) != {"schema_version", "stacks"} or not isinstance(stacks["stacks"], dict):
         raise lock_io.LockError(f"{STACKS}: invalid stack choices")
@@ -182,7 +185,7 @@ def current_roster() -> dict:
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
         )
         if result.returncode:
-            raise lock_io.LockError("Cannot confirm unpublished plugins against Marketplace main: "
+            raise lock_io.LockError("Cannot reconcile plugins against Marketplace main: "
                                     + (result.stderr or result.stdout).strip())
         return load_roster(json.loads(update_marketplace_plugins.snapshot(source)))
 
@@ -192,14 +195,8 @@ def reconcile(root: Path, mode: str) -> list[str]:
     selection = plugin_selection.resolve(root)
     if not selection.is_file():
         return []
-    _, identities = plugin_selection.validate(lock_io.load_json(selection))
-    roster = load_roster()
-    unknown = [identity for identity in identities
-               if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
-               and plugin_selection.split(identity)[0] not in roster["plugins"]]
-    if unknown:
-        roster = current_roster()
-    return run(root, [], [], mode, roster=roster)
+    plugin_selection.validate(lock_io.load_json(selection))
+    return run(root, [], [], mode, roster=current_roster())
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -379,7 +379,36 @@ def invoke(target: Target, arguments: list[str], timeout: int, inherit: bool = F
                           timeout=timeout, check=False)
 
 
+def reconcile_selection(project: Path, *, check_only: bool = False) -> list[str]:
+    project = project_root(project)
+    if not (project / ".agents/plugins.json").is_file():
+        return []
+    script = Path(__file__).resolve().parents[1] / "utility/plugins/scripts/adopt_plugins.py"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-B", str(script), "--root", str(project), "--converge-existing",
+             "--mode", "check" if check_only else "write"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RequiredPluginsError(f"Repository plugin selection could not converge: {error}") from error
+    detail = (result.stderr or result.stdout).strip()
+    if result.returncode:
+        if check_only and result.returncode == 1 and result.stdout.startswith("Drift in:"):
+            return [detail]
+        raise RequiredPluginsError(f"Repository plugin selection could not converge: {detail}")
+    if detail and not check_only:
+        print(f"plugins: {detail}", file=sys.stderr)
+    return []
+
+
 def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None]) -> list[str]:
+    try:
+        drift = reconcile_selection(project, check_only=True)
+    except RequiredPluginsError as error:
+        return [str(error)]
+    if drift:
+        return drift
     targets_found, errors = collect(project, hosts, executables)
     for target in targets_found:
         try:
