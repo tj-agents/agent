@@ -308,6 +308,7 @@ def repository_key(project: Path) -> str:
 
 def repository_projects(projects: list[Path]) -> list[Path]:
     discovered, seen = set(projects), set()
+    requested = {project.resolve() for project in projects}
     for project in projects:
         key = repository_key(project)
         if key in seen or not project.is_dir():
@@ -319,7 +320,17 @@ def repository_projects(projects: list[Path]) -> list[Path]:
         if result.returncode == 0:
             discovered.update(Path(field.removeprefix("worktree ")) for field in result.stdout.split("\0")
                               if field.startswith("worktree "))
-    return sorted(path.resolve() for path in discovered if path.is_dir())
+    return sorted(path for path in (path.resolve() for path in discovered if path.is_dir())
+                  if path in requested or readable_worktree(path))
+
+
+def readable_worktree(project: Path) -> bool:
+    try:
+        git_common_directory(project)
+    except required_plugins.RequiredPluginsError as error:
+        print(f"plugins: skipped unreadable worktree {project}: {error}", file=sys.stderr)
+        return False
+    return True
 
 
 def materialize(root: Path, tree: dict[str, bytes], modes: dict[str, int] | None = None) -> Path:

@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -72,6 +73,25 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
 
     def test_repository_discovery_finds_nested_and_sibling_worktrees_only(self):
         self.assertEqual({self.primary, self.nested, self.sibling}, set(CLAUDE.repository_projects([self.sibling])))
+
+    def test_an_unreadable_discovered_worktree_is_skipped_not_fatal(self):
+        resolve = CLAUDE.git_common_directory
+
+        def common_directory(project):
+            if Path(project) == self.nested:
+                raise CLAUDE.required_plugins.RequiredPluginsError('detected dubious ownership')
+            return resolve(project)
+
+        with mock.patch.object(CLAUDE, 'git_common_directory', side_effect=common_directory), \
+                mock.patch('sys.stderr', new_callable=io.StringIO) as stderr:
+            self.assertEqual({self.primary, self.sibling}, set(CLAUDE.repository_projects([self.sibling])))
+        self.assertIn(f'skipped unreadable worktree {self.nested}', stderr.getvalue())
+
+    def test_an_unreadable_requested_project_still_fails(self):
+        with mock.patch.object(CLAUDE, 'git_common_directory',
+                               side_effect=CLAUDE.required_plugins.RequiredPluginsError('dubious ownership')):
+            with self.assertRaises(CLAUDE.required_plugins.RequiredPluginsError):
+                CLAUDE.repository_projects([self.sibling])
 
     def native(self, command, cwd):
         self.commands.append((command, Path(cwd)))
