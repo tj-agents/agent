@@ -225,6 +225,45 @@ class ProfileTests(Machine):
         self.assertIn("'/opt/it'\\''s/python3'", block)
         self.assertIn("'/home/o'\\''neil/launch_check.py'", block)
 
+    def native_fixture(self, name):
+        directory = Path(tempfile.mkdtemp(prefix="bypass "))
+        self.addCleanup(shutil.rmtree, directory, True)
+        if os.name == "nt":
+            (directory / f"{name}.cmd").write_text("@echo native %*\r\n", encoding="utf-8")
+        else:
+            native = directory / name
+            native.write_text('#!/bin/sh\necho native "$@"\n', encoding="utf-8")
+            native.chmod(0o755)
+        return directory
+
+    def test_powershell_bypass_flag_and_missing_python_start_the_native_host_directly(self):
+        shell = shutil.which("pwsh")
+        if shell is None:
+            self.skipTest("pwsh is unavailable")
+        directory = self.native_fixture("codex")
+        for python, arguments in ((sys.executable, "--no-tj a b"), (str(directory / "missing-python"), "a b")):
+            with self.subTest(python=python):
+                block = install.powershell_block(python, directory / "missing-launcher.py", None, "\n")
+                result = subprocess.run(
+                    [shell, "-NoProfile", "-NonInteractive", "-Command",
+                     f"$env:PATH = '{directory}' + [IO.Path]::PathSeparator + $env:PATH\n{block}\ncodex {arguments}"],
+                    capture_output=True, text=True, timeout=60, check=False)
+                self.assertIn("native a b", result.stdout, result.stderr)
+                self.assertNotIn("--no-tj", result.stdout)
+
+    def test_posix_bypass_flag_and_missing_python_start_the_native_host_directly(self):
+        shell = shutil.which("bash")
+        if shell is None or os.name == "nt":
+            self.skipTest("POSIX bash is unavailable")
+        directory = self.native_fixture("codex")
+        for python, arguments in ((sys.executable, "--no-tj a b"), (str(directory / "missing-python"), "a b")):
+            with self.subTest(python=python):
+                block = install.posix_block(python, directory / "missing-launcher.py")
+                result = subprocess.run(
+                    [shell, "-c", f"PATH='{directory}':\"$PATH\"\n{block}\ncodex {arguments}"],
+                    capture_output=True, text=True, timeout=60, check=False)
+                self.assertIn("native a b", result.stdout, result.stderr)
+
     def test_linux_creates_bashrc_when_no_profile_exists(self):
         self.converge(step("shell profiles"), self.context(windows=False))
         self.assertEqual([self.home / ".bashrc"],
