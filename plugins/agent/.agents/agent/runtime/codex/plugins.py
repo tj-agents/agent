@@ -149,7 +149,7 @@ def reconcile(project: Path, executable: str | None = None, *, refresh: bool = F
     receipt_path = plugin_autoupdate.state_directory() / "codex-plugin-bytes.json"
     receipts = plugin_autoupdate.read_json(receipt_path)
     contents = plugin_autoupdate.read_contents()
-    roots = required_plugins.inventory_roots(project, HOST, executable)
+    roots = required_plugins.inventory_roots(project, HOST, executable, identities=identities)
     publishers, expected, stale, signatures = {}, {}, [], {}
     with tempfile.TemporaryDirectory(prefix="codex-plugin-bytes-") as temporary:
         for marketplace in marketplaces:
@@ -189,7 +189,7 @@ def reconcile(project: Path, executable: str | None = None, *, refresh: bool = F
                     stale.append(identity)
         if stale:
             install_missing(executable, project, stale)
-            roots = required_plugins.inventory_roots(project, HOST, executable)
+            roots = required_plugins.inventory_roots(project, HOST, executable, identities=identities)
         for identity, tree in expected.items():
             if identity not in roots or plugin_refresh.package_tree(roots[identity]) != tree:
                 raise plugin_refresh.RefreshError(f"Native installed bytes differ from marketplace after update: {identity}")
