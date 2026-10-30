@@ -31,6 +31,14 @@ def _git_environment():
     return environment
 
 
+def setUpModule():
+    # Windows drops empty variables when patch.dict restores os.environ, leaving GIT_CONFIG_COUNT pointing at
+    # missing GIT_CONFIG_VALUE_n entries and every later git call failing.
+    for name in tuple(os.environ):
+        if name == "GIT_CONFIG_COUNT" or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            os.environ.pop(name)
+
+
 def _run_git(cwd, *args):
     result = subprocess.run(
         ["git", "-C", str(cwd), *args], capture_output=True, text=True, timeout=15,
@@ -510,6 +518,93 @@ class HookLifecycleTests(unittest.TestCase):
                 registered = json.loads((registry / "rooted-id.json").read_text(encoding="utf-8"))
                 self.assertEqual(expected.resolve(), Path(registered["cwd"]).resolve())
                 self.assertEqual(expected.resolve(), Path(self._row("codex:rooted-id")["cwd"]).resolve())
+
+    def _item(self, key):
+        connection = STORE.connect()
+        try:
+            return STORE.get_work_item(connection, key)
+        finally:
+            connection.close()
+
+    def test_first_prompt_titles_an_untitled_session_and_later_prompts_keep_it(self):
+        payload = {"session_id": "titled-id", "cwd": str(self.repo)}
+        self._invoke("session-start", "claude", payload)
+        self._invoke("prompt", "claude", dict(payload, prompt="/recover"))
+        self.assertIsNone(self._row("claude:titled-id")["title"])
+        self._invoke("prompt", "claude", dict(payload, prompt="  Fix the\n crash   recovery lookup "))
+        self._invoke("prompt", "claude", dict(payload, prompt="something else"))
+        self.assertEqual("Fix the crash recovery lookup", self._row("claude:titled-id")["title"])
+
+    def test_prompt_title_is_cut_at_a_word_boundary(self):
+        title = STORE.prompt_title("word " * 40)
+        self.assertLessEqual(len(title), STORE.PROMPT_TITLE_LENGTH + 1)
+        self.assertTrue(title.endswith("word…"))
+
+    def test_stop_on_a_feature_branch_creates_one_work_item_every_session_on_it_shares(self):
+        _run_git(self.repo, "checkout", "-q", "-b", "Fix/Recovery")
+        first = {"session_id": "first-id", "cwd": str(self.repo)}
+        self._invoke("session-start", "claude", first)
+        self._invoke("prompt", "claude", dict(first, prompt="Fix crash recovery"))
+        self._invoke("stop", "claude", first)
+        key = self._row("claude:first-id")["work_item"]
+        self.assertTrue(key.startswith("execution:"))
+        item = self._item(key)
+        self.assertEqual(("github.com/tj-agents/core", "Fix/Recovery", "Fix crash recovery", "active"),
+                         (item["repo"], item["branch"], item["title"], item["status"]))
+
+        second = {"session_id": "second-id", "cwd": str(self.repo)}
+        self._invoke("session-start", "codex", second)
+        self.assertEqual(key, self._row("codex:second-id")["work_item"])
+
+    def test_stop_on_the_default_branch_creates_no_work_item(self):
+        branch = _run_git(self.repo, "branch", "--show-current")
+        payload = {"session_id": "main-id", "cwd": str(self.repo)}
+        self._invoke("session-start", "claude", payload)
+        self._invoke("stop", "claude", payload)
+        self.assertEqual(branch, self._row("claude:main-id")["branch"])
+        self.assertIsNone(self._row("claude:main-id")["work_item"])
+
+    def test_origin_head_names_the_default_branch(self):
+        _run_git(self.repo, "checkout", "-q", "-b", "develop")
+        _run_git(self.repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+        _run_git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+        payload = {"session_id": "develop-id", "cwd": str(self.repo)}
+        self._invoke("session-start", "claude", payload)
+        self._invoke("stop", "claude", payload)
+        self.assertIsNone(self._row("claude:develop-id")["work_item"])
+
+    def test_a_named_work_item_on_the_branch_absorbs_the_automatic_one(self):
+        _run_git(self.repo, "checkout", "-q", "-b", "Feature/Named")
+        payload = {"session_id": "absorb-id", "cwd": str(self.repo)}
+        self._invoke("session-start", "claude", payload)
+        self._invoke("stop", "claude", payload)
+        automatic = self._row("claude:absorb-id")["work_item"]
+        named = STORE.work_item_key("github.com/tj-agents/core", "feature", "named")
+        connection = STORE.connect()
+        try:
+            STORE.upsert_work_item(connection, named, "github.com/tj-agents/core", "feature", "named",
+                                   branch="Feature/Named", title="Named")
+        finally:
+            connection.close()
+        self.assertIsNone(self._item(automatic))
+        self.assertEqual(named, self._row("claude:absorb-id")["work_item"])
+
+    def test_registering_a_tracker_reference_adopts_the_branch_work_item(self):
+        _run_git(self.repo, "checkout", "-q", "-b", "Feature/Tracked")
+        payload = {"session_id": "tracked-id", "cwd": str(self.repo)}
+        self._invoke("session-start", "claude", payload)
+        self._invoke("stop", "claude", payload)
+        automatic = self._row("claude:tracked-id")["work_item"]
+        connection = STORE.connect()
+        try:
+            item, created = STORE.resolve_or_create_work_item_reference(
+                connection, "github", "github.com/tj-agents/core", "12", "github.com/tj-agents/core",
+                branch="Feature/Tracked",
+            )
+        finally:
+            connection.close()
+        self.assertFalse(created)
+        self.assertEqual(automatic, item["key"])
 
     def test_resume_start_clears_ended_at_and_end_reason(self):
         payload = {"session_id": "exact-id", "cwd": str(self.repo)}

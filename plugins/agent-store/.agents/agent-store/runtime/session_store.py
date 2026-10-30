@@ -30,6 +30,7 @@ def _load_repository_identity():
 SCHEMA_VERSION = 4
 GIT_TIMEOUT = 3
 HOOK_GIT_TIMEOUT = 2
+PROMPT_TITLE_LENGTH = 80
 REGISTRY_REPLACE_ATTEMPTS = 40
 REGISTRY_REPLACE_DELAY_SECONDS = 0.05
 _LOCK_RETRY_DELAY = 0.05
@@ -248,17 +249,32 @@ def _rev_parse_probe(cwd, timeout):
     return None, branch, common_dir, None
 
 
+def _is_default_branch(cwd, common_dir, branch):
+    if branch in ("main", "master"):
+        return True
+    if not branch or not common_dir:
+        return False
+    path = Path(common_dir)
+    if not path.is_absolute():
+        path = Path(cwd) / path
+    try:
+        ref = (path / "refs" / "remotes" / "origin" / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return ref == f"ref: refs/remotes/origin/{branch}"
+
+
 def _collect_checkout(cwd, timeout=HOOK_GIT_TIMEOUT):
-    head, branch, _common_dir, toplevel = _rev_parse_probe(cwd, timeout)
+    head, branch, common_dir, toplevel = _rev_parse_probe(cwd, timeout)
     repo = _load_repository_identity().repository_identity(
         cwd,
         lambda directory, *arguments: _git(directory, *arguments, timeout=timeout),
     )
-    return toplevel or str(cwd), repo, branch, head
+    return toplevel or str(cwd), repo, branch, head, _is_default_branch(cwd, common_dir, branch)
 
 
 def _collect_repo_branch_head(cwd, timeout=HOOK_GIT_TIMEOUT):
-    _checkout, repo, branch, head = _collect_checkout(cwd, timeout)
+    _checkout, repo, branch, head, _default = _collect_checkout(cwd, timeout)
     return repo, branch, head
 
 
@@ -368,14 +384,20 @@ def resolve_or_create_work_item_reference(connection, provider, scope, native_id
                 raise RuntimeError(f"reference {provider}/{scope}/{native_id} has a missing work item")
             connection.commit()
             return item, False
-        key = execution_key()
-        _upsert_work_item_locked(
-            connection, key, repo, None, None, status="active", branch=branch,
-        )
+        adoptable = _branch_work_items_to_absorb_locked(connection, "", repo, branch) if branch else []
+        if len(adoptable) == 1:
+            key = adoptable[0]
+            created = False
+        else:
+            key = execution_key()
+            _upsert_work_item_locked(
+                connection, key, repo, None, None, status="active", branch=branch,
+            )
+            created = True
         _insert_work_item_reference_locked(connection, key, provider, scope, native_id)
         item = get_work_item(connection, key)
         connection.commit()
-        return item, True
+        return item, created
     except Exception:
         connection.rollback()
         raise
@@ -461,16 +483,28 @@ def attach_session_client(connection, handle, pid, pid_started_at, cwd):
     connection.commit()
 
 
-def record_prompt(connection, handle):
+def prompt_title(prompt):
+    if not isinstance(prompt, str):
+        return None
+    text = " ".join(prompt.split())
+    if not text or text.startswith(("/", "<")):
+        return None
+    if len(text) <= PROMPT_TITLE_LENGTH:
+        return text
+    cut = text[:PROMPT_TITLE_LENGTH].rsplit(" ", 1)[0]
+    return f"{cut}…"
+
+
+def record_prompt(connection, handle, prompt=None):
     connection.execute(
-        "UPDATE sessions SET turn_state = 'working', last_activity_at = ? WHERE handle = ?",
-        (time.time(), handle),
+        "UPDATE sessions SET turn_state = 'working', last_activity_at = ?, title = COALESCE(title, ?) WHERE handle = ?",
+        (time.time(), prompt_title(prompt), handle),
     )
     connection.commit()
 
 
 def record_stop(connection, handle, cwd, follow=None):
-    checkout, repo, branch, head = _collect_checkout(cwd)
+    checkout, repo, branch, head, default = _collect_checkout(cwd)
     if follow is not None and follow(checkout) is False:
         checkout = repo = branch = head = None
     now = time.time()
@@ -484,7 +518,7 @@ def record_stop(connection, handle, cwd, follow=None):
     )
     connection.commit()
     if repo and branch:
-        attach_work_item_if_unique(connection, repo, branch, handle)
+        attach_work_item_if_unique(connection, repo, branch, handle, create=not default)
         connection.commit()
 
 
@@ -519,16 +553,50 @@ def delete_session(connection, session_id):
     connection.commit()
 
 
-def attach_work_item_if_unique(connection, repo, branch, handle):
-    row = connection.execute("SELECT work_item FROM sessions WHERE handle = ?", (handle,)).fetchone()
-    if row is None or row["work_item"] is not None:
-        return
-    matches = connection.execute(
-        "SELECT key FROM work_items WHERE repo = ? AND branch = ? AND status != 'done'",
-        (repo, branch),
-    ).fetchall()
-    if len(matches) == 1:
-        connection.execute("UPDATE sessions SET work_item = ? WHERE handle = ?", (matches[0]["key"], handle))
+def attach_work_item_if_unique(connection, repo, branch, handle, create=False):
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        row = connection.execute("SELECT work_item, title FROM sessions WHERE handle = ?", (handle,)).fetchone()
+        if row is None or row["work_item"] is not None:
+            connection.commit()
+            return
+        matches = connection.execute(
+            "SELECT key FROM work_items WHERE repo = ? AND branch = ? AND status != 'done'",
+            (repo, branch),
+        ).fetchall()
+        if len(matches) == 1:
+            key = matches[0]["key"]
+        elif not matches and create:
+            key = execution_key()
+            _upsert_work_item_locked(
+                connection, key, repo, None, None, status="active", branch=branch, title=row["title"] or branch,
+            )
+        else:
+            connection.commit()
+            return
+        connection.execute("UPDATE sessions SET work_item = ? WHERE handle = ?", (key, handle))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _branch_work_items_to_absorb_locked(connection, key, repo, branch):
+    return [row["key"] for row in connection.execute(
+        """
+        SELECT w.key FROM work_items w
+        WHERE w.repo = ? AND w.branch = ? AND w.key != ? AND w.feature IS NULL AND w.status != 'done'
+            AND NOT EXISTS (SELECT 1 FROM work_item_references r WHERE r.work_item = w.key)
+            AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.work_item = w.key AND s.role IS NOT NULL)
+        """,
+        (repo, branch, key),
+    ).fetchall()]
+
+
+def _absorb_branch_work_items_locked(connection, key, repo, branch):
+    for absorbed in _branch_work_items_to_absorb_locked(connection, key, repo, branch):
+        connection.execute("UPDATE sessions SET work_item = ? WHERE work_item = ?", (key, absorbed))
+        connection.execute("DELETE FROM work_items WHERE key = ?", (absorbed,))
 
 
 def get_work_item(connection, key):
@@ -566,6 +634,8 @@ def upsert_work_item(connection, key, repo, feature, item, status=None, branch=N
         connection, key, repo, feature, item, status=status, branch=branch, pr=pr,
         title=title, plan_path=plan_path,
     )
+    if feature is not None and branch:
+        _absorb_branch_work_items_locked(connection, key, repo, branch)
     connection.commit()
 
 
@@ -742,7 +812,7 @@ def run_hook(event, host):
             if event == "session-start":
                 start_session(connection, host, session_id, cwd)
             elif event == "prompt":
-                record_prompt(connection, handle)
+                record_prompt(connection, handle, payload.get("prompt"))
             elif event == "stop":
                 record_stop(connection, handle, cwd,
                             follow=lambda checkout: follow_registered_cwd(host, session_id, checkout))

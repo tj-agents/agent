@@ -2,6 +2,7 @@
 """Claim, inspect and resume work-item sessions recorded in the central session store."""
 
 import argparse
+from datetime import datetime
 import importlib.util
 import json
 import math
@@ -514,7 +515,7 @@ def cmd_resume(work_item=None, handle=None, execution_key=None, provider=None, s
 
 def cmd_interrupted(resume_handles=None, cwd=None):
     store = _session_store()
-    repo = _require_repo(cwd or Path.cwd())
+    repo = store.repo_identity(cwd or Path.cwd())
     connection = store.connect()
     try:
         candidates = store.interrupted_candidates(connection, repo=repo)
@@ -526,18 +527,24 @@ def cmd_interrupted(resume_handles=None, cwd=None):
     finally:
         connection.close()
     machine = socket.gethostname()
-    dead = [
-        row for row in candidates
-        if (row.get("machine") or "").casefold() == machine.casefold()
-        and _pid_is_dead(row.get("pid"), row.get("pid_started_at"))
-    ]
+    dead = sorted(
+        (
+            row for row in candidates
+            if (row.get("machine") or "").casefold() == machine.casefold()
+            and _pid_is_dead(row.get("pid"), row.get("pid_started_at"))
+        ),
+        key=lambda row: row.get("last_activity_at") or 0, reverse=True,
+    )
     statuses = {row["handle"]: _read_time_status(row, machine) for row in dead}
     grouped = {}
     for row in dead:
         label = item_names.get(row["work_item"], "(unclaimed)")
-        grouped.setdefault(label, []).append(
-            {"handle": row["handle"], "turn_state": row["turn_state"], "status": statuses[row["handle"]]}
-        )
+        last_activity = row.get("last_activity_at")
+        grouped.setdefault(label, []).append({
+            "handle": row["handle"], "title": row.get("title"), "cwd": row.get("cwd"), "branch": row.get("branch"),
+            "last_activity": datetime.fromtimestamp(last_activity).isoformat(timespec="minutes") if last_activity else None,
+            "turn_state": row["turn_state"], "status": statuses[row["handle"]],
+        })
     result = {"interrupted": grouped}
     if resume_handles:
         by_handle = {row["handle"]: row for row in dead}
