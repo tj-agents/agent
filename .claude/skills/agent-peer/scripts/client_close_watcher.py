@@ -60,7 +60,8 @@ def _record_end(entry):
     if module is None:
         raise session_close.Refusal("session store is unavailable")
     with module.SessionStore() as store:
-        store.end_session(module.session_handle(entry["host"], entry["session_id"]), "closed")
+        store.update_session(module.session_handle(entry["host"], entry["session_id"]),
+                             lambda session: session.end("closed"))
 
 
 def closed_after_stop(entry, guard, cli_root):

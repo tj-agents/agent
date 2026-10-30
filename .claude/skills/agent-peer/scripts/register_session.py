@@ -32,7 +32,7 @@ MAX_ANCESTOR_DEPTH = 10
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "repository_identity.py")
+OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "checkout.py", "session.py", "work_item.py")
 
 FILETIME_EPOCH_DELTA = 11644473600
 FILETIME_TICKS_PER_SECOND = 10_000_000
@@ -491,9 +491,10 @@ def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, pre
         try:
             handle = module.session_handle(host, session_id)
             if preserve_turn and store.get_session(handle) is not None:
-                store.attach_session_client(handle, pid, pid_started_at, cwd)
+                store.update_session(handle, lambda session: session.attach_client(pid, pid_started_at, cwd))
             else:
-                store.start_session(host, session_id, cwd, title=title, pid=pid, pid_started_at=pid_started_at)
+                store.start_session(host, session_id, cwd, module.Checkout.probe(cwd), title=title, pid=pid,
+                                    pid_started_at=pid_started_at)
         except Exception:
             pass
 

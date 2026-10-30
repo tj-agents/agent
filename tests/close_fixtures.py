@@ -91,7 +91,8 @@ class CloseFixture:
                              cli_client.RECORD_PATH_ENV: str(self.recording)}}
         self.patch(mock.patch.object(cli_client, "process_arguments", side_effect=self.commands.get))
         self.patch(mock.patch.object(cli_client, "process_context", side_effect=lambda pid: self.contexts.get(pid, {})))
-        self.store = register_session._load_session_store().SessionStore()
+        self.store_module = register_session._load_session_store()
+        self.store = self.store_module.SessionStore()
         self.addCleanup(self.store.close)
         initial_pid = 10 if host == "codex" else 20
         self.handle = self.store.start_session(host, "one", self.root,
@@ -153,7 +154,7 @@ class CloseFixture:
     def stop(self):
         if self.host == "claude":
             self.append({"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.store.record_stop(self.handle, self.root)
+        self.store.record_stop(self.handle, self.store_module.Checkout.probe(self.root))
         if self.host == "codex":
             self.append_rollout({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-one"}})
         LIFECYCLE.run("stop", Host(self.host), {"session_id": "one", "turn_id": "turn-one",

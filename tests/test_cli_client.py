@@ -276,19 +276,20 @@ class ClientAttributionTests(unittest.TestCase):
 class SessionStoreAttachmentTests(unittest.TestCase):
     def test_frontend_attachment_preserves_turn_state_siblings_and_end_state(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}):
-            with register_session._load_session_store().SessionStore() as store:
+            module = register_session._load_session_store()
+            with module.SessionStore() as store:
                 own = store.start_session("codex", "own", directory, pid=10, pid_started_at=1.0)
                 peer = store.start_session("codex", "peer", directory, pid=10, pid_started_at=1.0)
-                store.record_stop(own, directory)
+                store.record_stop(own, module.Checkout.probe(directory))
                 before = store.get_session(own)
-                store.attach_session_client(own, 20, 2.0, directory)
+                store.update_session(own, lambda session: session.attach_client(20, 2.0, directory))
                 after = store.get_session(own)
                 self.assertEqual("awaiting_input", after.turn_state)
                 self.assertEqual(before.last_activity_at, after.last_activity_at)
                 self.assertEqual(20, after.pid)
                 self.assertEqual(10, store.get_session(peer).pid)
-                store.end_session(own, "closed")
-                store.attach_session_client(own, 30, 3.0, directory)
+                store.update_session(own, lambda session: session.end("closed"))
+                store.update_session(own, lambda session: session.attach_client(30, 3.0, directory))
                 self.assertEqual(20, store.get_session(own).pid)
 
 

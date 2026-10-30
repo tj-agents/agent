@@ -42,7 +42,7 @@ SCHEDULER_DIAGNOSTIC_LIMIT = 1000
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "repository_identity.py")
+OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "checkout.py", "session.py", "work_item.py")
 
 ET.register_namespace("", TASK_SCHEDULER_NAMESPACE)
 
@@ -140,13 +140,13 @@ def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
         raise Refusal(str(error)) from error
 
 
-def _update_own_end(entry, operation, reason):
+def _update_own_end(entry, change):
     try:
         module = register_session._load_session_store()
         if module is None or not entry.get("host") or not entry.get("session_id"):
             return
         with module.SessionStore() as store:
-            getattr(store, operation)(module.session_handle(entry["host"], entry["session_id"]), reason)
+            store.update_session(module.session_handle(entry["host"], entry["session_id"]), change)
     except Exception:
         pass
 
@@ -163,11 +163,11 @@ def delete_own_session(session_id):
 
 
 def _record_own_end(entry, reason):
-    _update_own_end(entry, "end_session", reason)
+    _update_own_end(entry, lambda session: session.end(reason))
 
 
 def _reopen_own_end(entry, reason):
-    _update_own_end(entry, "reopen_session", reason)
+    _update_own_end(entry, lambda session: session.reopen(reason))
 
 
 def session_activity(entry):
@@ -637,7 +637,7 @@ def start_detached(script, arguments, extra=(), stage=True):
             shutil.copy2(path, staging / path.name)
         store = register_session.session_store_path()
         if store is not None:
-            for name in ("session_store.py", "repository_identity.py"):
+            for name in OBSERVER_STORE_FILES[1:]:
                 shutil.copy2(store.with_name(name), staging / name)
             _write_observer_store_receipt(staging)
         command = [sys.executable, str(staging / Path(script).name), *arguments]

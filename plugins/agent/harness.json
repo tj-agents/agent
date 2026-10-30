@@ -19,7 +19,7 @@
     ],
     "hooks": [
       {
-        "path": ".agents/agent-store/runtime/session_store.py",
+        "path": ".agents/agent-store/runtime/session_hook.py",
         "hosts": [
           "claude",
           "codex"
