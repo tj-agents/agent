@@ -133,11 +133,13 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         source = self.native_root("codex/plugins/cache/tj-agents/agent/local", b"runtime", b"resource")
         project = self.root / "project"
         (project / ".codex").mkdir(parents=True)
+        (project / ".git").mkdir()
         (project / ".codex/config.toml").write_text('[plugins."agent@tj-agents"]\nenabled = true\n', encoding="utf-8")
         with mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex"),
                                           "CLAUDE_CONFIG_DIR": str(self.root / "claude")}):
             self.assertEqual([], self.runtime.native_agent_roots(self.runtime.load_codex_config()))
             self.assertEqual([source], self.runtime.native_agent_roots(self.runtime.load_codex_config(project)))
+            self.assertEqual([source], self.runtime.native_agent_roots(self.runtime.load_codex_config(project / "src")))
 
     def test_identical_native_package_keeps_the_core_git_receipt(self):
         target = self.receipt_root("core", b"same runtime", b"same resource")
