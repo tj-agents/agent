@@ -21,6 +21,7 @@ class Supervisor:
         self.context = context
         self.calls = []
         self.sid = "S-1-5-21-1234"
+        self.account = r"DESKTOP\test-user"
         self.xml = None
         self.running = False
         self.enabled = False
@@ -38,7 +39,7 @@ class Supervisor:
             script = base64.b64decode(argv[-1]).decode("utf-16-le")
             if "ConvertTo-Json" in script:
                 import json
-                stdout = json.dumps({"sid": self.sid, "xml": self.xml,
+                stdout = json.dumps({"sid": self.sid, "account": self.account, "xml": self.xml,
                                      "state": "Running" if self.running else "Ready"}, ensure_ascii=False)
             else:
                 self.xml = SERVICE.task_xml(self.context, self.sid)
@@ -114,6 +115,33 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(2, len(drift))
         SERVICE.apply(context)
         self.assertEqual([], SERVICE.check(context))
+
+    def test_windows_exported_defaults_and_current_account_name_are_equivalent(self):
+        context = self.context(windows=True)
+        SERVICE.apply(context)
+        xml = ET.fromstring(context.run.xml)
+        for parent, name in (("Triggers/LogonTrigger", "Enabled"),
+                             ("Principals/Principal", "RunLevel"), ("Settings", "Enabled")):
+            node = xml.find("/".join(f"{{{SERVICE.NAMESPACE}}}{part}" for part in parent.split("/")))
+            node.remove(node.find(f"{{{SERVICE.NAMESPACE}}}{name}"))
+        for node in xml.iter(f"{{{SERVICE.NAMESPACE}}}UserId"):
+            node.text = context.run.account
+        context.run.xml = ET.tostring(xml, encoding="unicode")
+        before = context.run.xml
+        self.assertEqual([], SERVICE.check(context))
+        self.assertEqual([], SERVICE.apply(context))
+        self.assertEqual(before, context.run.xml)
+
+    def test_windows_explicit_disabled_elevated_or_other_user_values_still_drift(self):
+        context = self.context(windows=True)
+        SERVICE.apply(context)
+        original = context.run.xml
+        for before, after in (("<Enabled>true</Enabled>", "<Enabled>false</Enabled>"),
+                              ("LeastPrivilege", "HighestAvailable"),
+                              (context.run.sid, "S-1-5-21-other")):
+            with self.subTest(after=after):
+                context.run.xml = original.replace(before, after)
+                self.assertIn("machine-event scheduled task command or settings differ", SERVICE.check(context))
 
     def test_windows_preserves_task_owned_by_someone_else(self):
         context = self.context(windows=True)
