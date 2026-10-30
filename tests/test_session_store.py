@@ -1,4 +1,3 @@
-import importlib.util
 import io
 import json
 import os
@@ -16,19 +15,11 @@ from unittest import mock
 from git_isolation import isolate_git_config, without_git_config
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / ".agents/agent-store/runtime"
+sys.path.insert(0, str(ROOT / ".agents/agent-store/runtime"))
 
-
-def _load(name):
-    spec = importlib.util.spec_from_file_location(f"test_session_store_{name}", RUNTIME / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-STORE = _load("session_store")
-CHECKOUT = _load("checkout")
-HOOK = _load("session_hook")
+import session_hook  # noqa: E402
+import tj_agent_store  # noqa: E402
+from tj_agent_store import _checkout, _cli_session_registry, _store  # noqa: E402
 
 GIT = shutil.which("git")
 
@@ -71,7 +62,7 @@ class SchemaTests(unittest.TestCase):
         self.db_path = Path(self.temp.name) / "state" / "sessions.db"
 
     def test_schema_created_with_expected_tables_and_user_version(self):
-        store = STORE.SessionStore(self.db_path)
+        store = tj_agent_store.SessionStore(self.db_path)
         self.addCleanup(store.close)
         tables = {
             row[0] for row in store._connection.execute(
@@ -83,8 +74,8 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(4, version)
 
     def test_reconnecting_does_not_lose_the_schema_version(self):
-        STORE.SessionStore(self.db_path).close()
-        store = STORE.SessionStore(self.db_path)
+        tj_agent_store.SessionStore(self.db_path).close()
+        store = tj_agent_store.SessionStore(self.db_path)
         self.addCleanup(store.close)
         self.assertEqual(4, store._connection.execute("PRAGMA user_version").fetchone()[0])
 
@@ -96,7 +87,7 @@ class SchemaTests(unittest.TestCase):
         connection.close()
 
         with self.assertRaisesRegex(RuntimeError, "unsupported schema version 5"):
-            STORE.SessionStore(self.db_path)
+            tj_agent_store.SessionStore(self.db_path)
         connection = sqlite3.connect(self.db_path)
         try:
             self.assertEqual(5, connection.execute("PRAGMA user_version").fetchone()[0])
@@ -110,7 +101,7 @@ class SchemaTests(unittest.TestCase):
         errors = []
 
         def resolve():
-            store = STORE.SessionStore(self.db_path)
+            store = tj_agent_store.SessionStore(self.db_path)
             try:
                 barrier.wait(timeout=5)
                 results.append(store.resolve_or_create_work_item_reference(
@@ -131,7 +122,7 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(2, len(results))
         self.assertEqual({results[0][0].key}, {item.key for item, _created in results})
         self.assertEqual(1, sum(created for _item, created in results))
-        store = STORE.SessionStore(self.db_path)
+        store = tj_agent_store.SessionStore(self.db_path)
         try:
             self.assertEqual(1, store._connection.execute("SELECT COUNT(*) FROM work_items").fetchone()[0])
             self.assertEqual(1, store._connection.execute("SELECT COUNT(*) FROM work_item_references").fetchone()[0])
@@ -139,7 +130,7 @@ class SchemaTests(unittest.TestCase):
             store.close()
 
     def test_binding_is_idempotent_and_conflict_preserves_session_ownership(self):
-        store = STORE.SessionStore(self.db_path)
+        store = tj_agent_store.SessionStore(self.db_path)
         self.addCleanup(store.close)
         store.upsert_work_item("local-a", "repo", "feature", "item")
         store.upsert_work_item("local-b", "repo", "feature", "other")
@@ -174,7 +165,7 @@ class SchemaTests(unittest.TestCase):
         self.db_path.parent.mkdir(exist_ok=True)
         connection = sqlite3.connect(self.db_path, factory=RecordingConnection)
         self.addCleanup(connection.close)
-        STORE.SessionStore._ensure_schema(connection)
+        tj_agent_store.SessionStore._ensure_schema(connection)
         self.assertIn("BEGIN IMMEDIATE", connection.commands)
         self.assertLess(
             connection.commands.index("BEGIN IMMEDIATE"),
@@ -182,7 +173,7 @@ class SchemaTests(unittest.TestCase):
         )
 
     def test_connect_enables_wal_and_foreign_keys(self):
-        store = STORE.SessionStore(self.db_path)
+        store = tj_agent_store.SessionStore(self.db_path)
         self.addCleanup(store.close)
         self.assertEqual("wal", store._connection.execute("PRAGMA journal_mode").fetchone()[0].lower())
         self.assertEqual(1, store._connection.execute("PRAGMA foreign_keys").fetchone()[0])
@@ -201,11 +192,11 @@ class SchemaTests(unittest.TestCase):
 
         connection.execute.side_effect = execute
         with (
-            mock.patch.object(STORE.sqlite3, "connect", return_value=connection),
-            mock.patch.object(STORE.SessionStore, "_ensure_schema"),
-            mock.patch.object(STORE, "_LOCK_RETRY_DELAY", 0),
+            mock.patch.object(sqlite3, "connect", return_value=connection),
+            mock.patch.object(tj_agent_store.SessionStore, "_ensure_schema"),
+            mock.patch.object(_store, "_LOCK_RETRY_DELAY", 0),
         ):
-            self.assertIs(connection, STORE.SessionStore(self.db_path)._connection)
+            self.assertIs(connection, tj_agent_store.SessionStore(self.db_path)._connection)
         self.assertEqual(2, wal_attempts)
         connection.close.assert_not_called()
 
@@ -219,15 +210,15 @@ class SchemaTests(unittest.TestCase):
 
         connection.execute.side_effect = execute
         with (
-            mock.patch.object(STORE.sqlite3, "connect", return_value=connection),
-            mock.patch.object(STORE.SessionStore, "_ensure_schema"),
+            mock.patch.object(sqlite3, "connect", return_value=connection),
+            mock.patch.object(tj_agent_store.SessionStore, "_ensure_schema"),
         ):
             with self.assertRaisesRegex(sqlite3.OperationalError, "disk I/O error"):
-                STORE.SessionStore(self.db_path)
+                tj_agent_store.SessionStore(self.db_path)
         connection.close.assert_called_once_with()
 
     def test_partial_unique_index_enforces_one_owner_row_per_work_item(self):
-        store = STORE.SessionStore(self.db_path)
+        store = tj_agent_store.SessionStore(self.db_path)
         self.addCleanup(store.close)
         store._connection.execute(
             "INSERT INTO work_items (key, repo, feature, item, status) VALUES ('key-1', 'repo', 'f', 'i', 'active')"
@@ -247,7 +238,7 @@ class SchemaTests(unittest.TestCase):
             with self.subTest(repository=repository):
                 self.assertEqual(
                     ("github", f"github.com/owner/{repository}", "42"),
-                    STORE.normalise_work_item_reference("GitHub", f"GitHub.com/Owner/{repository}", "42"),
+                    tj_agent_store.normalise_work_item_reference("GitHub", f"GitHub.com/Owner/{repository}", "42"),
                 )
         for provider, scope, native_id in (
             ("github", "gitlab.com/owner/.github", "42"),
@@ -256,7 +247,7 @@ class SchemaTests(unittest.TestCase):
         ):
             with self.subTest(provider=provider, scope=scope, native_id=native_id):
                 with self.assertRaises(ValueError):
-                    STORE.normalise_work_item_reference(provider, scope, native_id)
+                    tj_agent_store.normalise_work_item_reference(provider, scope, native_id)
 
 
 @unittest.skipUnless(GIT, "git is required for repo-identity and hook lifecycle tests")
@@ -268,78 +259,78 @@ class RepoIdentityTests(unittest.TestCase):
 
     def test_https_remote_normalises_to_host_and_owner_name(self):
         repo = _init_repo(self.root / "https-repo", origin="https://github.com/tj-agents/core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
+        self.assertEqual("github.com/tj-agents/core", _checkout.identify_repository(repo))
 
     def test_ssh_scp_remote_normalises_to_host_and_owner_name(self):
         repo = _init_repo(self.root / "ssh-repo", origin="git@github.com:tj-agents/core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
+        self.assertEqual("github.com/tj-agents/core", _checkout.identify_repository(repo))
 
     def test_ssh_url_remote_normalises_to_host_and_owner_name(self):
         repo = _init_repo(self.root / "ssh-url-repo", origin="ssh://git@github.com/tj-agents/core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
+        self.assertEqual("github.com/tj-agents/core", _checkout.identify_repository(repo))
 
     def test_github_https_ssh_and_scp_remotes_are_the_same_identity(self):
         https = _init_repo(self.root / "gh-https", origin="https://github.com/tj-agents/core.git")
         ssh_url = _init_repo(self.root / "gh-ssh-url", origin="ssh://git@github.com/tj-agents/core.git")
         scp = _init_repo(self.root / "gh-scp", origin="git@github.com:tj-agents/core.git")
-        identities = {CHECKOUT.identify_repository(https), CHECKOUT.identify_repository(ssh_url), CHECKOUT.identify_repository(scp)}
+        identities = {_checkout.identify_repository(https), _checkout.identify_repository(ssh_url), _checkout.identify_repository(scp)}
         self.assertEqual({"github.com/tj-agents/core"}, identities)
 
     def test_azure_devops_https_and_ssh_remotes_are_the_same_identity(self):
         https = _init_repo(self.root / "ado-https", origin="https://org@dev.azure.com/org/project/_git/repo")
         ssh = _init_repo(self.root / "ado-ssh", origin="git@ssh.dev.azure.com:v3/org/project/repo")
-        self.assertEqual(CHECKOUT.identify_repository(https), CHECKOUT.identify_repository(ssh))
-        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.identify_repository(https))
+        self.assertEqual(_checkout.identify_repository(https), _checkout.identify_repository(ssh))
+        self.assertEqual("dev.azure.com/org/project/_git/repo", _checkout.identify_repository(https))
 
     def test_same_path_on_different_hosts_is_a_different_identity(self):
         github = _init_repo(self.root / "gh-collide", origin="https://github.com/tj-agents/core.git")
         gitlab = _init_repo(self.root / "gl-collide", origin="https://gitlab.com/tj-agents/core.git")
-        self.assertNotEqual(CHECKOUT.identify_repository(github), CHECKOUT.identify_repository(gitlab))
+        self.assertNotEqual(_checkout.identify_repository(github), _checkout.identify_repository(gitlab))
 
     def test_userinfo_and_port_are_stripped_from_the_identity(self):
         repo = _init_repo(self.root / "port-repo", origin="https://user:token@github.com:443/tj-agents/core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
+        self.assertEqual("github.com/tj-agents/core", _checkout.identify_repository(repo))
 
     def test_no_remote_falls_back_to_absolute_git_common_dir(self):
         repo = _init_repo(self.root / "no-remote-repo")
-        identity = CHECKOUT.identify_repository(repo)
+        identity = _checkout.identify_repository(repo)
         self.assertEqual(str((repo / ".git").resolve()), identity)
 
     def test_non_git_directory_returns_none(self):
         directory = self.root / "not-a-repo"
         directory.mkdir()
-        self.assertIsNone(CHECKOUT.identify_repository(directory))
+        self.assertIsNone(_checkout.identify_repository(directory))
 
     def test_legacy_visualstudio_https_remote_normalises_like_dev_azure_com(self):
         repo = _init_repo(
             self.root / "legacy-vso-https",
             origin="https://org@ORG.visualstudio.com/DefaultCollection/Project/_git/Repo",
         )
-        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.identify_repository(repo))
+        self.assertEqual("dev.azure.com/org/project/_git/repo", _checkout.identify_repository(repo))
 
     def test_legacy_visualstudio_https_remote_without_defaultcollection(self):
         repo = _init_repo(
             self.root / "legacy-vso-https-no-dc", origin="https://org.visualstudio.com/project/_git/repo",
         )
-        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.identify_repository(repo))
+        self.assertEqual("dev.azure.com/org/project/_git/repo", _checkout.identify_repository(repo))
 
     def test_legacy_vs_ssh_remote_normalises_like_ssh_dev_azure_com(self):
         repo = _init_repo(self.root / "legacy-vso-ssh", origin="git@vs-ssh.visualstudio.com:v3/org/project/repo")
-        self.assertEqual("dev.azure.com/org/project/_git/repo", CHECKOUT.identify_repository(repo))
+        self.assertEqual("dev.azure.com/org/project/_git/repo", _checkout.identify_repository(repo))
 
     def test_legacy_visualstudio_short_form_without_defaultcollection_uses_repo_as_project(self):
         repo = _init_repo(self.root / "legacy-vso-short", origin="https://org.visualstudio.com/_git/repo")
-        self.assertEqual("dev.azure.com/org/repo/_git/repo", CHECKOUT.identify_repository(repo))
+        self.assertEqual("dev.azure.com/org/repo/_git/repo", _checkout.identify_repository(repo))
 
     def test_legacy_visualstudio_short_form_with_defaultcollection_uses_repo_as_project(self):
         repo = _init_repo(
             self.root / "legacy-vso-short-dc", origin="https://org.visualstudio.com/DefaultCollection/_git/repo",
         )
-        self.assertEqual("dev.azure.com/org/repo/_git/repo", CHECKOUT.identify_repository(repo))
+        self.assertEqual("dev.azure.com/org/repo/_git/repo", _checkout.identify_repository(repo))
 
     def test_identity_is_fully_case_folded(self):
         repo = _init_repo(self.root / "case-fold-repo", origin="https://GitHub.com/Tj-Agents/Core.git")
-        self.assertEqual("github.com/tj-agents/core", CHECKOUT.identify_repository(repo))
+        self.assertEqual("github.com/tj-agents/core", _checkout.identify_repository(repo))
 
     def test_unborn_head_keeps_repo_identity_via_git_common_dir_fallback(self):
         directory = self.root / "unborn-repo"
@@ -347,26 +338,26 @@ class RepoIdentityTests(unittest.TestCase):
         _run_git(directory, "init")
         _run_git(directory, "config", "user.email", "test@example.com")
         _run_git(directory, "config", "user.name", "Test User")
-        identity = CHECKOUT.identify_repository(directory)
+        identity = _checkout.identify_repository(directory)
         self.assertEqual(str((directory / ".git").resolve()), identity)
 
     def test_ambiguous_tag_and_branch_name_still_records_the_branch(self):
         repo = _init_repo(self.root / "ambiguous-name-repo")
         _run_git(repo, "checkout", "-b", "shared-name")
         _run_git(repo, "tag", "shared-name")
-        self.assertEqual("shared-name", CHECKOUT.Checkout.probe(repo, CHECKOUT.GIT_TIMEOUT).branch)
+        self.assertEqual("shared-name", _checkout.Checkout.probe(repo, _checkout.GIT_TIMEOUT).branch)
 
     def test_rev_parse_probe_fast_path_uses_one_git_call(self):
         repo = _init_repo(self.root / "fast-path-repo")
         calls = []
-        original_run = CHECKOUT.subprocess.run
+        original_run = _checkout.subprocess.run
 
         def counting_run(*args, **kwargs):
             calls.append(args)
             return original_run(*args, **kwargs)
 
-        with mock.patch.object(CHECKOUT.subprocess, "run", side_effect=counting_run):
-            head, branch, common_dir, toplevel = CHECKOUT._rev_parse_probe(repo, CHECKOUT.GIT_TIMEOUT)
+        with mock.patch.object(_checkout.subprocess, "run", side_effect=counting_run):
+            head, branch, common_dir, toplevel = _checkout._rev_parse_probe(repo, _checkout.GIT_TIMEOUT)
         self.assertEqual(1, len(calls))
         self.assertIsNotNone(head)
         self.assertIsNotNone(common_dir)
@@ -379,14 +370,14 @@ class RepoIdentityTests(unittest.TestCase):
         _run_git(directory, "config", "user.email", "test@example.com")
         _run_git(directory, "config", "user.name", "Test User")
         calls = []
-        original_run = CHECKOUT.subprocess.run
+        original_run = _checkout.subprocess.run
 
         def counting_run(*args, **kwargs):
             calls.append(args)
             return original_run(*args, **kwargs)
 
-        with mock.patch.object(CHECKOUT.subprocess, "run", side_effect=counting_run):
-            head, branch, common_dir, toplevel = CHECKOUT._rev_parse_probe(directory, CHECKOUT.GIT_TIMEOUT)
+        with mock.patch.object(_checkout.subprocess, "run", side_effect=counting_run):
+            head, branch, common_dir, toplevel = _checkout._rev_parse_probe(directory, _checkout.GIT_TIMEOUT)
         self.assertLessEqual(len(calls), 3)
         self.assertIsNone(head)
         self.assertIsNotNone(common_dir)
@@ -395,14 +386,14 @@ class RepoIdentityTests(unittest.TestCase):
         directory = self.root / "not-a-repo-probe"
         directory.mkdir()
         calls = []
-        original_run = CHECKOUT.subprocess.run
+        original_run = _checkout.subprocess.run
 
         def counting_run(*args, **kwargs):
             calls.append(args[0])
             return original_run(*args, **kwargs)
 
-        with mock.patch.object(CHECKOUT.subprocess, "run", side_effect=counting_run):
-            head, branch, common_dir, toplevel = CHECKOUT._rev_parse_probe(directory, CHECKOUT.GIT_TIMEOUT)
+        with mock.patch.object(_checkout.subprocess, "run", side_effect=counting_run):
+            head, branch, common_dir, toplevel = _checkout._rev_parse_probe(directory, _checkout.GIT_TIMEOUT)
         self.assertIsNone(head)
         self.assertIsNone(common_dir)
         self.assertFalse(any("symbolic-ref" in call for call in calls))
@@ -415,8 +406,8 @@ class RepoIdentityTests(unittest.TestCase):
             calls.append(args[0])
             raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 0))
 
-        with mock.patch.object(CHECKOUT.subprocess, "run", side_effect=timeout_run):
-            head, branch, common_dir, toplevel = CHECKOUT._rev_parse_probe(repo, CHECKOUT.GIT_TIMEOUT)
+        with mock.patch.object(_checkout.subprocess, "run", side_effect=timeout_run):
+            head, branch, common_dir, toplevel = _checkout._rev_parse_probe(repo, _checkout.GIT_TIMEOUT)
         self.assertEqual(1, len(calls))
         self.assertIsNone(head)
         self.assertIsNone(branch)
@@ -437,10 +428,10 @@ class HookLifecycleTests(unittest.TestCase):
 
     def _invoke(self, event, host, payload):
         with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))):
-            return HOOK.main([event, "--host", host])
+            return session_hook.main([event, "--host", host])
 
     def _row(self, handle):
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             return store.get_session(handle)
         finally:
@@ -493,7 +484,7 @@ class HookLifecycleTests(unittest.TestCase):
         entry = {"session_id": "locked-id", "host": "claude", "cwd": str(self.root), "pid": 7, "pid_started_at": 1.5}
         (registry / "locked-id.json").write_text(json.dumps(entry), encoding="utf-8")
         self._invoke("session-start", "claude", {"session_id": "locked-id", "cwd": str(self.root)})
-        follower = HOOK.load_sibling(HOOK.__file__, "cli_session_registry")
+        follower = _cli_session_registry
         with mock.patch.object(follower.os, "replace", side_effect=PermissionError("in use")), \
                 mock.patch.object(follower, "REPLACE_DELAY_SECONDS", 0):
             self.assertEqual(0, self._invoke("stop", "claude", {"session_id": "locked-id", "cwd": str(self.repo)}))
@@ -522,7 +513,7 @@ class HookLifecycleTests(unittest.TestCase):
                 self.assertEqual(expected.resolve(), Path(self._row("codex:rooted-id").cwd).resolve())
 
     def _item(self, key):
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             return store.get_work_item(key)
         finally:
@@ -562,16 +553,16 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertIsNone(self._row("claude:main-id").work_item)
 
     def test_main_stays_default_beside_the_origin_head_branch(self):
-        self.assertTrue(STORE.Checkout.probe(self.repo).is_default)
+        self.assertTrue(tj_agent_store.Checkout.probe(self.repo).is_default)
         _run_git(self.repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
         _run_git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
-        on_main = STORE.Checkout.probe(self.repo)
+        on_main = tj_agent_store.Checkout.probe(self.repo)
         self.assertEqual((True, None), (on_main.is_default, on_main.work_branch))
         _run_git(self.repo, "checkout", "-q", "-b", "develop")
-        on_develop = STORE.Checkout.probe(self.repo)
+        on_develop = tj_agent_store.Checkout.probe(self.repo)
         self.assertEqual((True, None), (on_develop.is_default, on_develop.work_branch))
         _run_git(self.repo, "checkout", "-q", "-b", "Feature/Work")
-        on_feature = STORE.Checkout.probe(self.repo)
+        on_feature = tj_agent_store.Checkout.probe(self.repo)
         self.assertEqual((False, "Feature/Work"), (on_feature.is_default, on_feature.work_branch))
 
     def test_origin_head_names_the_default_branch(self):
@@ -589,8 +580,8 @@ class HookLifecycleTests(unittest.TestCase):
         self._invoke("session-start", "claude", payload)
         self._invoke("stop", "claude", payload)
         automatic = self._row("claude:absorb-id").work_item
-        named = STORE.work_item_key("github.com/tj-agents/core", "feature", "named")
-        store = STORE.SessionStore()
+        named = tj_agent_store.work_item_key("github.com/tj-agents/core", "feature", "named")
+        store = tj_agent_store.SessionStore()
         try:
             store.upsert_work_item(named, "github.com/tj-agents/core", "feature", "named",
                                    branch="Feature/Named", title="Named")
@@ -605,7 +596,7 @@ class HookLifecycleTests(unittest.TestCase):
         self._invoke("session-start", "claude", payload)
         self._invoke("stop", "claude", payload)
         automatic = self._row("claude:tracked-id").work_item
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             item, created = store.resolve_or_create_work_item_reference(
                 "github", "github.com/tj-agents/core", "12", "github.com/tj-agents/core",
@@ -630,7 +621,7 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertEqual("working", row.turn_state)
 
     def test_end_and_reopen_persist_through_update_session(self):
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             store.start_session("claude", "id-1", self.repo)
             store.update_session("claude:id-1", lambda session: session.end("finished"))
@@ -647,7 +638,7 @@ class HookLifecycleTests(unittest.TestCase):
 
     def test_session_start_hook_malformed_stdin_exits_zero(self):
         with mock.patch.object(sys, "stdin", io.StringIO("not json {{{")):
-            self.assertEqual(0, HOOK.main(["session-start", "--host", "claude"]))
+            self.assertEqual(0, session_hook.main(["session-start", "--host", "claude"]))
 
     def test_session_start_hook_unwritable_db_path_exits_zero(self):
         blocker = self.root / "blocker-file"
@@ -655,44 +646,44 @@ class HookLifecycleTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(blocker / "nested")}, clear=False):
             payload = {"session_id": "id", "cwd": str(self.repo)}
             with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))):
-                self.assertEqual(0, HOOK.main(["session-start", "--host", "claude"]))
+                self.assertEqual(0, session_hook.main(["session-start", "--host", "claude"]))
 
     def test_work_item_auto_attach_requires_exactly_one_match(self):
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             repo = "github.com/tj-agents/core"
             store.upsert_work_item("github.com/tj-agents/core:f/a", repo, "f", "a", status="active", branch="topic")
-            store.start_session("claude", "attach-id", self.repo, STORE.Checkout.probe(self.repo))
-            store.record_stop("claude:attach-id", STORE.Checkout.probe(self.repo))
+            store.start_session("claude", "attach-id", self.repo, tj_agent_store.Checkout.probe(self.repo))
+            store.record_stop("claude:attach-id", tj_agent_store.Checkout.probe(self.repo))
         finally:
             store.close()
 
         _run_git(self.repo, "checkout", "-b", "topic")
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
-            store.record_stop("claude:attach-id", STORE.Checkout.probe(self.repo))
+            store.record_stop("claude:attach-id", tj_agent_store.Checkout.probe(self.repo))
             row = store.get_session("claude:attach-id")
             self.assertEqual("github.com/tj-agents/core:f/a", row.work_item)
         finally:
             store.close()
 
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             store.upsert_work_item("github.com/tj-agents/core:f/b", "github.com/tj-agents/core", "f", "b", status="active", branch="topic")
-            store.start_session("claude", "attach-id-2", self.repo, STORE.Checkout.probe(self.repo))
-            store.record_stop("claude:attach-id-2", STORE.Checkout.probe(self.repo))
+            store.start_session("claude", "attach-id-2", self.repo, tj_agent_store.Checkout.probe(self.repo))
+            store.record_stop("claude:attach-id-2", tj_agent_store.Checkout.probe(self.repo))
             row = store.get_session("claude:attach-id-2")
             self.assertIsNone(row.work_item)
         finally:
             store.close()
 
     def test_concurrent_writers_from_threads_keep_every_row(self):
-        STORE.SessionStore().close()
+        tj_agent_store.SessionStore().close()
         errors = []
 
         def write(index):
             try:
-                store = STORE.SessionStore()
+                store = tj_agent_store.SessionStore()
                 try:
                     store.start_session("claude", f"thread-{index}", self.repo)
                 finally:
@@ -707,7 +698,7 @@ class HookLifecycleTests(unittest.TestCase):
             thread.join()
 
         self.assertEqual([], errors)
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             handles = {row["handle"] for row in store._connection.execute("SELECT handle FROM sessions").fetchall()}
         finally:
@@ -715,7 +706,7 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertEqual({f"claude:thread-{index}" for index in range(8)}, handles)
 
     def test_resume_start_after_handoff_clears_role_but_keeps_work_item(self):
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             store.upsert_work_item("some-key", "repo", "f", "a", status="active")
             store.start_session("claude", "id-1", self.repo)
@@ -729,7 +720,7 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertEqual("some-key", row.work_item)
 
     def test_resume_start_keeps_role_when_not_handed_off(self):
-        store = STORE.SessionStore()
+        store = tj_agent_store.SessionStore()
         try:
             store.upsert_work_item("some-key", "repo", "f", "a", status="active")
             store.start_session("claude", "id-2", self.repo)
@@ -742,9 +733,9 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertEqual("owner", row.role)
 
     def test_git_decodes_with_utf8_and_replaces_errors(self):
-        with mock.patch.object(CHECKOUT.subprocess, "run") as run:
+        with mock.patch.object(_checkout.subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n")
-            CHECKOUT.git(self.repo, "status")
+            _checkout.git(self.repo, "status")
         _, kwargs = run.call_args
         self.assertEqual("utf-8", kwargs.get("encoding"))
         self.assertEqual("replace", kwargs.get("errors"))
@@ -775,7 +766,7 @@ class ClaimWorkItemTests(unittest.TestCase):
         self.db_path = Path(self.temp.name) / "state" / "sessions.db"
 
     def _store(self):
-        return STORE.SessionStore(self.db_path)
+        return tj_agent_store.SessionStore(self.db_path)
 
     def _seed_work_item(self, store, key):
         store.upsert_work_item(key, "repo", "feature", "item")
@@ -804,7 +795,7 @@ class ClaimWorkItemTests(unittest.TestCase):
             store.start_session("claude", "a")
             store.claim_work_item("claude:a", "key-1", "owner")
             store.start_session("codex", "b")
-            with mock.patch.object(STORE.Session, "claim", side_effect=RuntimeError("boom")):
+            with mock.patch.object(tj_agent_store.Session, "claim", side_effect=RuntimeError("boom")):
                 with self.assertRaises(RuntimeError):
                     store.claim_work_item("codex:b", "key-1", "owner", predecessor="claude:a")
             predecessor = store.get_session("claude:a")
@@ -826,7 +817,7 @@ class ClaimWorkItemTests(unittest.TestCase):
         finally:
             store.close()
 
-        original_live_owners = STORE.SessionStore.live_owners
+        original_live_owners = tj_agent_store.SessionStore.live_owners
 
         def slow_live_owners(store, key):
             result = original_live_owners(store, key)
@@ -844,7 +835,7 @@ class ClaimWorkItemTests(unittest.TestCase):
             finally:
                 own_store.close()
 
-        with mock.patch.object(STORE.SessionStore, "live_owners", autospec=True, side_effect=slow_live_owners):
+        with mock.patch.object(tj_agent_store.SessionStore, "live_owners", autospec=True, side_effect=slow_live_owners):
             threads = [
                 threading.Thread(target=claim, args=("b", "codex:b")),
                 threading.Thread(target=claim, args=("c", "codex:c")),
@@ -918,7 +909,7 @@ class ClaimWorkItemTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "title must be non-empty"):
                 store.claim_registered_work_item(
                     "claude", "registered", self.temp.name, None, "key-1", "repo", "feature", "item",
-                    "owner", title="  ", registration=STORE.ClientRegistration("Claude tab", 1, 1.0),
+                    "owner", title="  ", registration=tj_agent_store.ClientRegistration("Claude tab", 1, 1.0),
                 )
             self.assertIsNone(store.get_work_item("key-1"))
             self.assertIsNone(store.get_session("claude:registered"))
@@ -932,11 +923,11 @@ class BranchWorkItemRuleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="branch work items ")
         self.addCleanup(self.temp.cleanup)
-        self.store = STORE.SessionStore(Path(self.temp.name) / "sessions.db")
+        self.store = tj_agent_store.SessionStore(Path(self.temp.name) / "sessions.db")
         self.addCleanup(self.store.close)
 
     def _checkout(self, branch, default=False):
-        return STORE.Checkout(self.temp.name, "repo", branch, "abc", default)
+        return tj_agent_store.Checkout(self.temp.name, "repo", branch, "abc", default)
 
     def _stopped(self, session_id, branch):
         handle = self.store.start_session("claude", session_id)
@@ -981,7 +972,7 @@ class BranchWorkItemRuleTests(unittest.TestCase):
         automatic = self._stopped("a", "topic")
         self.store.claim_registered_work_item(
             "codex", "c", self.temp.name, self._checkout("topic"), "repo:f/i", "repo", "f", "i", "owner",
-            branch="topic", title="Named", registration=STORE.ClientRegistration("Codex tab", 7, 7.0),
+            branch="topic", title="Named", registration=tj_agent_store.ClientRegistration("Codex tab", 7, 7.0),
         )
         self.assertIsNone(self.store.get_work_item(automatic))
         self.assertEqual("repo:f/i", self.store.get_session("claude:a").work_item)
@@ -993,7 +984,7 @@ class BranchWorkItemRuleTests(unittest.TestCase):
         automatic = self._stopped("a", "topic")
         self.store.claim_registered_work_item(
             "codex", "c", self.temp.name, self._checkout("topic"), "repo:f/i", "repo", "f", "i", "bounded: docs",
-            branch="topic", title="Named", registration=STORE.ClientRegistration("Codex tab", 7, 7.0),
+            branch="topic", title="Named", registration=tj_agent_store.ClientRegistration("Codex tab", 7, 7.0),
         )
         self.assertEqual("topic", self.store.get_work_item("repo:f/i").branch)
         self.assertEqual(automatic, self.store.get_session("claude:a").work_item)
@@ -1015,25 +1006,6 @@ class BranchWorkItemRuleTests(unittest.TestCase):
         [(session, item)] = self.store.sessions_with_work_items_on_hosts(["claude"], "a")
         self.assertEqual(("claude:a", automatic, "topic"), (session.handle, item.key, item.branch))
 
-
-class RuntimeLoaderTests(unittest.TestCase):
-    def test_each_runtime_module_loads_once_per_process(self):
-        again = _load("session_store")
-        self.assertIsNot(STORE, again)
-        self.assertIs(STORE.Session, again.Session)
-        self.assertIs(STORE.Checkout, HOOK.load_sibling(STORE.__file__, "checkout").Checkout)
-        self.assertEqual(STORE.Session("claude:x", "claude", "x"), again.Session("claude:x", "claude", "x"))
-
-    def test_a_packaged_copy_keeps_its_own_loader_and_modules(self):
-        packaged_runtime = ROOT / "plugins/agent/.agents/agent-store/runtime"
-        spec = importlib.util.spec_from_file_location(
-            "test_packaged_session_store", packaged_runtime / "session_store.py",
-        )
-        packaged = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(packaged)
-        self.assertIsNot(STORE.Session, packaged.Session)
-        loaders = {Path(sys.modules[module.load_sibling.__module__].__file__).parent for module in (STORE, packaged)}
-        self.assertEqual({RUNTIME.resolve(), packaged_runtime.resolve()}, loaders)
 
 if __name__ == "__main__":
     unittest.main()

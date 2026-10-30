@@ -56,7 +56,7 @@ def final_local_guard(request, path, digest, activity):
 
 
 def _record_end(entry):
-    module = session_close.register_session._load_session_store()
+    module = session_close.register_session.agent_store()
     if module is None:
         raise session_close.Refusal("session store is unavailable")
     with module.SessionStore() as store:

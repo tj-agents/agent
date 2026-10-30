@@ -43,11 +43,11 @@ class LoaderRootTests(unittest.TestCase):
         scripts = self.inner / '.agents/agent/utility/peer/scripts'
         scripts.mkdir(parents=True)
         shutil.copy2(ROOT / 'plugins/agent/.agents/agent/utility/peer/scripts/register_session.py', scripts / 'register_session.py')
-        sentinel = self.outer / '.agents/agent-store/runtime/session_store.py'
+        sentinel = self.outer / '.agents/agent-store/runtime/tj_agent_store/__init__.py'
         sentinel.parent.mkdir(parents=True)
-        sentinel.write_text("raise AssertionError('outer store loaded')\n", encoding='utf-8')
+        sentinel.write_text("raise AssertionError('outer store loaded')", encoding='utf-8')
         register = load('nested_register_session', scripts / 'register_session.py')
-        self.assertIsNone(register._load_session_store())
+        self.assertIsNone(register.agent_store())
 
     def test_followup_loader_refuses_missing_inner_transport(self):
         script = self.inner / '.agents/agent/utility/message/scripts/codex_followup.py'

@@ -1,4 +1,3 @@
-import importlib.util
 import json
 from pathlib import Path
 import sqlite3
@@ -10,14 +9,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 INSPECT = ROOT / ".agents/agent-store/utility/inspect/scripts/inspect.py"
-READER = ROOT / ".agents/agent-store/runtime/reader.py"
+sys.path.insert(0, str(ROOT / ".agents/agent-store/runtime"))
 
-
-def load_reader():
-    spec = importlib.util.spec_from_file_location("agent_store_reader", READER)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from tj_agent_store import ReadOnlyWorkItemStore  # noqa: E402
 
 
 class InspectTests(unittest.TestCase):
@@ -136,7 +130,7 @@ class InspectTests(unittest.TestCase):
         connection = sqlite3.connect(self.database)
         connection.execute("PRAGMA journal_mode = WAL")
         connection.close()
-        reader = load_reader().ReadOnlyWorkItemStore(self.database)
+        reader = ReadOnlyWorkItemStore(self.database)
         references = reader._references
 
         def add_reference(connection, clause="", arguments=()):

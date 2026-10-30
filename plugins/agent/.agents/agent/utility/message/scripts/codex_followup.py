@@ -25,8 +25,8 @@ class ReceiptMismatch(FollowupError):
     pass
 
 
-def _agent_store_reader():
-    """Load the Store reader only from this package's nearest verified root."""
+def _agent_store():
+    """Import the Agent Store only from this package's nearest verified root."""
     for root in Path(__file__).resolve().parents:
         runtime = root / ".agents" / "agent" / "runtime"
         locator = runtime / "package_root.py"
@@ -37,19 +37,19 @@ def _agent_store_reader():
         spec.loader.exec_module(package_root)
         if not package_root.is_package_root(root):
             continue
-        path = root / ".agents" / "agent-store" / "runtime" / "reader.py"
-        if not path.is_file():
+        store_root = root / ".agents" / "agent-store" / "runtime"
+        if not (store_root / "tj_agent_store" / "__init__.py").is_file():
             break
-        spec = importlib.util.spec_from_file_location("followup_store_reader", path)
-        reader = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(reader)
-        return reader
+        if str(store_root) not in sys.path:
+            sys.path.insert(0, str(store_root))
+        import tj_agent_store
+
+        return tj_agent_store
     raise FollowupError("The shipped Agent Store reader is unavailable; no send attempted")
 
 
 def responsibility(receipt):
-    reader = _agent_store_reader()
-    snapshot = reader.ReadOnlyWorkItemStore().inspect(execution_key=receipt["routing"]["execution_key"])
+    snapshot = _agent_store().ReadOnlyWorkItemStore().inspect(execution_key=receipt["routing"]["execution_key"])
     if snapshot["work_items"][0]["status"] == "done":
         raise FollowupError("Recipient execution is complete; reconcile responsibility before sending")
     matches = [row for row in snapshot["sessions"]

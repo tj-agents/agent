@@ -22,11 +22,6 @@ AWAIT_PICKUP = RECOVERY.await_pickup
 
 
 class RecoveryTests(unittest.TestCase):
-    def test_store_loader_requires_the_canonical_runtime(self):
-        with mock.patch.object(RECOVERY, "_package_root", return_value=Path("staging")):
-            with self.assertRaisesRegex(RuntimeError, "session_store.py"):
-                RECOVERY._script_path("session_store")
-
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="synthetic recovery ")
         self.addCleanup(self.temp.cleanup)
@@ -385,7 +380,7 @@ Observed blocker: no send was attempted."""
                                                       "content": [{"type": "input_text", "text": "policy"}]}},
             ]
             rollout.write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
-        module = RECOVERY._load("session_store")
+        module = RECOVERY.tj_agent_store
         with module.SessionStore() as store:
             if work_title:
                 store.upsert_work_item("github.com/tj-agents/docs:problem-management/personal-policy",

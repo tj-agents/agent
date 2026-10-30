@@ -276,7 +276,7 @@ class ClientAttributionTests(unittest.TestCase):
 class SessionStoreAttachmentTests(unittest.TestCase):
     def test_frontend_attachment_preserves_turn_state_siblings_and_end_state(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}):
-            module = register_session._load_session_store()
+            module = register_session.agent_store()
             with module.SessionStore() as store:
                 own = store.start_session("codex", "own", directory, pid=10, pid_started_at=1.0)
                 peer = store.start_session("codex", "peer", directory, pid=10, pid_started_at=1.0)
