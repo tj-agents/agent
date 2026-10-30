@@ -12,7 +12,8 @@ import lock_io
 
 def runtime_module(name):
     for parent in Path(__file__).resolve().parents:
-        markers = (parent / ".git", parent / ".codex-plugin" / "plugin.json", parent / ".claude-plugin" / "plugin.json")
+        markers = (parent / ".git", parent / ".codex-plugin" / "plugin.json", parent / ".claude-plugin" / "plugin.json",
+                   parent / "source.json")
         candidate = parent / ".agents" / "agent" / "runtime" / f"{name}.py"
         if candidate.is_file() and any(marker.exists() for marker in markers):
             spec = importlib.util.spec_from_file_location(f"selection_{name}", candidate)

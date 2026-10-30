@@ -41,6 +41,7 @@ def refresh(plugins: Plugins, executable: str, project: Path, marketplaces: dict
 
 def prepare_required(project: Path, host: Host, executable: str | None = None,
                      inventory_options: tuple[str, ...] = (), updated: set[str] | None = None):
+    required_plugins.reconcile_selection(project)
     try:
         return required_plugins.check(project, host, executable, inventory_options)
     except required_plugins.MissingRequiredPluginsError as error:
