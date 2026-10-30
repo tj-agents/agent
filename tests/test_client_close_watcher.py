@@ -17,7 +17,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.stop()
         self.assertEqual(0, self.wait())
         self.assertEqual("closed", self.outcome()["status"])
-        self.assertEqual("closed", self.row()["end_reason"])
+        self.assertEqual("closed", self.row().end_reason)
         self.assertFalse(WATCHER.canonical_path(self.request).exists())
         self.assertGreaterEqual(self.server.request.call_count, 9)
 
@@ -26,7 +26,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.append_rollout({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-one"}})
         self.assertEqual(0, self.wait())
         self.assertEqual("closed", self.outcome()["status"])
-        self.assertEqual("closed", self.row()["end_reason"])
+        self.assertEqual("closed", self.row().end_reason)
 
     def test_store_bookkeeping_failure_after_a_real_stop_keeps_the_close_proof(self):
         self.arm()
@@ -37,7 +37,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.assertEqual({"status": "closed", "session_id": "one"},
                          {key: outcome[key] for key in ("status", "session_id")})
         self.assertEqual("session Store bookkeeping failed after close: Store unavailable", outcome["reason"])
-        self.assertIsNone(self.row()["ended_at"])
+        self.assertIsNone(self.row().ended_at)
 
     def test_refused_stop_does_not_attempt_store_bookkeeping(self):
         self.arm()
@@ -69,21 +69,21 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.stop()
         self.assertEqual(0, self.wait())
         self.assertEqual("closed", self.outcome()["status"])
-        self.assertEqual("closed", self.row()["end_reason"])
+        self.assertEqual("closed", self.row().end_reason)
 
     def test_stop_store_transition_waits_for_completion_publication(self):
         self.arm()
         self.stop()
         self.assertEqual(0, self.wait())
         self.assertEqual("closed", self.outcome()["status"])
-        self.assertEqual("closed", self.row()["end_reason"])
+        self.assertEqual("closed", self.row().end_reason)
 
     def test_no_matching_stop_never_signals(self):
         self.arm()
         with mock.patch.object(session_close, "stop_cli_client") as stop:
             self.assertEqual(2, self.wait())
         stop.assert_not_called()
-        self.assertIsNone(self.row()["ended_at"])
+        self.assertIsNone(self.row().ended_at)
 
     def test_private_codex_uses_the_frozen_frontend_and_native_input(self):
         self.commands[20] = ["codex", "--no-daemon"]
@@ -109,7 +109,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.server.request.side_effect = request
         self.assertEqual(0, self.wait())
         self.assertEqual("cancelled", self.outcome()["status"])
-        self.assertIsNone(self.row()["ended_at"])
+        self.assertIsNone(self.row().ended_at)
 
     def test_later_prompt_and_stop_during_settlement_cancel(self):
         self.arm()
@@ -139,7 +139,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
             self.assertEqual(2, self.wait())
         self.assertEqual(["held"], calls)
         self.assertEqual(original, self.recording.read_bytes())
-        self.assertIsNone(self.row()["ended_at"])
+        self.assertIsNone(self.row().ended_at)
 
     def test_store_transition_does_not_replace_the_native_completion_guard(self):
         self.arm()
@@ -147,12 +147,12 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         native = self.native_request
         def request(method, params):
             if method == "thread/items/list":
-                self.store.record_prompt(self.connection, self.handle)
-                self.store.record_stop(self.connection, self.handle, self.root)
+                self.store.update_session(self.handle, lambda session: session.prompted())
+                self.store.record_stop(self.handle, self.store_module.Checkout.probe(self.root))
             return native(method, params)
         self.server.request.side_effect = request
         self.assertEqual(0, self.wait())
-        self.assertEqual("closed", self.row()["end_reason"])
+        self.assertEqual("closed", self.row().end_reason)
 
     def test_mutated_request_and_replaced_generation_never_signal(self):
         self.arm()
@@ -174,7 +174,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.assertTrue(WATCHER.canonical_path(self.request).exists())
         self.assertEqual(0, self.wait())
         self.assertEqual("cancelled", self.outcome()["status"])
-        self.assertIsNone(self.row()["ended_at"])
+        self.assertIsNone(self.row().ended_at)
 
 
 class ClaudeWatcherTests(CloseFixture, unittest.TestCase):
@@ -186,7 +186,7 @@ class ClaudeWatcherTests(CloseFixture, unittest.TestCase):
         self.stop()
         self.assertEqual(0, self.wait())
         self.assertEqual("closed", self.outcome()["status"])
-        self.assertEqual("closed", self.row()["end_reason"])
+        self.assertEqual("closed", self.row().end_reason)
 
     def test_user_changes_inside_held_handle_preserve_claude(self):
         self.arm()
@@ -200,7 +200,7 @@ class ClaudeWatcherTests(CloseFixture, unittest.TestCase):
         with mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive()):
             self.assertEqual(0, self.wait())
         self.assertEqual([], signals)
-        self.assertIsNone(self.row()["ended_at"])
+        self.assertIsNone(self.row().ended_at)
 
 
 if __name__ == "__main__":

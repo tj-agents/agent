@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from git_isolation import isolate_git_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
@@ -20,9 +22,7 @@ from host import Host
 
 class SelectionConvergenceTests(unittest.TestCase):
     def setUp(self):
-        isolated_git = mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "0"})
-        isolated_git.start()
-        self.addCleanup(isolated_git.stop)
+        isolate_git_config()
         temporary = tempfile.TemporaryDirectory(prefix="selection upgrade ü ")
         self.addCleanup(temporary.cleanup)
         self.project = Path(temporary.name)

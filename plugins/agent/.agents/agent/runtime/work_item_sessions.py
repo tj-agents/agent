@@ -130,35 +130,26 @@ def _selector(work_item=None, execution_key=None, provider=None, scope=None, nat
     return "reference", reference
 
 
-def _label(item):
-    if item is None:
-        return None
-    if item["feature"] is not None:
-        return f"{item['feature']}/{item['item']}"
-    return item["key"]
-
-
 def _result_item(item, reference=None):
     return {
-        "work_item": _label(item),
-        "execution_key": item["key"] if item else None,
+        "work_item": item.label if item else None,
+        "execution_key": item.key if item else None,
         "reference": reference,
     }
 
 
-def _find_selected_work_item(connection, selector, cwd):
-    store = _session_store()
+def _find_selected_work_item(store, selector, cwd):
     kind, value = selector
     if kind == "local":
         repo = _require_repo(cwd)
-        return store.get_work_item(connection, store.work_item_key(repo, *value)), None
+        return store.get_work_item(_session_store().work_item_key(repo, *value)), None
     if kind == "execution":
-        return store.get_work_item(connection, value), None
+        return store.get_work_item(value), None
     provider, scope, native_id = value
-    reference = store.get_work_item_reference(connection, provider, scope, native_id)
+    reference = store.get_work_item_reference(provider, scope, native_id)
     if reference is None:
         return None, {"provider": provider, "scope": scope, "native_id": native_id}
-    return store.get_work_item(connection, reference["work_item"]), {
+    return store.get_work_item(reference.work_item), {
         "provider": provider, "scope": scope, "native_id": native_id,
     }
 
@@ -172,38 +163,23 @@ def _validate_role(role):
     raise ValueError(f"invalid --role {role!r}; expected 'owner' or 'bounded: <non-empty scope>'")
 
 
-def _default_branch(cwd, current_branch):
-    output = _session_store()._git(cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-    if output:
-        return output.split("/", 1)[1] if output.startswith("origin/") else output
-    if current_branch in ("main", "master"):
-        return current_branch
-    return None
-
-
-def _branch_to_record(cwd, branch):
-    if not branch:
-        return None
-    return None if branch == _default_branch(cwd, branch) else branch
-
-
 def _require_repo(cwd):
-    repo = _session_store().repo_identity(cwd)
+    repo = _session_store().identify_repository(cwd)
     if not repo:
         raise ValueError(f"could not determine a git repository identity from {cwd}")
     return repo
 
 
-def _require_repo_branch_head(cwd):
-    store = _session_store()
-    repo, branch, head = store._collect_repo_branch_head(cwd, timeout=store.GIT_TIMEOUT)
-    if not repo:
+def _require_checkout(cwd):
+    module = _session_store()
+    checkout = module.Checkout.probe(cwd, timeout=module.GIT_TIMEOUT)
+    if not checkout.repo:
         raise ValueError(f"could not determine a git repository identity from {cwd}")
-    return repo, branch, head
+    return checkout
 
 
 def _repository_root(cwd):
-    root = _session_store()._git(cwd, "rev-parse", "--show-toplevel")
+    root = _session_store().git(cwd, "rev-parse", "--show-toplevel")
     if not root:
         raise ValueError(f"could not determine the repository root from {cwd}")
     return Path(root).resolve()
@@ -250,12 +226,12 @@ def _require_session_id(host):
     return session_id
 
 
-def _registered_current_session(connection, host, cwd):
+def _registered_current_session(store, host, cwd):
     session_id = _current_session_id(host)
     if session_id and _agent_recovery().SESSION_ID.fullmatch(session_id):
         handle = _session_store().session_handle(host.value, session_id)
-        session = _session_store().get_session(connection, handle)
-        if session is not None and session["pid"] is not None and session["pid_started_at"] is not None:
+        session = store.get_session(handle)
+        if session is not None and session.has_client_identity:
             return session_id, None
     try:
         entry = _session_close().own_host_and_entry(cwd)
@@ -268,7 +244,7 @@ def _registered_current_session(connection, host, cwd):
         raise ValueError("the verified native session has no valid session id")
     if session_id and session_id != registered_id:
         raise ValueError("the native session id does not match the verified registry attachment")
-    return registered_id, entry
+    return registered_id, _session_store().ClientRegistration.from_entry(entry)
 
 
 def _path_key(value):
@@ -291,16 +267,16 @@ def _head_is_ancestor(worktree, head):
     return result.returncode == 0
 
 
-def _worktree_status(row):
-    worktree = row.get("cwd")
+def _worktree_status(session):
+    worktree = session.cwd
     if not worktree or not Path(worktree).is_dir():
         return "stale"
-    branch = _session_store()._git(worktree, "branch", "--show-current")
+    branch = _session_store().git(worktree, "branch", "--show-current")
     if branch is None:
         return "unknown"
-    if branch != row.get("branch"):
+    if branch != session.branch:
         return "stale"
-    head = row.get("head")
+    head = session.head
     if not head:
         return "unknown"
     contains = _head_is_ancestor(worktree, head)
@@ -309,19 +285,18 @@ def _worktree_status(row):
     return "live" if contains else "stale"
 
 
-def _read_time_status(row, machine):
-    if (row.get("machine") or "").casefold() != machine.casefold():
+def _read_time_status(session, machine):
+    if (session.machine or "").casefold() != machine.casefold():
         return "foreign"
-    ended = row.get("ended_at") is not None
-    if not ended:
-        liveness = _agent_recovery().liveness({"host": row["host"], "session": row["session_id"]})
+    if not session.ended:
+        liveness = _agent_recovery().liveness({"host": session.host, "session": session.session_id})
         if liveness == "live":
             return "live"
         if liveness == "unknown":
             return "unknown"
-    if ended and row.get("end_reason") in ("finished", "handed_off"):
-        return row["end_reason"]
-    worktree = _worktree_status(row)
+    if session.ended and session.end_reason in ("finished", "handed_off"):
+        return session.end_reason
+    worktree = _worktree_status(session)
     return worktree if worktree in ("stale", "unknown") else "closed"
 
 
@@ -340,22 +315,22 @@ def _pid_is_dead(pid, pid_started_at):
     return started != pid_started_at
 
 
-def _finished_elsewhere(row, machine):
-    if row.get("ended_at") is not None:
+def _finished_elsewhere(session, machine):
+    if session.ended:
         return True
-    if (row.get("machine") or "").casefold() != machine.casefold():
+    if (session.machine or "").casefold() != machine.casefold():
         return False
-    record = _agent_recovery()._registry(row["session_id"]) or {}
+    record = _agent_recovery()._registry(session.session_id) or {}
     started = record.get("pid_started_at")
-    if (record.get("host") in (None, row["host"]) and isinstance(record.get("pid"), int)
+    if (record.get("host") in (None, session.host) and isinstance(record.get("pid"), int)
             and isinstance(started, (int, float)) and not isinstance(started, bool) and math.isfinite(started)):
         return _pid_is_dead(record["pid"], started)
-    return _pid_is_dead(row.get("pid"), row.get("pid_started_at"))
+    return _pid_is_dead(session.pid, session.pid_started_at)
 
 
-def _resume_roots(row):
-    host = Host(row["host"])
-    return {host: Path(row["profile"]) / host.history_directory}
+def _resume_roots(session):
+    host = Host(session.host)
+    return {host: Path(session.profile) / host.history_directory}
 
 
 def _unverified_launch(error):
@@ -364,183 +339,173 @@ def _unverified_launch(error):
 
 def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=None, title=None, plan_path=None,
               execution_key=None, provider=None, scope=None, native_id=None, cwd=None):
-    store = _session_store()
+    module = _session_store()
     cwd = cwd or Path.cwd()
     selector = _selector(work_item, execution_key, provider, scope, native_id)
     role = _validate_role(role)
     title = _validate_title(title)
     plan_path = _validate_plan_path(plan_path, cwd)
-    repo, branch, head = _require_repo_branch_head(cwd)
-    record_branch = _branch_to_record(cwd, branch)
-    connection = store.connect()
-    try:
+    checkout = _require_checkout(cwd)
+    repo = checkout.repo
+    record_branch = checkout.work_branch
+    with module.SessionStore() as store:
         kind, value = selector
         reference = None
         if kind == "local":
             feature, item = value
-            key = store.work_item_key(repo, feature, item)
-            selected = store.get_work_item(connection, key)
+            key = module.work_item_key(repo, feature, item)
+            selected = store.get_work_item(key)
         elif kind == "execution":
             key = value
-            selected = store.get_work_item(connection, key)
+            selected = store.get_work_item(key)
             if selected is None:
                 raise ValueError(f"work item does not exist: {key}")
-            feature, item = selected["feature"], selected["item"]
+            feature, item = selected.feature, selected.item
         else:
             provider, scope, native_id = value
-            selected, _reference = _find_selected_work_item(connection, selector, cwd)
+            selected, _reference = _find_selected_work_item(store, selector, cwd)
             if selected is None:
                 raise ValueError("work item does not exist; register the remote reference before claiming it")
-            key = selected["key"]
-            feature, item = selected["feature"], selected["item"]
+            key = selected.key
+            feature, item = selected.feature, selected.item
             reference = {"provider": provider, "scope": scope, "native_id": native_id}
-        work_item_repo = selected["repo"] if selected else repo
+        work_item_repo = selected.repo if selected else repo
         if plan_path is not None and work_item_repo != repo:
             raise ValueError("--plan-path cannot update a work item from a different repository")
         item_branch = record_branch if work_item_repo == repo else None
-        session_id, registration = _registered_current_session(connection, host, cwd)
-        handle = store.session_handle(host.value, session_id)
+        session_id, registration = _registered_current_session(store, host, cwd)
+        handle = module.session_handle(host.value, session_id)
         removed = store.claim_registered_work_item(
-            connection, host.value, session_id, cwd, key, work_item_repo, repo, feature, item, role,
-            status=status, branch=item_branch, session_branch=branch, head=head,
-            title=title, plan_path=plan_path, predecessor=predecessor, registration=registration,
+            host.value, session_id, cwd, checkout, key, work_item_repo, feature, item, role,
+            status=status, branch=item_branch, title=title, plan_path=plan_path, predecessor=predecessor,
+            registration=registration,
             require_existing_binding=kind == "reference",
         )
-        item_row = store.get_work_item(connection, key)
-        result = _result_item(item_row, reference)
+        result = _result_item(store.get_work_item(key), reference)
         result["handle"] = handle
         if removed:
             result["removed"] = removed
         return result
-    finally:
-        connection.close()
 
 
 def cmd_status(work_item=None, execution_key=None, provider=None, scope=None, native_id=None, cwd=None):
-    store = _session_store()
     cwd = cwd or Path.cwd()
     selector = _selector(work_item, execution_key, provider, scope, native_id)
-    connection = store.connect()
-    try:
-        item_row, reference = _find_selected_work_item(connection, selector, cwd)
-        rows = store.sessions_for_work_item(connection, item_row["key"]) if item_row else []
-    finally:
-        connection.close()
+    with _session_store().SessionStore() as store:
+        selected, reference = _find_selected_work_item(store, selector, cwd)
+        recorded = store.sessions_for_work_item(selected.key) if selected else []
     machine = socket.gethostname()
     sessions = [
         {
-            "handle": row["handle"],
-            "role": row["role"],
-            "turn_state": row["turn_state"],
-            "ended": row["ended_at"] is not None,
-            "status": _read_time_status(row, machine),
+            "handle": session.handle,
+            "role": session.role,
+            "turn_state": session.turn_state,
+            "ended": session.ended,
+            "status": _read_time_status(session, machine),
         }
-        for row in rows
+        for session in recorded
     ]
-    result = _result_item(item_row, reference)
+    result = _result_item(selected, reference)
     result.update({
-        "status": item_row["status"] if item_row else None,
-        "title": item_row["title"] if item_row else None,
-        "plan_path": item_row["plan_path"] if item_row else None,
+        "status": selected.status if selected else None,
+        "title": selected.title if selected else None,
+        "plan_path": selected.plan_path if selected else None,
         "sessions": sessions,
     })
     return result
 
 
 def cmd_find(worktree):
-    store = _session_store()
     target = _path_key(worktree)
-    connection = store.connect()
-    try:
-        rows = connection.execute("SELECT * FROM sessions WHERE work_item IS NOT NULL").fetchall()
+    with _session_store().SessionStore() as store:
         matches = []
-        for row in rows:
-            if row["cwd"] and _path_key(row["cwd"]) == target:
-                item_row = store.get_work_item(connection, row["work_item"])
-                if item_row:
+        for session in store.sessions_with_work_item():
+            if session.cwd and _path_key(session.cwd) == target:
+                selected = store.get_work_item(session.work_item)
+                if selected:
                     matches.append({
-                        "work_item": _label(item_row),
-                        "execution_key": item_row["key"],
-                        "references": store.work_item_references(connection, item_row["key"]),
-                        "handle": row["handle"],
-                        "role": row["role"],
+                        "work_item": selected.label,
+                        "execution_key": selected.key,
+                        "references": [
+                            {"provider": reference.provider, "scope": reference.scope,
+                             "native_id": reference.native_id}
+                            for reference in store.work_item_references(selected.key)
+                        ],
+                        "handle": session.handle,
+                        "role": session.role,
                     })
-    finally:
-        connection.close()
     return {"matches": matches}
 
 
 def cmd_resume(work_item=None, handle=None, execution_key=None, provider=None, scope=None, native_id=None,
                cwd=None, prompt=None, prompt_path=None, title=None):
-    store = _session_store()
     cwd = cwd or Path.cwd()
     selector = _selector(work_item, execution_key, provider, scope, native_id)
-    connection = store.connect()
-    try:
-        item_row, _reference = _find_selected_work_item(connection, selector, cwd)
-        rows = store.sessions_for_work_item(connection, item_row["key"]) if item_row else []
-    finally:
-        connection.close()
-    if not rows:
+    with _session_store().SessionStore() as store:
+        found, _reference = _find_selected_work_item(store, selector, cwd)
+        sessions = store.sessions_for_work_item(found.key) if found else []
+    if not sessions:
         raise ValueError("no recorded session; start a new owner from the work item README's ## Next Steps")
     if handle:
-        matched = [row for row in rows if row["handle"] == handle]
+        matched = [session for session in sessions if session.handle == handle]
         if not matched:
             raise ValueError(f"no recorded session with handle {handle!r}")
         selected = matched[0]
     else:
         owners = [
-            row for row in rows
-            if row["role"] == "owner" and (row["ended_at"] is None or row["end_reason"] == "closed")
+            session for session in sessions
+            if session.role == "owner" and (not session.ended or session.end_reason == "closed")
         ]
         if len(owners) != 1:
-            raise ValueError("specify --handle; recorded sessions: " + ", ".join(row["handle"] for row in rows))
+            raise ValueError("specify --handle; recorded sessions: " + ", ".join(session.handle for session in sessions))
         selected = owners[0]
     machine = socket.gethostname()
     status = _read_time_status(selected, machine)
     if status != "closed":
-        raise ValueError(f"{selected['handle']}: {status}; reconcile before resuming")
+        raise ValueError(f"{selected.handle}: {status}; reconcile before resuming")
     recovery = _agent_recovery()
     roots = _resume_roots(selected)
     if prompt_path:
         return recovery.open_session(
-            Host(selected["host"]), selected["session_id"], prompt=None, title=title, roots=roots, prompt_path=prompt_path,
+            Host(selected.host), selected.session_id, prompt=None, title=title, roots=roots, prompt_path=prompt_path,
         )
     return recovery.open_session(
-        Host(selected["host"]), selected["session_id"], prompt=prompt or "Continue the requested work.",
+        Host(selected.host), selected.session_id, prompt=prompt or "Continue the requested work.",
         title=title, roots=roots,
     )
 
 
 def cmd_interrupted(resume_handles=None, cwd=None):
-    store = _session_store()
-    repo = _require_repo(cwd or Path.cwd())
-    connection = store.connect()
-    try:
-        candidates = store.interrupted_candidates(connection, repo=repo)
+    module = _session_store()
+    repo = module.identify_repository(cwd or Path.cwd())
+    with module.SessionStore() as store:
+        candidates = store.interrupted_candidates(repo=repo)
         item_names = {}
-        for row in candidates:
-            if row["work_item"] and row["work_item"] not in item_names:
-                item_row = store.get_work_item(connection, row["work_item"])
-                item_names[row["work_item"]] = _label(item_row) if item_row else row["work_item"]
-    finally:
-        connection.close()
+        for session in candidates:
+            if session.work_item and session.work_item not in item_names:
+                named = store.get_work_item(session.work_item)
+                item_names[session.work_item] = named.label if named else session.work_item
     machine = socket.gethostname()
-    dead = [
-        row for row in candidates
-        if (row.get("machine") or "").casefold() == machine.casefold()
-        and _pid_is_dead(row.get("pid"), row.get("pid_started_at"))
-    ]
-    statuses = {row["handle"]: _read_time_status(row, machine) for row in dead}
+    dead = sorted(
+        (
+            session for session in candidates
+            if (session.machine or "").casefold() == machine.casefold()
+            and _pid_is_dead(session.pid, session.pid_started_at)
+        ),
+        key=lambda session: session.last_activity_at or 0, reverse=True,
+    )
+    statuses = {session.handle: _read_time_status(session, machine) for session in dead}
     grouped = {}
-    for row in dead:
-        label = item_names.get(row["work_item"], "(unclaimed)")
-        grouped.setdefault(label, []).append(
-            {"handle": row["handle"], "turn_state": row["turn_state"], "status": statuses[row["handle"]]}
-        )
+    for session in dead:
+        label = item_names.get(session.work_item, "(unclaimed)")
+        grouped.setdefault(label, []).append({
+            "handle": session.handle, "title": session.title, "cwd": session.cwd, "branch": session.branch,
+            "last_activity": _agent_recovery().iso_timestamp(session.last_activity_at),
+            "turn_state": session.turn_state, "status": statuses[session.handle],
+        })
     result = {"interrupted": grouped}
     if resume_handles:
-        by_handle = {row["handle"]: row for row in dead}
+        by_handle = {session.handle: session for session in dead}
         for handle in resume_handles:
             if handle not in by_handle:
                 raise ValueError(f"{handle!r} is not a listed interrupted session")
@@ -550,96 +515,88 @@ def cmd_interrupted(resume_handles=None, cwd=None):
         recovery = _agent_recovery()
         resumed = []
         for handle in resume_handles:
-            row = by_handle[handle]
+            session = by_handle[handle]
             resumed.append(recovery.open_session(
-                Host(row["host"]), row["session_id"], prompt="Continue the requested work.", roots=_resume_roots(row),
+                Host(session.host), session.session_id, prompt="Continue the requested work.",
+                roots=_resume_roots(session),
             ))
         result["resumed"] = resumed
     return result
 
 
 def cmd_end(host, reason, successor=None):
-    store = _session_store()
+    module = _session_store()
     session_id = _require_session_id(host)
-    handle = store.session_handle(host.value, session_id)
-    connection = store.connect()
-    try:
-        store.end_session(connection, handle, reason, successor=successor)
-    finally:
-        connection.close()
+    handle = module.session_handle(host.value, session_id)
+    with module.SessionStore() as store:
+        store.update_session(handle, lambda session: session.end(reason, successor=successor))
     return {"handle": handle, "reason": reason}
 
 
 def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, execution_key=None,
              provider=None, scope=None, native_id=None, cwd=None):
-    store = _session_store()
+    module = _session_store()
     cwd = cwd or Path.cwd()
     selector = _selector(work_item, execution_key, provider, scope, native_id)
     title = _validate_title(title)
     plan_path = _validate_plan_path(plan_path, cwd)
-    repo, branch, _head = _require_repo_branch_head(cwd)
-    record_branch = _branch_to_record(cwd, branch)
-    connection = store.connect()
-    try:
+    checkout = _require_checkout(cwd)
+    repo = checkout.repo
+    record_branch = checkout.work_branch
+    with module.SessionStore() as store:
         kind, value = selector
         reference = None
         if kind == "local":
             feature, item = value
-            key = store.work_item_key(repo, feature, item)
-            item_row = store.get_work_item(connection, key)
-            if item_row is None and title is None:
+            key = module.work_item_key(repo, feature, item)
+            if store.get_work_item(key) is None and title is None:
                 raise ValueError("a non-empty --title is required when creating a work item")
             store.upsert_work_item(
-                connection, key, repo, feature, item, status=status, branch=record_branch, pr=pr,
+                key, repo, feature, item, status=status, branch=record_branch, pr=pr,
                 title=title, plan_path=plan_path,
             )
         else:
-            item_row, reference = _find_selected_work_item(connection, selector, cwd)
-            if item_row is None:
+            selected, reference = _find_selected_work_item(store, selector, cwd)
+            if selected is None:
                 raise ValueError("work item does not exist; register or bind the remote reference before updating it")
-            key = item_row["key"]
-            if plan_path is not None and item_row["repo"] != repo:
+            key = selected.key
+            if plan_path is not None and selected.repo != repo:
                 raise ValueError("--plan-path cannot update a work item from a different repository")
             store.upsert_work_item(
-                connection, key, item_row["repo"], item_row["feature"], item_row["item"], status=status,
-                branch=record_branch if item_row["repo"] == repo else None, pr=pr, title=title, plan_path=plan_path,
+                key, selected.repo, selected.feature, selected.item, status=status,
+                branch=record_branch if selected.repo == repo else None, pr=pr, title=title, plan_path=plan_path,
             )
         if status == "done":
             keep = [
-                store.session_handle(host.value, session_id)
+                module.session_handle(host.value, session_id)
                 for host in Host
                 for session_id in (_current_session_id(host),) if session_id
             ]
             machine = socket.gethostname()
-            for row in store.sessions_for_work_item(connection, key):
-                if row["handle"] not in keep and _finished_elsewhere(row, machine):
-                    store.delete_session(connection, row["session_id"])
-        result = _result_item(store.get_work_item(connection, key), reference)
+            for session in store.sessions_for_work_item(key):
+                if session.handle not in keep and _finished_elsewhere(session, machine):
+                    store.delete_session(session.session_id)
+        result = _result_item(store.get_work_item(key), reference)
         result["status"] = status
         return result
-    finally:
-        connection.close()
 
 
 def cmd_register(provider, scope, native_id, cwd=None):
-    store = _session_store()
+    module = _session_store()
     cwd = cwd or Path.cwd()
-    repo, branch, _head = _require_repo_branch_head(cwd)
-    provider, scope, native_id = store.normalise_work_item_reference(provider, scope, native_id)
-    connection = store.connect()
-    try:
-        item_row, created = store.resolve_or_create_work_item_reference(
-            connection, provider, scope, native_id, repo, branch=_branch_to_record(cwd, branch),
+    checkout = _require_checkout(cwd)
+    provider, scope, native_id = module.normalise_work_item_reference(provider, scope, native_id)
+    with module.SessionStore() as store:
+        selected, created = store.resolve_or_create_work_item_reference(
+            provider, scope, native_id, checkout.repo, branch=checkout.work_branch,
         )
-    finally:
-        connection.close()
-    result = _result_item(item_row, {"provider": provider, "scope": scope, "native_id": native_id})
+    result = _result_item(selected, {"provider": provider, "scope": scope, "native_id": native_id})
     result["created"] = created
     return result
 
 
 def cmd_bind(work_item=None, execution_key=None, provider=None, scope=None, native_id=None, cwd=None):
-    store = _session_store()
+    module = _session_store()
     cwd = cwd or Path.cwd()
     reference = _remote_reference(provider, scope, native_id)
     if reference is None:
@@ -647,20 +604,17 @@ def cmd_bind(work_item=None, execution_key=None, provider=None, scope=None, nati
     selected = sum(value is not None for value in (work_item, execution_key))
     if selected != 1:
         raise ValueError("bind needs exactly one of <feature>/<item> or --execution-key")
-    connection = store.connect()
-    try:
+    with module.SessionStore() as store:
         if work_item is not None:
             feature, item = _parse_work_item(work_item)
-            key = store.work_item_key(_require_repo(cwd), feature, item)
+            key = module.work_item_key(_require_repo(cwd), feature, item)
         else:
-            key = store.validate_execution_key(execution_key)
-        if store.get_work_item(connection, key) is None:
+            key = module.validate_execution_key(execution_key)
+        if store.get_work_item(key) is None:
             raise ValueError(f"work item does not exist: {key}")
-        changed = store.bind_work_item_reference(connection, key, *reference)
-        item_row = store.get_work_item(connection, key)
-    finally:
-        connection.close()
-    result = _result_item(item_row, {"provider": reference[0], "scope": reference[1], "native_id": reference[2]})
+        changed = store.bind_work_item_reference(key, *reference)
+        bound = store.get_work_item(key)
+    result = _result_item(bound, {"provider": reference[0], "scope": reference[1], "native_id": reference[2]})
     result["bound"] = changed
     return result
 

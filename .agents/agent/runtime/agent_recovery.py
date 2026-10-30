@@ -27,10 +27,6 @@ PICKUP_TIMEOUT_SECONDS = 480
 WRAPPER_TIMEOUT_SECONDS = 45
 PICKUP_INTERVAL_SECONDS = 1.0
 STATUS_CLOCK_SLACK_SECONDS = 2.0
-STORE_FIELDS = (
-    ("title", "s.title"), ("id", "s.session_id"), ("cwd", "s.cwd"), ("repo", "s.repo"), ("branch", "s.branch"),
-    ("work_item", "s.work_item"), ("work_item.title", "w.title"), ("work_item.plan_path", "w.plan_path"),
-)
 LOCKS = {}
 LOCKS_GUARD = threading.Lock()
 MODULES = {}
@@ -218,53 +214,53 @@ def _tokens(value):
 
 
 def _store_rows(hosts, session_id=None):
-    store = _load("session_store")
-    if not store.database_path().is_file():
+    module = _load("session_store")
+    if not module.database_path().is_file():
         return []
-    connection = store.connect()
-    try:
-        placeholders = ", ".join("?" for _ in hosts)
-        columns = ", ".join(f"{column} AS \"{name}\"" for name, column in STORE_FIELDS)
-        exact = " AND s.session_id = ?" if session_id else ""
-        return [dict(row) for row in connection.execute(
-            f"SELECT s.host, s.profile, s.last_activity_at, s.started_at, s.ended_at, w.status AS work_item_status, "
-            f"{columns} FROM sessions s LEFT JOIN work_items w ON w.key = s.work_item "
-            f"WHERE s.host IN ({placeholders}){exact}",
-            (*(host.value for host in hosts), *((session_id,) if session_id else ())))]
-    finally:
-        connection.close()
+    with module.SessionStore() as store:
+        return store.sessions_with_work_items_on_hosts([host.value for host in hosts], session_id)
+
+
+def _store_fields(session, work_item):
+    return {
+        "title": session.title, "id": session.session_id, "cwd": session.cwd, "repo": session.repo,
+        "branch": session.branch, "work_item": session.work_item,
+        "work_item.title": work_item.title if work_item else None,
+        "work_item.plan_path": work_item.plan_path if work_item else None,
+    }
 
 
 def _match_value(name, value):
     return Path(value).name if name == "cwd" and value else value
 
 
-def _store_match(row, topic):
+def _store_match(session, work_item, topic):
     if not topic:
         return []
     wanted = _tokens(topic)
-    fields = {name: _tokens(_match_value(name, row.get(name))) for name, _column in STORE_FIELDS}
+    fields = {name: _tokens(_match_value(name, value)) for name, value in _store_fields(session, work_item).items()}
     if not wanted or not wanted <= set().union(*fields.values()):
         return None
     return [name for name, tokens in fields.items() if tokens & wanted]
 
 
-def _iso(epoch):
+def iso_timestamp(epoch):
     if isinstance(epoch, bool) or not isinstance(epoch, (int, float)) or not math.isfinite(epoch):
         return None
     return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def _store_item(row, matched_by):
+def _store_item(session, work_item, matched_by):
     item = {
-        "id": row["id"], "host": row["host"], "cwd": row["cwd"], "branch": row["branch"],
-        "activity": _iso(row["last_activity_at"] or row["started_at"]),
-        "preview": row["title"] or row["work_item.title"] or "(no title)",
-        "profile": row["profile"], "matched_by": matched_by, "title": row["title"], "source": "sessions.db",
+        "id": session.session_id, "host": session.host, "cwd": session.cwd, "branch": session.branch,
+        "activity": iso_timestamp(session.last_activity_at or session.started_at),
+        "preview": session.title or (work_item.title if work_item else None) or "(no title)",
+        "profile": session.profile, "matched_by": matched_by, "title": session.title, "source": "sessions.db",
     }
-    if row["work_item"]:
-        item["work_item"] = {"key": row["work_item"], "title": row["work_item.title"],
-                             "status": row["work_item_status"], "plan_path": row["work_item.plan_path"]}
+    if session.work_item:
+        item["work_item"] = {"key": session.work_item, "title": work_item.title if work_item else None,
+                             "status": work_item.status if work_item else None,
+                             "plan_path": work_item.plan_path if work_item else None}
     return item
 
 
@@ -318,14 +314,14 @@ def _store_search(hosts, topic, checkout, history):
         return []
     variants = history._worktree_variants(checkout) if checkout else None
     results = []
-    for row in rows:
-        if not row["id"] or not SESSION_ID.fullmatch(row["id"]) or not row["profile"]:
+    for session, work_item in rows:
+        if not session.session_id or not SESSION_ID.fullmatch(session.session_id) or not session.profile:
             continue
-        if variants and not history._cwd_under(row["cwd"], variants):
+        if variants and not history._cwd_under(session.cwd, variants):
             continue
-        matched_by = _store_match(row, topic)
+        matched_by = _store_match(session, work_item, topic)
         if matched_by is not None:
-            results.append(_store_item(row, matched_by))
+            results.append(_store_item(session, work_item, matched_by))
     return results
 
 
@@ -374,9 +370,12 @@ def _store_find(host, session_id, history):
         rows = _store_rows((host,), session_id)
     except Exception:
         return None
-    if not rows or not rows[0]["profile"]:
+    if not rows:
         return None
-    item = _resumable(_store_item(rows[0], []), history, {})
+    session, work_item = rows[0]
+    if not session.profile:
+        return None
+    item = _resumable(_store_item(session, work_item, []), history, {})
     return _finish_store_item(item) if item else None
 
 
@@ -602,14 +601,14 @@ def _modified(path):
         return None
 
 
-def _registered_since(connection, handle, since):
-    if connection is None:
+def _registered_since(store, handle, since):
+    if store is None:
         return False
     try:
-        row = connection.execute("SELECT started_at FROM sessions WHERE handle = ?", (handle,)).fetchone()
+        session = store.get_session(handle)
     except Exception:
         return False
-    started = row[0] if row else None
+    started = session.started_at if session else None
     return isinstance(started, (int, float)) and not isinstance(started, bool) and started >= since
 
 
@@ -623,9 +622,9 @@ def _status_path(receipt):
     return receipt.with_name(f"{receipt.stem}.{secrets.token_hex(8)}.status.json")
 
 
-def _connect(store):
+def _open_store(module):
     try:
-        return store.connect() if store.database_path().is_file() else None
+        return module.SessionStore() if module.database_path().is_file() else None
     except Exception:
         return None
 
@@ -633,21 +632,21 @@ def _connect(store):
 def await_pickup(host, session_id, status_path, since, history_path=None, timeout=PICKUP_TIMEOUT_SECONDS,
                  wrapper_timeout=WRAPPER_TIMEOUT_SECONDS, interval=PICKUP_INTERVAL_SECONDS,
                  clock=time.monotonic, wait=time.sleep):
-    store = _load("session_store")
+    module = _load("session_store")
     status_file = _load("launch_status")
-    handle = store.session_handle(host.value, session_id)
+    handle = module.session_handle(host.value, session_id)
     start = clock()
     history_before = _modified(history_path)
-    connection = None
+    store = None
     try:
         while True:
             status = status_file.read(status_path)
             state = status.get("state") if status else None
             if state == "failed":
                 raise LaunchFailed(str(status.get("error") or f"{host} startup failed"))
-            connection = connection or _connect(store)
+            store = store or _open_store(module)
             evidence = None
-            if _registered_since(connection, handle, since):
+            if _registered_since(store, handle, since):
                 evidence = "registered in sessions.db"
             else:
                 modified = _modified(history_path)
@@ -670,8 +669,8 @@ def await_pickup(host, session_id, status_path, since, history_path=None, timeou
                                        "check the opened tab before retrying")
             wait(interval)
     finally:
-        if connection is not None:
-            connection.close()
+        if store is not None:
+            store.close()
 
 
 def open_session(host, session_id, prompt="Continue the requested work.", title=None, roots=None, confirm_closed=False,

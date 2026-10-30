@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from git_isolation import isolate_git_config, without_git_config
+
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'plugins/agent/.agents/agent/runtime'
 sys.path.insert(0, str(SCRIPTS))
@@ -40,7 +42,7 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
         cls.nested = cls.primary / '.worktrees/feature'
         cls.sibling = cls.root / 'sibling'
         cls.foreign = cls.primary / 'different-repository'
-        environment = dict(os.environ, GIT_CONFIG_COUNT='0')
+        environment = without_git_config(os.environ)
         for name in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE'):
             environment.pop(name, None)
         commands = [
@@ -61,9 +63,7 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
             settings.write_text(json.dumps({'enabledPlugins': {IDENTITY: True}}), encoding='utf-8')
 
     def setUp(self):
-        environment = mock.patch.dict(os.environ, {'GIT_CONFIG_COUNT': '0'})
-        environment.start()
-        self.addCleanup(environment.stop)
+        isolate_git_config()
         self.commands = []
 
     def entry(self, owner, version='old', **extra):

@@ -76,9 +76,11 @@ python -B '<skill-directory>/scripts/work_item_sessions.py' register --provider 
   [--handle <handle>]`: without `--handle`, resumes the single owner that is not
   ended or ended `closed`; refuses foreign, stale, live, unknown, finished or handed-off sessions, then
   calls `agent_recovery.open_session`.
-- `interrupted [--resume <handle>...]`: lists not-ended sessions whose recorded pid is dead, grouped by
-  work item with their last turn state and computed status; resumes only listed handles whose status is
-  `closed`, refusing stale, unknown, foreign, live, finished or handed-off ones.
+- `interrupted [--resume <handle>...]`: lists not-ended sessions on this machine whose recorded pid is dead,
+  newest activity first, grouped by work item (`(unclaimed)` when none). Each entry gives handle, title, cwd,
+  branch, `last_activity` as UTC ISO 8601 ending in `Z`, last turn state and computed status. Inside a
+  repository it lists that repository's sessions; outside one it lists every repository's. Resumes only
+  listed handles whose status is `closed`, refusing stale, unknown, foreign, live, finished or handed-off ones.
 - `end --host claude|codex --reason finished|closed|handed_off [--successor <handle>]`: records the
   current session's end reason.
 - `item [<feature>/<item>|--execution-key execution:<uuid>|--provider <provider> --scope <scope> --native-id <id>]
