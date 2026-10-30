@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import math
 import re
@@ -127,7 +129,7 @@ def permissions(root):
     return "bypass" if settings is None else settings.get("permissions", "bypass")
 
 
-def trust_hooks(root):
+def trust_hooks(root: str | Path) -> bool:
     settings = core(root)
     return True if settings is None else settings.get("trust_hooks", True)
 
