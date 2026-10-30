@@ -216,19 +216,24 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
         if require_session_start:
             environment[ACK_DIRECTORY_ENV] = str(directory)
             environment[ACK_TOKEN_ENV] = token
-            if hook_roots is _HOOK_ROOTS_UNSET:
-                _effective_project, roots = required_plugins.check_launch_roots(project, host, target, arguments)
-            else:
-                roots = hook_roots
-            environment[REQUIRED_HOOKS_ENV] = json.dumps(startup_participants(host, roots))
+            try:
+                if hook_roots is _HOOK_ROOTS_UNSET:
+                    _effective_project, roots = required_plugins.check_launch_roots(project, host, target, arguments)
+                else:
+                    roots = hook_roots
+                environment[REQUIRED_HOOKS_ENV] = json.dumps(startup_participants(host, roots))
+            except (required_plugins.RequiredPluginsError, RuntimeError, OSError, ValueError) as error:
+                print(f"launch: {host} hook check skipped: {error}", file=sys.stderr)
+                require_session_start = False
         phase("starting-native")
+        command = command_for_target(target, list(arguments))
         try:
-            command = command_for_target(target, list(arguments))
             arguments, environment, ticket = SESSIONS[host].prepare_frontend(
                 command[1:], project, environment, executable=command[0],
             )
-        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-            raise StartupBindingError(f"native {host} could not prepare: {error}") from error
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            print(f"launch: {host} session binding skipped: {error}", file=sys.stderr)
+            arguments, ticket = command[1:], None
         process = None
         try:
             process = subprocess.Popen([command[0], *arguments],
@@ -236,7 +241,10 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
         except OSError as error:
             raise StartupBindingError(f"native {host} could not start: {error}") from error
         try:
-            SESSIONS[host].attach_frontend(ticket, process.pid)
+            try:
+                SESSIONS[host].attach_frontend(ticket, process.pid)
+            except (OSError, RuntimeError, ValueError) as error:
+                print(f"launch: {host} session binding skipped: {error}", file=sys.stderr)
             if require_session_start:
                 phase("waiting-session-start")
                 deadline = time.monotonic() + timeout
@@ -278,6 +286,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     parsed = parser.parse_args(argv)
     arguments = parsed.arguments[1:] if parsed.arguments[:1] == ["--"] else parsed.arguments
+    if launch_check.BYPASS_FLAG in arguments:
+        native = [argument for argument in arguments if argument != launch_check.BYPASS_FLAG]
+        return subprocess.call(command_for_target(parsed.target, native), cwd=parsed.project)
     status: dict[str, object] = {"pid": os.getpid(), "terminal": register_session.terminal_identity(),
                                  "title": os.environ.get(register_session.TITLE_ENV)}
     if parsed.require_session_start and parsed.status_file is not None:
