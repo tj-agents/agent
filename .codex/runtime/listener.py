@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import importlib.util
 import json
@@ -22,6 +22,7 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from codex import client, hook_trust
+from codex.listener_types import BackendIdentity, CommandResult, Lifecycle
 import package_root
 
 
@@ -36,16 +37,30 @@ class Server(Protocol):
     def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]: ...
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Target:
     session_id: str
     profile: str
     cwd: str
-    backend: dict[str, Any]
+    backend: BackendIdentity
     executable: str
 
+    def __post_init__(self) -> None:
+        if (any(not isinstance(value, str) or not value or '\0' in value
+                for value in (self.session_id, self.profile, self.cwd, self.executable))
+                or not isinstance(self.backend, BackendIdentity)):
+            raise RuntimeError('The listener target is invalid')
+        try:
+            canonical = str(uuid.UUID(self.session_id))
+        except ValueError as error:
+            raise RuntimeError('An exact canonical Codex thread UUID is required') from error
+        if canonical != self.session_id:
+            raise RuntimeError('An exact canonical Codex thread UUID is required')
+        if any(not Path(value).is_absolute() for value in (self.profile, self.cwd, self.executable)):
+            raise RuntimeError('The listener target paths must be absolute')
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class Request:
     target: Target
     identity: str
@@ -54,10 +69,42 @@ class Request:
     timeout: float
     command: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        if (not isinstance(self.target, Target)
+                or any(not isinstance(value, str) or not value.strip() or '\0' in value
+                       for value in (self.identity, self.purpose, self.cwd))
+                or not Path(self.cwd).is_absolute()
+                or not isinstance(self.command, tuple) or not self.command
+                or any(not isinstance(argument, str) or '\0' in argument for argument in self.command)
+                or not self.command[0] or not isinstance(self.timeout, (int, float))
+                or isinstance(self.timeout, bool) or not math.isfinite(self.timeout)
+                or not 0 < self.timeout <= 86400):
+            raise RuntimeError('A job identity, purpose, command and timeout in (0, 86400] are required')
+
     def value(self) -> dict[str, Any]:
         result = asdict(self)
         result['command'] = list(self.command)
         return result
+
+
+@dataclass(frozen=True, slots=True)
+class JobState:
+    identity: str
+    status: Lifecycle
+    result: CommandResult | None = None
+    turn_id: str | None = None
+    error: str | None = None
+
+    def value(self) -> dict[str, Any]:
+        value: dict[str, Any] = {'identity': self.identity, 'status': self.status.value,
+                                 'acknowledged': False}
+        if self.result is not None:
+            value.update(self.result.value())
+        if self.turn_id is not None:
+            value['turn_id'] = self.turn_id
+        if self.error is not None:
+            value['error'] = self.error
+        return value
 
 
 def state_directory() -> Path:
@@ -117,19 +164,19 @@ def verify_backend(target: Target) -> None:
         if path_key(executable) != path_key(target.executable):
             raise RuntimeError('The pinned native Codex daemon or executable changed')
         return
-    backend = client.daemon_identity({'CODEX_HOME': target.profile})
+    backend = BackendIdentity.from_value(client.daemon_identity({'CODEX_HOME': target.profile}))
     executable = native_executable(target.profile, backend)
     if backend != target.backend or path_key(executable) != path_key(target.executable):
         raise RuntimeError('The pinned native Codex daemon or executable changed')
-    verify_mapped_image(backend['pid'], target.executable)
+    verify_mapped_image(backend.pid, target.executable)
 
 
-def native_executable(profile: str, backend: dict[str, Any]) -> str:
+def native_executable(profile: str, backend: BackendIdentity) -> str:
     if os.name == 'nt':
         from codex import listener_windows
 
         return listener_windows.daemon_executable(profile, backend)
-    arguments = client.process_arguments(backend['pid'])
+    arguments = client.process_arguments(backend.pid)
     if not arguments:
         raise RuntimeError('The native Codex daemon executable is unavailable')
     return str(Path(arguments[0]).resolve(strict=True))
@@ -162,7 +209,8 @@ def verify_running_version(server: hook_trust.AppServer, target: Target) -> None
 
 def verify_target(server: Server, target: Target, state: Path) -> None:
     value = registration(state, target.session_id, target.profile)
-    if path_key(value['cwd']) != path_key(target.cwd) or value.get('backend') != target.backend:
+    if (path_key(value['cwd']) != path_key(target.cwd)
+            or value.get('backend') != target.backend.value()):
         raise RuntimeError('The registered Codex target or backend changed')
     verify_backend(target)
     response = server.request('thread/read', {'threadId': target.session_id, 'includeTurns': False})
@@ -223,18 +271,15 @@ def capture_target(state: Path) -> Target:
     profile = str(client.profile_directory())
     value = registration(state, session_id, profile)
     if os.name == 'nt':
-        backend = value.get('backend')
-        if (not isinstance(backend, dict) or type(backend.get('pid')) is not int or backend['pid'] <= 0
-                or not isinstance(backend.get('process_start_time'), str) or not backend['process_start_time']):
-            raise RuntimeError('The session has no pinned native Codex daemon identity')
+        backend = BackendIdentity.from_value(value.get('backend'))
     else:
-        backend = client.daemon_identity({'CODEX_HOME': profile})
-    if value.get('backend') != backend:
+        backend = BackendIdentity.from_value(client.daemon_identity({'CODEX_HOME': profile}))
+    if value.get('backend') != backend.value():
         raise RuntimeError('The session does not identify this native Codex daemon')
     executable = Path(native_executable(profile, backend)).resolve(strict=True)
     if not executable.is_file():
         raise RuntimeError('The native daemon executable is unavailable')
-    target = Target(session_id, profile, str(Path(value['cwd']).resolve()), dict(backend), str(executable))
+    target = Target(session_id, profile, str(Path(value['cwd']).resolve()), backend, str(executable))
     with connection(target) as server:
         verify_target(server, target, state)
         verify_running_version(server, target)
@@ -247,28 +292,17 @@ def capture_target(state: Path) -> Target:
 
 def load_request(job: Path) -> Request:
     value = read_json(job / 'request.json')
+    if set(value) != {'target', 'identity', 'purpose', 'cwd', 'timeout', 'command'}:
+        raise RuntimeError('The persisted listener request is invalid')
     target = value.get('target')
     if not isinstance(target, dict) or set(target) != {'session_id', 'profile', 'cwd', 'backend', 'executable'}:
         raise RuntimeError('The persisted listener target is invalid')
-    if (any(not isinstance(target[key], str) or not target[key]
-            for key in ('session_id', 'profile', 'cwd', 'executable'))
-            or not isinstance(target['backend'], dict)
-            or type(target['backend'].get('pid')) is not int
-            or target['backend']['pid'] <= 0
-            or not isinstance(target['backend'].get('process_start_time'), str)
-            or not target['backend']['process_start_time']):
-        raise RuntimeError('The persisted listener backend is invalid')
     command = value.get('command')
-    timeout = value.get('timeout')
-    if (any(not isinstance(value.get(key), str) or not value[key].strip()
-            for key in ('identity', 'purpose', 'cwd'))
-            or not isinstance(command, list) or not command
-            or any(not isinstance(argument, str) or '\0' in argument for argument in command)
-            or not command[0] or not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
-            or not math.isfinite(timeout) or not 0 < timeout <= 86400):
+    if not isinstance(command, list):
         raise RuntimeError('The persisted listener command is invalid')
-    request = Request(Target(**target), value['identity'], value['purpose'], value['cwd'],
-                      float(timeout), tuple(command))
+    native_target = Target(**{**target, 'backend': BackendIdentity.from_value(target['backend'])})
+    request = Request(native_target, value['identity'], value['purpose'], value['cwd'],
+                      value['timeout'], tuple(command))
     if job.name != job_key(request.target.session_id, request.identity):
         raise RuntimeError('The listener job directory does not match its identity')
     return request
@@ -306,10 +340,6 @@ def detach(job: Path) -> None:
 
 def start(identity: str, purpose: str, cwd: Path, timeout: float,
           command: tuple[str, ...]) -> dict[str, Any]:
-    if (not identity.strip() or not purpose.strip() or not command or not command[0]
-            or any('\0' in argument for argument in command)
-            or not math.isfinite(timeout) or not 0 < timeout <= 86400):
-        raise RuntimeError('A job identity, purpose, command and timeout in (0, 86400] are required')
     cwd = cwd.resolve(strict=True)
     if not cwd.is_dir():
         raise RuntimeError('The listener command directory is unavailable')
@@ -326,17 +356,16 @@ def start(identity: str, purpose: str, cwd: Path, timeout: float,
             raise RuntimeError('This listener identity already owns a different request')
         return status(job)
     write_json(job / 'request.json', request.value())
-    write_json(job / 'state.json', {'status': 'starting', 'identity': identity, 'acknowledged': False})
+    write_json(job / 'state.json', JobState(identity, Lifecycle.STARTING).value())
     try:
         detach(job)
     except Exception as error:
-        write_json(job / 'state.json', {'status': 'unavailable', 'identity': identity,
-                                      'acknowledged': False, 'error': str(error)})
+        write_json(job / 'state.json', JobState(identity, Lifecycle.UNAVAILABLE, error=str(error)).value())
         return status(job)
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         value = status(job)
-        if value['status'] != 'starting':
+        if Lifecycle(value['status']) != Lifecycle.STARTING:
             return value
         time.sleep(0.05)
     return status(job)
@@ -349,24 +378,21 @@ def output_tail(path: Path) -> str:
         return stream.read(8192).decode('utf-8', errors='replace')
 
 
-def run_command(request: Request, output: Path, environment: dict[str, str] | None = None) -> dict[str, Any]:
+def run_command(request: Request, output: Path, environment: dict[str, str] | None = None) -> CommandResult:
     environment = dict(os.environ) if environment is None else environment
     with output.open('wb') as stream:
         try:
             if sys.platform == 'win32':
                 from codex import listener_windows
 
-                returncode, timed_out = listener_windows.run(request.command, request.cwd,
-                                                             request.timeout, stream, environment)
-                return {'outcome': 'timeout' if timed_out else ('success' if returncode == 0 else 'failed'),
-                        'returncode': returncode}
+                return listener_windows.run(request.command, request.cwd, request.timeout, stream, environment)
             else:
                 process = subprocess.Popen(request.command, cwd=request.cwd, stdin=subprocess.DEVNULL,
                                            stdout=stream, stderr=subprocess.STDOUT, shell=False,
                                            env=environment, start_new_session=True)
                 try:
                     returncode = process.wait(timeout=request.timeout)
-                    return {'outcome': 'success' if returncode == 0 else 'failed', 'returncode': returncode}
+                    return CommandResult(returncode)
                 except subprocess.TimeoutExpired:
                     os.killpg(process.pid, signal.SIGTERM)
                     try:
@@ -374,7 +400,7 @@ def run_command(request: Request, output: Path, environment: dict[str, str] | No
                     except subprocess.TimeoutExpired:
                         os.killpg(process.pid, signal.SIGKILL)
                         process.wait(timeout=5)
-                    return {'outcome': 'timeout', 'returncode': process.returncode}
+                    return CommandResult(process.returncode, timed_out=True)
                 finally:
                     try:
                         os.killpg(process.pid, signal.SIGKILL)
@@ -382,7 +408,7 @@ def run_command(request: Request, output: Path, environment: dict[str, str] | No
                         pass
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             stream.write(str(error).encode('utf-8', errors='replace'))
-            return {'outcome': 'failed', 'returncode': None}
+            return CommandResult(None)
 
 
 def worker(job: Path, environment: dict[str, str] | None = None) -> dict[str, Any]:
@@ -393,22 +419,23 @@ def worker(job: Path, environment: dict[str, str] | None = None) -> dict[str, An
     except FileExistsError:
         return status(job)
     state = job.parent.parent
-    value: dict[str, Any] = {'identity': request.identity, 'acknowledged': False}
+    value = JobState(request.identity, Lifecycle.STARTING)
     try:
         with connection(request.target) as server:
             verify_target(server, request.target, state)
             verify_running_version(server, request.target)
-        value['status'] = 'running'
-        write_json(job / 'state.json', value)
-        value.update(run_command(request, job / 'output.log', environment))
+        value = replace(value, status=Lifecycle.RUNNING)
+        write_json(job / 'state.json', value.value())
+        result = run_command(request, job / 'output.log', environment)
+        value = replace(value, result=result)
         with connection(request.target) as server:
             verify_target(server, request.target, state)
             verify_running_version(server, request.target)
             payload = {'identity': request.identity, 'purpose': request.purpose,
-                       'outcome': value['outcome'], 'returncode': value['returncode'],
+                       **result.value(),
                        'output': str(job / 'output.log'), 'tail': output_tail(job / 'output.log')}
-            value['status'] = 'delivering'
-            write_json(job / 'state.json', value)
+            value = replace(value, status=Lifecycle.DELIVERING)
+            write_json(job / 'state.json', value.value())
             try:
                 result = server.request('turn/start', {
                     'threadId': request.target.session_id, 'input': [],
@@ -418,15 +445,15 @@ def worker(job: Path, environment: dict[str, str] | None = None) -> dict[str, An
                 turn = result.get('turn')
                 if not isinstance(turn, dict) or not isinstance(turn.get('id'), str) or not turn['id']:
                     raise RuntimeError('The native submission response did not confirm acceptance')
-                value.update(status='accepted', turn_id=turn['id'])
+                value = replace(value, status=Lifecycle.ACCEPTED, turn_id=turn['id'])
             except Exception as error:
-                value.update(status='delivery-unknown', error=str(error))
+                value = replace(value, status=Lifecycle.DELIVERY_UNKNOWN, error=str(error))
     except Exception as error:
-        if value.get('status') == 'delivering':
-            value.update(status='delivery-unknown', error=str(error))
-        elif value.get('status') not in ('accepted', 'delivery-unknown'):
-            value.update(status='unavailable', error=str(error))
-    write_json(job / 'state.json', value)
+        if value.status == Lifecycle.DELIVERING:
+            value = replace(value, status=Lifecycle.DELIVERY_UNKNOWN, error=str(error))
+        elif value.status not in (Lifecycle.ACCEPTED, Lifecycle.DELIVERY_UNKNOWN):
+            value = replace(value, status=Lifecycle.UNAVAILABLE, error=str(error))
+    write_json(job / 'state.json', value.value())
     return status(job)
 
 
@@ -464,9 +491,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result = status(arguments.job.resolve(strict=True))
         print(json.dumps(result, ensure_ascii=False))
-        return 1 if result['status'] in ('unavailable', 'delivery-unknown') else 0
+        return 1 if Lifecycle(result['status']) in (Lifecycle.UNAVAILABLE, Lifecycle.DELIVERY_UNKNOWN) else 0
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
-        print(json.dumps({'status': 'unavailable', 'error': str(error)}, ensure_ascii=False))
+        print(json.dumps({'status': Lifecycle.UNAVAILABLE.value, 'error': str(error)}, ensure_ascii=False))
         return 1
 
 

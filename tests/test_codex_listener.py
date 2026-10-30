@@ -1,3 +1,4 @@
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -82,7 +83,7 @@ class CodexListenerTests(unittest.TestCase):
             self.windows_daemon_executable = listener_windows.daemon_executable
 
             def executable(_profile, backend):
-                if backend != self.daemon.return_value:
+                if backend.value() != self.daemon.return_value:
                     raise RuntimeError('The pinned native Codex daemon or executable changed')
                 return self.arguments.return_value[0]
 
@@ -119,6 +120,49 @@ class CodexListenerTests(unittest.TestCase):
 
     def job(self, identity='exact-job'):
         return self.state / 'listeners' / listener.job_key(THREAD, identity)
+
+    def test_invalid_requests_are_refused_at_construction_and_after_persistence(self):
+        target = listener.capture_target(self.state)
+        request = listener.Request(target, 'exact-job', 'Wait for command', str(self.command_cwd),
+                                   5, self.command('print("never")\n'))
+        self.job().mkdir(parents=True)
+        for invalid in ({'identity': ' '}, {'purpose': None}, {'cwd': 'relative'},
+                        {'timeout': True}, {'timeout': float('inf')}, {'timeout': 0},
+                        {'command': ()}, {'command': ('',)}, {'command': ('bad\0argument',)}):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(RuntimeError):
+                    replace(request, **invalid)
+                value = {**request.value(), **invalid}
+                (self.job() / 'request.json').write_text(json.dumps(value), encoding='utf-8')
+                with self.assertRaises(RuntimeError):
+                    listener.load_request(self.job())
+        self.launch.assert_not_called()
+
+    def test_invalid_target_identity_is_refused_at_construction_and_after_persistence(self):
+        target = listener.capture_target(self.state)
+        request = listener.Request(target, 'exact-job', 'Wait for command', str(self.command_cwd),
+                                   5, (sys.executable, '--version'))
+        self.job().mkdir(parents=True)
+        for invalid in ({'session_id': 'foreign'}, {'profile': 'relative'}, {'cwd': ''},
+                        {'executable': 'relative'}):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(RuntimeError):
+                    replace(target, **invalid)
+                value = request.value()
+                value['target'].update(invalid)
+                (self.job() / 'request.json').write_text(json.dumps(value), encoding='utf-8')
+                with self.assertRaises(RuntimeError):
+                    listener.load_request(self.job())
+        for invalid in ({'pid': True}, {'pid': 0}, {'process_start_time': ''}):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(RuntimeError):
+                    replace(target.backend, **invalid)
+                value = request.value()
+                value['target']['backend'].update(invalid)
+                (self.job() / 'request.json').write_text(json.dumps(value), encoding='utf-8')
+                with self.assertRaises(RuntimeError):
+                    listener.load_request(self.job())
+        self.launch.assert_not_called()
 
     def test_duplicate_identity_and_duplicate_worker_execute_command_once(self):
         command = self.command(
@@ -341,7 +385,7 @@ class CodexListenerTests(unittest.TestCase):
 
     def test_schema_probe_uses_verified_daemon_executable_and_exact_profile(self):
         target = listener.Target(THREAD, str(self.profile), str(self.thread_cwd),
-                                 dict(BACKEND), str(Path(sys.executable).resolve()))
+                                 listener.BackendIdentity.from_value(BACKEND), str(Path(sys.executable).resolve()))
         supported = True
 
         def generate(arguments, **kwargs):
@@ -359,7 +403,8 @@ class CodexListenerTests(unittest.TestCase):
                 self.verify_capability(target)
 
     def test_running_native_version_must_match_the_schema_executable(self):
-        target = listener.Target(THREAD, str(self.profile), str(self.thread_cwd), dict(BACKEND), sys.executable)
+        target = listener.Target(THREAD, str(self.profile), str(self.thread_cwd),
+                                 listener.BackendIdentity.from_value(BACKEND), sys.executable)
         native = mock.Mock(initialization={'userAgent': 'listener/0.163.0-alpha.1 (Windows)',
                                           'codexHome': str(self.profile)})
         with mock.patch.object(listener.subprocess, 'run', return_value=mock.Mock(
@@ -520,7 +565,7 @@ class CodexListenerTests(unittest.TestCase):
         native = {'pid': backend['pid'], 'processStartTime': backend['process_start_time']}
         path.write_text(json.dumps(native), encoding='utf-8')
         with mock.patch.dict(os.environ, {listener.client.RECORD_ENV: '', listener.client.RECORD_PATH_ENV: ''}):
-            executable = self.windows_daemon_executable(str(self.profile), backend)
+            executable = self.windows_daemon_executable(str(self.profile), listener.BackendIdentity.from_value(backend))
             self.assertEqual(listener.path_key(sys.executable), listener.path_key(executable))
             self.arguments.assert_not_called()
             context = listener.client.process_context(process.pid, include_command_line=True)
@@ -529,25 +574,27 @@ class CodexListenerTests(unittest.TestCase):
             path.write_text(json.dumps({'pid': own['pid'], 'processStartTime': own['process_start_time']}),
                             encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError, 'not an app-server daemon'):
-                self.windows_daemon_executable(str(self.profile), own)
+                self.windows_daemon_executable(str(self.profile), listener.BackendIdentity.from_value(own))
             path.write_text(json.dumps(native), encoding='utf-8')
             stale = {**backend, 'process_start_time': str(int(backend['process_start_time']) + 1)}
             path.write_text(json.dumps({**native, 'processStartTime': stale['process_start_time']}),
                             encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError, 'stale or reused'):
-                self.windows_daemon_executable(str(self.profile), stale)
+                self.windows_daemon_executable(str(self.profile), listener.BackendIdentity.from_value(stale))
             path.write_text(json.dumps(native), encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError, 'metadata changed'):
-                self.windows_daemon_executable(str(self.profile), {**backend, 'pid': backend['pid'] + 1})
+                self.windows_daemon_executable(str(self.profile), listener.BackendIdentity.from_value(
+                    {**backend, 'pid': backend['pid'] + 1}))
             other_profile = self.root / 'foreign-profile'
             other_path = other_profile / 'app-server-daemon' / 'daemon.pid'
             other_path.parent.mkdir(parents=True)
             other_path.write_text(json.dumps(native), encoding='utf-8')
             with self.assertRaisesRegex(RuntimeError, 'profile or recording'):
-                self.windows_daemon_executable(str(other_profile), backend)
+                self.windows_daemon_executable(str(other_profile), listener.BackendIdentity.from_value(backend))
             with mock.patch.object(listener_windows, 'daemon_executable',
                                    side_effect=self.windows_daemon_executable):
-                target = listener.Target(THREAD, str(self.profile), str(self.thread_cwd), backend,
+                target = listener.Target(THREAD, str(self.profile), str(self.thread_cwd),
+                                         listener.BackendIdentity.from_value(backend),
                                          str(self.root / 'different-native-executable'))
                 with self.assertRaisesRegex(RuntimeError, 'daemon or executable changed'):
                     listener.verify_backend(target)

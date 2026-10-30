@@ -15,6 +15,7 @@ import subprocess
 import time
 from typing import Any, BinaryIO
 
+from codex.listener_types import BackendIdentity, CommandResult
 
 class SecurityAttributes(ctypes.Structure):
     _fields_ = [('length', wintypes.DWORD), ('descriptor', wintypes.LPVOID), ('inherit', wintypes.BOOL)]
@@ -133,27 +134,27 @@ def checked(succeeded: Any) -> Any:
     return succeeded
 
 
-def daemon_executable(profile: str, backend: dict[str, Any]) -> str:
+def daemon_executable(profile: str, backend: BackendIdentity) -> str:
     from codex import client
 
     kernel, _security = api()
     record_path = Path(profile) / 'app-server-daemon' / 'daemon.pid'
     record = json.loads(record_path.read_text(encoding='utf-8'))
-    if (not isinstance(record, dict) or record.get('pid') != backend['pid']
-            or str(record.get('processStartTime')) != backend['process_start_time']):
+    if (not isinstance(record, dict) or record.get('pid') != backend.pid
+            or str(record.get('processStartTime')) != backend.process_start_time):
         raise RuntimeError('The pinned native Codex daemon metadata changed')
-    process = checked(kernel.OpenProcess(0x1000 | 0x100000, False, backend['pid']))
+    process = checked(kernel.OpenProcess(0x1000 | 0x100000, False, backend.pid))
     try:
         creation, exited, system, user = (wintypes.FILETIME() for _ in range(4))
         checked(kernel.GetProcessTimes(process, ctypes.byref(creation), ctypes.byref(exited),
                                        ctypes.byref(system), ctypes.byref(user)))
         started = str((creation.dwHighDateTime << 32) | creation.dwLowDateTime)
-        if started != backend['process_start_time'] or kernel.WaitForSingleObject(process, 0) != 258:
+        if started != backend.process_start_time or kernel.WaitForSingleObject(process, 0) != 258:
             raise RuntimeError('The pinned native Codex daemon process is stale or reused')
         size = wintypes.DWORD(32768)
         image = ctypes.create_unicode_buffer(size.value)
         checked(kernel.QueryFullProcessImageNameW(process, 0, image, ctypes.byref(size)))
-        context = client.process_context(backend['pid'], include_command_line=True)
+        context = client.process_context(backend.pid, include_command_line=True)
         arguments = context.get('arguments')
         if (not isinstance(arguments, list) or not arguments
                 or any(not isinstance(argument, str) for argument in arguments)
@@ -188,7 +189,7 @@ def terminate_owned_processes(job: Any) -> None:
 
 
 def run(command: tuple[str, ...], cwd: str, timeout: float, output: BinaryIO,
-        environment: dict[str, str]) -> tuple[int, bool]:
+        environment: dict[str, str]) -> CommandResult:
     import msvcrt
 
     kernel, _security = api()
@@ -245,7 +246,7 @@ def run(command: tuple[str, ...], cwd: str, timeout: float, output: BinaryIO,
             raise ctypes.WinError(ctypes.get_last_error())
         code = wintypes.DWORD()
         checked(kernel.GetExitCodeProcess(process.process, ctypes.byref(code)))
-        return code.value, timed_out
+        return CommandResult(code.value, timed_out)
     finally:
         try:
             terminate_owned_processes(job)
