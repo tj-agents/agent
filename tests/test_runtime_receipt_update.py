@@ -125,8 +125,11 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
 
         script = target / ".agents/agent/runtime/plugin_autoupdate.py"
         with mock.patch.object(self.runtime, "native_agent_roots", return_value=[source]), \
-                mock.patch.object(self.delivery, "native_receipt", side_effect=replaced_cache):
+                mock.patch.object(self.runtime, "delivery_runtime", return_value=self.delivery), \
+                mock.patch.object(self.delivery, "native_receipt", side_effect=replaced_cache) as replaced:
             self.assertTrue(self.runtime.self_update(script, {}))
+        replaced.assert_called_once()
+        self.assertEqual(b"unverified replacement", (source / ".agents/agent/runtime/plugin_autoupdate.py").read_bytes())
         self.assertEqual(b"published runtime", script.read_bytes())
 
     def test_project_codex_selection_can_supply_the_current_native_source(self):
