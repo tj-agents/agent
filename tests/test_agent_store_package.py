@@ -7,12 +7,13 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_RUNTIME = ROOT / ".agents/agent-store/runtime"
 RUNTIMES = (
-    ROOT / ".agents/agent-store/runtime",
+    SOURCE_RUNTIME,
     ROOT / "plugins/agent/.agents/agent-store/runtime",
     ROOT / "plugins/agent-store/.agents/agent-store/runtime",
 )
-sys.path.insert(0, str(RUNTIMES[0]))
+sys.path.insert(0, str(SOURCE_RUNTIME))
 
 import tj_agent_store  # noqa: E402
 
