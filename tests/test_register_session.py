@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from git_isolation import without_git_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "plugins/agent/.agents/agent/utility/peer/scripts/register_session.py"
@@ -28,11 +30,7 @@ ProcessInfo = register_session.ProcessInfo
 
 
 def _git_environment():
-    environment = os.environ.copy()
-    for name in tuple(environment):
-        if name == "GIT_CONFIG_COUNT" or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-            environment.pop(name)
-    return environment
+    return without_git_config(os.environ)
 
 
 class ResolveRecordedPidTests(unittest.TestCase):
@@ -408,6 +406,17 @@ class ProcessLookupSafetyTests(unittest.TestCase):
         with mock.patch("subprocess.run", return_value=malformed):
             with self.assertRaises(ValueError):
                 register_session._ps_lookup(101)
+
+
+class LauncherTitleTests(unittest.TestCase):
+    def test_a_cleared_session_does_not_inherit_the_tab_title(self):
+        module = load_module()
+        with mock.patch.dict(os.environ, {module.TITLE_ENV: "Launched work"}, clear=False):
+            for source, expected in ((None, "Launched work"), ("startup", "Launched work"),
+                                     ("resume", "Launched work"), ("compact", "Launched work"), ("clear", None)):
+                with self.subTest(source=source):
+                    payload = {"session_id": "id"} if source is None else {"session_id": "id", "source": source}
+                    self.assertEqual(expected, module.launcher_title(payload))
 
 
 if __name__ == "__main__":

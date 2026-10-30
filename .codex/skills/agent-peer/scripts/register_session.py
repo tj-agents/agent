@@ -498,6 +498,12 @@ def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, pre
             pass
 
 
+def launcher_title(data):
+    if data.get("source") == "clear":
+        return None
+    return os.environ.get(TITLE_ENV)
+
+
 def record(data, lookup=None, host_names=None, client=None):
     session = data.get("session_id") or data.get("sessionId")
     if not session:
@@ -509,7 +515,7 @@ def record(data, lookup=None, host_names=None, client=None):
     else:
         pid, host, pid_started_at = client["pid"], client["host"], client["pid_started_at"]
     cwd = data.get("cwd") or os.getcwd()
-    title = (client.get("title") if client is not None else os.environ.get(TITLE_ENV)) or None
+    title = (client.get("title") if client is not None else launcher_title(data)) or None
     entry = {
         "session_id": str(session),
         "title": title,

@@ -13,6 +13,8 @@ import time
 import unittest
 from unittest import mock
 
+from git_isolation import isolate_git_config, without_git_config
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "session_store", ROOT / ".agents/agent-store/runtime/session_store.py"
@@ -24,19 +26,11 @@ GIT = shutil.which("git")
 
 
 def _git_environment():
-    environment = os.environ.copy()
-    for name in tuple(environment):
-        if name == "GIT_CONFIG_COUNT" or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-            environment.pop(name)
-    return environment
+    return without_git_config(os.environ)
 
 
 def setUpModule():
-    # Windows drops empty variables when patch.dict restores os.environ, leaving GIT_CONFIG_COUNT pointing at
-    # missing GIT_CONFIG_VALUE_n entries and every later git call failing.
-    for name in tuple(os.environ):
-        if name == "GIT_CONFIG_COUNT" or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-            os.environ.pop(name)
+    isolate_git_config()
 
 
 def _run_git(cwd, *args):
