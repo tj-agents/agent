@@ -246,10 +246,11 @@ class CodexStaleBytesTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(root / "state")}), \
                     mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
                     mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": source}]}), \
-                    mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
+                    mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}) as inventory, \
                     mock.patch.object(sources, "tree", return_value=tree) as fetch, \
                     mock.patch.object(sources, "resolved_head", return_value="b" * 40):
                 self.assertEqual([], CODEX.reconcile(root, executable="codex"))
+                inventory.assert_called_once_with(root, CODEX.HOST, "codex", identities=[IDENTITY])
                 fetch.reset_mock()
                 fetch.side_effect = OSError("offline")
                 self.assertEqual([], CODEX.reconcile(root, executable="codex"))
