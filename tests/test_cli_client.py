@@ -276,24 +276,20 @@ class ClientAttributionTests(unittest.TestCase):
 class SessionStoreAttachmentTests(unittest.TestCase):
     def test_frontend_attachment_preserves_turn_state_siblings_and_end_state(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}):
-            store = register_session._load_session_store()
-            connection = store.connect()
-            try:
-                own = store.start_session(connection, "codex", "own", directory, pid=10, pid_started_at=1.0)
-                peer = store.start_session(connection, "codex", "peer", directory, pid=10, pid_started_at=1.0)
-                store.record_stop(connection, own, directory)
-                before = store.get_session(connection, own)
-                store.attach_session_client(connection, own, 20, 2.0, directory)
-                after = store.get_session(connection, own)
-                self.assertEqual("awaiting_input", after["turn_state"])
-                self.assertEqual(before["last_activity_at"], after["last_activity_at"])
-                self.assertEqual(20, after["pid"])
-                self.assertEqual(10, store.get_session(connection, peer)["pid"])
-                store.end_session(connection, own, "closed")
-                store.attach_session_client(connection, own, 30, 3.0, directory)
-                self.assertEqual(20, store.get_session(connection, own)["pid"])
-            finally:
-                connection.close()
+            with register_session._load_session_store().SessionStore() as store:
+                own = store.start_session("codex", "own", directory, pid=10, pid_started_at=1.0)
+                peer = store.start_session("codex", "peer", directory, pid=10, pid_started_at=1.0)
+                store.record_stop(own, directory)
+                before = store.get_session(own)
+                store.attach_session_client(own, 20, 2.0, directory)
+                after = store.get_session(own)
+                self.assertEqual("awaiting_input", after.turn_state)
+                self.assertEqual(before.last_activity_at, after.last_activity_at)
+                self.assertEqual(20, after.pid)
+                self.assertEqual(10, store.get_session(peer).pid)
+                store.end_session(own, "closed")
+                store.attach_session_client(own, 30, 3.0, directory)
+                self.assertEqual(20, store.get_session(own).pid)
 
 
 if __name__ == "__main__":

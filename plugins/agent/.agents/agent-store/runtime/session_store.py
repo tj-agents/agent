@@ -2,6 +2,8 @@
 """Single SQLite-backed store for session and work-item status, written by hooks (Python 3.9+)."""
 
 import argparse
+import contextlib
+from dataclasses import dataclass, fields
 import functools
 import importlib.util
 import json
@@ -12,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from typing import Optional
 import uuid
 from pathlib import Path
 
@@ -101,6 +104,84 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_owner_per_work_item
 ON sessions(work_item) WHERE role = 'owner'
 """
 
+
+@dataclass(eq=False)
+class Session:
+    handle: str
+    host: str
+    session_id: str
+    machine: Optional[str]
+    profile: Optional[str]
+    title: Optional[str]
+    cwd: Optional[str]
+    repo: Optional[str]
+    branch: Optional[str]
+    head: Optional[str]
+    work_item: Optional[str]
+    role: Optional[str]
+    pid: Optional[int]
+    pid_started_at: Optional[float]
+    started_at: Optional[float]
+    last_activity_at: Optional[float]
+    turn_state: Optional[str]
+    ended_at: Optional[float]
+    end_reason: Optional[str]
+    predecessor: Optional[str]
+    successor: Optional[str]
+
+    @property
+    def ended(self):
+        return self.ended_at is not None
+
+    def __eq__(self, other):
+        if not isinstance(other, Session):
+            return NotImplemented
+        return self.handle == other.handle
+
+    def __hash__(self):
+        return hash(self.handle)
+
+
+@dataclass(eq=False)
+class WorkItem:
+    key: str
+    repo: str
+    feature: Optional[str]
+    item: Optional[str]
+    status: str
+    branch: Optional[str]
+    pr: Optional[str]
+    title: Optional[str]
+    plan_path: Optional[str]
+    updated_at: Optional[float]
+
+    @property
+    def label(self):
+        return f"{self.feature}/{self.item}" if self.feature is not None else self.key
+
+    def __eq__(self, other):
+        if not isinstance(other, WorkItem):
+            return NotImplemented
+        return self.key == other.key
+
+    def __hash__(self):
+        return hash(self.key)
+
+
+@dataclass(frozen=True)
+class WorkItemReference:
+    provider: str
+    scope: str
+    native_id: str
+    work_item: str
+
+
+def _from_row(record_type, row):
+    if row is None:
+        return None
+    return record_type(**{field.name: row[field.name] for field in fields(record_type)})
+
+
 def state_directory():
     override = os.environ.get("AGENT_STATE_DIRECTORY")
     return Path(override) if override else Path.home() / ".agents-state"
@@ -149,38 +230,11 @@ def _execute_with_lock_retry(connection, statement):
             time.sleep(_LOCK_RETRY_DELAY)
 
 
-def connect(path=None):
-    target = Path(path) if path is not None else database_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(target), timeout=5)
-    try:
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 5000")
-        _execute_with_lock_retry(connection, "PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA foreign_keys = ON")
-        _ensure_schema(connection)
-        return connection
-    except Exception:
-        connection.close()
-        raise
-
-
-def _ensure_schema(connection):
-    version = connection.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (0, SCHEMA_VERSION):
-        raise RuntimeError(f"session store has unsupported schema version {version}")
+@contextlib.contextmanager
+def _immediate_transaction(connection):
     connection.execute("BEGIN IMMEDIATE")
     try:
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, SCHEMA_VERSION):
-            raise RuntimeError(f"session store has unsupported schema version {version}")
-        connection.execute(WORK_ITEMS_SCHEMA)
-        connection.execute(SESSIONS_SCHEMA)
-        connection.execute(SESSIONS_ONE_OWNER_INDEX)
-        connection.execute(WORK_ITEM_REFERENCES_SCHEMA)
-        connection.execute(WORK_ITEM_REFERENCES_ITEM_INDEX)
-        if version != SCHEMA_VERSION:
-            connection.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
+        yield
         connection.commit()
     except Exception:
         connection.rollback()
@@ -325,164 +379,6 @@ def normalise_work_item_reference(provider, scope, native_id):
     return provider, scope, native_id
 
 
-def get_work_item_reference(connection, provider, scope, native_id):
-    provider, scope, native_id = normalise_work_item_reference(provider, scope, native_id)
-    row = connection.execute(
-        "SELECT provider, scope, native_id, work_item FROM work_item_references "
-        "WHERE provider = ? AND scope = ? AND native_id = ?",
-        (provider, scope, native_id),
-    ).fetchone()
-    return dict(row) if row else None
-
-
-def work_item_references(connection, key):
-    rows = connection.execute(
-        "SELECT provider, scope, native_id FROM work_item_references WHERE work_item = ? "
-        "ORDER BY provider, scope, native_id",
-        (key,),
-    ).fetchall()
-    return [dict(row) for row in rows]
-
-
-def _insert_work_item_reference_locked(connection, key, provider, scope, native_id):
-    reference = get_work_item_reference(connection, provider, scope, native_id)
-    if reference is not None:
-        if reference["work_item"] == key:
-            return False
-        raise ValueError(
-            f"{provider}/{scope}/{native_id} is already bound to {reference['work_item']}, not {key}"
-        )
-    if get_work_item(connection, key) is None:
-        raise ValueError(f"work item does not exist: {key}")
-    connection.execute(
-        "INSERT INTO work_item_references (provider, scope, native_id, work_item) VALUES (?, ?, ?, ?)",
-        (provider, scope, native_id, key),
-    )
-    return True
-
-
-def bind_work_item_reference(connection, key, provider, scope, native_id):
-    provider, scope, native_id = normalise_work_item_reference(provider, scope, native_id)
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        changed = _insert_work_item_reference_locked(connection, key, provider, scope, native_id)
-        connection.commit()
-        return changed
-    except Exception:
-        connection.rollback()
-        raise
-
-
-def resolve_or_create_work_item_reference(connection, provider, scope, native_id, repo, branch=None):
-    provider, scope, native_id = normalise_work_item_reference(provider, scope, native_id)
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        reference = get_work_item_reference(connection, provider, scope, native_id)
-        if reference is not None:
-            item = get_work_item(connection, reference["work_item"])
-            if item is None:
-                raise RuntimeError(f"reference {provider}/{scope}/{native_id} has a missing work item")
-            connection.commit()
-            return item, False
-        adoptable = _branch_work_items_to_absorb_locked(connection, "", repo, branch) if branch else []
-        if len(adoptable) == 1:
-            key = adoptable[0]
-            created = False
-        else:
-            key = execution_key()
-            _upsert_work_item_locked(
-                connection, key, repo, None, None, status="active", branch=branch,
-            )
-            created = True
-        _insert_work_item_reference_locked(connection, key, provider, scope, native_id)
-        item = get_work_item(connection, key)
-        connection.commit()
-        return item, created
-    except Exception:
-        connection.rollback()
-        raise
-
-
-def _start_session_locked(
-    connection, host, session_id, cwd, title=None, pid=None, pid_started_at=None,
-    repo=None, branch=None, head=None,
-):
-    handle = session_handle(host, session_id)
-    machine = current_machine()
-    profile = profile_directory(host)
-    now = time.time()
-    connection.execute(
-        """
-        INSERT INTO sessions (
-            handle, host, session_id, machine, profile, title, cwd, repo, branch, head,
-            pid, pid_started_at, started_at, last_activity_at, turn_state, ended_at, end_reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', NULL, NULL)
-        ON CONFLICT(handle) DO UPDATE SET
-            machine = excluded.machine,
-            profile = excluded.profile,
-            title = COALESCE(excluded.title, sessions.title),
-            cwd = excluded.cwd,
-            repo = excluded.repo,
-            branch = excluded.branch,
-            head = excluded.head,
-            pid = excluded.pid,
-            pid_started_at = excluded.pid_started_at,
-            started_at = excluded.started_at,
-            last_activity_at = excluded.started_at,
-            turn_state = 'working',
-            ended_at = NULL,
-            end_reason = NULL,
-            role = CASE WHEN sessions.end_reason = 'handed_off' THEN NULL ELSE sessions.role END
-        """,
-        (handle, host, session_id, machine, profile, title, str(cwd), repo, branch, head,
-         pid, pid_started_at, now, now),
-    )
-    return handle
-
-
-def start_session(connection, host, session_id, cwd, title=None, pid=None, pid_started_at=None):
-    repo, branch, head = _collect_repo_branch_head(cwd)
-    handle = _start_session_locked(
-        connection, host, session_id, cwd, title=title, pid=pid, pid_started_at=pid_started_at,
-        repo=repo, branch=branch, head=head,
-    )
-    connection.commit()
-    if repo and branch:
-        attach_work_item_if_unique(connection, repo, branch, handle)
-        connection.commit()
-    return handle
-
-
-def ensure_session(connection, host, session_id, cwd=None):
-    handle = session_handle(host, session_id)
-    if get_session(connection, handle) is not None:
-        return handle
-    machine = current_machine()
-    profile = profile_directory(host)
-    repo, branch, head = _collect_repo_branch_head(cwd) if cwd else (None, None, None)
-    now = time.time()
-    connection.execute(
-        """
-        INSERT INTO sessions (
-            handle, host, session_id, machine, profile, cwd, repo, branch, head,
-            started_at, last_activity_at, turn_state
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working')
-        ON CONFLICT(handle) DO NOTHING
-        """,
-        (handle, host, session_id, machine, profile, str(cwd) if cwd else None, repo, branch, head, now, now),
-    )
-    connection.commit()
-    return handle
-
-
-def attach_session_client(connection, handle, pid, pid_started_at, cwd):
-    connection.execute(
-        "UPDATE sessions SET pid = ?, pid_started_at = ?, cwd = ? WHERE handle = ? AND ended_at IS NULL",
-        (pid, pid_started_at, str(cwd), handle),
-    )
-    connection.commit()
-
-
 def prompt_title(prompt):
     if not isinstance(prompt, str):
         return None
@@ -495,296 +391,440 @@ def prompt_title(prompt):
     return f"{cut}…"
 
 
-def record_prompt(connection, handle, prompt=None):
-    connection.execute(
-        "UPDATE sessions SET turn_state = 'working', last_activity_at = ?, title = COALESCE(title, ?) WHERE handle = ?",
-        (time.time(), prompt_title(prompt), handle),
-    )
-    connection.commit()
+class SessionStore:
+    def __init__(self, path=None):
+        self._connection = self._connect(path)
 
+    def __enter__(self):
+        return self
 
-def record_stop(connection, handle, cwd, follow=None):
-    checkout, repo, branch, head, default = _collect_checkout(cwd)
-    if follow is not None and follow(checkout) is False:
-        checkout = repo = branch = head = None
-    now = time.time()
-    connection.execute(
-        """
-        UPDATE sessions SET turn_state = 'awaiting_input', last_activity_at = ?, cwd = COALESCE(?, cwd),
-            repo = COALESCE(?, repo), branch = COALESCE(?, branch), head = COALESCE(?, head)
-        WHERE handle = ?
-        """,
-        (now, checkout, repo, branch, head, handle),
-    )
-    connection.commit()
-    if repo and branch:
-        attach_work_item_if_unique(connection, repo, branch, handle, create=not default)
-        connection.commit()
+    def __exit__(self, *_exception):
+        self.close()
 
+    def close(self):
+        self._connection.close()
 
-def _end_session_locked(connection, handle, reason, successor=None):
-    connection.execute(
-        """
-        UPDATE sessions SET
-            ended_at = COALESCE(ended_at, ?),
-            end_reason = COALESCE(end_reason, ?),
-            successor = COALESCE(successor, ?)
-        WHERE handle = ?
-        """,
-        (time.time(), reason, successor, handle),
-    )
+    @classmethod
+    def _connect(cls, path):
+        target = Path(path) if path is not None else database_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(str(target), timeout=5)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA busy_timeout = 5000")
+            _execute_with_lock_retry(connection, "PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA foreign_keys = ON")
+            cls._ensure_schema(connection)
+            return connection
+        except Exception:
+            connection.close()
+            raise
 
+    @staticmethod
+    def _ensure_schema(connection):
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (0, SCHEMA_VERSION):
+            raise RuntimeError(f"session store has unsupported schema version {version}")
+        with _immediate_transaction(connection):
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0, SCHEMA_VERSION):
+                raise RuntimeError(f"session store has unsupported schema version {version}")
+            connection.execute(WORK_ITEMS_SCHEMA)
+            connection.execute(SESSIONS_SCHEMA)
+            connection.execute(SESSIONS_ONE_OWNER_INDEX)
+            connection.execute(WORK_ITEM_REFERENCES_SCHEMA)
+            connection.execute(WORK_ITEM_REFERENCES_ITEM_INDEX)
+            if version != SCHEMA_VERSION:
+                connection.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
 
-def end_session(connection, handle, reason, successor=None):
-    _end_session_locked(connection, handle, reason, successor=successor)
-    connection.commit()
+    def _sessions(self, clause="", arguments=()):
+        rows = self._connection.execute(f"SELECT * FROM sessions {clause}", arguments).fetchall()
+        return [_from_row(Session, row) for row in rows]
 
+    def get_session(self, handle):
+        row = self._connection.execute("SELECT * FROM sessions WHERE handle = ?", (handle,)).fetchone()
+        return _from_row(Session, row)
 
-def reopen_session(connection, handle, reason):
-    connection.execute(
-        "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE handle = ? AND end_reason = ?",
-        (handle, reason),
-    )
-    connection.commit()
+    def sessions_for_work_item(self, item):
+        return self._sessions("WHERE work_item = ? ORDER BY started_at", (item,))
 
+    def sessions_with_work_item(self):
+        return self._sessions("WHERE work_item IS NOT NULL")
 
-def delete_session(connection, session_id):
-    connection.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-    connection.commit()
+    def live_owners(self, item):
+        return self._sessions("WHERE work_item = ? AND role = 'owner' AND ended_at IS NULL", (item,))
 
+    def sessions_by_repo(self, repo):
+        return self._sessions("WHERE repo = ?", (repo,))
 
-def attach_work_item_if_unique(connection, repo, branch, handle, create=False):
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        row = connection.execute("SELECT work_item, title FROM sessions WHERE handle = ?", (handle,)).fetchone()
-        if row is None or row["work_item"] is not None:
-            connection.commit()
-            return
-        matches = connection.execute(
-            "SELECT key FROM work_items WHERE repo = ? AND branch = ? AND status != 'done'",
-            (repo, branch),
-        ).fetchall()
-        if len(matches) == 1:
-            key = matches[0]["key"]
-        elif not matches and create:
-            key = execution_key()
-            _upsert_work_item_locked(
-                connection, key, repo, None, None, status="active", branch=branch, title=row["title"] or branch,
-            )
-        else:
-            connection.commit()
-            return
-        connection.execute("UPDATE sessions SET work_item = ? WHERE handle = ?", (key, handle))
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-
-
-def _branch_work_items_to_absorb_locked(connection, key, repo, branch):
-    return [row["key"] for row in connection.execute(
-        """
-        SELECT w.key FROM work_items w
-        WHERE w.repo = ? AND w.branch = ? AND w.key != ? AND w.feature IS NULL AND w.status != 'done'
-            AND NOT EXISTS (SELECT 1 FROM work_item_references r WHERE r.work_item = w.key)
-            AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.work_item = w.key AND s.role IS NOT NULL)
-        """,
-        (repo, branch, key),
-    ).fetchall()]
-
-
-def _absorb_branch_work_items_locked(connection, key, repo, branch):
-    for absorbed in _branch_work_items_to_absorb_locked(connection, key, repo, branch):
-        connection.execute("UPDATE sessions SET work_item = ? WHERE work_item = ?", (key, absorbed))
-        connection.execute("DELETE FROM work_items WHERE key = ?", (absorbed,))
-
-
-def get_work_item(connection, key):
-    row = connection.execute("SELECT * FROM work_items WHERE key = ?", (key,)).fetchone()
-    return dict(row) if row else None
-
-
-def _upsert_work_item_locked(
-    connection, key, repo, feature, item, status=None, branch=None, pr=None, title=None, plan_path=None,
-):
-    if (feature is None) != (item is None):
-        raise ValueError("work item feature and item must both be present or both be absent")
-    if feature is None:
-        validate_execution_key(key)
-    now = time.time()
-    connection.execute(
-        """
-        INSERT INTO work_items (key, repo, feature, item, status, branch, pr, title, plan_path, updated_at)
-        VALUES (?, ?, ?, ?, COALESCE(?, 'active'), ?, ?, ?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET
-            status = COALESCE(?, work_items.status),
-            branch = COALESCE(work_items.branch, ?),
-            pr = COALESCE(?, work_items.pr),
-            title = COALESCE(?, work_items.title),
-            plan_path = COALESCE(?, work_items.plan_path),
-            updated_at = ?
-        """,
-        (key, repo, feature, item, status, branch, pr, title, plan_path, now,
-         status, branch, pr, title, plan_path, now),
-    )
-
-
-def upsert_work_item(connection, key, repo, feature, item, status=None, branch=None, pr=None, title=None, plan_path=None):
-    _upsert_work_item_locked(
-        connection, key, repo, feature, item, status=status, branch=branch, pr=pr,
-        title=title, plan_path=plan_path,
-    )
-    if feature is not None and branch:
-        _absorb_branch_work_items_locked(connection, key, repo, branch)
-    connection.commit()
-
-
-def set_work_item_status(connection, key, status, pr=None, branch=None):
-    connection.execute(
-        """
-        UPDATE work_items SET status = ?, pr = COALESCE(?, pr), branch = COALESCE(branch, ?), updated_at = ?
-        WHERE key = ?
-        """,
-        (status, pr, branch, time.time(), key),
-    )
-    connection.commit()
-
-
-def _set_session_ownership_locked(connection, handle, role, item, predecessor=None):
-    connection.execute(
-        "UPDATE sessions SET role = ?, work_item = ?, predecessor = COALESCE(?, predecessor) WHERE handle = ?",
-        (role, item, predecessor, handle),
-    )
-
-
-def set_session_ownership(connection, handle, role, item, predecessor=None):
-    _set_session_ownership_locked(connection, handle, role, item, predecessor=predecessor)
-    connection.commit()
-
-
-def _demote_other_owners_locked(connection, item, keep_handle):
-    connection.execute(
-        "UPDATE sessions SET role = NULL WHERE work_item = ? AND role = 'owner' AND handle != ?",
-        (item, keep_handle),
-    )
-
-
-def _claim_work_item_locked(connection, handle, key, role, predecessor=None, branch=None, require_existing_binding=False):
-    current = get_session(connection, handle)
-    if current is None:
-        raise ValueError(f"{handle} is not a registered current native session")
-    if require_existing_binding and current["work_item"] not in (None, key):
-        raise ValueError(
-            f"{handle} is attached to {current['work_item']}; bind the remote reference explicitly before claiming"
+    def sessions_on_hosts(self, hosts, session_id=None):
+        placeholders = ", ".join("?" for _ in hosts)
+        exact = " AND session_id = ?" if session_id else ""
+        return self._sessions(
+            f"WHERE host IN ({placeholders}){exact}", (*hosts, *((session_id,) if session_id else ())),
         )
-    removed = None
-    if role == "owner":
-        others = [row for row in live_owners(connection, key) if row["handle"] != handle]
-        if others:
-            other = others[0]
-            if predecessor and predecessor == other["handle"]:
-                _end_session_locked(connection, predecessor, "handed_off", successor=handle)
-                removed = predecessor
+
+    def interrupted_candidates(self, repo=None):
+        if repo:
+            return self._sessions("WHERE ended_at IS NULL AND repo = ?", (repo,))
+        return self._sessions("WHERE ended_at IS NULL")
+
+    def get_work_item(self, key):
+        row = self._connection.execute("SELECT * FROM work_items WHERE key = ?", (key,)).fetchone()
+        return _from_row(WorkItem, row)
+
+    def get_work_item_reference(self, provider, scope, native_id):
+        provider, scope, native_id = normalise_work_item_reference(provider, scope, native_id)
+        row = self._connection.execute(
+            "SELECT provider, scope, native_id, work_item FROM work_item_references "
+            "WHERE provider = ? AND scope = ? AND native_id = ?",
+            (provider, scope, native_id),
+        ).fetchone()
+        return _from_row(WorkItemReference, row)
+
+    def work_item_references(self, key):
+        rows = self._connection.execute(
+            "SELECT provider, scope, native_id, work_item FROM work_item_references WHERE work_item = ? "
+            "ORDER BY provider, scope, native_id",
+            (key,),
+        ).fetchall()
+        return [_from_row(WorkItemReference, row) for row in rows]
+
+    def _insert_work_item_reference_locked(self, key, provider, scope, native_id):
+        reference = self.get_work_item_reference(provider, scope, native_id)
+        if reference is not None:
+            if reference.work_item == key:
+                return False
+            raise ValueError(
+                f"{provider}/{scope}/{native_id} is already bound to {reference.work_item}, not {key}"
+            )
+        if self.get_work_item(key) is None:
+            raise ValueError(f"work item does not exist: {key}")
+        self._connection.execute(
+            "INSERT INTO work_item_references (provider, scope, native_id, work_item) VALUES (?, ?, ?, ?)",
+            (provider, scope, native_id, key),
+        )
+        return True
+
+    def bind_work_item_reference(self, key, provider, scope, native_id):
+        provider, scope, native_id = normalise_work_item_reference(provider, scope, native_id)
+        with _immediate_transaction(self._connection):
+            return self._insert_work_item_reference_locked(key, provider, scope, native_id)
+
+    def resolve_or_create_work_item_reference(self, provider, scope, native_id, repo, branch=None):
+        provider, scope, native_id = normalise_work_item_reference(provider, scope, native_id)
+        with _immediate_transaction(self._connection):
+            reference = self.get_work_item_reference(provider, scope, native_id)
+            if reference is not None:
+                item = self.get_work_item(reference.work_item)
+                if item is None:
+                    raise RuntimeError(f"reference {provider}/{scope}/{native_id} has a missing work item")
+                return item, False
+            adoptable = self._branch_work_items_to_absorb_locked("", repo, branch) if branch else []
+            if len(adoptable) == 1:
+                key = adoptable[0]
+                created = False
             else:
-                raise ValueError(
-                    f"{other['handle']} already owns this work item; hand off before taking ownership"
+                key = execution_key()
+                self._upsert_work_item_locked(key, repo, None, None, status="active", branch=branch)
+                created = True
+            self._insert_work_item_reference_locked(key, provider, scope, native_id)
+            return self.get_work_item(key), created
+
+    def _start_session_locked(
+        self, host, session_id, cwd, title=None, pid=None, pid_started_at=None, repo=None, branch=None, head=None,
+    ):
+        handle = session_handle(host, session_id)
+        machine = current_machine()
+        profile = profile_directory(host)
+        now = time.time()
+        self._connection.execute(
+            """
+            INSERT INTO sessions (
+                handle, host, session_id, machine, profile, title, cwd, repo, branch, head,
+                pid, pid_started_at, started_at, last_activity_at, turn_state, ended_at, end_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', NULL, NULL)
+            ON CONFLICT(handle) DO UPDATE SET
+                machine = excluded.machine,
+                profile = excluded.profile,
+                title = COALESCE(excluded.title, sessions.title),
+                cwd = excluded.cwd,
+                repo = excluded.repo,
+                branch = excluded.branch,
+                head = excluded.head,
+                pid = excluded.pid,
+                pid_started_at = excluded.pid_started_at,
+                started_at = excluded.started_at,
+                last_activity_at = excluded.started_at,
+                turn_state = 'working',
+                ended_at = NULL,
+                end_reason = NULL,
+                role = CASE WHEN sessions.end_reason = 'handed_off' THEN NULL ELSE sessions.role END
+            """,
+            (handle, host, session_id, machine, profile, title, str(cwd), repo, branch, head,
+             pid, pid_started_at, now, now),
+        )
+        return handle
+
+    def start_session(self, host, session_id, cwd, title=None, pid=None, pid_started_at=None):
+        repo, branch, head = _collect_repo_branch_head(cwd)
+        handle = self._start_session_locked(
+            host, session_id, cwd, title=title, pid=pid, pid_started_at=pid_started_at,
+            repo=repo, branch=branch, head=head,
+        )
+        self._connection.commit()
+        if repo and branch:
+            self.attach_work_item_if_unique(repo, branch, handle)
+            self._connection.commit()
+        return handle
+
+    def ensure_session(self, host, session_id, cwd=None):
+        handle = session_handle(host, session_id)
+        if self.get_session(handle) is not None:
+            return handle
+        machine = current_machine()
+        profile = profile_directory(host)
+        repo, branch, head = _collect_repo_branch_head(cwd) if cwd else (None, None, None)
+        now = time.time()
+        self._connection.execute(
+            """
+            INSERT INTO sessions (
+                handle, host, session_id, machine, profile, cwd, repo, branch, head,
+                started_at, last_activity_at, turn_state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working')
+            ON CONFLICT(handle) DO NOTHING
+            """,
+            (handle, host, session_id, machine, profile, str(cwd) if cwd else None, repo, branch, head, now, now),
+        )
+        self._connection.commit()
+        return handle
+
+    def attach_session_client(self, handle, pid, pid_started_at, cwd):
+        self._connection.execute(
+            "UPDATE sessions SET pid = ?, pid_started_at = ?, cwd = ? WHERE handle = ? AND ended_at IS NULL",
+            (pid, pid_started_at, str(cwd), handle),
+        )
+        self._connection.commit()
+
+    def record_prompt(self, handle, prompt=None):
+        self._connection.execute(
+            "UPDATE sessions SET turn_state = 'working', last_activity_at = ?, title = COALESCE(title, ?) "
+            "WHERE handle = ?",
+            (time.time(), prompt_title(prompt), handle),
+        )
+        self._connection.commit()
+
+    def record_stop(self, handle, cwd, follow=None):
+        checkout, repo, branch, head, default = _collect_checkout(cwd)
+        if follow is not None and follow(checkout) is False:
+            checkout = repo = branch = head = None
+        now = time.time()
+        self._connection.execute(
+            """
+            UPDATE sessions SET turn_state = 'awaiting_input', last_activity_at = ?, cwd = COALESCE(?, cwd),
+                repo = COALESCE(?, repo), branch = COALESCE(?, branch), head = COALESCE(?, head)
+            WHERE handle = ?
+            """,
+            (now, checkout, repo, branch, head, handle),
+        )
+        self._connection.commit()
+        if repo and branch:
+            self.attach_work_item_if_unique(repo, branch, handle, create=not default)
+            self._connection.commit()
+
+    def _end_session_locked(self, handle, reason, successor=None):
+        self._connection.execute(
+            """
+            UPDATE sessions SET
+                ended_at = COALESCE(ended_at, ?),
+                end_reason = COALESCE(end_reason, ?),
+                successor = COALESCE(successor, ?)
+            WHERE handle = ?
+            """,
+            (time.time(), reason, successor, handle),
+        )
+
+    def end_session(self, handle, reason, successor=None):
+        self._end_session_locked(handle, reason, successor=successor)
+        self._connection.commit()
+
+    def reopen_session(self, handle, reason):
+        self._connection.execute(
+            "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE handle = ? AND end_reason = ?",
+            (handle, reason),
+        )
+        self._connection.commit()
+
+    def delete_session(self, session_id):
+        self._connection.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        self._connection.commit()
+
+    def attach_work_item_if_unique(self, repo, branch, handle, create=False):
+        with _immediate_transaction(self._connection):
+            session = self.get_session(handle)
+            if session is None or session.work_item is not None:
+                return
+            matches = self._connection.execute(
+                "SELECT key FROM work_items WHERE repo = ? AND branch = ? AND status != 'done'",
+                (repo, branch),
+            ).fetchall()
+            if len(matches) == 1:
+                key = matches[0]["key"]
+            elif not matches and create:
+                key = execution_key()
+                self._upsert_work_item_locked(
+                    key, repo, None, None, status="active", branch=branch, title=session.title or branch,
                 )
-        _demote_other_owners_locked(connection, key, handle)
-    _set_session_ownership_locked(connection, handle, role, key, predecessor=predecessor)
-    if role == "owner" and branch:
-        connection.execute(
-            "UPDATE work_items SET branch = COALESCE(branch, ?), updated_at = ? WHERE key = ?",
-            (branch, time.time(), key),
+            else:
+                return
+            self._connection.execute("UPDATE sessions SET work_item = ? WHERE handle = ?", (key, handle))
+
+    def _branch_work_items_to_absorb_locked(self, key, repo, branch):
+        return [row["key"] for row in self._connection.execute(
+            """
+            SELECT w.key FROM work_items w
+            WHERE w.repo = ? AND w.branch = ? AND w.key != ? AND w.feature IS NULL AND w.status != 'done'
+                AND NOT EXISTS (SELECT 1 FROM work_item_references r WHERE r.work_item = w.key)
+                AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.work_item = w.key AND s.role IS NOT NULL)
+            """,
+            (repo, branch, key),
+        ).fetchall()]
+
+    def _absorb_branch_work_items_locked(self, key, repo, branch):
+        for absorbed in self._branch_work_items_to_absorb_locked(key, repo, branch):
+            self._connection.execute("UPDATE sessions SET work_item = ? WHERE work_item = ?", (key, absorbed))
+            self._connection.execute("DELETE FROM work_items WHERE key = ?", (absorbed,))
+
+    def _upsert_work_item_locked(
+        self, key, repo, feature, item, status=None, branch=None, pr=None, title=None, plan_path=None,
+    ):
+        if (feature is None) != (item is None):
+            raise ValueError("work item feature and item must both be present or both be absent")
+        if feature is None:
+            validate_execution_key(key)
+        now = time.time()
+        self._connection.execute(
+            """
+            INSERT INTO work_items (key, repo, feature, item, status, branch, pr, title, plan_path, updated_at)
+            VALUES (?, ?, ?, ?, COALESCE(?, 'active'), ?, ?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                status = COALESCE(?, work_items.status),
+                branch = COALESCE(work_items.branch, ?),
+                pr = COALESCE(?, work_items.pr),
+                title = COALESCE(?, work_items.title),
+                plan_path = COALESCE(?, work_items.plan_path),
+                updated_at = ?
+            """,
+            (key, repo, feature, item, status, branch, pr, title, plan_path, now,
+             status, branch, pr, title, plan_path, now),
         )
-    return removed
 
-
-def claim_work_item(connection, handle, key, role, predecessor=None, branch=None, require_existing_binding=False):
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        removed = _claim_work_item_locked(
-            connection, handle, key, role, predecessor=predecessor, branch=branch,
-            require_existing_binding=require_existing_binding,
+    def upsert_work_item(
+        self, key, repo, feature, item, status=None, branch=None, pr=None, title=None, plan_path=None,
+    ):
+        self._upsert_work_item_locked(
+            key, repo, feature, item, status=status, branch=branch, pr=pr, title=title, plan_path=plan_path,
         )
-        connection.commit()
-        return removed
-    except Exception:
-        connection.rollback()
-        raise
+        if feature is not None and branch:
+            self._absorb_branch_work_items_locked(key, repo, branch)
+        self._connection.commit()
 
+    def set_work_item_status(self, key, status, pr=None, branch=None):
+        self._connection.execute(
+            """
+            UPDATE work_items SET status = ?, pr = COALESCE(?, pr), branch = COALESCE(branch, ?), updated_at = ?
+            WHERE key = ?
+            """,
+            (status, pr, branch, time.time(), key),
+        )
+        self._connection.commit()
 
-def claim_registered_work_item(
-    connection, host, session_id, cwd, key, work_item_repo, current_repo, feature, item, role,
-    status=None, branch=None, session_branch=None, head=None, title=None, plan_path=None,
-    predecessor=None, registration=None, require_existing_binding=False,
-):
-    handle = session_handle(host, session_id)
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        session = get_session(connection, handle)
-        if session is None:
-            if registration is None:
-                raise ValueError(f"{handle} is not a registered current native session")
-            _start_session_locked(
-                connection, host, session_id, cwd, title=registration.get("title"),
-                pid=registration.get("pid"), pid_started_at=registration.get("pid_started_at"),
-                repo=current_repo, branch=session_branch, head=head,
+    def _set_session_ownership_locked(self, handle, role, item, predecessor=None):
+        self._connection.execute(
+            "UPDATE sessions SET role = ?, work_item = ?, predecessor = COALESCE(?, predecessor) WHERE handle = ?",
+            (role, item, predecessor, handle),
+        )
+
+    def set_session_ownership(self, handle, role, item, predecessor=None):
+        self._set_session_ownership_locked(handle, role, item, predecessor=predecessor)
+        self._connection.commit()
+
+    def _demote_other_owners_locked(self, item, keep_handle):
+        self._connection.execute(
+            "UPDATE sessions SET role = NULL WHERE work_item = ? AND role = 'owner' AND handle != ?",
+            (item, keep_handle),
+        )
+
+    def _claim_work_item_locked(
+        self, handle, key, role, predecessor=None, branch=None, require_existing_binding=False,
+    ):
+        current = self.get_session(handle)
+        if current is None:
+            raise ValueError(f"{handle} is not a registered current native session")
+        if require_existing_binding and current.work_item not in (None, key):
+            raise ValueError(
+                f"{handle} is attached to {current.work_item}; bind the remote reference explicitly before claiming"
             )
-        elif session["ended_at"] is not None:
-            raise ValueError(f"{handle} is not a current native session")
-        existing = get_work_item(connection, key)
-        if title is not None and (not isinstance(title, str) or not title.strip()):
-            raise ValueError("work item title must be non-empty")
-        if existing is None and title is None:
-            raise ValueError("a non-empty --title is required when creating a work item")
-        item_branch = branch if existing is None or role == "owner" else None
-        _upsert_work_item_locked(
-            connection, key, work_item_repo, feature, item, status=status, branch=item_branch,
-            title=title, plan_path=plan_path,
-        )
-        removed = _claim_work_item_locked(
-            connection, handle, key, role, predecessor=predecessor, branch=branch,
-            require_existing_binding=require_existing_binding,
-        )
-        connection.commit()
+        removed = None
+        if role == "owner":
+            others = [session for session in self.live_owners(key) if session.handle != handle]
+            if others:
+                other = others[0]
+                if predecessor and predecessor == other.handle:
+                    self._end_session_locked(predecessor, "handed_off", successor=handle)
+                    removed = predecessor
+                else:
+                    raise ValueError(
+                        f"{other.handle} already owns this work item; hand off before taking ownership"
+                    )
+            self._demote_other_owners_locked(key, handle)
+        self._set_session_ownership_locked(handle, role, key, predecessor=predecessor)
+        if role == "owner" and branch:
+            self._connection.execute(
+                "UPDATE work_items SET branch = COALESCE(branch, ?), updated_at = ? WHERE key = ?",
+                (branch, time.time(), key),
+            )
         return removed
-    except Exception:
-        connection.rollback()
-        raise
 
+    def claim_work_item(self, handle, key, role, predecessor=None, branch=None, require_existing_binding=False):
+        with _immediate_transaction(self._connection):
+            return self._claim_work_item_locked(
+                handle, key, role, predecessor=predecessor, branch=branch,
+                require_existing_binding=require_existing_binding,
+            )
 
-def get_session(connection, handle):
-    row = connection.execute("SELECT * FROM sessions WHERE handle = ?", (handle,)).fetchone()
-    return dict(row) if row else None
-
-
-def sessions_for_work_item(connection, item):
-    rows = connection.execute(
-        "SELECT * FROM sessions WHERE work_item = ? ORDER BY started_at", (item,),
-    ).fetchall()
-    return [dict(row) for row in rows]
-
-
-def live_owners(connection, item):
-    rows = connection.execute(
-        "SELECT * FROM sessions WHERE work_item = ? AND role = 'owner' AND ended_at IS NULL", (item,),
-    ).fetchall()
-    return [dict(row) for row in rows]
-
-
-def sessions_by_repo(connection, repo):
-    rows = connection.execute("SELECT * FROM sessions WHERE repo = ?", (repo,)).fetchall()
-    return [dict(row) for row in rows]
-
-
-def interrupted_candidates(connection, repo=None):
-    if repo:
-        rows = connection.execute(
-            "SELECT * FROM sessions WHERE ended_at IS NULL AND repo = ?", (repo,),
-        ).fetchall()
-    else:
-        rows = connection.execute("SELECT * FROM sessions WHERE ended_at IS NULL").fetchall()
-    return [dict(row) for row in rows]
+    def claim_registered_work_item(
+        self, host, session_id, cwd, key, work_item_repo, current_repo, feature, item, role,
+        status=None, branch=None, session_branch=None, head=None, title=None, plan_path=None,
+        predecessor=None, registration=None, require_existing_binding=False,
+    ):
+        handle = session_handle(host, session_id)
+        with _immediate_transaction(self._connection):
+            session = self.get_session(handle)
+            if session is None:
+                if registration is None:
+                    raise ValueError(f"{handle} is not a registered current native session")
+                self._start_session_locked(
+                    host, session_id, cwd, title=registration.get("title"),
+                    pid=registration.get("pid"), pid_started_at=registration.get("pid_started_at"),
+                    repo=current_repo, branch=session_branch, head=head,
+                )
+            elif session.ended:
+                raise ValueError(f"{handle} is not a current native session")
+            existing = self.get_work_item(key)
+            if title is not None and (not isinstance(title, str) or not title.strip()):
+                raise ValueError("work item title must be non-empty")
+            if existing is None and title is None:
+                raise ValueError("a non-empty --title is required when creating a work item")
+            item_branch = branch if existing is None or role == "owner" else None
+            self._upsert_work_item_locked(
+                key, work_item_repo, feature, item, status=status, branch=item_branch,
+                title=title, plan_path=plan_path,
+            )
+            return self._claim_work_item_locked(
+                handle, key, role, predecessor=predecessor, branch=branch,
+                require_existing_binding=require_existing_binding,
+            )
 
 
 def _read_json_stdin():
@@ -807,19 +847,15 @@ def run_hook(event, host):
             return 0
         cwd = payload.get("cwd") or os.getcwd()
         handle = session_handle(host, session_id)
-        connection = connect()
-        try:
+        with SessionStore() as store:
             if event == "session-start":
-                start_session(connection, host, session_id, cwd)
+                store.start_session(host, session_id, cwd)
             elif event == "prompt":
-                record_prompt(connection, handle, payload.get("prompt"))
+                store.record_prompt(handle, payload.get("prompt"))
             elif event == "stop":
-                record_stop(connection, handle, cwd,
-                            follow=lambda checkout: follow_registered_cwd(host, session_id, checkout))
+                store.record_stop(handle, cwd, follow=lambda checkout: follow_registered_cwd(host, session_id, checkout))
             elif event == "session-end":
-                end_session(connection, handle, "closed")
-        finally:
-            connection.close()
+                store.end_session(handle, "closed")
     except Exception:
         pass
     return 0

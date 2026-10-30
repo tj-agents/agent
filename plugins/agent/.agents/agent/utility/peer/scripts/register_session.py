@@ -480,23 +480,22 @@ def _load_session_store():
 
 
 def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, preserve_turn=False):
-    store = _load_session_store()
-    if store is None:
+    module = _load_session_store()
+    if module is None:
         return
     try:
-        connection = store.connect()
+        store = module.SessionStore()
     except Exception:
         return
-    try:
-        handle = store.session_handle(host, session_id)
-        if preserve_turn and store.get_session(connection, handle) is not None:
-            store.attach_session_client(connection, handle, pid, pid_started_at, cwd)
-        else:
-            store.start_session(connection, host, session_id, cwd, title=title, pid=pid, pid_started_at=pid_started_at)
-    except Exception:
-        pass
-    finally:
-        connection.close()
+    with store:
+        try:
+            handle = module.session_handle(host, session_id)
+            if preserve_turn and store.get_session(handle) is not None:
+                store.attach_session_client(handle, pid, pid_started_at, cwd)
+            else:
+                store.start_session(host, session_id, cwd, title=title, pid=pid, pid_started_at=pid_started_at)
+        except Exception:
+            pass
 
 
 def record(data, lookup=None, host_names=None, client=None):

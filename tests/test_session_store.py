@@ -69,22 +69,22 @@ class SchemaTests(unittest.TestCase):
         self.db_path = Path(self.temp.name) / "state" / "sessions.db"
 
     def test_schema_created_with_expected_tables_and_user_version(self):
-        connection = STORE.connect(self.db_path)
-        self.addCleanup(connection.close)
+        store = STORE.SessionStore(self.db_path)
+        self.addCleanup(store.close)
         tables = {
-            row[0] for row in connection.execute(
+            row[0] for row in store._connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
         self.assertEqual({"sessions", "work_items", "work_item_references"}, tables)
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        version = store._connection.execute("PRAGMA user_version").fetchone()[0]
         self.assertEqual(4, version)
 
     def test_reconnecting_does_not_lose_the_schema_version(self):
-        STORE.connect(self.db_path).close()
-        connection = STORE.connect(self.db_path)
-        self.addCleanup(connection.close)
-        self.assertEqual(4, connection.execute("PRAGMA user_version").fetchone()[0])
+        STORE.SessionStore(self.db_path).close()
+        store = STORE.SessionStore(self.db_path)
+        self.addCleanup(store.close)
+        self.assertEqual(4, store._connection.execute("PRAGMA user_version").fetchone()[0])
 
     def test_future_schema_is_refused_without_migration(self):
         self.db_path.parent.mkdir()
@@ -94,7 +94,7 @@ class SchemaTests(unittest.TestCase):
         connection.close()
 
         with self.assertRaisesRegex(RuntimeError, "unsupported schema version 5"):
-            STORE.connect(self.db_path)
+            STORE.SessionStore(self.db_path)
         connection = sqlite3.connect(self.db_path)
         try:
             self.assertEqual(5, connection.execute("PRAGMA user_version").fetchone()[0])
@@ -108,16 +108,16 @@ class SchemaTests(unittest.TestCase):
         errors = []
 
         def resolve():
-            connection = STORE.connect(self.db_path)
+            store = STORE.SessionStore(self.db_path)
             try:
                 barrier.wait(timeout=5)
-                results.append(STORE.resolve_or_create_work_item_reference(
-                    connection, "github", "github.com/owner/repository", "42", "github.com/local/repo",
+                results.append(store.resolve_or_create_work_item_reference(
+                    "github", "github.com/owner/repository", "42", "github.com/local/repo",
                 ))
             except Exception as error:
                 errors.append(error)
             finally:
-                connection.close()
+                store.close()
 
         threads = [threading.Thread(target=resolve) for _ in range(2)]
         for thread in threads:
@@ -127,38 +127,38 @@ class SchemaTests(unittest.TestCase):
 
         self.assertEqual([], errors)
         self.assertEqual(2, len(results))
-        self.assertEqual({results[0][0]["key"]}, {item["key"] for item, _created in results})
+        self.assertEqual({results[0][0].key}, {item.key for item, _created in results})
         self.assertEqual(1, sum(created for _item, created in results))
-        connection = STORE.connect(self.db_path)
+        store = STORE.SessionStore(self.db_path)
         try:
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM work_items").fetchone()[0])
-            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM work_item_references").fetchone()[0])
+            self.assertEqual(1, store._connection.execute("SELECT COUNT(*) FROM work_items").fetchone()[0])
+            self.assertEqual(1, store._connection.execute("SELECT COUNT(*) FROM work_item_references").fetchone()[0])
         finally:
-            connection.close()
+            store.close()
 
     def test_binding_is_idempotent_and_conflict_preserves_session_ownership(self):
-        connection = STORE.connect(self.db_path)
-        self.addCleanup(connection.close)
-        STORE.upsert_work_item(connection, "local-a", "repo", "feature", "item")
-        STORE.upsert_work_item(connection, "local-b", "repo", "feature", "other")
-        STORE.ensure_session(connection, "codex", "owner")
-        STORE.set_session_ownership(connection, "codex:owner", "owner", "local-a")
+        store = STORE.SessionStore(self.db_path)
+        self.addCleanup(store.close)
+        store.upsert_work_item("local-a", "repo", "feature", "item")
+        store.upsert_work_item("local-b", "repo", "feature", "other")
+        store.ensure_session("codex", "owner")
+        store.set_session_ownership("codex:owner", "owner", "local-a")
 
-        self.assertTrue(STORE.bind_work_item_reference(
-            connection, "local-a", "azure-devops", "DEV.AZURE.COM/Organization", "7",
+        self.assertTrue(store.bind_work_item_reference(
+            "local-a", "azure-devops", "DEV.AZURE.COM/Organization", "7",
         ))
-        self.assertFalse(STORE.bind_work_item_reference(
-            connection, "local-a", "azure-devops", "dev.azure.com/organization", "7",
+        self.assertFalse(store.bind_work_item_reference(
+            "local-a", "azure-devops", "dev.azure.com/organization", "7",
         ))
         with self.assertRaisesRegex(ValueError, "already bound to local-a, not local-b"):
-            STORE.bind_work_item_reference(
-                connection, "local-b", "azure-devops", "dev.azure.com/organization", "7",
+            store.bind_work_item_reference(
+                "local-b", "azure-devops", "dev.azure.com/organization", "7",
             )
-        self.assertEqual("owner", STORE.get_session(connection, "codex:owner")["role"])
-        self.assertEqual("local-a", STORE.get_session(connection, "codex:owner")["work_item"])
+        self.assertEqual("owner", store.get_session("codex:owner").role)
+        self.assertEqual("local-a", store.get_session("codex:owner").work_item)
         self.assertEqual(
             "local-a",
-            STORE.get_work_item_reference(connection, "azure-devops", "dev.azure.com/organization", "7")["work_item"],
+            store.get_work_item_reference("azure-devops", "dev.azure.com/organization", "7").work_item,
         )
 
     def test_migration_rereads_the_version_under_an_immediate_transaction(self):
@@ -172,7 +172,7 @@ class SchemaTests(unittest.TestCase):
         self.db_path.parent.mkdir(exist_ok=True)
         connection = sqlite3.connect(self.db_path, factory=RecordingConnection)
         self.addCleanup(connection.close)
-        STORE._ensure_schema(connection)
+        STORE.SessionStore._ensure_schema(connection)
         self.assertIn("BEGIN IMMEDIATE", connection.commands)
         self.assertLess(
             connection.commands.index("BEGIN IMMEDIATE"),
@@ -180,10 +180,10 @@ class SchemaTests(unittest.TestCase):
         )
 
     def test_connect_enables_wal_and_foreign_keys(self):
-        connection = STORE.connect(self.db_path)
-        self.addCleanup(connection.close)
-        self.assertEqual("wal", connection.execute("PRAGMA journal_mode").fetchone()[0].lower())
-        self.assertEqual(1, connection.execute("PRAGMA foreign_keys").fetchone()[0])
+        store = STORE.SessionStore(self.db_path)
+        self.addCleanup(store.close)
+        self.assertEqual("wal", store._connection.execute("PRAGMA journal_mode").fetchone()[0].lower())
+        self.assertEqual(1, store._connection.execute("PRAGMA foreign_keys").fetchone()[0])
 
     def test_connect_retries_a_locked_wal_initialization(self):
         connection = mock.Mock()
@@ -200,10 +200,10 @@ class SchemaTests(unittest.TestCase):
         connection.execute.side_effect = execute
         with (
             mock.patch.object(STORE.sqlite3, "connect", return_value=connection),
-            mock.patch.object(STORE, "_ensure_schema"),
+            mock.patch.object(STORE.SessionStore, "_ensure_schema"),
             mock.patch.object(STORE, "_LOCK_RETRY_DELAY", 0),
         ):
-            self.assertIs(connection, STORE.connect(self.db_path))
+            self.assertIs(connection, STORE.SessionStore(self.db_path)._connection)
         self.assertEqual(2, wal_attempts)
         connection.close.assert_not_called()
 
@@ -218,25 +218,25 @@ class SchemaTests(unittest.TestCase):
         connection.execute.side_effect = execute
         with (
             mock.patch.object(STORE.sqlite3, "connect", return_value=connection),
-            mock.patch.object(STORE, "_ensure_schema"),
+            mock.patch.object(STORE.SessionStore, "_ensure_schema"),
         ):
             with self.assertRaisesRegex(sqlite3.OperationalError, "disk I/O error"):
-                STORE.connect(self.db_path)
+                STORE.SessionStore(self.db_path)
         connection.close.assert_called_once_with()
 
     def test_partial_unique_index_enforces_one_owner_row_per_work_item(self):
-        connection = STORE.connect(self.db_path)
-        self.addCleanup(connection.close)
-        connection.execute(
+        store = STORE.SessionStore(self.db_path)
+        self.addCleanup(store.close)
+        store._connection.execute(
             "INSERT INTO work_items (key, repo, feature, item, status) VALUES ('key-1', 'repo', 'f', 'i', 'active')"
         )
-        connection.execute(
+        store._connection.execute(
             "INSERT INTO sessions (handle, host, session_id, role, work_item) "
             "VALUES ('claude:a', 'claude', 'a', 'owner', 'key-1')"
         )
-        connection.commit()
+        store._connection.commit()
         with self.assertRaises(sqlite3.IntegrityError):
-            connection.execute(
+            store._connection.execute(
                 "INSERT INTO sessions (handle, host, session_id, role, work_item) "
                 "VALUES ('codex:b', 'codex', 'b', 'owner', 'key-1')"
             )
@@ -439,32 +439,32 @@ class HookLifecycleTests(unittest.TestCase):
             return STORE.main(["hook", event, "--host", host])
 
     def _row(self, handle):
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            return STORE.get_session(connection, handle)
+            return store.get_session(handle)
         finally:
-            connection.close()
+            store.close()
 
     def test_start_prompt_stop_session_end_lifecycle(self):
         payload = {"session_id": "a2bcd5c4-bf6d-4087-95e3-d7ba7f711875", "cwd": str(self.repo)}
         self.assertEqual(0, self._invoke("session-start", "claude", payload))
         handle = "claude:a2bcd5c4-bf6d-4087-95e3-d7ba7f711875"
         row = self._row(handle)
-        self.assertEqual("working", row["turn_state"])
-        self.assertIsNone(row["ended_at"])
+        self.assertEqual("working", row.turn_state)
+        self.assertIsNone(row.ended_at)
 
         self.assertEqual(0, self._invoke("prompt", "claude", payload))
-        self.assertEqual("working", self._row(handle)["turn_state"])
+        self.assertEqual("working", self._row(handle).turn_state)
 
         self.assertEqual(0, self._invoke("stop", "claude", payload))
         row = self._row(handle)
-        self.assertEqual("awaiting_input", row["turn_state"])
-        self.assertEqual("github.com/tj-agents/core", row["repo"])
+        self.assertEqual("awaiting_input", row.turn_state)
+        self.assertEqual("github.com/tj-agents/core", row.repo)
 
         self.assertEqual(0, self._invoke("session-end", "claude", payload))
         row = self._row(handle)
-        self.assertIsNotNone(row["ended_at"])
-        self.assertEqual("closed", row["end_reason"])
+        self.assertIsNotNone(row.ended_at)
+        self.assertEqual("closed", row.end_reason)
 
     def test_stop_moves_the_registered_cwd_to_where_the_session_now_runs(self):
         registry = self.state / "cli-sessions"
@@ -480,7 +480,7 @@ class HookLifecycleTests(unittest.TestCase):
         moved = json.loads((registry / "moved-id.json").read_text(encoding="utf-8"))
         self.assertEqual(self.repo.resolve(), Path(moved.pop("cwd")).resolve())
         self.assertEqual(dict({key: value for key, value in entry.items() if key != "cwd"}, launch_cwd=str(self.root)), moved)
-        self.assertEqual(self.repo.resolve(), Path(self._row("claude:moved-id")["cwd"]).resolve())
+        self.assertEqual(self.repo.resolve(), Path(self._row("claude:moved-id").cwd).resolve())
         self.assertEqual(0, self._invoke("stop", "claude", {"session_id": "other-id", "cwd": str(self.repo)}))
         self.assertEqual(foreign, json.loads((registry / "other-id.json").read_text(encoding="utf-8")))
         self.assertEqual(0, self._invoke("stop", "claude", {"session_id": "unregistered", "cwd": str(self.repo)}))
@@ -497,9 +497,9 @@ class HookLifecycleTests(unittest.TestCase):
             self.assertEqual(0, self._invoke("stop", "claude", {"session_id": "locked-id", "cwd": str(self.repo)}))
         self.assertEqual(entry, json.loads((registry / "locked-id.json").read_text(encoding="utf-8")))
         row = self._row("claude:locked-id")
-        self.assertEqual("awaiting_input", row["turn_state"])
+        self.assertEqual("awaiting_input", row.turn_state)
         self.assertEqual((str(self.root), None, None, None, None),
-                         (row["cwd"], row["repo"], row["branch"], row["head"], row["work_item"]))
+                         (row.cwd, row.repo, row.branch, row.head, row.work_item))
         self.assertEqual([], [path.name for path in registry.iterdir() if path.name.endswith(".tmp")])
 
     def test_stop_records_the_checkout_root_not_a_subdirectory_or_the_enclosing_checkout(self):
@@ -517,23 +517,23 @@ class HookLifecycleTests(unittest.TestCase):
                 self.assertEqual(0, self._invoke("stop", "codex", payload))
                 registered = json.loads((registry / "rooted-id.json").read_text(encoding="utf-8"))
                 self.assertEqual(expected.resolve(), Path(registered["cwd"]).resolve())
-                self.assertEqual(expected.resolve(), Path(self._row("codex:rooted-id")["cwd"]).resolve())
+                self.assertEqual(expected.resolve(), Path(self._row("codex:rooted-id").cwd).resolve())
 
     def _item(self, key):
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            return STORE.get_work_item(connection, key)
+            return store.get_work_item(key)
         finally:
-            connection.close()
+            store.close()
 
     def test_first_prompt_titles_an_untitled_session_and_later_prompts_keep_it(self):
         payload = {"session_id": "titled-id", "cwd": str(self.repo)}
         self._invoke("session-start", "claude", payload)
         self._invoke("prompt", "claude", dict(payload, prompt="/recover"))
-        self.assertIsNone(self._row("claude:titled-id")["title"])
+        self.assertIsNone(self._row("claude:titled-id").title)
         self._invoke("prompt", "claude", dict(payload, prompt="  Fix the\n crash   recovery lookup "))
         self._invoke("prompt", "claude", dict(payload, prompt="something else"))
-        self.assertEqual("Fix the crash recovery lookup", self._row("claude:titled-id")["title"])
+        self.assertEqual("Fix the crash recovery lookup", self._row("claude:titled-id").title)
 
     def test_prompt_title_is_cut_at_a_word_boundary(self):
         title = STORE.prompt_title("word " * 40)
@@ -546,23 +546,23 @@ class HookLifecycleTests(unittest.TestCase):
         self._invoke("session-start", "claude", first)
         self._invoke("prompt", "claude", dict(first, prompt="Fix crash recovery"))
         self._invoke("stop", "claude", first)
-        key = self._row("claude:first-id")["work_item"]
+        key = self._row("claude:first-id").work_item
         self.assertTrue(key.startswith("execution:"))
         item = self._item(key)
         self.assertEqual(("github.com/tj-agents/core", "Fix/Recovery", "Fix crash recovery", "active"),
-                         (item["repo"], item["branch"], item["title"], item["status"]))
+                         (item.repo, item.branch, item.title, item.status))
 
         second = {"session_id": "second-id", "cwd": str(self.repo)}
         self._invoke("session-start", "codex", second)
-        self.assertEqual(key, self._row("codex:second-id")["work_item"])
+        self.assertEqual(key, self._row("codex:second-id").work_item)
 
     def test_stop_on_the_default_branch_creates_no_work_item(self):
         branch = _run_git(self.repo, "branch", "--show-current")
         payload = {"session_id": "main-id", "cwd": str(self.repo)}
         self._invoke("session-start", "claude", payload)
         self._invoke("stop", "claude", payload)
-        self.assertEqual(branch, self._row("claude:main-id")["branch"])
-        self.assertIsNone(self._row("claude:main-id")["work_item"])
+        self.assertEqual(branch, self._row("claude:main-id").branch)
+        self.assertIsNone(self._row("claude:main-id").work_item)
 
     def test_origin_head_names_the_default_branch(self):
         _run_git(self.repo, "checkout", "-q", "-b", "develop")
@@ -571,79 +571,79 @@ class HookLifecycleTests(unittest.TestCase):
         payload = {"session_id": "develop-id", "cwd": str(self.repo)}
         self._invoke("session-start", "claude", payload)
         self._invoke("stop", "claude", payload)
-        self.assertIsNone(self._row("claude:develop-id")["work_item"])
+        self.assertIsNone(self._row("claude:develop-id").work_item)
 
     def test_a_named_work_item_on_the_branch_absorbs_the_automatic_one(self):
         _run_git(self.repo, "checkout", "-q", "-b", "Feature/Named")
         payload = {"session_id": "absorb-id", "cwd": str(self.repo)}
         self._invoke("session-start", "claude", payload)
         self._invoke("stop", "claude", payload)
-        automatic = self._row("claude:absorb-id")["work_item"]
+        automatic = self._row("claude:absorb-id").work_item
         named = STORE.work_item_key("github.com/tj-agents/core", "feature", "named")
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            STORE.upsert_work_item(connection, named, "github.com/tj-agents/core", "feature", "named",
+            store.upsert_work_item(named, "github.com/tj-agents/core", "feature", "named",
                                    branch="Feature/Named", title="Named")
         finally:
-            connection.close()
+            store.close()
         self.assertIsNone(self._item(automatic))
-        self.assertEqual(named, self._row("claude:absorb-id")["work_item"])
+        self.assertEqual(named, self._row("claude:absorb-id").work_item)
 
     def test_registering_a_tracker_reference_adopts_the_branch_work_item(self):
         _run_git(self.repo, "checkout", "-q", "-b", "Feature/Tracked")
         payload = {"session_id": "tracked-id", "cwd": str(self.repo)}
         self._invoke("session-start", "claude", payload)
         self._invoke("stop", "claude", payload)
-        automatic = self._row("claude:tracked-id")["work_item"]
-        connection = STORE.connect()
+        automatic = self._row("claude:tracked-id").work_item
+        store = STORE.SessionStore()
         try:
-            item, created = STORE.resolve_or_create_work_item_reference(
-                connection, "github", "github.com/tj-agents/core", "12", "github.com/tj-agents/core",
+            item, created = store.resolve_or_create_work_item_reference(
+                "github", "github.com/tj-agents/core", "12", "github.com/tj-agents/core",
                 branch="Feature/Tracked",
             )
         finally:
-            connection.close()
+            store.close()
         self.assertFalse(created)
-        self.assertEqual(automatic, item["key"])
+        self.assertEqual(automatic, item.key)
 
     def test_resume_start_clears_ended_at_and_end_reason(self):
         payload = {"session_id": "exact-id", "cwd": str(self.repo)}
         handle = "codex:exact-id"
         self._invoke("session-start", "codex", payload)
         self._invoke("session-end", "codex", payload)
-        self.assertIsNotNone(self._row(handle)["ended_at"])
+        self.assertIsNotNone(self._row(handle).ended_at)
 
         self._invoke("session-start", "codex", payload)
         row = self._row(handle)
-        self.assertIsNone(row["ended_at"])
-        self.assertIsNone(row["end_reason"])
-        self.assertEqual("working", row["turn_state"])
+        self.assertIsNone(row.ended_at)
+        self.assertIsNone(row.end_reason)
+        self.assertEqual("working", row.turn_state)
 
     def test_first_end_reason_wins(self):
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            STORE.start_session(connection, "claude", "id-1", self.repo)
-            STORE.end_session(connection, "claude:id-1", "finished")
-            STORE.end_session(connection, "claude:id-1", "closed")
-            row = STORE.get_session(connection, "claude:id-1")
+            store.start_session("claude", "id-1", self.repo)
+            store.end_session("claude:id-1", "finished")
+            store.end_session("claude:id-1", "closed")
+            row = store.get_session("claude:id-1")
         finally:
-            connection.close()
-        self.assertEqual("finished", row["end_reason"])
+            store.close()
+        self.assertEqual("finished", row.end_reason)
 
     def test_reopen_clears_only_the_matching_end_reason(self):
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            STORE.start_session(connection, "claude", "id-1", self.repo)
-            STORE.end_session(connection, "claude:id-1", "finished")
-            STORE.reopen_session(connection, "claude:id-1", "closed")
-            kept = STORE.get_session(connection, "claude:id-1")
-            STORE.reopen_session(connection, "claude:id-1", "finished")
-            reopened = STORE.get_session(connection, "claude:id-1")
+            store.start_session("claude", "id-1", self.repo)
+            store.end_session("claude:id-1", "finished")
+            store.reopen_session("claude:id-1", "closed")
+            kept = store.get_session("claude:id-1")
+            store.reopen_session("claude:id-1", "finished")
+            reopened = store.get_session("claude:id-1")
         finally:
-            connection.close()
-        self.assertEqual("finished", kept["end_reason"])
-        self.assertIsNone(reopened["ended_at"])
-        self.assertIsNone(reopened["end_reason"])
+            store.close()
+        self.assertEqual("finished", kept.end_reason)
+        self.assertIsNone(reopened.ended_at)
+        self.assertIsNone(reopened.end_reason)
 
     def test_session_start_hook_malformed_stdin_exits_zero(self):
         with mock.patch.object(sys, "stdin", io.StringIO("not json {{{")):
@@ -658,45 +658,45 @@ class HookLifecycleTests(unittest.TestCase):
                 self.assertEqual(0, STORE.main(["hook", "session-start", "--host", "claude"]))
 
     def test_work_item_auto_attach_requires_exactly_one_match(self):
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
             repo = "github.com/tj-agents/core"
-            STORE.upsert_work_item(connection, "github.com/tj-agents/core:f/a", repo, "f", "a", status="active", branch="topic")
-            STORE.start_session(connection, "claude", "attach-id", self.repo)
-            STORE.record_stop(connection, "claude:attach-id", self.repo)
+            store.upsert_work_item("github.com/tj-agents/core:f/a", repo, "f", "a", status="active", branch="topic")
+            store.start_session("claude", "attach-id", self.repo)
+            store.record_stop("claude:attach-id", self.repo)
         finally:
-            connection.close()
+            store.close()
 
         _run_git(self.repo, "checkout", "-b", "topic")
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            STORE.record_stop(connection, "claude:attach-id", self.repo)
-            row = STORE.get_session(connection, "claude:attach-id")
-            self.assertEqual("github.com/tj-agents/core:f/a", row["work_item"])
+            store.record_stop("claude:attach-id", self.repo)
+            row = store.get_session("claude:attach-id")
+            self.assertEqual("github.com/tj-agents/core:f/a", row.work_item)
         finally:
-            connection.close()
+            store.close()
 
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            STORE.upsert_work_item(connection, "github.com/tj-agents/core:f/b", "github.com/tj-agents/core", "f", "b", status="active", branch="topic")
-            STORE.start_session(connection, "claude", "attach-id-2", self.repo)
-            STORE.record_stop(connection, "claude:attach-id-2", self.repo)
-            row = STORE.get_session(connection, "claude:attach-id-2")
-            self.assertIsNone(row["work_item"])
+            store.upsert_work_item("github.com/tj-agents/core:f/b", "github.com/tj-agents/core", "f", "b", status="active", branch="topic")
+            store.start_session("claude", "attach-id-2", self.repo)
+            store.record_stop("claude:attach-id-2", self.repo)
+            row = store.get_session("claude:attach-id-2")
+            self.assertIsNone(row.work_item)
         finally:
-            connection.close()
+            store.close()
 
     def test_concurrent_writers_from_threads_keep_every_row(self):
-        STORE.connect().close()
+        STORE.SessionStore().close()
         errors = []
 
         def write(index):
             try:
-                connection = STORE.connect()
+                store = STORE.SessionStore()
                 try:
-                    STORE.start_session(connection, "claude", f"thread-{index}", self.repo)
+                    store.start_session("claude", f"thread-{index}", self.repo)
                 finally:
-                    connection.close()
+                    store.close()
             except Exception as error:  # noqa: BLE001
                 errors.append(error)
 
@@ -707,39 +707,39 @@ class HookLifecycleTests(unittest.TestCase):
             thread.join()
 
         self.assertEqual([], errors)
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            handles = {row["handle"] for row in connection.execute("SELECT handle FROM sessions").fetchall()}
+            handles = {row["handle"] for row in store._connection.execute("SELECT handle FROM sessions").fetchall()}
         finally:
-            connection.close()
+            store.close()
         self.assertEqual({f"claude:thread-{index}" for index in range(8)}, handles)
 
     def test_resume_start_after_handoff_clears_role_but_keeps_work_item(self):
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            STORE.upsert_work_item(connection, "some-key", "repo", "f", "a", status="active")
-            STORE.start_session(connection, "claude", "id-1", self.repo)
-            STORE.set_session_ownership(connection, "claude:id-1", "owner", "some-key")
-            STORE.end_session(connection, "claude:id-1", "handed_off", successor="codex:id-2")
-            STORE.start_session(connection, "claude", "id-1", self.repo)
-            row = STORE.get_session(connection, "claude:id-1")
+            store.upsert_work_item("some-key", "repo", "f", "a", status="active")
+            store.start_session("claude", "id-1", self.repo)
+            store.set_session_ownership("claude:id-1", "owner", "some-key")
+            store.end_session("claude:id-1", "handed_off", successor="codex:id-2")
+            store.start_session("claude", "id-1", self.repo)
+            row = store.get_session("claude:id-1")
         finally:
-            connection.close()
-        self.assertIsNone(row["role"])
-        self.assertEqual("some-key", row["work_item"])
+            store.close()
+        self.assertIsNone(row.role)
+        self.assertEqual("some-key", row.work_item)
 
     def test_resume_start_keeps_role_when_not_handed_off(self):
-        connection = STORE.connect()
+        store = STORE.SessionStore()
         try:
-            STORE.upsert_work_item(connection, "some-key", "repo", "f", "a", status="active")
-            STORE.start_session(connection, "claude", "id-2", self.repo)
-            STORE.set_session_ownership(connection, "claude:id-2", "owner", "some-key")
-            STORE.end_session(connection, "claude:id-2", "closed")
-            STORE.start_session(connection, "claude", "id-2", self.repo)
-            row = STORE.get_session(connection, "claude:id-2")
+            store.upsert_work_item("some-key", "repo", "f", "a", status="active")
+            store.start_session("claude", "id-2", self.repo)
+            store.set_session_ownership("claude:id-2", "owner", "some-key")
+            store.end_session("claude:id-2", "closed")
+            store.start_session("claude", "id-2", self.repo)
+            row = store.get_session("claude:id-2")
         finally:
-            connection.close()
-        self.assertEqual("owner", row["role"])
+            store.close()
+        self.assertEqual("owner", row.role)
 
     def test_git_decodes_with_utf8_and_replaces_errors(self):
         with mock.patch.object(STORE.subprocess, "run") as run:
@@ -774,77 +774,77 @@ class ClaimWorkItemTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.db_path = Path(self.temp.name) / "state" / "sessions.db"
 
-    def _connection(self):
-        return STORE.connect(self.db_path)
+    def _store(self):
+        return STORE.SessionStore(self.db_path)
 
-    def _seed_work_item(self, connection, key):
-        STORE.upsert_work_item(connection, key, "repo", "feature", "item")
+    def _seed_work_item(self, store, key):
+        store.upsert_work_item(key, "repo", "feature", "item")
 
     def test_claim_work_item_demotes_every_other_owner_row_for_the_key(self):
-        connection = self._connection()
+        store = self._store()
         try:
-            self._seed_work_item(connection, "key-1")
-            STORE.ensure_session(connection, "claude", "a")
-            STORE.set_session_ownership(connection, "claude:a", "owner", "key-1")
-            STORE.end_session(connection, "claude:a", "closed")
-            STORE.ensure_session(connection, "codex", "b")
-            removed = STORE.claim_work_item(connection, "codex:b", "key-1", "owner")
-            predecessor = STORE.get_session(connection, "claude:a")
-            successor = STORE.get_session(connection, "codex:b")
+            self._seed_work_item(store, "key-1")
+            store.ensure_session("claude", "a")
+            store.set_session_ownership("claude:a", "owner", "key-1")
+            store.end_session("claude:a", "closed")
+            store.ensure_session("codex", "b")
+            removed = store.claim_work_item("codex:b", "key-1", "owner")
+            predecessor = store.get_session("claude:a")
+            successor = store.get_session("codex:b")
         finally:
-            connection.close()
+            store.close()
         self.assertIsNone(removed)
-        self.assertIsNone(predecessor["role"])
-        self.assertEqual("owner", successor["role"])
+        self.assertIsNone(predecessor.role)
+        self.assertEqual("owner", successor.role)
 
     def test_claim_work_item_rollback_leaves_predecessor_untouched_on_write_failure(self):
-        connection = self._connection()
+        store = self._store()
         try:
-            self._seed_work_item(connection, "key-1")
-            STORE.ensure_session(connection, "claude", "a")
-            STORE.set_session_ownership(connection, "claude:a", "owner", "key-1")
-            STORE.ensure_session(connection, "codex", "b")
-            with mock.patch.object(STORE, "_set_session_ownership_locked", side_effect=RuntimeError("boom")):
+            self._seed_work_item(store, "key-1")
+            store.ensure_session("claude", "a")
+            store.set_session_ownership("claude:a", "owner", "key-1")
+            store.ensure_session("codex", "b")
+            with mock.patch.object(STORE.SessionStore, "_set_session_ownership_locked", side_effect=RuntimeError("boom")):
                 with self.assertRaises(RuntimeError):
-                    STORE.claim_work_item(connection, "codex:b", "key-1", "owner", predecessor="claude:a")
-            predecessor = STORE.get_session(connection, "claude:a")
-            successor = STORE.get_session(connection, "codex:b")
+                    store.claim_work_item("codex:b", "key-1", "owner", predecessor="claude:a")
+            predecessor = store.get_session("claude:a")
+            successor = store.get_session("codex:b")
         finally:
-            connection.close()
-        self.assertIsNone(predecessor["ended_at"])
-        self.assertEqual("owner", predecessor["role"])
-        self.assertIsNone(successor["role"])
+            store.close()
+        self.assertIsNone(predecessor.ended_at)
+        self.assertEqual("owner", predecessor.role)
+        self.assertIsNone(successor.role)
 
     def test_concurrent_handoff_claims_never_yield_two_owners(self):
-        connection = self._connection()
+        store = self._store()
         try:
-            self._seed_work_item(connection, "key-1")
-            STORE.ensure_session(connection, "claude", "a")
-            STORE.set_session_ownership(connection, "claude:a", "owner", "key-1")
-            STORE.ensure_session(connection, "codex", "b")
-            STORE.ensure_session(connection, "codex", "c")
+            self._seed_work_item(store, "key-1")
+            store.ensure_session("claude", "a")
+            store.set_session_ownership("claude:a", "owner", "key-1")
+            store.ensure_session("codex", "b")
+            store.ensure_session("codex", "c")
         finally:
-            connection.close()
+            store.close()
 
-        original_live_owners = STORE.live_owners
+        original_live_owners = STORE.SessionStore.live_owners
 
-        def slow_live_owners(connection, key):
-            result = original_live_owners(connection, key)
+        def slow_live_owners(store, key):
+            result = original_live_owners(store, key)
             time.sleep(0.3)
             return result
 
         errors = {}
 
         def claim(name, handle):
-            own_connection = self._connection()
+            own_store = self._store()
             try:
-                STORE.claim_work_item(own_connection, handle, "key-1", "owner", predecessor="claude:a")
+                own_store.claim_work_item(handle, "key-1", "owner", predecessor="claude:a")
             except Exception as error:  # noqa: BLE001
                 errors[name] = error
             finally:
-                own_connection.close()
+                own_store.close()
 
-        with mock.patch.object(STORE, "live_owners", side_effect=slow_live_owners):
+        with mock.patch.object(STORE.SessionStore, "live_owners", autospec=True, side_effect=slow_live_owners):
             threads = [
                 threading.Thread(target=claim, args=("b", "codex:b")),
                 threading.Thread(target=claim, args=("c", "codex:c")),
@@ -854,76 +854,76 @@ class ClaimWorkItemTests(unittest.TestCase):
             for thread in threads:
                 thread.join(timeout=10)
 
-        connection = self._connection()
+        store = self._store()
         try:
-            owners = connection.execute("SELECT handle FROM sessions WHERE role = 'owner'").fetchall()
+            owners = store._connection.execute("SELECT handle FROM sessions WHERE role = 'owner'").fetchall()
         finally:
-            connection.close()
+            store.close()
         self.assertEqual(1, len(owners))
 
     def test_demoted_former_owner_resumed_via_session_start_is_not_an_owner(self):
-        connection = self._connection()
+        store = self._store()
         try:
-            self._seed_work_item(connection, "key-1")
-            STORE.ensure_session(connection, "claude", "a")
-            STORE.set_session_ownership(connection, "claude:a", "owner", "key-1")
-            STORE.end_session(connection, "claude:a", "closed")
-            STORE.ensure_session(connection, "codex", "b")
-            STORE.claim_work_item(connection, "codex:b", "key-1", "owner")
-            STORE.start_session(connection, "claude", "a", self.temp.name)
-            row = STORE.get_session(connection, "claude:a")
+            self._seed_work_item(store, "key-1")
+            store.ensure_session("claude", "a")
+            store.set_session_ownership("claude:a", "owner", "key-1")
+            store.end_session("claude:a", "closed")
+            store.ensure_session("codex", "b")
+            store.claim_work_item("codex:b", "key-1", "owner")
+            store.start_session("claude", "a", self.temp.name)
+            row = store.get_session("claude:a")
         finally:
-            connection.close()
-        self.assertIsNone(row["role"])
+            store.close()
+        self.assertIsNone(row.role)
 
     def test_claim_work_item_refused_owner_claim_leaves_branch_unchanged(self):
-        connection = self._connection()
+        store = self._store()
         try:
-            self._seed_work_item(connection, "key-1")
-            STORE.ensure_session(connection, "claude", "a")
-            STORE.set_session_ownership(connection, "claude:a", "owner", "key-1")
-            STORE.ensure_session(connection, "codex", "b")
+            self._seed_work_item(store, "key-1")
+            store.ensure_session("claude", "a")
+            store.set_session_ownership("claude:a", "owner", "key-1")
+            store.ensure_session("codex", "b")
             with self.assertRaises(ValueError):
-                STORE.claim_work_item(connection, "codex:b", "key-1", "owner", branch="feature-branch")
-            item = STORE.get_work_item(connection, "key-1")
+                store.claim_work_item("codex:b", "key-1", "owner", branch="feature-branch")
+            item = store.get_work_item("key-1")
         finally:
-            connection.close()
-        self.assertIsNone(item["branch"])
+            store.close()
+        self.assertIsNone(item.branch)
 
     def test_claim_work_item_bounded_claim_leaves_branch_unchanged(self):
-        connection = self._connection()
+        store = self._store()
         try:
-            self._seed_work_item(connection, "key-1")
-            STORE.ensure_session(connection, "codex", "b")
-            STORE.claim_work_item(connection, "codex:b", "key-1", "bounded: docs", branch="feature-branch")
-            item = STORE.get_work_item(connection, "key-1")
+            self._seed_work_item(store, "key-1")
+            store.ensure_session("codex", "b")
+            store.claim_work_item("codex:b", "key-1", "bounded: docs", branch="feature-branch")
+            item = store.get_work_item("key-1")
         finally:
-            connection.close()
-        self.assertIsNone(item["branch"])
+            store.close()
+        self.assertIsNone(item.branch)
 
     def test_claim_work_item_successful_owner_claim_fills_branch(self):
-        connection = self._connection()
+        store = self._store()
         try:
-            self._seed_work_item(connection, "key-1")
-            STORE.ensure_session(connection, "codex", "b")
-            STORE.claim_work_item(connection, "codex:b", "key-1", "owner", branch="feature-branch")
-            item = STORE.get_work_item(connection, "key-1")
+            self._seed_work_item(store, "key-1")
+            store.ensure_session("codex", "b")
+            store.claim_work_item("codex:b", "key-1", "owner", branch="feature-branch")
+            item = store.get_work_item("key-1")
         finally:
-            connection.close()
-        self.assertEqual("feature-branch", item["branch"])
+            store.close()
+        self.assertEqual("feature-branch", item.branch)
 
     def test_registered_claim_rejects_blank_title_without_writing_a_session_or_work_item(self):
-        connection = self._connection()
+        store = self._store()
         try:
             with self.assertRaisesRegex(ValueError, "title must be non-empty"):
-                STORE.claim_registered_work_item(
-                    connection, "claude", "registered", self.temp.name, "key-1", "repo", "repo", "feature", "item",
+                store.claim_registered_work_item(
+                    "claude", "registered", self.temp.name, "key-1", "repo", "repo", "feature", "item",
                     "owner", title="  ", registration={"title": "Claude tab", "pid": 1, "pid_started_at": 1.0},
                 )
-            self.assertIsNone(STORE.get_work_item(connection, "key-1"))
-            self.assertIsNone(STORE.get_session(connection, "claude:registered"))
+            self.assertIsNone(store.get_work_item("key-1"))
+            self.assertIsNone(store.get_session("claude:registered"))
         finally:
-            connection.close()
+            store.close()
 
 
 

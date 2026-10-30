@@ -142,28 +142,22 @@ def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
 
 def _update_own_end(entry, operation, reason):
     try:
-        store = register_session._load_session_store()
-        if store is None or not entry.get("host") or not entry.get("session_id"):
+        module = register_session._load_session_store()
+        if module is None or not entry.get("host") or not entry.get("session_id"):
             return
-        connection = store.connect()
-        try:
-            getattr(store, operation)(connection, store.session_handle(entry["host"], entry["session_id"]), reason)
-        finally:
-            connection.close()
+        with module.SessionStore() as store:
+            getattr(store, operation)(module.session_handle(entry["host"], entry["session_id"]), reason)
     except Exception:
         pass
 
 
 def delete_own_session(session_id):
     try:
-        store = register_session._load_session_store()
-        if store is None:
+        module = register_session._load_session_store()
+        if module is None:
             return
-        connection = store.connect()
-        try:
-            store.delete_session(connection, session_id)
-        finally:
-            connection.close()
+        with module.SessionStore() as store:
+            store.delete_session(session_id)
     except Exception:
         pass
 
@@ -180,48 +174,42 @@ def session_activity(entry):
     if not valid_entry(entry) or not verified_live(entry["pid"], entry["pid_started_at"]):
         raise Refusal("registered host identity is not live")
     try:
-        store = register_session._load_session_store()
-        if store is None:
+        module = register_session._load_session_store()
+        if module is None:
             raise Refusal("session turn state is unavailable")
-        connection = store.connect()
-        try:
-            row = store.get_session(
-                connection, store.session_handle(entry["host"], entry["session_id"]),
-            )
-        finally:
-            connection.close()
+        with module.SessionStore() as store:
+            session = store.get_session(module.session_handle(entry["host"], entry["session_id"]))
     except Refusal:
         raise
     except Exception as error:
         raise Refusal("cannot read session turn state") from error
-    if not isinstance(row, dict):
+    if session is None:
         raise Refusal("session turn state is missing")
-    if (row.get("host") != entry["host"] or row.get("session_id") != entry["session_id"]
-            or row.get("pid") != entry["pid"]
-            or row.get("pid_started_at") != entry["pid_started_at"]
-            or not nonempty_string(row.get("cwd"))
-            or path_key(row["cwd"]) != path_key(entry["cwd"])):
+    if (session.host != entry["host"] or session.session_id != entry["session_id"]
+            or session.pid != entry["pid"]
+            or session.pid_started_at != entry["pid_started_at"]
+            or not nonempty_string(session.cwd)
+            or path_key(session.cwd) != path_key(entry["cwd"])):
         raise Refusal("session turn state does not match this attachment")
-    if row.get("ended_at") is not None:
+    if session.ended:
         raise Refusal("session is already ended")
-    activity = row.get("last_activity_at")
-    if not finite_positive(activity):
+    if not finite_positive(session.last_activity_at):
         raise Refusal("session activity state is invalid")
-    return row
+    return session
 
 
 def active_turn_activity(entry):
-    row = session_activity(entry)
-    if row.get("turn_state") != "working":
+    session = session_activity(entry)
+    if session.turn_state != "working":
         raise Refusal("session has no active turn to close after")
-    return row["last_activity_at"]
+    return session.last_activity_at
 
 
 def awaiting_input_activity(entry, expected_activity=None):
-    row = session_activity(entry)
-    if row.get("turn_state") != "awaiting_input":
+    session = session_activity(entry)
+    if session.turn_state != "awaiting_input":
         raise Refusal("session is not awaiting input")
-    activity = row["last_activity_at"]
+    activity = session.last_activity_at
     if expected_activity is not None and activity != expected_activity:
         raise Refusal("session activity changed before close")
     return activity

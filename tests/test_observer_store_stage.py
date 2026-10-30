@@ -51,7 +51,7 @@ class ObserverStoreStageTests(unittest.TestCase):
         store = staged._load_session_store()
 
         self.assertIsNotNone(store)
-        self.assertTrue(hasattr(store, 'delete_session'))
+        self.assertTrue(hasattr(store.SessionStore, 'delete_session'))
         receipt = (staging / '.tj-agents-observer-store.json').read_text(encoding='utf-8')
         self.assertIn('tj-agents-agent-observer-store', receipt)
 
