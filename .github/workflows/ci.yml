@@ -12,3 +12,4 @@ jobs:
       template_ref: main
     secrets:
       read_token: ${{ secrets.TJ_AGENTS_READ_TOKEN }}
+      UPDATE_APP_PRIVATE_KEY: ${{ secrets.UPDATE_APP_PRIVATE_KEY }}

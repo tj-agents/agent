@@ -59,6 +59,7 @@ COMMAND_UNSAFE = frozenset('"$`\\\n\r')
 HOST_ROOTS = (".claude", ".codex")
 RESOURCE_ROOTS = (".agents", *HOST_ROOTS)
 CODEX_HOOK_MANIFEST = "hooks/codex.json"
+CLAUDE_HOOK_MANIFEST = "hooks/claude.json"
 CODEX_HOOK_PACKAGE_LOADER = "hooks/codex/snapshot.py"
 CODEX_WINDOWS_COMMAND_BUDGET = 8191
 WINDOWS_MAX_PATH = 260
@@ -689,6 +690,8 @@ print(json.dumps({'name': distribution.metadata['Name'],
             "RECORD.p7s",
             "direct_url.json",
             "uv_cache.json",
+            "uv_build.json",
+            "WHEEL",
         }:
             continue
         if relative.suffix == ".pth":
@@ -1340,9 +1343,62 @@ def codex_snapshot_bootstrap(root: Path, loader: bytes) -> str:
 
 
 def snapshot_command(command: str, prefix: str, wrapped: str, field: str) -> str:
+    if not isinstance(command, str):
+        raise ValueError(f"Unsupported Codex hook {field}: command must be a string")
     if not command.startswith(prefix + '"${PLUGIN_ROOT}/'):
         raise ValueError(f"Unsupported Codex hook {field}: {command}")
     return wrapped + command.removeprefix(prefix)
+
+
+def claude_command_hook(hook: JSONObject, package: str) -> None:
+    command = hook.get("command")
+    arguments = hook.get("args")
+    if not isinstance(command, str) or not command or "\0" in command:
+        raise ValueError(
+            f"{package}: Claude command hook command must be a nonempty string "
+            "without NUL"
+        )
+    if not isinstance(arguments, list) or any(
+        not isinstance(argument, str) or "\0" in argument for argument in arguments
+    ):
+        raise ValueError(
+            f"{package}: Claude command hook args must be a list of strings"
+        )
+    hook["command"] = "tj_hook"
+    hook["args"] = ["--", command, *arguments]
+
+
+def bind_claude_hook_commands(output: dict[str, bytes], packages: list[str]) -> None:
+    for package in packages:
+        manifest = f"plugins/{package}/{CLAUDE_HOOK_MANIFEST}"
+        if manifest not in output:
+            continue
+        try:
+            payload = json.loads(output[manifest])
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"{package}: invalid Claude hook manifest: {error.msg}"
+            ) from None
+        if not isinstance(payload, dict) or not isinstance(payload.get("hooks"), dict):
+            raise ValueError(
+                f"{package}: Claude hook manifest must contain a hooks object"
+            )
+        for groups in payload["hooks"].values():
+            if not isinstance(groups, list):
+                raise ValueError(f"{package}: Claude hook groups must be lists")
+            for group in groups:
+                if not isinstance(group, dict) or not isinstance(
+                    group.get("hooks"), list
+                ):
+                    raise ValueError(
+                        f"{package}: Claude hook group must contain a hooks list"
+                    )
+                for hook in group["hooks"]:
+                    if not isinstance(hook, dict):
+                        raise ValueError(f"{package}: Claude hook must be an object")
+                    if hook.get("type") == "command":
+                        claude_command_hook(hook, package)
+        output[manifest] = dump(payload).encode("utf-8")
 
 
 def bind_codex_hook_snapshots(
@@ -1367,16 +1423,18 @@ def bind_codex_hook_snapshots(
         for groups in payload["hooks"].values():
             for group in groups:
                 for hook in group["hooks"]:
+                    if hook.get("type") != "command":
+                        continue
                     hook["command"] = snapshot_command(
                         hook["command"],
                         "python3 -B ",
-                        "python3 -I -B " + arguments,
+                        "tj_hook -- python3 -I -B " + arguments,
                         "command",
                     )
                     windows = snapshot_command(
                         hook["commandWindows"],
                         "python -B ",
-                        "python -I -B " + arguments,
+                        "tj_hook -- python -I -B " + arguments,
                         "commandWindows",
                     )
                     expanded = len(windows) + windows.count("${PLUGIN_ROOT}") * (
@@ -1566,6 +1624,7 @@ def build(root: Path) -> dict[str, bytes]:
                 manifest = {**manifest, "skills": "./codex-skills/"}
             emit(f"plugins/{package}/.{host}-plugin/plugin.json", dump(manifest))
 
+    bind_claude_hook_commands(output, list(publications))
     bind_codex_hook_snapshots(root, output, list(publications))
     emit(".agents/INDEX.md", "\n".join(repository_index))
     claude_entries, codex_entries = [], []
