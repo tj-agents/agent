@@ -25,6 +25,9 @@ LockError = ADOPT.lock_io.LockError
 
 class RemovePluginTests(unittest.TestCase):
     def setUp(self):
+        live = mock.patch.object(ADOPT, "current_roster", side_effect=ADOPT.load_roster)
+        live.start()
+        self.addCleanup(live.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name) / "project"
@@ -106,6 +109,23 @@ class RemovePluginTests(unittest.TestCase):
     def test_automatic_reconciliation_does_not_enroll_an_unconfigured_project(self):
         self.assertEqual([], ADOPT.reconcile(self.root, "write"))
         self.assertFalse((self.root / ".agents/plugins.json").exists())
+
+    def test_retirement_after_the_bundled_snapshot_is_reconciled(self):
+        self.write_selection(["base@tj-agents", "docs@tj-agents"])
+        roster = ADOPT.load_roster()
+        self.assertIn("docs", roster["plugins"])
+        del roster["plugins"]["docs"]
+        with mock.patch.object(ADOPT, "current_roster", return_value=roster):
+            ADOPT.reconcile(self.root, "write")
+        self.assertEqual(["base@tj-agents"], self.selected())
+
+    def test_live_roster_does_not_require_bundled_stack_presets_to_remain_valid(self):
+        snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK)
+        snapshot["marketplace"]["plugins"] = [entry for entry in snapshot["marketplace"]["plugins"]
+                                                if entry["name"] != "gpp"]
+        roster = ADOPT.load_roster(snapshot)
+        self.assertNotIn("gpp", roster["plugins"])
+        self.assertEqual({}, roster["stacks"])
 
     def test_removal_of_remaining_prerequisite_refuses_without_writing(self):
         self.write_selection(["agent@tj-agents", "base@tj-agents", "cli@tj-agents"])
