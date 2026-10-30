@@ -2,7 +2,6 @@
 """Claim, inspect and resume work-item sessions recorded in the central session store."""
 
 import argparse
-from datetime import datetime
 import importlib.util
 import json
 import math
@@ -164,21 +163,6 @@ def _validate_role(role):
     raise ValueError(f"invalid --role {role!r}; expected 'owner' or 'bounded: <non-empty scope>'")
 
 
-def _default_branch(cwd, current_branch):
-    output = _session_store().git(cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-    if output:
-        return output.split("/", 1)[1] if output.startswith("origin/") else output
-    if current_branch in ("main", "master"):
-        return current_branch
-    return None
-
-
-def _branch_to_record(cwd, branch):
-    if not branch:
-        return None
-    return None if branch == _default_branch(cwd, branch) else branch
-
-
 def _require_repo(cwd):
     repo = _session_store().identify_repository(cwd)
     if not repo:
@@ -247,7 +231,7 @@ def _registered_current_session(store, host, cwd):
     if session_id and _agent_recovery().SESSION_ID.fullmatch(session_id):
         handle = _session_store().session_handle(host.value, session_id)
         session = store.get_session(handle)
-        if session is not None and session.pid is not None and session.pid_started_at is not None:
+        if session is not None and session.has_client_identity:
             return session_id, None
     try:
         entry = _session_close().own_host_and_entry(cwd)
@@ -260,7 +244,7 @@ def _registered_current_session(store, host, cwd):
         raise ValueError("the verified native session has no valid session id")
     if session_id and session_id != registered_id:
         raise ValueError("the native session id does not match the verified registry attachment")
-    return registered_id, entry
+    return registered_id, _session_store().ClientRegistration.from_entry(entry)
 
 
 def _path_key(value):
@@ -363,7 +347,7 @@ def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=Non
     plan_path = _validate_plan_path(plan_path, cwd)
     checkout = _require_checkout(cwd)
     repo = checkout.repo
-    record_branch = _branch_to_record(cwd, checkout.branch)
+    record_branch = checkout.work_branch
     with module.SessionStore() as store:
         kind, value = selector
         reference = None
@@ -517,7 +501,7 @@ def cmd_interrupted(resume_handles=None, cwd=None):
         last_activity = session.last_activity_at
         grouped.setdefault(label, []).append({
             "handle": session.handle, "title": session.title, "cwd": session.cwd, "branch": session.branch,
-            "last_activity": datetime.fromtimestamp(last_activity).isoformat(timespec="minutes") if last_activity else None,
+            "last_activity": _agent_recovery().iso_timestamp(last_activity) if last_activity else None,
             "turn_state": session.turn_state, "status": statuses[session.handle],
         })
     result = {"interrupted": grouped}
@@ -559,7 +543,7 @@ def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, e
     plan_path = _validate_plan_path(plan_path, cwd)
     checkout = _require_checkout(cwd)
     repo = checkout.repo
-    record_branch = _branch_to_record(cwd, checkout.branch)
+    record_branch = checkout.work_branch
     with module.SessionStore() as store:
         kind, value = selector
         reference = None
@@ -605,7 +589,7 @@ def cmd_register(provider, scope, native_id, cwd=None):
     provider, scope, native_id = module.normalise_work_item_reference(provider, scope, native_id)
     with module.SessionStore() as store:
         selected, created = store.resolve_or_create_work_item_reference(
-            provider, scope, native_id, checkout.repo, branch=_branch_to_record(cwd, checkout.branch),
+            provider, scope, native_id, checkout.repo, branch=checkout.work_branch,
         )
     result = _result_item(selected, {"provider": provider, "scope": scope, "native_id": native_id})
     result["created"] = created

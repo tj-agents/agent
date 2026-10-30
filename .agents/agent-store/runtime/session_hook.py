@@ -2,25 +2,20 @@
 """Record host session lifecycle hook events in the session store (Python 3.9+)."""
 
 import argparse
-import functools
-import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
 
+_RUNTIME = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _RUNTIME)
+try:
+    from agent_store_loader import load_sibling
+finally:
+    sys.path.remove(_RUNTIME)
 
 EVENTS = ("session-start", "prompt", "stop", "session-end")
 HOSTS = ("claude", "codex")
-
-
-@functools.lru_cache(maxsize=None)
-def _load_sibling(name):
-    path = Path(__file__).resolve().with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(f"agent_store_hook_{name}", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _read_json_stdin():
@@ -36,7 +31,7 @@ def _read_json_stdin():
 
 
 def _record(event, host, session_id, cwd, payload):
-    store_module = _load_sibling("session_store")
+    store_module = load_sibling(__file__, "session_store")
     handle = store_module.session_handle(host, session_id)
     with store_module.SessionStore() as store:
         if event == "session-start":
@@ -45,7 +40,7 @@ def _record(event, host, session_id, cwd, payload):
             store.update_session(handle, lambda session: session.prompted(payload.get("prompt")))
         elif event == "stop":
             checkout = store_module.Checkout.probe(cwd)
-            registry = _load_sibling("cli_session_registry").CliSessionRegistry(
+            registry = load_sibling(__file__, "cli_session_registry").CliSessionRegistry(
                 store_module.state_directory() / "cli-sessions",
             )
             if registry.follow_cwd(host, session_id, checkout.root) is False:

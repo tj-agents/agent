@@ -153,11 +153,29 @@ class SessionOwnershipTests(unittest.TestCase):
         self.assertEqual("named", session.work_item)
 
 
+class ClientIdentityTests(unittest.TestCase):
+    def test_a_registration_entry_keeps_only_title_and_process_identity(self):
+        registration = SESSION.ClientRegistration.from_entry(
+            {"title": "Tab", "pid": 4, "pid_started_at": 4.5, "cwd": "/elsewhere", "host": "claude"},
+        )
+        self.assertEqual(SESSION.ClientRegistration("Tab", 4, 4.5), registration)
+
+    def test_client_identity_needs_both_pid_and_start_time(self):
+        self.assertFalse(started().has_client_identity)
+        self.assertFalse(started(pid=4).has_client_identity)
+        self.assertTrue(started(pid=4, pid_started_at=4.5).has_client_identity)
+
+
 class CheckoutTests(unittest.TestCase):
     def test_only_a_known_repository_branch_identifies_branch_work(self):
         self.assertTrue(Checkout("/r", "repo", "topic", None, False).on_branch)
         self.assertFalse(Checkout("/r", None, "topic", None, False).on_branch)
         self.assertFalse(Checkout("/r", "repo", None, None, False).on_branch)
+
+    def test_only_a_non_default_branch_is_recorded_as_work(self):
+        self.assertEqual("topic", Checkout("/r", "repo", "topic", None, False).work_branch)
+        self.assertIsNone(Checkout("/r", "repo", "main", None, True).work_branch)
+        self.assertIsNone(Checkout("/r", "repo", None, None, False).work_branch)
 
 
 if __name__ == "__main__":

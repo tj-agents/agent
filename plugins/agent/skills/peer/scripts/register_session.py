@@ -32,8 +32,9 @@ MAX_ANCESTOR_DEPTH = 10
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "checkout.py", "repository_identity.py",
-                        "session.py", "work_item.py")
+_SESSION_STORES = {}
+OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "agent_store_loader.py", "checkout.py",
+                        "repository_identity.py", "session.py", "work_item.py")
 
 FILETIME_EPOCH_DELTA = 11644473600
 FILETIME_TICKS_PER_SECOND = 10_000_000
@@ -471,13 +472,17 @@ def _load_session_store():
     path = session_store_path()
     if path is None:
         return None
+    identity = str(path.resolve())
+    if identity in _SESSION_STORES:
+        return _SESSION_STORES[identity]
     try:
-        spec = importlib.util.spec_from_file_location("register_session_session_store", path)
+        spec = importlib.util.spec_from_file_location(f"register_session_session_store_{len(_SESSION_STORES)}", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module
     except Exception:
         return None
+    _SESSION_STORES[identity] = module
+    return module
 
 
 def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, preserve_turn=False):

@@ -1,27 +1,25 @@
 """Git checkout probing for the session store (Python 3.9+)."""
 
 from dataclasses import dataclass
-import functools
-import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
 from typing import Optional
 
+_RUNTIME = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _RUNTIME)
+try:
+    from agent_store_loader import load_sibling
+finally:
+    sys.path.remove(_RUNTIME)
+
+_identity = load_sibling(__file__, "repository_identity")
 
 GIT_TIMEOUT = 3
 HOOK_GIT_TIMEOUT = 2
-
-
-@functools.lru_cache(maxsize=None)
-def _repository_identity():
-    path = Path(__file__).resolve().with_name("repository_identity.py")
-    spec = importlib.util.spec_from_file_location("agent_store_checkout_repository_identity", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"The Agent Store repository_identity.py module was not found in {path.parent}.")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+DEFAULT_BRANCHES = ("main", "master")
+_ORIGIN_HEAD_PREFIX = "ref: refs/remotes/origin/"
 
 
 def _run_git(cwd, args, timeout):
@@ -46,7 +44,7 @@ def git(cwd, *args, timeout=GIT_TIMEOUT):
 
 
 def identify_repository(cwd, timeout=GIT_TIMEOUT):
-    return _repository_identity().repository_identity(
+    return _identity.repository_identity(
         cwd, lambda directory, *arguments: git(directory, *arguments, timeout=timeout),
     )
 
@@ -79,19 +77,26 @@ def _rev_parse_probe(cwd, timeout):
     return None, _branch_from_symbolic_ref(symbolic), common_dir, None
 
 
-def _is_default_branch(cwd, common_dir, branch):
-    if branch in ("main", "master"):
-        return True
-    if not branch or not common_dir:
-        return False
+def _origin_default_branch(cwd, common_dir):
+    if not common_dir:
+        return None
     path = Path(common_dir)
     if not path.is_absolute():
         path = Path(cwd) / path
     try:
         ref = (path / "refs" / "remotes" / "origin" / "HEAD").read_text(encoding="utf-8").strip()
     except OSError:
+        return None
+    if not ref.startswith(_ORIGIN_HEAD_PREFIX):
+        return None
+    return ref[len(_ORIGIN_HEAD_PREFIX):] or None
+
+
+def _is_default_branch(cwd, common_dir, branch):
+    if not branch:
         return False
-    return ref == f"ref: refs/remotes/origin/{branch}"
+    default = _origin_default_branch(cwd, common_dir)
+    return branch in DEFAULT_BRANCHES if default is None else branch == default
 
 
 @dataclass(frozen=True)
@@ -111,3 +116,7 @@ class Checkout:
     @property
     def on_branch(self):
         return bool(self.repo and self.branch)
+
+    @property
+    def work_branch(self):
+        return None if not self.branch or self.is_default else self.branch

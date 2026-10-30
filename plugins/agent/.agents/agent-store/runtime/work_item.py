@@ -49,10 +49,6 @@ def normalise_work_item_reference(provider, scope, native_id):
     return provider, scope, native_id
 
 
-def _kept(value, current):
-    return current if value is None else value
-
-
 @dataclass(eq=False)
 class WorkItem:
     key: str
@@ -77,7 +73,8 @@ class WorkItem:
     def create(cls, key, repo, feature=None, item=None, status=None, branch=None, pr=None, title=None,
                plan_path=None):
         cls.require_identity(key, feature, item)
-        return cls(key, repo, feature, item, _kept(status, ACTIVE), branch, pr, title, plan_path, time.time())
+        return cls(key, repo, feature, item, ACTIVE if status is None else status, branch, pr, title, plan_path,
+                   time.time())
 
     @classmethod
     def for_branch(cls, repo, branch, title=None):
@@ -95,18 +92,27 @@ class WorkItem:
     def is_named(self):
         return self.feature is not None
 
+    @property
+    def absorbs_branch_items(self):
+        return self.is_named and self.is_open and bool(self.branch)
+
     def can_be_absorbed(self, referenced, claimed):
         return not self.is_named and self.is_open and not referenced and not claimed
 
     def revise(self, status=None, branch=None, pr=None, title=None, plan_path=None):
-        self.status = _kept(status, self.status)
-        self.pr = _kept(pr, self.pr)
-        self.title = _kept(title, self.title)
-        self.plan_path = _kept(plan_path, self.plan_path)
+        if status is not None:
+            self.status = status
+        if pr is not None:
+            self.pr = pr
+        if title is not None:
+            self.title = title
+        if plan_path is not None:
+            self.plan_path = plan_path
         self.record_branch(branch)
 
     def record_branch(self, branch):
-        self.branch = _kept(self.branch, branch)
+        if self.branch is None:
+            self.branch = branch
         self.updated_at = time.time()
 
     def __eq__(self, other):
@@ -132,4 +138,6 @@ class WorkItemReference:
     def rebind(self, key):
         if self.work_item == key:
             return False
-        raise ValueError(f"{self.provider}/{self.scope}/{self.native_id} is already bound to {self.work_item}, not {key}")
+        raise ValueError(
+            f"{self.provider}/{self.scope}/{self.native_id} is already bound to {self.work_item}, not {key}"
+        )

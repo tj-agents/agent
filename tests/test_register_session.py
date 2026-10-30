@@ -194,6 +194,10 @@ class MainTests(unittest.TestCase):
 
 
 class LoadSessionStoreTests(unittest.TestCase):
+    def test_the_store_loads_once_per_process(self):
+        first = register_session._load_session_store()
+        self.assertIsNotNone(first)
+        self.assertIs(first, register_session._load_session_store())
 
     def _write_store_stub(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)

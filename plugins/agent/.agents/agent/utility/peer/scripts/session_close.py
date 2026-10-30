@@ -42,8 +42,8 @@ SCHEDULER_DIAGNOSTIC_LIMIT = 1000
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "checkout.py", "repository_identity.py",
-                        "session.py", "work_item.py")
+OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "agent_store_loader.py", "checkout.py",
+                        "repository_identity.py", "session.py", "work_item.py")
 
 ET.register_namespace("", TASK_SCHEDULER_NAMESPACE)
 

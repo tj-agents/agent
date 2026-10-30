@@ -493,7 +493,7 @@ class HookLifecycleTests(unittest.TestCase):
         entry = {"session_id": "locked-id", "host": "claude", "cwd": str(self.root), "pid": 7, "pid_started_at": 1.5}
         (registry / "locked-id.json").write_text(json.dumps(entry), encoding="utf-8")
         self._invoke("session-start", "claude", {"session_id": "locked-id", "cwd": str(self.root)})
-        follower = HOOK._load_sibling("cli_session_registry")
+        follower = HOOK.load_sibling(HOOK.__file__, "cli_session_registry")
         with mock.patch.object(follower.os, "replace", side_effect=PermissionError("in use")), \
                 mock.patch.object(follower, "REPLACE_DELAY_SECONDS", 0):
             self.assertEqual(0, self._invoke("stop", "claude", {"session_id": "locked-id", "cwd": str(self.repo)}))
@@ -560,6 +560,17 @@ class HookLifecycleTests(unittest.TestCase):
         self._invoke("stop", "claude", payload)
         self.assertEqual(branch, self._row("claude:main-id").branch)
         self.assertIsNone(self._row("claude:main-id").work_item)
+
+    def test_origin_head_makes_main_a_work_branch_and_names_the_default(self):
+        main = _run_git(self.repo, "branch", "--show-current")
+        self.assertTrue(STORE.Checkout.probe(self.repo).is_default)
+        _run_git(self.repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
+        _run_git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+        on_main = STORE.Checkout.probe(self.repo)
+        self.assertEqual((False, main), (on_main.is_default, on_main.work_branch))
+        _run_git(self.repo, "checkout", "-q", "-b", "develop")
+        on_develop = STORE.Checkout.probe(self.repo)
+        self.assertEqual((True, None), (on_develop.is_default, on_develop.work_branch))
 
     def test_origin_head_names_the_default_branch(self):
         _run_git(self.repo, "checkout", "-q", "-b", "develop")
@@ -905,7 +916,7 @@ class ClaimWorkItemTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "title must be non-empty"):
                 store.claim_registered_work_item(
                     "claude", "registered", self.temp.name, None, "key-1", "repo", "feature", "item",
-                    "owner", title="  ", registration={"title": "Claude tab", "pid": 1, "pid_started_at": 1.0},
+                    "owner", title="  ", registration=STORE.ClientRegistration("Claude tab", 1, 1.0),
                 )
             self.assertIsNone(store.get_work_item("key-1"))
             self.assertIsNone(store.get_session("claude:registered"))
@@ -913,6 +924,86 @@ class ClaimWorkItemTests(unittest.TestCase):
             store.close()
 
 
+
+
+class BranchWorkItemRuleTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="branch work items ")
+        self.addCleanup(self.temp.cleanup)
+        self.store = STORE.SessionStore(Path(self.temp.name) / "sessions.db")
+        self.addCleanup(self.store.close)
+
+    def _checkout(self, branch, default=False):
+        return STORE.Checkout(self.temp.name, "repo", branch, "abc", default)
+
+    def _stopped(self, session_id, branch):
+        handle = self.store.start_session("claude", session_id)
+        self.store.record_stop(handle, self._checkout(branch))
+        return self.store.get_session(handle).work_item
+
+    def _items_on(self, branch):
+        return [row["key"] for row in self.store._connection.execute(
+            "SELECT key FROM work_items WHERE branch = ?", (branch,),
+        ).fetchall()]
+
+    def test_a_branch_whose_only_item_is_done_gets_no_new_automatic_item(self):
+        automatic = self._stopped("a", "topic")
+        self.store.upsert_work_item(automatic, "repo", None, None, status="done")
+        self.assertIsNone(self._stopped("b", "topic"))
+        self.assertEqual([automatic], self._items_on("topic"))
+
+    def test_an_open_item_still_attaches_beside_a_done_one(self):
+        self.store.upsert_work_item("repo:f/old", "repo", "f", "old", status="done", branch="topic", title="Old")
+        self.store.upsert_work_item("repo:f/new", "repo", "f", "new", branch="topic", title="New")
+        self.assertEqual("repo:f/new", self._stopped("a", "topic"))
+
+    def test_a_named_item_absorbs_only_on_its_stored_branch(self):
+        first = self._stopped("a", "first")
+        second = self._stopped("b", "second")
+        self.store.upsert_work_item("repo:f/i", "repo", "f", "i", branch="first", title="Named")
+        self.store.upsert_work_item("repo:f/i", "repo", "f", "i", branch="second")
+        self.assertIsNone(self.store.get_work_item(first))
+        self.assertEqual("repo:f/i", self.store.get_session("claude:a").work_item)
+        self.assertEqual("first", self.store.get_work_item("repo:f/i").branch)
+        self.assertIsNotNone(self.store.get_work_item(second))
+        self.assertEqual(second, self.store.get_session("claude:b").work_item)
+
+    def test_a_done_named_item_absorbs_nothing(self):
+        automatic = self._stopped("a", "topic")
+        self.store.upsert_work_item("repo:f/i", "repo", "f", "i", status="done", branch="topic", title="Done")
+        self.assertIsNotNone(self.store.get_work_item(automatic))
+        self.assertEqual(automatic, self.store.get_session("claude:a").work_item)
+
+    def test_a_registered_claim_of_a_named_item_absorbs_the_branch_item(self):
+        automatic = self._stopped("a", "topic")
+        self.store.claim_registered_work_item(
+            "codex", "c", self.temp.name, self._checkout("topic"), "repo:f/i", "repo", "f", "i", "owner",
+            branch="topic", title="Named", registration=STORE.ClientRegistration("Codex tab", 7, 7.0),
+        )
+        self.assertIsNone(self.store.get_work_item(automatic))
+        self.assertEqual("repo:f/i", self.store.get_session("claude:a").work_item)
+        claimant = self.store.get_session("codex:c")
+        self.assertEqual(("owner", "repo:f/i", "Codex tab", 7),
+                         (claimant.role, claimant.work_item, claimant.title, claimant.pid))
+
+    def test_sessions_on_hosts_come_with_their_work_items(self):
+        automatic = self._stopped("a", "topic")
+        self.store.start_session("claude", "b")
+        self.store.start_session("codex", "c")
+        pairs = self.store.sessions_with_work_items_on_hosts(["claude"])
+        found = {session.handle: item.key if item else None for session, item in pairs}
+        self.assertEqual({"claude:a": automatic, "claude:b": None}, found)
+        [(session, item)] = self.store.sessions_with_work_items_on_hosts(["claude"], "a")
+        self.assertEqual(("claude:a", automatic, "topic"), (session.handle, item.key, item.branch))
+
+
+class RuntimeLoaderTests(unittest.TestCase):
+    def test_each_runtime_module_loads_once_per_process(self):
+        again = _load("session_store")
+        self.assertIsNot(STORE, again)
+        self.assertIs(STORE.Session, again.Session)
+        self.assertIs(STORE.Checkout, HOOK.load_sibling(STORE.__file__, "checkout").Checkout)
+        self.assertEqual(STORE.Session("claude:x", "claude", "x"), again.Session("claude:x", "claude", "x"))
 
 if __name__ == "__main__":
     unittest.main()
