@@ -2,9 +2,10 @@ import os
 import sqlite3
 from pathlib import Path
 
+from tj_agent_store._store import SCHEMA_VERSION
+
 
 WORK_ITEM_STATUSES = ("proposed", "active", "blocked", "paused", "delivery-gated", "done")
-SCHEMA_VERSION = 4
 
 
 class StoreReadError(ValueError):

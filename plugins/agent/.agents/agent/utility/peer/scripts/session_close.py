@@ -42,8 +42,6 @@ SCHEDULER_DIAGNOSTIC_LIMIT = 1000
 OBSERVER_STORE_RECEIPT = ".tj-agents-observer-store.json"
 OBSERVER_STORE_KIND = "tj-agents-agent-observer-store"
 OBSERVER_STORE_VERSION = 1
-OBSERVER_STORE_FILES = ("register_session.py", "session_store.py", "agent_store_loader.py", "checkout.py",
-                        "repository_identity.py", "session.py", "work_item.py")
 
 ET.register_namespace("", TASK_SCHEDULER_NAMESPACE)
 
@@ -143,7 +141,7 @@ def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
 
 def _update_own_end(entry, change):
     try:
-        module = register_session._load_session_store()
+        module = register_session.agent_store()
         if module is None or not entry.get("host") or not entry.get("session_id"):
             return
         with module.SessionStore() as store:
@@ -154,7 +152,7 @@ def _update_own_end(entry, change):
 
 def delete_own_session(session_id):
     try:
-        module = register_session._load_session_store()
+        module = register_session.agent_store()
         if module is None:
             return
         with module.SessionStore() as store:
@@ -175,7 +173,7 @@ def session_activity(entry):
     if not valid_entry(entry) or not verified_live(entry["pid"], entry["pid_started_at"]):
         raise Refusal("registered host identity is not live")
     try:
-        module = register_session._load_session_store()
+        module = register_session.agent_store()
         if module is None:
             raise Refusal("session turn state is unavailable")
         with module.SessionStore() as store:
@@ -605,7 +603,7 @@ def start_observer(arguments):
 
 def _write_observer_store_receipt(staging):
     files = {}
-    for name in OBSERVER_STORE_FILES:
+    for name in register_session.observer_store_files(staging):
         path = staging / name
         if not path.is_file():
             return
@@ -636,10 +634,10 @@ def start_detached(script, arguments, extra=(), stage=True):
         for path in (Path(script), here, here.with_name("register_session.py"), here.with_name("detached_launch.py"),
                      *map(Path, extra)):
             shutil.copy2(path, staging / path.name)
-        store = register_session.session_store_path()
+        store = register_session.agent_store_root()
         if store is not None:
-            for name in OBSERVER_STORE_FILES[1:]:
-                shutil.copy2(store.with_name(name), staging / name)
+            shutil.copytree(store / register_session.STORE_PACKAGE, staging / register_session.STORE_PACKAGE,
+                            ignore=shutil.ignore_patterns("__pycache__"))
             _write_observer_store_receipt(staging)
         command = [sys.executable, str(staging / Path(script).name), *arguments]
     else:

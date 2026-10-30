@@ -193,16 +193,16 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self._run_main_with_stdin("[1, 2, 3]"), 0)
 
 
-class LoadSessionStoreTests(unittest.TestCase):
-    def test_the_store_loads_once_per_process(self):
-        first = register_session._load_session_store()
+class AgentStoreRootTests(unittest.TestCase):
+    def test_the_store_is_imported_once_per_process(self):
+        first = register_session.agent_store()
         self.assertIsNotNone(first)
-        self.assertIs(first, register_session._load_session_store())
+        self.assertIs(first, register_session.agent_store())
 
-    def _write_store_stub(self, path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("MARKER = 'session-store-stub'\n", encoding="utf-8")
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/agent_store_loader.py", path.parent)
+    def _write_store_package(self, runtime):
+        package = runtime / "tj_agent_store"
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "__init__.py").write_text("", encoding="utf-8")
 
     def _load_from(self, script_path):
         spec = importlib.util.spec_from_file_location("register_session_under_test", script_path)
@@ -231,16 +231,14 @@ class LoadSessionStoreTests(unittest.TestCase):
             script = root / ".agents/dependencies/agent/.agents/agent/utility/peer/scripts/register_session.py"
             script.parent.mkdir(parents=True, exist_ok=True)
             script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-            self._write_store_stub(root / ".agents/dependencies/agent/.agents/agent-store/runtime/session_store.py")
+            runtime = root / ".agents/dependencies/agent/.agents/agent-store/runtime"
+            self._write_store_package(runtime)
             self._staged_receipt(root)
-            module = self._load_from(script)
-            store = module._load_session_store()
-            self.assertIsNotNone(store)
-            self.assertEqual("session-store-stub", store.MARKER)
+            self.assertEqual(runtime.resolve(), self._load_from(script).agent_store_root())
 
     def test_shallow_staging_path_without_a_store_does_not_index_package_ancestors(self):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(register_session, "HERE", Path(tmp) / "staging"):
-            self.assertIsNone(register_session.session_store_path())
+            self.assertIsNone(register_session.agent_store_root())
 
     def test_finds_the_store_in_the_agent_utility_packaged_layout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,12 +246,10 @@ class LoadSessionStoreTests(unittest.TestCase):
             script = plugin_root / ".agents/agent/utility/peer/scripts/register_session.py"
             script.parent.mkdir(parents=True, exist_ok=True)
             script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-            self._write_store_stub(plugin_root / ".agents/agent-store/runtime/session_store.py")
+            runtime = plugin_root / ".agents/agent-store/runtime"
+            self._write_store_package(runtime)
             self._package_marker(plugin_root)
-            module = self._load_from(script)
-            store = module._load_session_store()
-            self.assertIsNotNone(store)
-            self.assertEqual("session-store-stub", store.MARKER)
+            self.assertEqual(runtime.resolve(), self._load_from(script).agent_store_root())
 
     def test_finds_the_store_in_the_skills_packaged_layout(self):
         for layout in ("skills", "codex-skills"):
@@ -263,12 +259,10 @@ class LoadSessionStoreTests(unittest.TestCase):
                     script = plugin_root / layout / "peer/scripts/register_session.py"
                     script.parent.mkdir(parents=True, exist_ok=True)
                     script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-                    self._write_store_stub(plugin_root / ".agents/agent-store/runtime/session_store.py")
+                    runtime = plugin_root / ".agents/agent-store/runtime"
+                    self._write_store_package(runtime)
                     self._package_marker(plugin_root)
-                    module = self._load_from(script)
-                    store = module._load_session_store()
-                    self.assertIsNotNone(store)
-                    self.assertEqual("session-store-stub", store.MARKER)
+                    self.assertEqual(runtime.resolve(), self._load_from(script).agent_store_root())
 
 
 @unittest.skipUnless(shutil.which("git"), "git is required for SessionStart persistence regression")
@@ -302,26 +296,25 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
     def _copy_layout(self, root, layout):
         if layout == "source":
             script = root / ".agents/dependencies/agent/.agents/agent/utility/peer/scripts/register_session.py"
-            store = root / ".agents/dependencies/agent/.agents/agent-store/runtime/session_store.py"
+            store = root / ".agents/dependencies/agent/.agents/agent-store/runtime"
         elif layout == "agents-utility":
             script = root / ".agents/agent/utility/peer/scripts/register_session.py"
-            store = root / ".agents/agent-store/runtime/session_store.py"
+            store = root / ".agents/agent-store/runtime"
         else:
             script = root / layout / "peer/scripts/register_session.py"
-            store = root / ".agents/agent-store/runtime/session_store.py"
+            store = root / ".agents/agent-store/runtime"
         script.parent.mkdir(parents=True)
-        store.parent.mkdir(parents=True)
         shutil.copy2(SCRIPT, script)
-        runtime = store.parents[2] / "agent" / "runtime"
+        runtime = store.parents[1] / "agent" / "runtime"
         runtime.mkdir(parents=True)
         shutil.copy2(ROOT / "plugins/agent/.agents/agent/runtime/host.py", runtime / "host.py")
-        for name in register_session.OBSERVER_STORE_FILES[1:]:
-            shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime" / name, store.with_name(name))
+        shutil.copytree(ROOT / "plugins/agent/.agents/agent-store/runtime/tj_agent_store", store / "tj_agent_store",
+                        ignore=shutil.ignore_patterns("__pycache__"))
         if layout == "source":
-            LoadSessionStoreTests._staged_receipt(root)
+            AgentStoreRootTests._staged_receipt(root)
         else:
-            LoadSessionStoreTests._package_marker(root)
-        return script
+            AgentStoreRootTests._package_marker(root)
+        return script, store
 
     def test_session_start_records_real_store_from_source_and_packaged_layouts(self):
         cases = (
@@ -336,7 +329,9 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
             repo, head = self._create_repo(root)
             for layout, host in cases:
                 with self.subTest(layout=layout, host=host):
-                    module = self._load_from(self._copy_layout(root / f"{layout} {host}", layout))
+                    script, store_root = self._copy_layout(root / f"{layout} {host}", layout)
+                    module = self._load_from(script)
+                    self.assertEqual(store_root.resolve(), module.agent_store_root())
                     state = root / f"state {layout} {host} é"
                     profile = root / f"profile {layout} {host} é"
                     session_id = f"{host}-{layout}"

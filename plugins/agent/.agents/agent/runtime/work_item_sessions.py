@@ -14,8 +14,10 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parents[2] / ".agents" / "agent-store" / "runtime"))
 
 from host import Host  # noqa: E402
+import tj_agent_store  # noqa: E402
 
 WORK_ITEM_RE = re.compile(r"^(?P<feature>[a-z0-9]+(?:-[a-z0-9]+)*)/(?P<item>[a-z0-9]+(?:-[a-z0-9]+)*)$")
 WORK_ITEM_STATUSES = ("proposed", "active", "blocked", "paused", "delivery-gated", "done")
@@ -23,7 +25,6 @@ END_REASONS = ("finished", "closed", "handed_off")
 HEAD_CHECK_TIMEOUT = 5
 _BOUNDED_ROLE_RE = re.compile(r"^bounded: (?P<scope>.+)$")
 
-_SESSION_STORE = None
 _AGENT_RECOVERY = None
 _REGISTER_SESSION = None
 _SESSION_CLOSE = None
@@ -37,20 +38,6 @@ def _package_root():
         if package_root.is_package_root(root):
             return root
     raise RuntimeError(f"The Agent package root was not found relative to {HERE}.")
-
-
-def _session_store():
-    global _SESSION_STORE
-    if _SESSION_STORE is not None:
-        return _SESSION_STORE
-    candidate = _package_root() / ".agents" / "agent-store" / "runtime" / "session_store.py"
-    if candidate.is_file():
-        spec = importlib.util.spec_from_file_location("work_item_sessions_session_store", candidate)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _SESSION_STORE = module
-        return module
-    raise RuntimeError(f"The shared session_store.py helper was not found relative to {HERE}.")
 
 
 def _agent_recovery():
@@ -114,7 +101,7 @@ def _remote_reference(provider, scope, native_id):
         return None
     if any(value is None for value in values):
         raise ValueError("--provider, --scope and --native-id must be supplied together")
-    return _session_store().normalise_work_item_reference(provider, scope, native_id)
+    return tj_agent_store.normalise_work_item_reference(provider, scope, native_id)
 
 
 def _selector(work_item=None, execution_key=None, provider=None, scope=None, native_id=None):
@@ -126,7 +113,7 @@ def _selector(work_item=None, execution_key=None, provider=None, scope=None, nat
         feature, item = _parse_work_item(work_item)
         return "local", (feature, item)
     if execution_key is not None:
-        return "execution", _session_store().validate_execution_key(execution_key)
+        return "execution", tj_agent_store.validate_execution_key(execution_key)
     return "reference", reference
 
 
@@ -142,7 +129,7 @@ def _find_selected_work_item(store, selector, cwd):
     kind, value = selector
     if kind == "local":
         repo = _require_repo(cwd)
-        return store.get_work_item(_session_store().work_item_key(repo, *value)), None
+        return store.get_work_item(tj_agent_store.work_item_key(repo, *value)), None
     if kind == "execution":
         return store.get_work_item(value), None
     provider, scope, native_id = value
@@ -164,22 +151,21 @@ def _validate_role(role):
 
 
 def _require_repo(cwd):
-    repo = _session_store().identify_repository(cwd)
+    repo = tj_agent_store.identify_repository(cwd)
     if not repo:
         raise ValueError(f"could not determine a git repository identity from {cwd}")
     return repo
 
 
 def _require_checkout(cwd):
-    module = _session_store()
-    checkout = module.Checkout.probe(cwd, timeout=module.GIT_TIMEOUT)
+    checkout = tj_agent_store.Checkout.probe(cwd, timeout=tj_agent_store.GIT_TIMEOUT)
     if not checkout.repo:
         raise ValueError(f"could not determine a git repository identity from {cwd}")
     return checkout
 
 
 def _repository_root(cwd):
-    root = _session_store().git(cwd, "rev-parse", "--show-toplevel")
+    root = tj_agent_store.git(cwd, "rev-parse", "--show-toplevel")
     if not root:
         raise ValueError(f"could not determine the repository root from {cwd}")
     return Path(root).resolve()
@@ -229,7 +215,7 @@ def _require_session_id(host):
 def _registered_current_session(store, host, cwd):
     session_id = _current_session_id(host)
     if session_id and _agent_recovery().SESSION_ID.fullmatch(session_id):
-        handle = _session_store().session_handle(host.value, session_id)
+        handle = tj_agent_store.session_handle(host.value, session_id)
         session = store.get_session(handle)
         if session is not None and session.has_client_identity:
             return session_id, None
@@ -244,7 +230,7 @@ def _registered_current_session(store, host, cwd):
         raise ValueError("the verified native session has no valid session id")
     if session_id and session_id != registered_id:
         raise ValueError("the native session id does not match the verified registry attachment")
-    return registered_id, _session_store().ClientRegistration.from_entry(entry)
+    return registered_id, tj_agent_store.ClientRegistration.from_entry(entry)
 
 
 def _path_key(value):
@@ -271,7 +257,7 @@ def _worktree_status(session):
     worktree = session.cwd
     if not worktree or not Path(worktree).is_dir():
         return "stale"
-    branch = _session_store().git(worktree, "branch", "--show-current")
+    branch = tj_agent_store.git(worktree, "branch", "--show-current")
     if branch is None:
         return "unknown"
     if branch != session.branch:
@@ -339,7 +325,6 @@ def _unverified_launch(error):
 
 def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=None, title=None, plan_path=None,
               execution_key=None, provider=None, scope=None, native_id=None, cwd=None):
-    module = _session_store()
     cwd = cwd or Path.cwd()
     selector = _selector(work_item, execution_key, provider, scope, native_id)
     role = _validate_role(role)
@@ -348,12 +333,12 @@ def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=Non
     checkout = _require_checkout(cwd)
     repo = checkout.repo
     record_branch = checkout.work_branch
-    with module.SessionStore() as store:
+    with tj_agent_store.SessionStore() as store:
         kind, value = selector
         reference = None
         if kind == "local":
             feature, item = value
-            key = module.work_item_key(repo, feature, item)
+            key = tj_agent_store.work_item_key(repo, feature, item)
             selected = store.get_work_item(key)
         elif kind == "execution":
             key = value
@@ -374,7 +359,7 @@ def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=Non
             raise ValueError("--plan-path cannot update a work item from a different repository")
         item_branch = record_branch if work_item_repo == repo else None
         session_id, registration = _registered_current_session(store, host, cwd)
-        handle = module.session_handle(host.value, session_id)
+        handle = tj_agent_store.session_handle(host.value, session_id)
         removed = store.claim_registered_work_item(
             host.value, session_id, cwd, checkout, key, work_item_repo, feature, item, role,
             status=status, branch=item_branch, title=title, plan_path=plan_path, predecessor=predecessor,
@@ -391,7 +376,7 @@ def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=Non
 def cmd_status(work_item=None, execution_key=None, provider=None, scope=None, native_id=None, cwd=None):
     cwd = cwd or Path.cwd()
     selector = _selector(work_item, execution_key, provider, scope, native_id)
-    with _session_store().SessionStore() as store:
+    with tj_agent_store.SessionStore() as store:
         selected, reference = _find_selected_work_item(store, selector, cwd)
         recorded = store.sessions_for_work_item(selected.key) if selected else []
     machine = socket.gethostname()
@@ -417,7 +402,7 @@ def cmd_status(work_item=None, execution_key=None, provider=None, scope=None, na
 
 def cmd_find(worktree):
     target = _path_key(worktree)
-    with _session_store().SessionStore() as store:
+    with tj_agent_store.SessionStore() as store:
         matches = []
         for session in store.sessions_with_work_item():
             if session.cwd and _path_key(session.cwd) == target:
@@ -441,7 +426,7 @@ def cmd_resume(work_item=None, handle=None, execution_key=None, provider=None, s
                cwd=None, prompt=None, prompt_path=None, title=None):
     cwd = cwd or Path.cwd()
     selector = _selector(work_item, execution_key, provider, scope, native_id)
-    with _session_store().SessionStore() as store:
+    with tj_agent_store.SessionStore() as store:
         found, _reference = _find_selected_work_item(store, selector, cwd)
         sessions = store.sessions_for_work_item(found.key) if found else []
     if not sessions:
@@ -476,9 +461,8 @@ def cmd_resume(work_item=None, handle=None, execution_key=None, provider=None, s
 
 
 def cmd_interrupted(resume_handles=None, cwd=None):
-    module = _session_store()
-    repo = module.identify_repository(cwd or Path.cwd())
-    with module.SessionStore() as store:
+    repo = tj_agent_store.identify_repository(cwd or Path.cwd())
+    with tj_agent_store.SessionStore() as store:
         candidates = store.interrupted_candidates(repo=repo)
         item_names = {}
         for session in candidates:
@@ -525,17 +509,15 @@ def cmd_interrupted(resume_handles=None, cwd=None):
 
 
 def cmd_end(host, reason, successor=None):
-    module = _session_store()
     session_id = _require_session_id(host)
-    handle = module.session_handle(host.value, session_id)
-    with module.SessionStore() as store:
+    handle = tj_agent_store.session_handle(host.value, session_id)
+    with tj_agent_store.SessionStore() as store:
         store.update_session(handle, lambda session: session.end(reason, successor=successor))
     return {"handle": handle, "reason": reason}
 
 
 def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, execution_key=None,
              provider=None, scope=None, native_id=None, cwd=None):
-    module = _session_store()
     cwd = cwd or Path.cwd()
     selector = _selector(work_item, execution_key, provider, scope, native_id)
     title = _validate_title(title)
@@ -543,12 +525,12 @@ def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, e
     checkout = _require_checkout(cwd)
     repo = checkout.repo
     record_branch = checkout.work_branch
-    with module.SessionStore() as store:
+    with tj_agent_store.SessionStore() as store:
         kind, value = selector
         reference = None
         if kind == "local":
             feature, item = value
-            key = module.work_item_key(repo, feature, item)
+            key = tj_agent_store.work_item_key(repo, feature, item)
             if store.get_work_item(key) is None and title is None:
                 raise ValueError("a non-empty --title is required when creating a work item")
             store.upsert_work_item(
@@ -568,7 +550,7 @@ def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, e
             )
         if status == "done":
             keep = [
-                module.session_handle(host.value, session_id)
+                tj_agent_store.session_handle(host.value, session_id)
                 for host in Host
                 for session_id in (_current_session_id(host),) if session_id
             ]
@@ -582,11 +564,10 @@ def cmd_item(work_item=None, status=None, pr=None, title=None, plan_path=None, e
 
 
 def cmd_register(provider, scope, native_id, cwd=None):
-    module = _session_store()
     cwd = cwd or Path.cwd()
     checkout = _require_checkout(cwd)
-    provider, scope, native_id = module.normalise_work_item_reference(provider, scope, native_id)
-    with module.SessionStore() as store:
+    provider, scope, native_id = tj_agent_store.normalise_work_item_reference(provider, scope, native_id)
+    with tj_agent_store.SessionStore() as store:
         selected, created = store.resolve_or_create_work_item_reference(
             provider, scope, native_id, checkout.repo, branch=checkout.work_branch,
         )
@@ -596,7 +577,6 @@ def cmd_register(provider, scope, native_id, cwd=None):
 
 
 def cmd_bind(work_item=None, execution_key=None, provider=None, scope=None, native_id=None, cwd=None):
-    module = _session_store()
     cwd = cwd or Path.cwd()
     reference = _remote_reference(provider, scope, native_id)
     if reference is None:
@@ -604,12 +584,12 @@ def cmd_bind(work_item=None, execution_key=None, provider=None, scope=None, nati
     selected = sum(value is not None for value in (work_item, execution_key))
     if selected != 1:
         raise ValueError("bind needs exactly one of <feature>/<item> or --execution-key")
-    with module.SessionStore() as store:
+    with tj_agent_store.SessionStore() as store:
         if work_item is not None:
             feature, item = _parse_work_item(work_item)
-            key = module.work_item_key(_require_repo(cwd), feature, item)
+            key = tj_agent_store.work_item_key(_require_repo(cwd), feature, item)
         else:
-            key = module.validate_execution_key(execution_key)
+            key = tj_agent_store.validate_execution_key(execution_key)
         if store.get_work_item(key) is None:
             raise ValueError(f"work item does not exist: {key}")
         changed = store.bind_work_item_reference(key, *reference)

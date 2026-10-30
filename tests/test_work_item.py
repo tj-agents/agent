@@ -1,14 +1,10 @@
-import importlib.util
 from pathlib import Path
+import sys
 import unittest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".agents/agent-store/runtime"))
 
-RUNTIME = Path(__file__).resolve().parents[1] / ".agents/agent-store/runtime"
-SPEC = importlib.util.spec_from_file_location("test_work_item_module", RUNTIME / "work_item.py")
-WORK_ITEM = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(WORK_ITEM)
-WorkItem = WORK_ITEM.WorkItem
-WorkItemReference = WORK_ITEM.WorkItemReference
+from tj_agent_store import WorkItem, WorkItemReference, validate_execution_key  # noqa: E402
 
 
 class WorkItemTests(unittest.TestCase):
@@ -23,7 +19,7 @@ class WorkItemTests(unittest.TestCase):
 
     def test_a_branch_item_is_an_open_unnamed_execution(self):
         item = WorkItem.for_branch("repo", "Fix/Thing", title="Fix the thing")
-        WORK_ITEM.validate_execution_key(item.key)
+        validate_execution_key(item.key)
         self.assertEqual((item.key, "Fix/Thing", "Fix the thing"), (item.label, item.branch, item.title))
         self.assertTrue(item.is_open)
         self.assertFalse(item.is_named)

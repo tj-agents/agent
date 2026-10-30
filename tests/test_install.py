@@ -539,7 +539,7 @@ class RuntimeTests(Machine):
                          Path('.agents/agent/runtime/tj_agent/plugins/sources.py'),
                          Path('.agents/agent/resources/lanes/resolve.py'),
                          Path('.agents/agent/utility/peer/scripts/register_session.py'),
-                         Path('.agents/agent-store/runtime/session_store.py')):
+                         Path('.agents/agent-store/runtime/tj_agent_store/__init__.py')):
             self.assertTrue((installed / relative).is_file(), relative)
         result = subprocess.run([sys.executable, "-I", "-B", str(install.launch_script(context)), "--help"],
                                 cwd=self.root, capture_output=True, text=True, timeout=15)

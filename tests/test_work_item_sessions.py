@@ -17,7 +17,7 @@ class InterruptedTests(unittest.TestCase):
     def test_last_activity_is_reported_in_utc_like_recovery(self):
         with tempfile.TemporaryDirectory(prefix="interrupted ") as directory, \
                 mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}):
-            store_module = WORK_ITEM_SESSIONS._session_store()
+            store_module = WORK_ITEM_SESSIONS.tj_agent_store
             with store_module.SessionStore() as store:
                 handle = store.start_session("claude", "dead", directory, pid=4000003, pid_started_at=1.0)
                 store.update_session(handle, lambda session: setattr(session, "last_activity_at", 1767225600.25))

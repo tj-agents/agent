@@ -17,9 +17,11 @@ from datetime import datetime, timezone
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parents[2] / ".agents" / "agent-store" / "runtime"))
 
 from host import Host  # noqa: E402
 from host_sessions import SESSIONS  # noqa: E402
+import tj_agent_store  # noqa: E402
 
 SESSION_ID = re.compile(r"(?!-)[A-Za-z0-9_-]+\Z")
 TOKEN = re.compile(r"[a-z0-9]+")
@@ -44,9 +46,7 @@ def _package_root():
 
 def _script_path(name):
     root = _package_root()
-    if name == "session_store":
-        candidate = root / ".agents" / "agent-store" / "runtime" / "session_store.py"
-    elif name in {"register_session", "session_close", "close_tab"}:
+    if name in {"register_session", "session_close", "close_tab"}:
         candidate = root / ".agents" / "agent" / "utility" / "peer" / "scripts" / f"{name}.py"
     else:
         candidate = root / ".agents" / "agent" / "runtime" / f"{name}.py"
@@ -214,10 +214,9 @@ def _tokens(value):
 
 
 def _store_rows(hosts, session_id=None):
-    module = _load("session_store")
-    if not module.database_path().is_file():
+    if not tj_agent_store.database_path().is_file():
         return []
-    with module.SessionStore() as store:
+    with tj_agent_store.SessionStore() as store:
         return store.sessions_with_work_items_on_hosts([host.value for host in hosts], session_id)
 
 
@@ -622,9 +621,9 @@ def _status_path(receipt):
     return receipt.with_name(f"{receipt.stem}.{secrets.token_hex(8)}.status.json")
 
 
-def _open_store(module):
+def _open_store():
     try:
-        return module.SessionStore() if module.database_path().is_file() else None
+        return tj_agent_store.SessionStore() if tj_agent_store.database_path().is_file() else None
     except Exception:
         return None
 
@@ -632,9 +631,8 @@ def _open_store(module):
 def await_pickup(host, session_id, status_path, since, history_path=None, timeout=PICKUP_TIMEOUT_SECONDS,
                  wrapper_timeout=WRAPPER_TIMEOUT_SECONDS, interval=PICKUP_INTERVAL_SECONDS,
                  clock=time.monotonic, wait=time.sleep):
-    module = _load("session_store")
     status_file = _load("launch_status")
-    handle = module.session_handle(host.value, session_id)
+    handle = tj_agent_store.session_handle(host.value, session_id)
     start = clock()
     history_before = _modified(history_path)
     store = None
@@ -644,7 +642,7 @@ def await_pickup(host, session_id, status_path, since, history_path=None, timeou
             state = status.get("state") if status else None
             if state == "failed":
                 raise LaunchFailed(str(status.get("error") or f"{host} startup failed"))
-            store = store or _open_store(module)
+            store = store or _open_store()
             evidence = None
             if _registered_since(store, handle, since):
                 evidence = "registered in sessions.db"

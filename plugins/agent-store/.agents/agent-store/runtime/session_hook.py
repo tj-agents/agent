@@ -2,21 +2,14 @@
 """Record host session lifecycle hook events in the session store (Python 3.9+)."""
 
 import argparse
-import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
 
-_LOADER_PATH = Path(__file__).resolve().with_name("agent_store_loader.py")
-_LOADER_KEY = f"agent_store_loader_{hashlib.sha256(str(_LOADER_PATH).encode('utf-8')).hexdigest()[:16]}"
-if _LOADER_KEY not in sys.modules:
-    _spec = importlib.util.spec_from_file_location(_LOADER_KEY, _LOADER_PATH)
-    _loader = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_loader)
-    sys.modules[_LOADER_KEY] = _loader
-load_sibling = sys.modules[_LOADER_KEY].load_sibling
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import tj_agent_store  # noqa: E402
 
 EVENTS = ("session-start", "prompt", "stop", "session-end")
 HOSTS = ("claude", "codex")
@@ -35,18 +28,15 @@ def _read_json_stdin():
 
 
 def _record(event, host, session_id, cwd, payload):
-    store_module = load_sibling(__file__, "session_store")
-    handle = store_module.session_handle(host, session_id)
-    with store_module.SessionStore() as store:
+    handle = tj_agent_store.session_handle(host, session_id)
+    with tj_agent_store.SessionStore() as store:
         if event == "session-start":
-            store.start_session(host, session_id, cwd, store_module.Checkout.probe(cwd))
+            store.start_session(host, session_id, cwd, tj_agent_store.Checkout.probe(cwd))
         elif event == "prompt":
             store.update_session(handle, lambda session: session.prompted(payload.get("prompt")))
         elif event == "stop":
-            checkout = store_module.Checkout.probe(cwd)
-            registry = load_sibling(__file__, "cli_session_registry").CliSessionRegistry(
-                store_module.state_directory() / "cli-sessions",
-            )
+            checkout = tj_agent_store.Checkout.probe(cwd)
+            registry = tj_agent_store.CliSessionRegistry(tj_agent_store.state_directory() / "cli-sessions")
             if registry.follow_cwd(host, session_id, checkout.root) is False:
                 checkout = None
             store.record_stop(handle, checkout)

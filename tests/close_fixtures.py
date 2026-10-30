@@ -91,7 +91,7 @@ class CloseFixture:
                              cli_client.RECORD_PATH_ENV: str(self.recording)}}
         self.patch(mock.patch.object(cli_client, "process_arguments", side_effect=self.commands.get))
         self.patch(mock.patch.object(cli_client, "process_context", side_effect=lambda pid: self.contexts.get(pid, {})))
-        self.store_module = register_session._load_session_store()
+        self.store_module = register_session.agent_store()
         self.store = self.store_module.SessionStore()
         self.addCleanup(self.store.close)
         initial_pid = 10 if host == "codex" else 20
