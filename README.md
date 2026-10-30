@@ -55,7 +55,8 @@ Unconfigured projects are not enrolled. Installer `--check` reports
 selection drift without changing repository files, and a converged rerun writes nothing.
 
 The subscriber runs as a hidden current-user scheduled task on Windows or a systemd user service on
-Linux. It reads the existing event channel, verifies repository hints against GitHub, and updates every
+Linux. Watcher lock contention exits as a failure so the supervisor retries after the previous watcher
+releases ownership, including during runtime upgrades. It reads the existing event channel, verifies repository hints against GitHub, and updates every
 registered repository while sessions remain open. Repository registrations share a Git common directory
 across linked worktrees and retain project/local scope. Successful revisions are recorded once; failed
 updates retry without acknowledging the event. After a long disconnection, an authoritative catch-up
