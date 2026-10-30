@@ -35,6 +35,7 @@ import plugin_autoupdate
 import machine_events
 import event_service
 import host_permissions
+import repository_configuration
 import required_plugins
 import runtime_delivery
 from tj_agent import content
@@ -787,9 +788,13 @@ def codex_config_path(context: Context) -> Path:
     return context.codex_home / "config.toml"
 
 
-def native_permissions_plan(context: Context) -> dict[Path, str]:
-    mode = host_permissions.permissions(plugin_setup_project(context))
-    return host_permissions.plan(context.claude_home / "settings.json", codex_config_path(context), mode)
+def native_permissions_plan(context: Context, *, applying: bool = False) -> dict[Path, str]:
+    mode = repository_configuration.permissions(plugin_setup_project(context))
+    paths = {
+        Host.CLAUDE: context.claude_home / "settings.json",
+        Host.CODEX: codex_config_path(context),
+    }
+    return host_permissions.plan(paths, mode, applying=applying)
 
 
 def check_native_permissions(context: Context) -> list[str]:
@@ -797,13 +802,10 @@ def check_native_permissions(context: Context) -> list[str]:
 
 
 def apply_native_permissions(context: Context) -> list[str]:
-    targets = native_permissions_plan(context)
-    desktop = codex_config_path(context).parent / ".codex-global-state.json"
-    if desktop in targets:
-        if host_permissions.desktop_running():
-            raise InstallError("Close Codex Desktop, run install --step 'native permission defaults' "
-                               "from a terminal, then reopen the app to load the configured defaults")
-        targets = native_permissions_plan(context)
+    try:
+        targets = native_permissions_plan(context, applying=True)
+    except ValueError as error:
+        raise InstallError(str(error)) from error
     for path, text in targets.items():
         write_profile(path, text, "utf-8", False)
     return [f"updated native permission defaults in {path}" for path in targets]

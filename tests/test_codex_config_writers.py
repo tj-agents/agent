@@ -15,7 +15,7 @@ RUNTIME = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime"
 sys.path.insert(0, str(RUNTIME))
 
 
-HOST_PERMISSIONS = importlib.import_module("host_permissions")
+from codex import permissions as CODEX_PERMISSIONS
 INSTALL = importlib.import_module("install")
 AUTOUPDATE = importlib.import_module("plugin_autoupdate")
 CONFIG = """model = "gpt-6.1-sol"
@@ -73,7 +73,7 @@ class CodexConfigWriterTests(unittest.TestCase):
 
     def native_permissions(self):
         text = self.path.read_text(encoding="utf-8-sig")
-        updated = HOST_PERMISSIONS.codex_settings(text, "bypass")
+        updated = CODEX_PERMISSIONS.settings(text, "bypass")
         if updated != text:
             INSTALL.write_profile(self.path, updated, "utf-8", False)
 

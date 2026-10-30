@@ -21,6 +21,8 @@ if sys.version_info < (3, 11):
     raise SystemExit("Repository settings generation requires Python 3.11 or newer")
 
 host_permissions = plugin_selection.runtime_module("host_permissions")
+configuration = plugin_selection.runtime_module("repository_configuration")
+from host import Host
 
 
 MANAGED_START = "# BEGIN repo-declared agent capabilities"
@@ -409,9 +411,9 @@ def plan(
     else:
         targets = {claude: claude_settings(claude, sources, identities, allow), codex: codex_settings(codex, sources, identities), rules_path: expected_rules}
     try:
-        mode = host_permissions.permissions(root)
-        targets[claude] = host_permissions.claude_settings(targets[claude], mode, project=True)
-        targets[codex] = host_permissions.codex_settings(targets[codex], mode)
+        mode = configuration.permissions(root)
+        for host, path in ((Host.CLAUDE, claude), (Host.CODEX, codex)):
+            targets[path] = host_permissions.ADAPTERS[host].settings(targets[path], mode, project=True)
     except ValueError as error:
         raise lock_io.LockError(str(error)) from error
     if scope == "project":

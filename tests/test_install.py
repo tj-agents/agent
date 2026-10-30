@@ -523,7 +523,7 @@ class RuntimeTests(Machine):
         context = self.context(windows=False)
         context.project = self.root / "consumer"
         context.project.mkdir()
-        with mock.patch.object(install.host_permissions, "permissions", return_value="standard") as mode:
+        with mock.patch.object(install.repository_configuration, "permissions", return_value="standard") as mode:
             planned = install.native_permissions_plan(context)
         mode.assert_called_once_with(context.project)
         self.assertTrue(planned)
@@ -887,7 +887,7 @@ class RepairTests(Machine):
 
 
 class NativePermissionsTests(Machine):
-    @mock.patch.object(install.host_permissions, "desktop_running", return_value=False)
+    @mock.patch.object(install.host_permissions.ADAPTERS[install.Host.CODEX], "desktop_running", return_value=False)
     def test_native_permissions_follow_portable_mode_and_converge_for_both_platforms(self, _desktop):
         settings = self.checkout / ".agents/settings.json"
         settings.parent.mkdir()
@@ -922,7 +922,7 @@ class NativePermissionsTests(Machine):
         state = {"electron-persisted-atom-state": {"agent-mode-by-host-id": {"local": "guardian-approvals"}}}
         app.write_text(json.dumps(state), encoding="utf-8")
         before = snapshot(self.root)
-        with mock.patch.object(install.host_permissions, "desktop_running", return_value=True):
+        with mock.patch.object(install.host_permissions.ADAPTERS[install.Host.CODEX], "desktop_running", return_value=True):
             with self.assertRaisesRegex(install.InstallError, "Close Codex Desktop"):
                 install.apply_native_permissions(context)
         self.assertEqual(before, snapshot(self.root))
@@ -932,7 +932,7 @@ class NativePermissionsTests(Machine):
             app.write_text(json.dumps(state), encoding="utf-8")
             return False
 
-        with mock.patch.object(install.host_permissions, "desktop_running", side_effect=closed):
+        with mock.patch.object(install.host_permissions.ADAPTERS[install.Host.CODEX], "desktop_running", side_effect=closed):
             install.apply_native_permissions(context)
         self.assertTrue(json.loads(app.read_text(encoding="utf-8"))["saved-during-shutdown"])
 

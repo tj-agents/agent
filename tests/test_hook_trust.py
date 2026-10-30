@@ -42,6 +42,29 @@ class HookTrustTests(unittest.TestCase):
         self.archive.start()
         self.addCleanup(self.archive.stop)
 
+    def test_packaged_standalone_cli_resolves_shared_configuration_in_isolated_python(self):
+        server = self.cwd / "app-server"
+        server.write_text(
+            'import json, os, sys\n'
+            'for line in sys.stdin:\n'
+            '    message = json.loads(line)\n'
+            '    if "id" not in message:\n'
+            '        continue\n'
+            '    result = {"config": {}} if message["method"] == "config/read" else '
+            '{"data": [{"cwd": os.getcwd(), "hooks": []}]}\n'
+            '    print(json.dumps({"id": message["id"], "result": result}), flush=True)\n',
+            encoding="utf-8",
+        )
+        settings = self.cwd / ".agents/settings.json"
+        settings.parent.mkdir()
+        settings.write_text('{"configuration":{"core":{"trust_hooks":false}}}', encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(Path(TRUST.__file__)),
+             "--codex", sys.executable, "--project", str(self.cwd)],
+            cwd=self.cwd, capture_output=True, text=True, encoding="utf-8", timeout=30,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     @patch.object(TRUST, "AppServer")
     def test_live_reload_rejects_unloaded_or_wrong_checkout_without_writing(self, app):
         for loaded, directory in (([], self.cwd), (["current"], self.cwd / "other")):
@@ -257,6 +280,33 @@ class HookTrustTests(unittest.TestCase):
             "edits": [{"keyPath": "hooks.state", "value": selected, "mergeStrategy": "upsert"}],
             "reloadUserConfig": True,
         })
+
+    @patch.object(TRUST, "AppServer")
+    @patch.object(TRUST, "run")
+    def test_manual_trust_never_writes_and_still_requires_ready_hooks(self, runner, server_class):
+        settings = self.cwd / ".agents/settings.json"
+        settings.parent.mkdir()
+        (self.cwd / ".agents/plugins.json").write_text("{}", encoding="utf-8")
+        settings.write_text(json.dumps({"configuration": {"core": {"trust_hooks": False}}}), encoding="utf-8")
+        nested = self.cwd / "nested"
+        nested.mkdir()
+        server = server_class.return_value.__enter__.return_value
+        for state in ("modified", "trusted"):
+            with self.subTest(state=state):
+                server.request.reset_mock()
+                hook = dict(self.hook, trustStatus=state)
+                server.request.side_effect = lambda method, params: (
+                    {"config": {}} if method == "config/read" else
+                    {"data": [{"cwd": str(nested), "hooks": [hook]}]}
+                )
+                required = {hook["pluginId"]: [TRUST.signature(hook)]}
+                if state == "modified":
+                    with self.assertRaisesRegex(RuntimeError, "not ready"):
+                        TRUST.apply_trust("codex", nested, required=required)
+                else:
+                    self.assertEqual({}, TRUST.apply_trust("codex", nested, required=required))
+                self.assertEqual(["config/read", "hooks/list"], [call.args[0] for call in server.request.call_args_list])
+        runner.assert_not_called()
 
     @patch.object(TRUST, "AppServer")
     @patch.object(TRUST, "run")
