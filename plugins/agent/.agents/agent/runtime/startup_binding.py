@@ -27,6 +27,7 @@ from host_sessions import SESSIONS
 import required_plugins
 from terminal_command import command_for_target, without_binding_state
 from tj_cli.paths import prepend
+from tj_cli.close import terminal as native_terminal
 
 ACK_DIRECTORY_ENV = "TJ_AGENTS_STARTUP_ACK_DIRECTORY"
 ACK_TOKEN_ENV = "TJ_AGENTS_STARTUP_ACK_TOKEN"
@@ -78,27 +79,17 @@ def _windows_tab_binding(terminal: dict) -> dict | None:
     title = os.environ.get(register_session.TITLE_ENV)
     if not isinstance(title, str) or not title:
         return None
-    for root in Path(__file__).resolve().parents:
-        if not (root / ".agents" / "agent" / "runtime").is_dir():
-            continue
-        path = root / ".agents" / "agent" / "utility" / "peer" / "scripts" / "close_tab.py"
-        if not path.is_file():
+    try:
+        matches = [item for item in native_terminal.inventory({"kind": "windows-terminal"}) if item.get("title") == title]
+        if len(matches) != 1:
             return None
-        try:
-            spec = importlib.util.spec_from_file_location("agent_startup_close_tab", path)
-            close_tab = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(close_tab)
-            matches = [item for item in close_tab.windows_inventory() or [] if item.get("title") == title]
-            if len(matches) != 1:
-                return None
-            runtime_id = matches[0].get("identity", {}).get("runtime_id")
-            if not isinstance(runtime_id, str) or not runtime_id:
-                return None
-            return {"runtime_id": runtime_id, "observed_title": title,
-                    "evidence": "windows-uia-unique-title-at-launch"}
-        except Exception:
+        runtime_id = matches[0].get("runtime_id")
+        if not isinstance(runtime_id, str) or not runtime_id:
             return None
-    return None
+        return {"runtime_id": runtime_id, "observed_title": title,
+                "evidence": "windows-uia-unique-title-at-launch"}
+    except (OSError, RuntimeError, ValueError):
+        return None
 
 
 def _prelaunch_terminal() -> dict | None:
