@@ -59,3 +59,16 @@ def test_repeated_complete_preserves_the_armed_assessment(session: Any) -> None:
     assert session.wait() == 0
     assert session.outcome()["status"] == "closed"
     session.primitive_stop.assert_called_once()
+
+
+def test_new_input_records_assessment_while_cancelled_request_remains(
+    session: Any,
+) -> None:
+    session.arm()
+    LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "one", "turn_id": "turn-two"})
+    assert session.assess("complete") == 2
+    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
+    assert session.wait() == 0
+    assert session.outcome()["status"] == "cancelled"
+    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
+    session.primitive_stop.assert_not_called()

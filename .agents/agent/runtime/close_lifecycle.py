@@ -305,6 +305,13 @@ def assess(
             assessment["status"] = "kept-open"
         elif _state_path(session_id).exists():
             assessment["reason"] = "a close request is already pending for this session"
+            previous = _read(
+                state_root() / "assessments" / _state_path(session_id).name
+            )
+            if previous is None or any(
+                previous.get(key) != value for key, value in native.items()
+            ):
+                record_assessment(assessment)
             return assessment
         record_assessment(assessment)
     try:
