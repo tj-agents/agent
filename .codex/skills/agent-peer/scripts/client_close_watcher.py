@@ -42,8 +42,9 @@ def require_current(request, path, digest):
     from host import Host
 
     try:
-        close_lifecycle.require_input(Host(request["host"]), request["session_id"], request)
-    except ValueError as error:
+        close_lifecycle.require_input(Host(request["host"]), request["session_id"], request,
+                                      session_close.SHARED)
+    except (OSError, RuntimeError, ValueError) as error:
         raise session_close.Cancelled(str(error)) from error
     assessment = session_close.read_json(close_lifecycle.state_root() / "assessments" / canonical_path(request).name)
     if (not isinstance(assessment, dict) or assessment.get("status") != "armed"
@@ -63,11 +64,7 @@ def final_local_guard(request, path, digest, activity):
     require_current(request, path, digest)
     entry = request["entry"]
     current = session_close.read_json(request["registry"])
-    fields = (*session_close.CLIENT_BINDING_FIELDS, "frontend", "provenance", "terminal")
-    if (not isinstance(current, dict) or not session_close.nonempty_string(current.get("cwd"))
-            or not Path(current["cwd"]).is_absolute()
-            or session_close.path_key(current["cwd"]) != session_close.path_key(entry["cwd"])
-            or any(current.get(key) != entry.get(key) for key in fields)):
+    if not session_close.registration_matches(current, entry):
         raise session_close.Cancelled("session registration changed before close")
     session_close.host_sessions(request["host"]).close_guard(request, activity, complete(request), session_close.SHARED)
 

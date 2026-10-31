@@ -259,6 +259,12 @@ def close_target(session_id: str, supplied: Path | None) -> dict:
     return {"transcript": str(path), "claude_user_uuid": user_turn(path)}
 
 
+def restart_input(entry: dict, shared) -> dict:
+    verify_frontend(entry, shared)
+    target = close_target(entry["session_id"], None)
+    return {**target, "input_generation": target["claude_user_uuid"]}
+
+
 def arm_close(entry: dict, turn_id: str | None, target: dict, supplied: Path | None, shared) -> dict:
     verify_receipt(entry, shared)
     activity = shared.active_turn_activity(entry)
@@ -273,6 +279,8 @@ def close_monitor(request: dict, shared):
 
 
 def settled(request: dict, monitor, completed: bool, shared):
+    if request.get("input_source") == "frontend":
+        completed = finished(request, {"transcript_path": request["transcript"]})
     session = shared.session_activity(request["entry"])
     if completed:
         if session.turn_state != "awaiting_input" or session.last_activity_at <= request["armed_at"]:
@@ -284,6 +292,8 @@ def settled(request: dict, monitor, completed: bool, shared):
 
 
 def close_guard(request: dict, activity, completed: bool, shared) -> None:
+    if request.get("input_source") == "frontend":
+        completed = finished(request, {"transcript_path": request["transcript"]})
     if not completed:
         raise shared.Cancelled("completion changed before close")
     if not finished(request, {"transcript_path": request["transcript"]}):
