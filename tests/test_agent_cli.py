@@ -519,6 +519,16 @@ class LaunchTabTests(unittest.TestCase):
         CLI.launch_tab(self.directory, '/bin/exe', 'My Title', environ={'TMUX': 'session'}, run=run, popen=mock.Mock())
         self.assertEqual(run.calls[1][0], ['tmux', 'select-pane', '-t', '%7', '-T', 'My Title'])
 
+    def test_a_tmux_pane_title_failure_after_the_window_started_warns_instead_of_failing_the_launch(self):
+        for results in ([('', '', 0)], [('%7\n', '', 0), ('', 'no such pane', 1)]):
+            with self.subTest(results=results):
+                run = fake_run(results)
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    CLI.launch_tab(self.directory, '/bin/exe', 'My Title', environ={'TMUX': 'session'}, run=run,
+                                   popen=mock.Mock())
+                self.assertIn("pane title was not set to 'My Title'", err.getvalue())
+
     def test_kitty_handler_exact_argv(self):
         run = fake_run([('', '', 0)])
         CLI.launch_tab(self.directory, '/bin/exe', 'A Tab',
