@@ -48,6 +48,7 @@ def require_current(request, path, digest):
     assessment = session_close.read_json(close_lifecycle.state_root() / "assessments" / canonical_path(request).name)
     if (not isinstance(assessment, dict) or assessment.get("status") != "armed"
             or assessment.get("decision") not in ("complete", "restart")
+            or assessment.get("assessment_generation") != request.get("assessment_generation")
             or assessment.get("input_generation") != request.get("input_generation")
             or assessment.get("completion_token") != request["completion_token"]):
         raise session_close.Cancelled("the close assessment changed")

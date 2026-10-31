@@ -10,8 +10,9 @@ import secrets
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -92,6 +93,30 @@ def _signal(path: str, value: dict[str, Any]) -> None:
 def record_assessment(state: dict[str, Any]) -> None:
     path = state_root() / "assessments" / _state_path(state["session_id"]).name
     _write(path, state)
+
+
+def _assessment_lock(session_id: str) -> IO[bytes]:
+    from plugin_autoupdate import acquire_lock
+
+    acquire: Callable[[Path], IO[bytes] | None] = acquire_lock
+    path = (
+        state_root() / "assessments" / _state_path(session_id).with_suffix(".lock").name
+    )
+    deadline = time.monotonic() + 2
+    while (lock := acquire(path)) is None:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("close assessment stayed locked")
+        time.sleep(0.01)
+    return lock
+
+
+def _owns_assessment(assessment: dict[str, Any]) -> bool:
+    current = _read(
+        state_root() / "assessments" / _state_path(assessment["session_id"]).name
+    )
+    return current is not None and current.get(
+        "assessment_generation"
+    ) == assessment.get("assessment_generation")
 
 
 def _input_path(session_id: str) -> Path:
@@ -203,6 +228,7 @@ def _arm(
         **armed,
         "mode": "close",
         "entry": entry,
+        "assessment_generation": assessment["assessment_generation"],
         "armed_at": time.time(),
         "registry": str(registry.resolve()),
         "completion": str(completion),
@@ -213,13 +239,18 @@ def _arm(
     raw = json.dumps(state, sort_keys=True).encode("utf-8") + b"\n"
     published = []
     try:
-        for path in (request, canonical):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("xb") as stream:
-                published.append((path, os.fstat(stream.fileno()).st_ino))
-                stream.write(raw)
-        require_input(host, session_id, native)
-        record_assessment({**assessment, "status": "armed", "completion_token": token})
+        with _assessment_lock(session_id):
+            if not _owns_assessment(assessment):
+                raise ValueError("a later close assessment superseded this attempt")
+            for path in (request, canonical):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("xb") as stream:
+                    published.append((path, os.fstat(stream.fileno()).st_ino))
+                    stream.write(raw)
+            require_input(host, session_id, native)
+            record_assessment(
+                {**assessment, "status": "armed", "completion_token": token}
+            )
         watcher = shared.start_agent_watcher(
             Path(shared.__file__).resolve().with_name("client_close_watcher.py"),
             [
@@ -259,13 +290,23 @@ def assess(
     native = current_input(host, session_id, supplied)
     if shared.path_key(native["profile"]) != shared.path_key(profile):
         raise ValueError("native input belongs to a different profile")
-    assessment = {**native, "decision": decision, "reason": reason, "at": time.time()}
-    if decision == "keep-open":
-        cancel(host, session_id, reason)
-        assessment["status"] = "kept-open"
-    else:
-        assessment["status"] = "unavailable"
-    record_assessment(assessment)
+    assessment = {
+        **native,
+        "decision": decision,
+        "reason": reason,
+        "at": time.time(),
+        "assessment_generation": secrets.token_hex(16),
+        "status": "unavailable",
+    }
+    with _assessment_lock(session_id):
+        require_input(host, session_id, native)
+        if decision == "keep-open":
+            cancel(host, session_id, reason)
+            assessment["status"] = "kept-open"
+        elif _state_path(session_id).exists():
+            assessment["reason"] = "a close request is already pending for this session"
+            return assessment
+        record_assessment(assessment)
     try:
         if decision in ("complete", "restart"):
             assessment.update(
@@ -274,7 +315,9 @@ def assess(
             )
     except (OSError, RuntimeError, ValueError) as error:
         assessment["reason"] = str(error)
-        record_assessment(assessment)
+        with _assessment_lock(session_id):
+            if _owns_assessment(assessment):
+                record_assessment(assessment)
     return assessment
 
 
