@@ -35,6 +35,18 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 3,
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex"
+          }
+        ]
+      }
     ]
   }
 }

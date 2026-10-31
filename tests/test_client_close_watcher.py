@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from close_fixtures import CloseFixture, Host, WATCHER, LIFECYCLE, session_close, cli_client
+from close_fixtures import CloseFixture, Host, WATCHER, LIFECYCLE, session_close, cli_client, processes
 
 
 class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
@@ -59,7 +59,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
                 before_signal()
                 calls.append("signal")
 
-        with mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive()):
+        with mock.patch.object(processes, "stop", side_effect=Primitive().stop):
             self.assertEqual(0, self.wait())
         self.assertEqual([], calls)
         self.assertEqual("cancelled", self.outcome()["status"])
@@ -135,7 +135,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
                 calls.append("held")
                 before_signal()
                 calls.append("signal")
-        with mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive()):
+        with mock.patch.object(processes, "stop", side_effect=Primitive().stop):
             self.assertEqual(2, self.wait())
         self.assertEqual(["held"], calls)
         self.assertEqual(original, self.recording.read_bytes())
@@ -197,7 +197,7 @@ class ClaudeWatcherTests(CloseFixture, unittest.TestCase):
                 self.append({"type": "user", "uuid": "later", "message": {"content": "continue"}})
                 before_signal()
                 signals.append(True)
-        with mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive()):
+        with mock.patch.object(processes, "stop", side_effect=Primitive().stop):
             self.assertEqual(0, self.wait())
         self.assertEqual([], signals)
         self.assertIsNone(self.row().ended_at)
