@@ -506,13 +506,18 @@ class LaunchTabTests(unittest.TestCase):
         CLI.launch_tab(self.directory, '/bin/exe', 'My Title', arguments=['--flag', 'v'],
                         environ={'TMUX': 'session'}, run=run, popen=mock.Mock())
         cmd, kwargs = run.calls[0]
-        self.assertEqual(cmd[:5], ['tmux', 'new-window', '-n', 'My Title', '--'])
-        inner = cmd[5:]
+        self.assertEqual(cmd[:8], ['tmux', 'new-window', '-n', 'My Title', '-P', '-F', '#{pane_id}', '--'])
+        inner = cmd[8:]
         self.assertEqual(inner[:5], ['sh', '-c', 'cd "$1" && shift && exec "$@"', 'sh', self.directory])
         self.assertEqual(inner[5], 'env')
         self.assertIn('AGENT_CLI_TAB_TITLE=My Title', inner)
         self.assertEqual(inner[-3:], ['/bin/exe', '--flag', 'v'])
         self.assertEqual(kwargs, {'stdin': subprocess.DEVNULL, 'capture_output': True, 'text': True, 'timeout': 30})
+
+    def test_tmux_titles_the_new_pane_so_inventory_reads_the_launch_title(self):
+        run = fake_run([('%7\n', '', 0)])
+        CLI.launch_tab(self.directory, '/bin/exe', 'My Title', environ={'TMUX': 'session'}, run=run, popen=mock.Mock())
+        self.assertEqual(run.calls[1][0], ['tmux', 'select-pane', '-t', '%7', '-T', 'My Title'])
 
     def test_kitty_handler_exact_argv(self):
         run = fake_run([('', '', 0)])
@@ -522,8 +527,8 @@ class LaunchTabTests(unittest.TestCase):
         cmd, kwargs = run.calls[0]
         self.assertEqual(cmd[:4], ['kitty', '@', '--to', 'unix:/tmp/kitty-99'])
         self.assertEqual(cmd[4:8], ['launch', '--type=tab', '--match', 'window_id:42'])
-        self.assertEqual(cmd[8:10], ['--tab-title', 'A Tab'])
-        self.assertEqual(cmd[10], 'sh')
+        self.assertEqual(cmd[8:12], ['--tab-title', 'A Tab', '--title', 'A Tab'])
+        self.assertEqual(cmd[12], 'sh')
         self.assertEqual(kwargs, {'stdin': subprocess.DEVNULL, 'capture_output': True, 'text': True, 'timeout': 30})
 
     def test_kitty_without_listen_on_raises_and_opens_nothing(self):
@@ -816,7 +821,7 @@ class OpenClaudeTabBindingTests(unittest.TestCase):
         self.launch_tab.assert_called_once_with(
             missing, sys.executable, 'Tab',
             arguments=CLI.bound_terminal_arguments('claude', missing, '/bin/claude', []),
-            clear=(), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color'},
+            clear=(), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1'},
         )
 
     def test_resolves_and_binds_the_typed_target_in_order(self):
@@ -830,7 +835,7 @@ class OpenClaudeTabBindingTests(unittest.TestCase):
         self.launch_tab.assert_called_once_with(
             self.directory, sys.executable, 'Tab',
             arguments=CLI.bound_terminal_arguments('claude', self.directory, '/bin/claude', ['--flag']),
-            clear=(), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color'},
+            clear=(), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1'},
         )
 
     def test_forwards_profile_environment_to_the_tab(self):
@@ -839,7 +844,7 @@ class OpenClaudeTabBindingTests(unittest.TestCase):
         self.launch_tab.assert_called_once_with(
             self.directory, sys.executable, 'Tab',
             arguments=CLI.bound_terminal_arguments('claude', self.directory, '/bin/claude', []),
-            clear=('CLAUDE_CONFIG_DIR',), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', 'EXTRA': '1'},
+            clear=('CLAUDE_CONFIG_DIR',), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1', 'EXTRA': '1'},
         )
 
 

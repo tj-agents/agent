@@ -115,7 +115,7 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
     verify_resume(executable)
     old_profile = os.environ.get(HOST.home_variable)
     os.environ[HOST.home_variable] = item["profile"]
-    arguments = [*native_arguments, "resume", item["id"]]
+    arguments = [*cli.CODEX_KEEP_TAB_TITLE, *native_arguments, "resume", item["id"]]
     if model:
         arguments += ["-m", model]
     arguments.append(instruction)
