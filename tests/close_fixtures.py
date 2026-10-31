@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
 from codex import client as cli_client
 from codex import hook_trust
+from tj_cli import processes
 import session_close
 import register_session
 from host import Host
@@ -45,14 +46,9 @@ class CloseFixture:
             "CODEX_HOME": str(self.profile), "CLAUDE_CONFIG_DIR": str(self.profile)}))
         self.patch(mock.patch.object(CLOSE, "_session_close", return_value=session_close))
         self.spawn = self.patch(mock.patch.object(session_close, "start_agent_watcher", return_value=99))
-        self.cli = self.root / "CLI capability ü"
-        (self.cli / ".git").mkdir(parents=True)
-        scripts = self.cli / ".agents/cli/utility/close/scripts"
-        scripts.mkdir(parents=True)
-        self.capability = scripts / "close.py"
-        self.capability.write_text("# disposable capability\n", encoding="utf-8")
-        (scripts / "process_identity.py").write_text(
-            "def stop(identity, *, before_signal):\n    before_signal()\n", encoding="utf-8")
+        self.patch(mock.patch.object(LIFECYCLE.secrets, "token_urlsafe", return_value="token"))
+        self.stop_patch = mock.patch.object(processes, "stop", side_effect=lambda _identity, *, before_signal: before_signal())
+        self.primitive_stop = self.patch(self.stop_patch)
         self.registry = self.root / "cli-sessions/one.json"
         self.target = self.root / "target.json"
         self.transcript = self.root / "one.jsonl"
@@ -109,6 +105,8 @@ class CloseFixture:
             entry.update({"frontend": frontend, "terminal": terminal,
                           "provenance": {"source": "agent-startup-binding", "receipt": str(receipt)}})
         self.write(self.registry, entry)
+        LIFECYCLE.run("prompt", Host(host), {"session_id": "one", "turn_id": "turn-one",
+                                            "transcript_path": str(self.transcript)})
 
     def patch(self, patcher):
         value = patcher.start()
@@ -134,20 +132,16 @@ class CloseFixture:
         with self.rollout.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record) + "\n")
 
-    def prepare(self):
-        return CLOSE.main(["prepare", "--session-id", "one", "--profile", str(self.profile),
-                           "--target", str(self.target), "--transcript", str(self.transcript)])
+    def assess_args(self, decision="complete", reason="owned delivery is finished"):
+        return ["assess", "--host", self.host, "--session-id", "one", "--profile", str(self.profile),
+                "--decision", decision, "--reason", reason, "--transcript", str(self.transcript)]
 
-    def arm_args(self, token="token"):
-        return ["arm", "--host", self.host, "--session-id", "one", "--turn-id", "turn-one",
-            "--profile", str(self.profile), "--target", str(self.target), "--cli-close", str(self.capability),
-            "--completion", str(self.root / "complete.json"), "--cancel", str(self.root / "cancel.json"),
-            "--completion-token", token]
+    def assess(self, decision="keep-open", reason="work remains"):
+        return CLOSE.main(self.assess_args(decision, reason))
 
     def arm(self):
-        self.assertEqual(0, self.prepare())
-        self.assertEqual(0, CLOSE.main(self.arm_args()))
-        self.request_path = self.root / "client-close/token.json"
+        self.assertEqual(0, self.assess("complete"))
+        self.request_path = self.root / "close-lifecycle/requests/token.json"
         self.digest = hashlib.sha256(self.request_path.read_bytes()).hexdigest()
         self.request = WATCHER.load_request(self.request_path, self.digest)
 

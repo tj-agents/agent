@@ -197,9 +197,6 @@ def check_relaunch(project: Path, executable: str, native: list[str], session_id
     required_plugins.check_launch(project, HOST, executable, [*native, "resume", session_id, prompt])
 
 
-def close_arguments(entry: dict) -> list[str]:
-    return ["--turn-id", entry["native_turn_id"]]
-
 
 def current_client(session_id: str, nearest, shared, *, project=None):
     info, record = client.recorded_client(session_id, nearest, shared.process_info,

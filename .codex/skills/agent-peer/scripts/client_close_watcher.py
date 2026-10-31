@@ -27,7 +27,7 @@ def load_request(path, digest):
             or not isinstance(request.get("completion_token"), str)
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request["completion_token"])):
         raise session_close.Refusal("invalid close request")
-    expected = session_close.state_directory() / "client-close" / (request["completion_token"] + ".json")
+    expected = session_close.state_directory() / "close-lifecycle/requests" / (request["completion_token"] + ".json")
     if path.resolve() != expected.resolve():
         raise session_close.Refusal("close request is outside canonical state")
     return request
@@ -38,6 +38,19 @@ def require_current(request, path, digest):
         raise session_close.Cancelled("close request generation changed")
     if Path(request["cancel"]).exists():
         raise session_close.Cancelled("close request was cancelled")
+    import close_lifecycle
+    from host import Host
+
+    try:
+        close_lifecycle.require_input(Host(request["host"]), request["session_id"], request)
+    except ValueError as error:
+        raise session_close.Cancelled(str(error)) from error
+    assessment = session_close.read_json(close_lifecycle.state_root() / "assessments" / canonical_path(request).name)
+    if (not isinstance(assessment, dict) or assessment.get("status") != "armed"
+            or assessment.get("decision") not in ("complete", "restart")
+            or assessment.get("input_generation") != request.get("input_generation")
+            or assessment.get("completion_token") != request["completion_token"]):
+        raise session_close.Cancelled("the close assessment changed")
 
 
 def complete(request):
@@ -64,9 +77,9 @@ def _record_end(entry):
                              lambda session: session.end("closed"))
 
 
-def closed_after_stop(entry, guard, cli_root):
+def closed_after_stop(entry, guard):
     """Return a secondary Store diagnostic only after a verified client stop."""
-    session_close.stop_cli_client(entry, guard, cli_root)
+    session_close.stop_cli_client(entry, guard)
     try:
         _record_end(entry)
     except Exception as error:  # Store bookkeeping cannot undo a verified client exit.
@@ -94,7 +107,7 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
                     def guard():
                         final_local_guard(request, path, digest, marker)
 
-                    reason = closed_after_stop(request["entry"], guard, request["cli_root"])
+                    reason = closed_after_stop(request["entry"], guard)
                     status = "closed"
                     break
             sleep(0.05)

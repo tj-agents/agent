@@ -12,80 +12,29 @@ sys.path.insert(0, str(PATH.parent))
 spec = importlib.util.spec_from_file_location("peer_cli", PATH); peer_cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(peer_cli)
 
 class PeerCliTests(unittest.TestCase):
-    def test_windows_inventory_uses_runtime_ids_when_automation_ids_are_empty(self):
-        inventory = json.dumps([
-            {'title': 'same launch title', 'runtimeId': '42:11'},
-            {'title': 'same launch title', 'runtimeId': '42:12'},
-        ])
-        completed = subprocess.CompletedProcess([], 0, stdout=inventory, stderr='')
-        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed):
-            targets = peer_cli.close_tab.windows_inventory()
-
-        self.assertEqual(['42:11', '42:12'], [target['identity']['runtime_id'] for target in targets])
-        self.assertFalse(peer_cli.close_tab.same_target(targets[0]['identity'], targets[1]['identity']))
-        self.assertTrue(all('automation_id' not in target['identity'] for target in targets))
-        adapter = (PATH.parent / 'windows_terminal_uia.ps1').read_text(encoding='utf-8')
-        self.assertIn('$tab.GetRuntimeId()', adapter)
-        self.assertNotIn('$tab.Current.AutomationId', adapter)
-
-    def test_windows_close_selects_the_exact_runtime_id(self):
-        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
-        calls = []
-
-        def run(arguments):
-            calls.append(arguments)
-            return completed
-
-        target = {'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
-        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(peer_cli.close_tab, 'target_liveness', return_value=False), \
-                mock.patch.object(peer_cli.close_tab, 'require_closed'), \
-                mock.patch.object(peer_cli.close_tab, 'run', side_effect=run):
-            peer_cli.close_tab.close_actual(target, force=True)
-
-        self.assertIn('-TabId', calls[0])
-        self.assertEqual('42:11', calls[0][calls[0].index('-TabId') + 1])
-
     def test_windows_focus_uses_captured_runtime_id_after_title_changes(self):
-        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
         entry = {
+            'pid': 10, 'pid_started_at': 1.0,
             'title': 'native cli changed the tab title',
-            'terminal': {
-                'kind': 'windows-terminal',
-                'tab_binding': {'runtime_id': '42:11', 'observed_title': 'launch nonce'},
-            },
+            'terminal': {'kind': 'windows-terminal',
+                         'tab_binding': {'runtime_id': '42:11', 'observed_title': 'launch nonce'}},
         }
-        target = {'title': entry['title'], 'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
-        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(peer_cli.close_tab.session_close, 'liveness', return_value=True), \
-                mock.patch.object(peer_cli.close_tab, 'windows_inventory', return_value=[target]), \
-                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed) as run:
+        with mock.patch.object(peer_cli.close_tab.session_close, 'liveness', return_value=True), \
+                mock.patch.object(peer_cli.close_tab.terminal, 'verify_process_binding'), \
+                mock.patch.object(peer_cli.close_tab.terminal, 'focus') as focus:
             peer_cli.close_tab.focus_entry(entry)
-        command = run.call_args.args[0]
-        self.assertEqual('42:11', command[command.index('-TabId') + 1])
-        self.assertNotIn('-Title', command)
+        self.assertEqual('42:11', focus.call_args.args[0]['runtime_id'])
 
     def test_windows_peer_close_uses_captured_runtime_id_after_title_changes(self):
-        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
         entry = {
+            'pid': 10, 'pid_started_at': 1.0,
             'title': 'native cli changed the tab title',
-            'terminal': {
-                'kind': 'windows-terminal',
-                'tab_binding': {'runtime_id': '42:11', 'observed_title': 'launch nonce'},
-            },
+            'terminal': {'kind': 'windows-terminal',
+                         'tab_binding': {'runtime_id': '42:11', 'observed_title': 'launch nonce'}},
         }
-        target = {'title': entry['title'], 'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
-        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(peer_cli.close_tab.session_close, 'liveness', return_value=True), \
-                mock.patch.object(peer_cli.close_tab, 'windows_inventory', return_value=[target]), \
-                mock.patch.object(peer_cli.close_tab, 'target_liveness', return_value=False), \
-                mock.patch.object(peer_cli.close_tab, 'require_closed'), \
-                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed) as run:
+        with mock.patch.object(peer_cli.close_tab.terminal, 'close_identity') as close:
             peer_cli.close_tab.close_entry(entry)
-        command = run.call_args.args[0]
-        self.assertEqual('42:11', command[command.index('-TabId') + 1])
-        self.assertNotIn('-Title', command)
+        self.assertEqual('42:11', close.call_args.args[0]['runtime_id'])
 
     def test_codex_native_session_id_prevents_peer_attachment_selection(self):
         host = peer_cli.register_session.ProcessInfo(10, 1, 'codex.exe', 20.0)
@@ -174,9 +123,9 @@ class PeerCliTests(unittest.TestCase):
             "terminal": {"kind": "windows-terminal"},
         }
         with mock.patch.object(peer_cli.close_tab, "close_entry",
-                               side_effect=peer_cli.close_tab.TerminalRefusal("ambiguous")), \
+                               side_effect=peer_cli.close_tab.processes.Refusal("ambiguous")), \
                 mock.patch.object(peer_cli.os, "kill") as killer:
-            with self.assertRaisesRegex(peer_cli.close_tab.TerminalRefusal, "ambiguous"):
+            with self.assertRaisesRegex(peer_cli.close_tab.processes.Refusal, "ambiguous"):
                 peer_cli.close_terminal_or_host(target, force=False)
         killer.assert_not_called()
 

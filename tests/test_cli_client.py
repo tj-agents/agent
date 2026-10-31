@@ -261,7 +261,7 @@ class ClientAttributionTests(unittest.TestCase):
         with mock.patch.object(session_close, "process_info", return_value=SimpleNamespace(name="codex.exe")), \
                 mock.patch.object(session_close, "verified_live", return_value=True), \
                 mock.patch.object(CODEX_SESSIONS, "revalidate_client"), \
-                mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive), \
+                mock.patch("tj_cli.processes.stop", side_effect=Primitive.stop), \
                 mock.patch.object(CLIENT, "process_arguments", return_value=["codex"]), \
                 mock.patch.object(CLIENT, "process_context", return_value={
                     "profile": str(self.profile), CLIENT.RECORD_ENV: "1", CLIENT.RECORD_PATH_ENV: "events.jsonl",
