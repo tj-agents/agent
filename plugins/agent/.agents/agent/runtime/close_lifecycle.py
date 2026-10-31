@@ -320,11 +320,29 @@ def assess(
     assessment_path = state_root() / "assessments" / _state_path(session_id).name
     with _assessment_lock(session_id):
         previous = _read(assessment_path)
-    native = (
-        restart_input(host, session_id, shared)
-        if decision == "restart"
-        else current_input(host, session_id, supplied)
-    )
+        if (
+            decision == "keep-open"
+            and previous
+            and previous.get("host") == host.value
+            and previous.get("session_id") == session_id
+            and shared.path_key(previous.get("profile", "")) == shared.path_key(profile)
+        ):
+            cancel(host, session_id, reason)
+    try:
+        native = (
+            restart_input(host, session_id, shared)
+            if decision == "restart"
+            else current_input(host, session_id, supplied)
+        )
+    except ValueError:
+        if not (
+            decision == "keep-open"
+            and previous
+            and previous.get("input_source") == "frontend"
+            and previous.get("decision") == "restart"
+        ):
+            raise
+        native = restart_input(host, session_id, shared)
     if shared.path_key(native["profile"]) != shared.path_key(profile):
         raise ValueError("native input belongs to a different profile")
     assessment = {
@@ -336,7 +354,7 @@ def assess(
         "status": "unavailable",
     }
     with _assessment_lock(session_id):
-        if _read(assessment_path) != previous:
+        if decision != "keep-open" and _read(assessment_path) != previous:
             return {
                 **assessment,
                 "reason": "a later close assessment superseded this attempt",

@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Iterator
 from contextlib import ExitStack
 from typing import Any
@@ -59,6 +60,29 @@ def test_repeated_complete_preserves_the_armed_assessment(session: Any) -> None:
     assert session.wait() == 0
     assert session.outcome()["status"] == "closed"
     session.primitive_stop.assert_called_once()
+
+
+def test_keep_open_cancels_completion_published_during_input_resolution(
+    session: Any,
+) -> None:
+    original = LIFECYCLE.current_input
+    resolving = False
+
+    def complete_first(*args: Any) -> Any:
+        nonlocal resolving
+        if not resolving:
+            resolving = True
+            session.arm()
+        return original(*args)
+
+    with (
+        mock.patch.dict(sys.modules, {"close_lifecycle": LIFECYCLE}),
+        mock.patch.object(LIFECYCLE, "current_input", side_effect=complete_first),
+    ):
+        assert session.assess("keep-open", "preserve this session") == 0
+    assert session.wait() == 0
+    assert session.outcome()["status"] == "cancelled"
+    session.primitive_stop.assert_not_called()
 
 
 def test_new_input_records_assessment_while_cancelled_request_remains(
