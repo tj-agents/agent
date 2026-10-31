@@ -63,8 +63,11 @@ def final_local_guard(request, path, digest, activity):
     require_current(request, path, digest)
     entry = request["entry"]
     current = session_close.read_json(request["registry"])
-    fields = (*session_close.CLIENT_BINDING_FIELDS, "cwd", "frontend", "provenance", "terminal")
-    if not isinstance(current, dict) or any(current.get(key) != entry.get(key) for key in fields):
+    fields = (*session_close.CLIENT_BINDING_FIELDS, "frontend", "provenance", "terminal")
+    if (not isinstance(current, dict) or not session_close.nonempty_string(current.get("cwd"))
+            or not Path(current["cwd"]).is_absolute()
+            or session_close.path_key(current["cwd"]) != session_close.path_key(entry["cwd"])
+            or any(current.get(key) != entry.get(key) for key in fields)):
         raise session_close.Cancelled("session registration changed before close")
     session_close.host_sessions(request["host"]).close_guard(request, activity, complete(request), session_close.SHARED)
 
