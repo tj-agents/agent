@@ -414,8 +414,14 @@ def _launch_tmux(directory, executable, title, arguments, cleared, forced, envir
     # intermediate shell; a single joined string would be re-split by tmux's own command parser. No `-d`:
     # the new window comes to the front, as a new tab does in every other terminal.
     pane = _client(run, ['tmux', 'new-window', '-n', title, '-P', '-F', '#{pane_id}', '--', *inner], 'tmux new-window')
-    if pane:
+    # The session is already running in that window, so a failure past this point must not read as a
+    # failed launch: a caller would retry and start a second writer.
+    try:
+        if not pane:
+            raise LaunchError('tmux new-window did not report the new pane id')
         _client(run, ['tmux', 'select-pane', '-t', pane, '-T', title], 'tmux select-pane')
+    except LaunchError as exc:
+        print(f'warning: the session started, but its tmux pane title was not set to {title!r}: {exc}', file=sys.stderr)
 
 
 def _launch_kitty(directory, executable, title, arguments, cleared, forced, environ, run, popen):
