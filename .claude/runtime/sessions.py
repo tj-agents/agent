@@ -282,6 +282,9 @@ def settled(request: dict, monitor, completed: bool, shared):
     if request.get("input_source") == "frontend":
         completed = finished(request, {"transcript_path": request["transcript"]})
     session = shared.session_activity(request["entry"])
+    if (request.get("input_source") == "frontend" and completed
+            and session.turn_state == "working" and session.last_activity_at == request["working_activity"]):
+        return None
     if completed:
         if session.turn_state != "awaiting_input" or session.last_activity_at <= request["armed_at"]:
             raise shared.Cancelled("completed turn is no longer awaiting input")

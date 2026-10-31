@@ -102,6 +102,29 @@ def test_later_keep_open_cancels_restart(session: Any) -> None:
     session.primitive_stop.assert_not_called()
 
 
+def test_later_keep_open_without_hook_receipt_cancels_restart(session: Any) -> None:
+    assert restart(session)["status"] == "armed"
+    assert session.assess("keep-open") == 0
+    assert not LIFECYCLE._input_path("one").exists()
+    assert session.wait() == 0
+    assert session.outcome()["status"] == "cancelled"
+    session.primitive_stop.assert_not_called()
+
+
+def test_wrong_profile_cannot_cancel_restart(session: Any) -> None:
+    assert restart(session)["status"] == "armed"
+    with pytest.raises(ValueError, match="different profile"):
+        LIFECYCLE.assess(
+            Host.CODEX,
+            "one",
+            session.root / "another-profile",
+            "keep-open",
+            "different profile",
+            session_close,
+        )
+    assert not (session.root / "close-lifecycle/requests/token.cancel.json").exists()
+
+
 def test_new_stop_preserves_a_restart_prepared_without_hooks(session: Any) -> None:
     assert restart(session)["status"] == "armed"
     assessment = LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json")
@@ -171,8 +194,10 @@ def test_same_frontend_registration_refresh_preserves_restart(session: Any) -> N
 
 
 @pytest.mark.parametrize("new_input", [False, True])
+@pytest.mark.parametrize("delayed_stop", [False, True])
 def test_claude_restart_uses_native_transcript_without_new_hooks(
     new_input: bool,
+    delayed_stop: bool,
 ) -> None:
     with ExitStack() as stack:
         session: Any = CloseFixture()
@@ -196,13 +221,22 @@ def test_claude_restart_uses_native_transcript_without_new_hooks(
         session.digest = outcome["request_sha256"]
         session.request = WATCHER.load_request(session.request_path, session.digest)
         session.append({"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        session.store.record_stop(
-            session.handle, session.store_module.Checkout.probe(session.root)
-        )
+        recorded = False
+
+        def record_stop(_elapsed: float = 0) -> None:
+            nonlocal recorded
+            if not recorded:
+                session.store.record_stop(
+                    session.handle, session.store_module.Checkout.probe(session.root)
+                )
+                recorded = True
+
+        if not delayed_stop:
+            record_stop()
         if new_input:
             session.append(
                 {"type": "user", "uuid": "user-two", "message": {"content": "wait"}}
             )
-        assert session.wait() == 0
+        assert session.wait(record_stop if delayed_stop else None) == 0
         assert session.outcome()["status"] == ("cancelled" if new_input else "closed")
         assert session.primitive_stop.call_count == (0 if new_input else 1)
