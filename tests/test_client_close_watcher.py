@@ -1,11 +1,12 @@
 """Real Store lifecycle and late native changes cannot authorize an old close."""
 
 import json
+import os
 from pathlib import Path
 import unittest
 from unittest import mock
 
-from close_fixtures import CloseFixture, Host, WATCHER, LIFECYCLE, session_close, cli_client
+from close_fixtures import CloseFixture, Host, WATCHER, LIFECYCLE, session_close, cli_client, processes
 
 
 class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
@@ -20,6 +21,26 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.assertEqual("closed", self.row().end_reason)
         self.assertFalse(WATCHER.canonical_path(self.request).exists())
         self.assertGreaterEqual(self.server.request.call_count, 9)
+
+    @unittest.skipUnless(os.name == "nt", "Windows path identity")
+    def test_case_only_registration_cwd_change_preserves_close(self):
+        self.arm()
+        self.stop()
+        registry = Path(self.request["registry"])
+        current = json.loads(registry.read_text(encoding="utf-8"))
+        self.write(registry, {**current, "cwd": current["cwd"].swapcase()})
+        self.assertEqual(0, self.wait())
+        self.assertEqual("closed", self.outcome()["status"])
+
+    def test_different_registration_cwd_cancels_close(self):
+        self.arm()
+        self.stop()
+        registry = Path(self.request["registry"])
+        current = json.loads(registry.read_text(encoding="utf-8"))
+        self.write(registry, {**current, "cwd": str(self.root / "different")})
+        self.assertEqual(0, self.wait())
+        self.assertEqual("cancelled", self.outcome()["status"])
+        self.assertIsNone(self.row().ended_at)
 
     def test_native_completion_closes_without_a_store_stop(self):
         self.arm()
@@ -59,7 +80,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
                 before_signal()
                 calls.append("signal")
 
-        with mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive()):
+        with mock.patch.object(processes, "stop", side_effect=Primitive().stop):
             self.assertEqual(0, self.wait())
         self.assertEqual([], calls)
         self.assertEqual("cancelled", self.outcome()["status"])
@@ -135,7 +156,7 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
                 calls.append("held")
                 before_signal()
                 calls.append("signal")
-        with mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive()):
+        with mock.patch.object(processes, "stop", side_effect=Primitive().stop):
             self.assertEqual(2, self.wait())
         self.assertEqual(["held"], calls)
         self.assertEqual(original, self.recording.read_bytes())
@@ -197,7 +218,7 @@ class ClaudeWatcherTests(CloseFixture, unittest.TestCase):
                 self.append({"type": "user", "uuid": "later", "message": {"content": "continue"}})
                 before_signal()
                 signals.append(True)
-        with mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive()):
+        with mock.patch.object(processes, "stop", side_effect=Primitive().stop):
             self.assertEqual(0, self.wait())
         self.assertEqual([], signals)
         self.assertIsNone(self.row().ended_at)

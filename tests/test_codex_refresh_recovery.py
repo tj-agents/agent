@@ -183,7 +183,6 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         close = {"request": str(self.root / "request"), "request_sha256": "a" * 64,
                  "result": str(self.root / "result"), "cancel": str(self.root / "cancel")}
         with mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"), \
-                mock.patch.object(self.relaunch, "cli_close_capability", return_value=self.root / "process_identity.py"), \
                 mock.patch.object(self.relaunch, "arm_client_close", return_value=close) as arm:
             result = self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CLAUDE, arguments=lambda _: ["--model", "chosen"])
         self.assertEqual("armed", result["relaunch"])
@@ -199,8 +198,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         close = {"request": str(self.root / "request"), "request_sha256": "a" * 64,
                  "result": str(self.root / "result"), "cancel": str(self.root / "cancel")}
         with mock.patch.object(agent_cli, "resolve_codex_executable", return_value=("codex", [])), \
-                mock.patch.object(self.relaunch.required_plugins, "check_launch"), \
-                mock.patch.object(self.relaunch, "cli_close_capability", return_value=self.root / "close.py"), \
+                mock.patch.object(CODEX_SESSIONS.required_plugins, "check_launch"), \
                 mock.patch.object(self.relaunch, "arm_client_close", return_value=close):
             result = self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CODEX, arguments=lambda _: [])
         self.assertEqual("armed", result["relaunch"])
@@ -216,14 +214,6 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
                     self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CODEX, arguments=lambda _: [])
                 shared.start_detached.assert_not_called()
 
-    def test_cli_close_uses_enabled_native_inventory_not_repository_selection(self):
-        cli = self.root / "cli"
-        process_identity = cli / ".agents/cli/utility/close/scripts/process_identity.py"
-        process_identity.parent.mkdir(parents=True)
-        process_identity.write_text("# capability\n", encoding="utf-8")
-        with mock.patch.object(self.relaunch.required_plugins, "check", side_effect=AssertionError("selection filter used")), \
-                mock.patch.object(self.relaunch.required_plugins, "inventory_roots", return_value={"cli@tj-agents": cli}):
-            self.assertEqual(process_identity, self.relaunch.cli_close_capability(self.root, Host.CODEX, "codex"))
 
     def test_claude_tool_restrictions_and_aliases_survive_recovery(self):
         self.assertEqual([

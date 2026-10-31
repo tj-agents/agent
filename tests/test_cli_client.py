@@ -126,6 +126,33 @@ class ClientAttributionTests(unittest.TestCase):
             CLIENT.recorded_client("thread", SimpleNamespace(pid=999, name="codex.exe", started_at=9.0),
                                    self.infos.get, self.infos, peer_state=self.peer_state)
 
+    @unittest.skipUnless(os.name == "nt", "Windows path identity")
+    def test_equivalent_windows_paths_preserve_frontend_attribution(self):
+        ticket, _environment = self.bind()
+        original = CLIENT.binding_path(ticket["token"]).read_text(encoding="utf-8")
+        for changed in ("state", "profile", "recording", "context"):
+            with self.subTest(changed=changed), mock.patch.dict(os.environ), \
+                    mock.patch.dict(self.contexts[123]):
+                record = json.loads(original)
+                if changed == "state":
+                    os.environ["AGENT_STATE_DIRECTORY"] = str(self.root).swapcase()
+                elif changed == "profile":
+                    record["profile"] = record["profile"].swapcase()
+                elif changed == "recording":
+                    record["recording_path"] = record["recording_path"].swapcase()
+                else:
+                    self.contexts[123][CLIENT.RECORD_PATH_ENV] = ticket["recording_path"].swapcase()
+                CLIENT.binding_path(ticket["token"]).write_text(json.dumps(record), encoding="utf-8")
+                self.assertEqual(123, self.resolve()[0].pid)
+
+    @unittest.skipUnless(os.name == "nt", "Windows path identity")
+    def test_case_variant_peer_recording_is_still_ambiguous(self):
+        ticket, _environment = self.bind()
+        self.infos[456] = SimpleNamespace(pid=456, name="codex.exe", started_at=11.0)
+        self.contexts[456] = {CLIENT.RECORD_PATH_ENV: ticket["recording_path"].swapcase()}
+        with self.assertRaisesRegex(RuntimeError, "Multiple native processes"):
+            self.resolve()
+
     def test_revalidation_rechecks_the_bound_frontend_not_the_shared_daemon(self):
         frontend = SimpleNamespace(pid=123, name="codex.exe", started_at=10.0)
         entry = {"host": "codex", "session_id": "thread", "pid": 123, "backend": self.backend,
@@ -261,7 +288,7 @@ class ClientAttributionTests(unittest.TestCase):
         with mock.patch.object(session_close, "process_info", return_value=SimpleNamespace(name="codex.exe")), \
                 mock.patch.object(session_close, "verified_live", return_value=True), \
                 mock.patch.object(CODEX_SESSIONS, "revalidate_client"), \
-                mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive), \
+                mock.patch("tj_cli.processes.stop", side_effect=Primitive.stop), \
                 mock.patch.object(CLIENT, "process_arguments", return_value=["codex"]), \
                 mock.patch.object(CLIENT, "process_context", return_value={
                     "profile": str(self.profile), CLIENT.RECORD_ENV: "1", CLIENT.RECORD_PATH_ENV: "events.jsonl",

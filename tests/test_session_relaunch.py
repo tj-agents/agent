@@ -137,7 +137,6 @@ class Shared:
 class ArmTests(State):
     def arm(self, arm_close):
         for patcher in (mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"),
-                        mock.patch.object(RELAUNCH, "cli_close_capability", return_value=self.root / "close.py"),
                         mock.patch.object(RELAUNCH, "arm_client_close", side_effect=arm_close)):
             patcher.start()
             self.addCleanup(patcher.stop)

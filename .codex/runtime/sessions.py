@@ -197,9 +197,6 @@ def check_relaunch(project: Path, executable: str, native: list[str], session_id
     required_plugins.check_launch(project, HOST, executable, [*native, "resume", session_id, prompt])
 
 
-def close_arguments(entry: dict) -> list[str]:
-    return ["--turn-id", entry["native_turn_id"]]
-
 
 def current_client(session_id: str, nearest, shared, *, project=None):
     info, record = client.recorded_client(session_id, nearest, shared.process_info,
@@ -246,7 +243,8 @@ def revalidate_client(entry: dict, shared) -> None:
 def verify_frontend(entry: dict, shared) -> None:
     revalidate_client(entry, shared)
     context = client.process_context(entry["pid"])
-    if (context.get(client.RECORD_PATH_ENV) != entry.get("recording_path")
+    if (client.comparable_path(Path(context.get(client.RECORD_PATH_ENV) or ''))
+            != client.comparable_path(Path(entry.get("recording_path") or ''))
             or context.get(client.RECORD_ENV) not in ("1", "true", "TRUE", "yes", "YES")
             or Path(context["profile"]) != Path(entry.get("profile"))
             or (entry.get("backend") is not None and client.daemon_identity(
