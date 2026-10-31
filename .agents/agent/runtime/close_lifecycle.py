@@ -171,7 +171,37 @@ def current_input(
     return {**state, **native}
 
 
-def require_input(host: Host, session_id: str, state: dict[str, Any]) -> None:
+def restart_input(host: Host, session_id: str, shared: Any) -> dict[str, Any]:
+    registry = state_root().parent / "cli-sessions" / (session_id + ".json")
+    sessions = shared.host_sessions(host.value)
+    entry = sessions.prepared_record(
+        shared.read_json(registry) or {}, session_id, shared
+    )
+    if entry.get("host") != host.value or entry.get("session_id") != session_id:
+        raise ValueError("restart frontend belongs to a different session")
+    return {
+        **sessions.restart_input(entry, shared),
+        "host": host.value,
+        "session_id": session_id,
+        "profile": entry["profile"],
+        "input_source": "frontend",
+        "entry": entry,
+    }
+
+
+def require_input(
+    host: Host, session_id: str, state: dict[str, Any], shared: Any = None
+) -> None:
+    if state.get("input_source") == "frontend":
+        if shared is None:
+            raise ValueError("restart frontend verification is unavailable")
+        entry = state["entry"]
+        if entry.get("host") != host.value or entry.get("session_id") != session_id:
+            raise ValueError("restart frontend belongs to a different session")
+        native = shared.host_sessions(host.value).restart_input(entry, shared)
+        if any(state.get(key) != value for key, value in native.items()):
+            raise ValueError("native input changed during the restart transition")
+        return
     current = current_input(host, session_id)
     if any(state.get(key) != value for key, value in current.items()):
         raise ValueError("native input changed during the close transition")
@@ -200,7 +230,7 @@ def _arm(
     registry = state_root().parent / "cli-sessions" / (session_id + ".json")
     sessions = shared.host_sessions(host.value)
     record = shared.read_json(registry) or {}
-    entry = sessions.prepared_record(record, session_id, shared)
+    entry = native.get("entry") or sessions.prepared_record(record, session_id, shared)
     if (
         entry.get("host") != host.value
         or entry.get("session_id") != session_id
@@ -211,8 +241,8 @@ def _arm(
         )
     turn = native.get("turn_id")
     armed = sessions.arm_close(entry, turn, native, supplied, shared)
-    require_input(host, session_id, native)
-    if shared.read_json(registry) != entry:
+    require_input(host, session_id, native, shared)
+    if not shared.registration_matches(shared.read_json(registry), entry):
         raise ValueError("session registration changed before arming")
     root = state_root()
     canonical = _state_path(session_id)
@@ -247,7 +277,7 @@ def _arm(
                 with path.open("xb") as stream:
                     published.append((path, os.fstat(stream.fileno()).st_ino))
                     stream.write(raw)
-            require_input(host, session_id, native)
+            require_input(host, session_id, native, shared)
             record_assessment(
                 {**assessment, "status": "armed", "completion_token": token}
             )
@@ -287,7 +317,14 @@ def assess(
 ) -> dict[str, Any]:
     if decision not in ("keep-open", "complete", "restart") or not reason.strip():
         raise ValueError("assessment needs an explicit decision and a nonempty reason")
-    native = current_input(host, session_id, supplied)
+    assessment_path = state_root() / "assessments" / _state_path(session_id).name
+    with _assessment_lock(session_id):
+        previous = _read(assessment_path)
+    native = (
+        restart_input(host, session_id, shared)
+        if decision == "restart"
+        else current_input(host, session_id, supplied)
+    )
     if shared.path_key(native["profile"]) != shared.path_key(profile):
         raise ValueError("native input belongs to a different profile")
     assessment = {
@@ -299,7 +336,12 @@ def assess(
         "status": "unavailable",
     }
     with _assessment_lock(session_id):
-        require_input(host, session_id, native)
+        if _read(assessment_path) != previous:
+            return {
+                **assessment,
+                "reason": "a later close assessment superseded this attempt",
+            }
+        require_input(host, session_id, native, shared)
         if decision == "keep-open":
             cancel(host, session_id, reason)
             assessment["status"] = "kept-open"
@@ -340,8 +382,17 @@ def assessed(
         isinstance(state, dict)
         and state.get("host") == host.value
         and state.get("session_id") == session_id
-        and isinstance(current, dict)
-        and state.get("input_generation") == current.get("input_generation")
+        and (
+            (
+                state.get("input_source") == "frontend"
+                and state.get("decision") == "restart"
+                and state.get("status") == "armed"
+            )
+            or (
+                isinstance(current, dict)
+                and state.get("input_generation") == current.get("input_generation")
+            )
+        )
         and state.get("decision") in ("keep-open", "complete", "restart")
         and state.get("status") in ("kept-open", "unavailable", "armed")
         and SESSIONS[host].completes(state, data, turn_id)

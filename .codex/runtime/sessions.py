@@ -266,6 +266,12 @@ def close_target(session_id: str, supplied: Path | None) -> dict:
     return {}
 
 
+def restart_input(entry: dict, shared) -> dict:
+    if client.latest_input(entry["recording_path"]) != entry["client_message_id"]:
+        raise ValueError("the native frontend input changed during restart")
+    return {"turn_id": entry["native_turn_id"], "input_generation": entry["client_message_id"]}
+
+
 def arm_close(entry: dict, turn_id: str | None, target: dict, supplied: Path | None, shared) -> dict:
     if turn_id != entry.get("native_turn_id"):
         raise ValueError("Codex arming requires the current native turn")
