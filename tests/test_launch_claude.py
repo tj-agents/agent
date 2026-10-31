@@ -47,7 +47,7 @@ class LaunchClaudeTests(unittest.TestCase):
         self.call_order.attach_mock(self.agent_cli.launch_tab, 'launch_tab')
 
     def run_main(self, *args):
-        argv = ['--working-directory', self.directory, '--prompt-path', str(self.prompt_path), *args]
+        argv = ['--working-directory', self.directory, '--prompt-path', str(self.prompt_path), '--title', 'Test handoff', *args]
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CLAUDE.main(argv)
@@ -71,7 +71,7 @@ class LaunchClaudeTests(unittest.TestCase):
     def test_a_missing_working_directory_is_rejected_through_the_real_directory_check(self):
         out, err = io.StringIO(), io.StringIO()
         missing = str(Path(self.directory) / 'missing')
-        argv = ['--working-directory', missing, '--prompt-path', str(self.prompt_path), '--lane', 'L4']
+        argv = ['--working-directory', missing, '--prompt-path', str(self.prompt_path), '--title', 'Test handoff', '--lane', 'L4']
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CLAUDE.main(argv)
         self.assertEqual(code, 1)
@@ -83,7 +83,7 @@ class LaunchClaudeTests(unittest.TestCase):
         # H14: the directory is validated first, so its error is never shadowed by a later check.
         out, err = io.StringIO(), io.StringIO()
         argv = ['--working-directory', str(Path(self.directory) / 'missing'),
-                '--prompt-path', str(Path(self.directory) / 'missing-prompt.md'), '--lane', 'L4']
+                '--prompt-path', str(Path(self.directory) / 'missing-prompt.md'), '--title', 'Test handoff', '--lane', 'L4']
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CLAUDE.main(argv)
         self.assertEqual(code, 1)
@@ -91,7 +91,7 @@ class LaunchClaudeTests(unittest.TestCase):
 
     def test_a_prompt_path_that_is_not_a_file_is_rejected(self):
         out, err = io.StringIO(), io.StringIO()
-        argv = ['--working-directory', self.directory, '--prompt-path', self.directory, '--lane', 'L4']
+        argv = ['--working-directory', self.directory, '--prompt-path', self.directory, '--title', 'Test handoff', '--lane', 'L4']
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CLAUDE.main(argv)
         self.assertEqual(code, 1)
@@ -283,7 +283,7 @@ class LaunchClaudeTests(unittest.TestCase):
     def test_force_environment_matches_the_native_claude_colour_contract(self):
         self.run_main('--model', 'explicit-model')
         force = self.agent_cli.launch_tab.call_args.kwargs['force']
-        self.assertEqual(force, {'FORCE_COLOR': '1', 'TERM': 'xterm-256color'})
+        self.assertEqual(force, {'FORCE_COLOR': '1', 'TERM': 'xterm-256color', 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1'})
 
     def test_executable_is_resolved_before_bound_session_launch(self):
         self.run_main('--model', 'explicit-model')
@@ -382,7 +382,7 @@ class LaunchClaudeTests(unittest.TestCase):
             self.skipTest('this filesystem or account does not allow creating a symlink')
         self.addCleanup(link.unlink)
         out, err = io.StringIO(), io.StringIO()
-        argv = ['--working-directory', str(link), '--prompt-path', str(self.prompt_path), '--lane', 'L3']
+        argv = ['--working-directory', str(link), '--prompt-path', str(self.prompt_path), '--title', 'Test handoff', '--lane', 'L3']
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CLAUDE.main(argv)
         self.assertEqual(code, 0, err.getvalue())
@@ -437,9 +437,8 @@ class LaunchClaudeEndToEndTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         cmd, kwargs = self.calls[0]
 
-        self.assertEqual(cmd[:4], ['tmux', 'new-window', '-n', 'e2e handoff'])
-        self.assertEqual(cmd[4], '--')
-        inner = cmd[5:]
+        self.assertEqual(cmd[:8], ['tmux', 'new-window', '-n', 'e2e handoff', '-P', '-F', '#{pane_id}', '--'])
+        inner = cmd[8:]
         directory = str(Path(os.path.abspath(self.directory)))
         self.assertEqual(inner[:5], ['sh', '-c', 'cd "$1" && shift && exec "$@"', 'sh', directory])
         self.assertEqual(inner[5], 'env')

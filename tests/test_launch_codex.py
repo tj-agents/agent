@@ -46,7 +46,7 @@ class LaunchCodexTests(unittest.TestCase):
         self.call_order.attach_mock(self.agent_cli.launch_tab, 'launch_tab')
 
     def run_main(self, *args):
-        argv = ['--working-directory', self.directory, '--prompt-path', str(self.prompt_path), *args]
+        argv = ['--working-directory', self.directory, '--prompt-path', str(self.prompt_path), '--title', 'Test handoff', *args]
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CODEX.main(argv)
@@ -70,7 +70,7 @@ class LaunchCodexTests(unittest.TestCase):
     def test_a_missing_working_directory_is_rejected_through_the_real_directory_check(self):
         out, err = io.StringIO(), io.StringIO()
         missing = str(Path(self.directory) / 'missing')
-        argv = ['--working-directory', missing, '--prompt-path', str(self.prompt_path)]
+        argv = ['--working-directory', missing, '--prompt-path', str(self.prompt_path), '--title', 'Test handoff']
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CODEX.main(argv)
         self.assertEqual(code, 1)
@@ -81,7 +81,7 @@ class LaunchCodexTests(unittest.TestCase):
     def test_a_missing_directory_is_reported_even_when_the_prompt_path_is_also_invalid(self):
         out, err = io.StringIO(), io.StringIO()
         argv = ['--working-directory', str(Path(self.directory) / 'missing'),
-                '--prompt-path', str(Path(self.directory) / 'missing-prompt.md')]
+                '--prompt-path', str(Path(self.directory) / 'missing-prompt.md'), '--title', 'Test handoff']
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CODEX.main(argv)
         self.assertEqual(code, 1)
@@ -89,7 +89,7 @@ class LaunchCodexTests(unittest.TestCase):
 
     def test_a_prompt_path_that_is_not_a_file_is_rejected(self):
         out, err = io.StringIO(), io.StringIO()
-        argv = ['--working-directory', self.directory, '--prompt-path', self.directory]
+        argv = ['--working-directory', self.directory, '--prompt-path', self.directory, '--title', 'Test handoff']
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CODEX.main(argv)
         self.assertEqual(code, 1)
@@ -162,9 +162,9 @@ class LaunchCodexTests(unittest.TestCase):
             arguments = arguments[1:]
         self.assertEqual(arguments[0], '--cd')
         self.assertEqual(arguments[1], os.path.abspath(self.directory))
-        self.assertTrue(arguments[2].startswith('Read the file at'))
+        self.assertEqual(arguments[2:4], ['--config', 'tui.terminal_title=[]'])
+        self.assertTrue(arguments[4].startswith('Read the file at'))
         self.assertNotIn('--model', arguments)
-        self.assertNotIn('--config', arguments)
 
     def test_argument_order_is_cd_model_config_bypass_then_prompt(self):
         self.run_main('--model', 'explicit-model', '--reasoning-effort', 'high', '--bypass-hook-trust')
@@ -178,7 +178,8 @@ class LaunchCodexTests(unittest.TestCase):
         self.assertEqual(arguments[4], '--config')
         self.assertEqual(arguments[5], 'model_reasoning_effort=high')
         self.assertEqual(arguments[6], '--dangerously-bypass-hook-trust')
-        self.assertTrue(arguments[7].startswith('Read the file at'))
+        self.assertEqual(arguments[7:9], ['--config', 'tui.terminal_title=[]'])
+        self.assertTrue(arguments[9].startswith('Read the file at'))
 
     def test_the_prompt_sentence_names_the_resolved_prompt_path_and_current_directory(self):
         self.run_main()
@@ -336,7 +337,7 @@ class LaunchCodexTests(unittest.TestCase):
             self.skipTest('this filesystem or account does not allow creating a symlink')
         self.addCleanup(link.unlink)
         out, err = io.StringIO(), io.StringIO()
-        argv = ['--working-directory', str(link), '--prompt-path', str(self.prompt_path)]
+        argv = ['--working-directory', str(link), '--prompt-path', str(self.prompt_path), '--title', 'Test handoff']
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = LAUNCH_CODEX.main(argv)
         self.assertEqual(code, 0, err.getvalue())
@@ -390,9 +391,8 @@ class LaunchCodexEndToEndTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         cmd, kwargs = self.calls[0]
 
-        self.assertEqual(cmd[:4], ['tmux', 'new-window', '-n', 'e2e handoff'])
-        self.assertEqual(cmd[4], '--')
-        inner = cmd[5:]
+        self.assertEqual(cmd[:8], ['tmux', 'new-window', '-n', 'e2e handoff', '-P', '-F', '#{pane_id}', '--'])
+        inner = cmd[8:]
         directory = str(Path(os.path.abspath(self.directory)))
         self.assertEqual(inner[:5], ['sh', '-c', 'cd "$1" && shift && exec "$@"', 'sh', directory])
         self.assertEqual(inner[5], 'env')
@@ -410,7 +410,8 @@ class LaunchCodexEndToEndTests(unittest.TestCase):
                 '--status-file', inner[inner.index('--status-file') + 1], '--require-session-start', '--',
                 *(['--no-daemon'] if sys.platform == 'win32' else []), '--cd', directory, '--model',
                 CODEX_LANES['lanes']['L4']['model'], '--config',
-                f"model_reasoning_effort={CODEX_LANES['lanes']['L4']['reasoning_effort']}", expected_prompt_sentence,
+                f"model_reasoning_effort={CODEX_LANES['lanes']['L4']['reasoning_effort']}",
+                '--config', 'tui.terminal_title=[]', expected_prompt_sentence,
             ],
         )
 

@@ -38,7 +38,7 @@ def parse_args(argv, agent_cli):
     parser = argparse.ArgumentParser(description='Hand prepared work to an independent Codex session in a new terminal tab.')
     parser.add_argument('--working-directory', required=True)
     parser.add_argument('--prompt-path', required=True)
-    parser.add_argument('--title', default='Codex handoff')
+    parser.add_argument('--title', required=True)
     parser.add_argument('--model')
     parser.add_argument('--reasoning-effort', choices=('low', 'medium', 'high', 'xhigh', 'max', 'ultra'))
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'))
@@ -46,6 +46,8 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--minimum-version', default='0.154.0')
     parser.add_argument('--bypass-hook-trust', action='store_true')
     args = parser.parse_args(argv)
+    if not args.title.strip():
+        raise agent_cli.LaunchError('--title must name the session; it becomes the tab title.')
 
     # L7 work stays inside an existing session: rejected before anything else runs, regardless of
     # whether --model or --frontier is also given, because the lane itself -- not what it would have
@@ -94,7 +96,7 @@ def resolve_model(args, agent_cli):
     return model, effort, tier
 
 
-def build_arguments(working_directory, model, effort, bypass_hook_trust, prompt_sentence, no_daemon=False):
+def build_arguments(working_directory, model, effort, bypass_hook_trust, prompt_sentence, no_daemon=False, keep_title=()):
     arguments = ['--cd', str(working_directory)]
     if no_daemon:
         arguments.insert(0, '--no-daemon')
@@ -104,6 +106,7 @@ def build_arguments(working_directory, model, effort, bypass_hook_trust, prompt_
         arguments += ['--config', f'model_reasoning_effort={effort}']
     if bypass_hook_trust:
         arguments.append('--dangerously-bypass-hook-trust')
+    arguments += keep_title
 
     arguments.append(prompt_sentence)
     return arguments
@@ -126,7 +129,8 @@ def main(argv=None):
         codex, version = agent_cli.resolve_codex_executable(minimum=args.minimum_version)
         model, effort, tier = resolve_model(args, agent_cli)
         no_daemon = sys.platform == 'win32' and version['core'] >= (0, 157, 0)
-        arguments = build_arguments(working_directory, model, effort, args.bypass_hook_trust, prompt_sentence, no_daemon)
+        arguments = build_arguments(working_directory, model, effort, args.bypass_hook_trust, prompt_sentence, no_daemon,
+                                    agent_cli.CODEX_KEEP_TAB_TITLE)
 
         # TERM is CLEARED here, never forced -- the opposite of handoff-claude, and not an oversight.
         # Claude Code exports TERM=xterm-256color; Codex is a Rust/crossterm binary, and on native Windows
