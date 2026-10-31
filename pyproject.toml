@@ -14,7 +14,7 @@ tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "f676d6ddf6345cf2
 dev = ["mypy>=2.4.0", "pytest>=9.1.1", "ruff>=0.17.1"]
 
 [tool.ruff]
-include = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/close/scripts/agent_close.py"]
+include = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/close/scripts/agent_close.py", "tests/test_close_assessment_order.py"]
 target-version = "py312"
 
 [tool.ruff.lint]
@@ -23,11 +23,11 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "A", "BLE", "C4", "SIM", "PTH", "P
 [tool.mypy]
 strict = true
 warn_unreachable = true
-files = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/close/scripts/agent_close.py"]
+files = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/close/scripts/agent_close.py", "tests/test_close_assessment_order.py"]
 mypy_path = ".agents/agent/runtime"
 
 [[tool.mypy.overrides]]
-module = ["host", "host_sessions"]
+module = ["host", "host_sessions", "plugin_autoupdate", "close_fixtures"]
 follow_imports = "skip"
 
 [tool.pytest]

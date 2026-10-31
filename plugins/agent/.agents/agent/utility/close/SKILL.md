@@ -1,6 +1,6 @@
 ---
 name: close
-description: Assess the current session before its final reply, keeping unfinished work open and requesting closure only after every owned outcome is finished. Use for the current session's completion decision; use agent:peer for another session.
+description: Assess the current session before its final reply, keeping unfinished work open or preserving a prepared refresh restart, and requesting completion closure only after every owned outcome is finished. Use for the current session; use agent:peer for another session.
 kind: utility
 domain: agent
 profile: core
@@ -11,18 +11,32 @@ provenance: house
 
 # Close the current session
 
-Owns the current session's completion decision. Before every final reply, run `assess` once with the
-exact native host, session and profile, a decision, and a nonempty reason. Use `python` on Windows and
-`python3` on Linux. Choose the invocation matching the decision:
+Owns the current session's completion decision and preservation of a prepared refresh restart. Before
+every final reply, ensure the current native input has an assessment. Except for the already armed
+refresh checkpoint below, run `assess` once with the exact native host, session and profile, a decision,
+and a nonempty reason. Use `python` on Windows and `python3` on Linux. Choose the invocation matching
+the decision:
 
 ```text
 python -B "<skill-directory>/scripts/agent_close.py" assess --host codex --session-id "<exact-id>" --profile "<profile>" --decision keep-open --reason "Linux validation is still pending."
 python -B "<skill-directory>/scripts/agent_close.py" assess --host codex --session-id "<exact-id>" --profile "<profile>" --decision complete --reason "Delivery, validation and the authorized handoff are complete."
 ```
 
-Choose `keep-open` while work, validation, delivery, an authorized handoff, a user question, approval or
-cleanup remains, or the user explicitly requests it. Choose `complete` only after every owned outcome
-is finished. A Stop event, merged PR or question about a missed close-out does not establish completion.
+A prepared [agent:refresh-plugins](../refresh-plugins/SKILL.md) checkpoint with a successfully armed
+current-input restart already supplies the required assessment. Preserve it when the resumed client
+will continue the same conversation and execution owner. Continuing that goal does not require another
+assessment. A restart replaces the frontend; it does not declare the goal complete.
+
+```text
+Refresh result: current-input restart armed; checkpoint prepared for the same conversation and owner.
+Final reply: report the checkpoint and preserve the armed restart without another assess call.
+```
+
+Outside that prepared checkpoint, choose `keep-open` while work, validation, delivery or an authorized
+handoff remains. A user question, pending approval, unprepared handoff, remaining cleanup or explicit
+keep-open request still requires `keep-open`, cancelling even an armed refresh restart. Choose
+`complete` only after every owned outcome is finished. A Stop event, merged PR or question about a
+missed close-out does not establish completion.
 
 `assess` binds the decision to the current native-hook input independently of frontend attribution.
 `keep-open` records the decision and cancels a pending close request. `complete` resolves and freezes

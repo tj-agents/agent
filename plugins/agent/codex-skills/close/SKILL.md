@@ -1,6 +1,6 @@
 ---
 name: close
-description: Assess the current session before its final reply, keeping unfinished work open and requesting closure only after every owned outcome is finished. Use for the current session's completion decision; use agent:peer for another session.
+description: Assess the current session before its final reply, keeping unfinished work open or preserving a prepared refresh restart, and requesting completion closure only after every owned outcome is finished. Use for the current session; use agent:peer for another session.
 kind: utility
 domain: agent
 profile: core

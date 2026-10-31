@@ -140,7 +140,7 @@ class CloseFixture:
         return CLOSE.main(self.assess_args(decision, reason))
 
     def arm(self):
-        self.assertEqual(0, self.assess("complete"))
+        assert self.assess("complete") == 0
         self.request_path = self.root / "close-lifecycle/requests/token.json"
         self.digest = hashlib.sha256(self.request_path.read_bytes()).hexdigest()
         self.request = WATCHER.load_request(self.request_path, self.digest)
