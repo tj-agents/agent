@@ -214,6 +214,33 @@ def test_real_conflict_inside_parseable_toml_string_is_not_accepted(
     assert scenario.snapshot() == before
 
 
+def test_unstaged_manual_resolution_preserves_existing_literal_marker_lines(
+    scenario: GitScenario,
+) -> None:
+    path = scenario.root / ".codex/config.toml"
+    original = path.read_text(encoding="utf-8")
+    example = 'developer_instructions = """\n<<<<<<< HEAD\nexample\n"""\n'
+
+    def write_model(value: str) -> None:
+        path.write_text(f'model = "{value}"\n' + example + original, encoding="utf-8")
+
+    write_model("base")
+    scenario.commit("Common literal marker example")
+    write_model("stashed")
+    scenario.git("stash", "push")
+    write_model("upstream")
+    scenario.commit("Upstream model")
+    result = scenario.git("stash", "apply", success=False)
+    assert isinstance(result, subprocess.CompletedProcess) and result.returncode != 0
+    write_model("resolved")
+    index = scenario.git("ls-files", "-u")
+    ADOPT.reconcile(scenario.root, "write")
+    parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert parsed["model"] == "resolved"
+    assert "<<<<<<< HEAD" in parsed["developer_instructions"]
+    assert scenario.git("ls-files", "-u") == index
+
+
 @pytest.mark.parametrize("kind", ["json", "toml"])
 def test_conflicting_unmanaged_settings_block_the_entire_write(
     scenario: GitScenario, kind: str
