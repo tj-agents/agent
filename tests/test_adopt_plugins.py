@@ -68,6 +68,7 @@ class RemovePluginTests(unittest.TestCase):
     def test_default_selection_never_selects_the_retired_machine_package(self):
         ADOPT.run(self.root, [], [], "write")
         self.assertIn("cli@tj-agents", self.selected())
+        self.assertIn("github@tj-agents", self.selected())
         self.assertNotIn("machine@tj-agents", self.selected())
 
     def test_automatic_reconciliation_checks_then_repairs_both_hosts_and_is_idempotent(self):
