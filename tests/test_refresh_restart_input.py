@@ -138,11 +138,14 @@ def test_new_stop_preserves_a_restart_prepared_without_hooks(session: Any) -> No
 
 
 def test_keep_open_during_restart_attribution_wins(session: Any) -> None:
-    LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "one", "turn_id": "turn-one"})
     original = LIFECYCLE.restart_input
 
     def preserve(*args: Any) -> Any:
-        assert session.assess("keep-open", "still working") == 0
+        with (
+            mock.patch.object(LIFECYCLE, "restart_input", original),
+            mock.patch.dict("sys.modules", {"close_lifecycle": LIFECYCLE}),
+        ):
+            assert session.assess("keep-open", "still working") == 0
         return original(*args)
 
     with mock.patch.object(LIFECYCLE, "restart_input", side_effect=preserve):

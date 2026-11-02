@@ -317,17 +317,33 @@ def assess(
 ) -> dict[str, Any]:
     if decision not in ("keep-open", "complete", "restart") or not reason.strip():
         raise ValueError("assessment needs an explicit decision and a nonempty reason")
+    if shared.path_key(host.configuration_root.resolve()) != shared.path_key(profile):
+        raise ValueError("native input belongs to a different profile")
     assessment_path = state_root() / "assessments" / _state_path(session_id).name
     with _assessment_lock(session_id):
         previous = _read(assessment_path)
-        if (
-            decision == "keep-open"
-            and previous
-            and previous.get("host") == host.value
-            and previous.get("session_id") == session_id
-            and shared.path_key(previous.get("profile", "")) == shared.path_key(profile)
-        ):
-            cancel(host, session_id, reason)
+        if decision == "keep-open":
+            pending = _read(_state_path(session_id))
+            if any(
+                state
+                and shared.path_key(state.get("profile", ""))
+                != shared.path_key(profile)
+                for state in (previous, pending)
+            ):
+                raise ValueError("pending close belongs to a different profile")
+            if pending:
+                cancel(host, session_id, reason)
+            previous = {
+                "host": host.value,
+                "session_id": session_id,
+                "profile": str(profile),
+                "decision": decision,
+                "reason": reason,
+                "at": time.time(),
+                "assessment_generation": secrets.token_hex(16),
+                "status": "unavailable",
+            }
+            record_assessment(previous)
     try:
         native = (
             restart_input(host, session_id, shared)
@@ -335,12 +351,7 @@ def assess(
             else current_input(host, session_id, supplied)
         )
     except ValueError:
-        if not (
-            decision == "keep-open"
-            and previous
-            and previous.get("input_source") == "frontend"
-            and previous.get("decision") == "restart"
-        ):
+        if decision != "keep-open":
             raise
         native = restart_input(host, session_id, shared)
     if shared.path_key(native["profile"]) != shared.path_key(profile):
@@ -354,7 +365,17 @@ def assess(
         "status": "unavailable",
     }
     with _assessment_lock(session_id):
-        if decision != "keep-open" and _read(assessment_path) != previous:
+        current = _read(assessment_path)
+        if decision == "keep-open":
+            pending = _read(_state_path(session_id))
+            if any(
+                state
+                and shared.path_key(state.get("profile", ""))
+                != shared.path_key(profile)
+                for state in (current, pending)
+            ):
+                raise ValueError("pending close belongs to a different profile")
+        elif current != previous:
             return {
                 **assessment,
                 "reason": "a later close assessment superseded this attempt",
