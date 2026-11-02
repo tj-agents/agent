@@ -6,10 +6,12 @@ import json
 import os
 import queue
 import secrets
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import IO, Any
 
@@ -39,10 +41,77 @@ def stop(child: subprocess.Popen[bytes]) -> None:
         child.wait(timeout=5)
 
 
-def remove_socket(socket: Path) -> None:
-    socket.unlink(missing_ok=True)
-    if socket.parent.exists():
-        socket.parent.rmdir()
+class Endpoint:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.parent_identity: tuple[int, int] | None = None
+        self.socket_identity: tuple[int, int] | None = None
+
+    @staticmethod
+    def identity(path: Path) -> tuple[int, int] | None:
+        try:
+            value = path.lstat()
+        except FileNotFoundError:
+            return None
+        return value.st_dev, value.st_ino
+
+    def capture(self, child: subprocess.Popen[bytes]) -> None:
+        deadline = time.monotonic() + 10
+        while child.poll() is None:
+            try:
+                parent = self.path.parent.lstat()
+            except FileNotFoundError:
+                parent = None
+            if parent is not None:
+                if not stat.S_ISDIR(parent.st_mode) or (
+                    getattr(parent, "st_file_attributes", 0)
+                    & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+                ):
+                    raise RuntimeError("Owned socket parent is not a native directory")
+                current = parent.st_dev, parent.st_ino
+                if self.parent_identity is None:
+                    self.parent_identity = current
+                elif self.parent_identity != current:
+                    raise RuntimeError("Owned socket parent changed during startup")
+                socket = self.identity(self.path)
+                if socket is not None and child.poll() is None:
+                    self.socket_identity = socket
+                    return
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Owned native endpoint was not created")
+            time.sleep(0.02)
+        raise RuntimeError("Owned backend exited before its endpoint was captured")
+
+    def evidence(self) -> dict[str, tuple[int, int] | None]:
+        return {"parent": self.parent_identity, "socket": self.socket_identity}
+
+    def remove(self) -> None:
+        parent = self.identity(self.path.parent)
+        if parent is None:
+            return
+        if self.parent_identity is None or parent != self.parent_identity:
+            raise RuntimeError(
+                "Owned endpoint cleanup cannot verify its original parent"
+            )
+        if self.socket_identity is None:
+            raise RuntimeError(
+                "Owned endpoint cleanup never captured its original socket"
+            )
+        socket = self.identity(self.path)
+        if socket is not None:
+            if self.socket_identity is None or socket != self.socket_identity:
+                raise RuntimeError(
+                    "Owned endpoint cleanup cannot verify its original socket"
+                )
+            if (
+                self.identity(self.path.parent) != self.parent_identity
+                or self.identity(self.path) != self.socket_identity
+            ):
+                raise RuntimeError("Owned endpoint changed before cleanup")
+            self.path.unlink()
+        if self.identity(self.path.parent) != self.parent_identity:
+            raise RuntimeError("Owned endpoint parent changed before directory cleanup")
+        self.path.parent.rmdir()
 
 
 def read_reply(stream: IO[bytes], result: queue.Queue[bytes]) -> None:
@@ -136,6 +205,7 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
 
     directory = Path(specification["directory"])
     socket = Path(specification["socket_path"])
+    endpoint = Endpoint(socket)
     receipt = directory / "backend.json"
     state: dict[str, Any] = {
         "state": "starting",
@@ -184,13 +254,17 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
                 close_fds=True,
             )
+            endpoint.capture(child)
             state.update(
                 state="running",
+                filesystem=endpoint.evidence(),
                 supervisor=identity(os.getpid()),
                 backend={
                     "kind": "handoff",
                     **identity(child.pid),
                     "socket_path": str(socket),
+                    "parent_identity": endpoint.parent_identity,
+                    "socket_identity": endpoint.socket_identity,
                 },
             )
             write_record(receipt, state)
@@ -203,7 +277,7 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
                 if child.poll() is not None:
                     break
             stop(child)
-        remove_socket(socket)
+        endpoint.remove()
         state.update(state="exited", returncode=child.returncode)
         write_record(receipt, state)
         return 0
@@ -211,10 +285,10 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
         if child is not None:
             try:
                 stop(child)
-                remove_socket(socket)
-            except (OSError, subprocess.SubprocessError) as cleanup:
+                endpoint.remove()
+            except (OSError, RuntimeError, subprocess.SubprocessError) as cleanup:
                 state["cleanup_error"] = str(cleanup)
-        state.update(state="failed", error=str(error))
+        state.update(state="failed", error=str(error), filesystem=endpoint.evidence())
         write_record(receipt, state)
         print(json.dumps(state), flush=True)
         return 1

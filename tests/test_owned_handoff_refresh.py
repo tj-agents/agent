@@ -89,6 +89,7 @@ def refresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Refresh:
             "started_at": 103.0,
             "socket_path": str(root / "old socket"),
             "socket_identity": [1, 123],
+            "parent_identity": [1, 42],
         },
         "recipient": {
             "thread_id": "thread",

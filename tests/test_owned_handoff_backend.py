@@ -27,7 +27,8 @@ def load_backend() -> Any:
 def wait_for(predicate: Callable[[], bool]) -> None:
     deadline = time.monotonic() + 10
     while not predicate():
-        assert time.monotonic() < deadline, "Owned process fixture did not settle"
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Owned process fixture did not settle")
         time.sleep(0.02)
 
 
@@ -221,6 +222,83 @@ def test_startup_identity_failure_reaps_the_child_and_removes_its_endpoint(
     assert not processes.matches(read_record(directory / "native.json"))
     assert not socket.exists()
     assert not socket.parent.exists()
+
+
+@pytest.mark.parametrize("replaced", ["socket", "parent"])
+def test_wrapper_cleanup_preserves_replaced_endpoint_objects(
+    wrappers: Callable[[str], tuple[subprocess.Popen[bytes], Path]], replaced: str
+) -> None:
+    wrapper, directory = wrappers("replacement")
+    binding = read_record(directory / "wrapper.json")
+    socket = Path(binding["backend"]["socket_path"])
+    captured = read_record(directory / "backend.json")["filesystem"]
+    if replaced == "socket":
+        socket.rename(socket.with_name("original"))
+    else:
+        socket.parent.rename(socket.parent.with_name("original-parent"))
+        socket.parent.mkdir()
+    socket.write_bytes(b"replacement endpoint")
+    assert wrapper.stdin is not None
+    wrapper.stdin.close()
+    wrapper.wait(timeout=15)
+    wait_for_process_exit(binding["supervisor"])
+    assert not processes.matches(binding["backend"])
+    assert wrapper.returncode != 0
+    receipt = read_record(directory / "backend.json")
+    assert receipt["state"] == "failed"
+    assert receipt["filesystem"] == captured
+    assert "cannot verify" in receipt["cleanup_error"]
+    assert socket.read_bytes() == b"replacement endpoint"
+    assert socket.parent.is_dir()
+
+
+def test_startup_cleanup_preserves_never_captured_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = load_backend()
+    socket = tmp_path / "unobserved socket" / "s"
+    monkeypatch.setenv("OWNED_FIXTURE_DIRECTORY", str(tmp_path))
+
+    def fail_before_capture(_endpoint: Any, _child: subprocess.Popen[bytes]) -> None:
+        wait_for(lambda: (tmp_path / "native.json").exists())
+        raise RuntimeError("Fixture endpoint capture unavailable")
+
+    monkeypatch.setattr(backend.Endpoint, "capture", fail_before_capture)
+    result = backend.supervise(
+        {
+            "directory": str(tmp_path),
+            "project": str(tmp_path),
+            "socket_path": str(socket),
+            "executable": sys.executable,
+            "arguments": [str(Path(__file__).resolve()), "--native-fixture"],
+            "token": tmp_path.name,
+            "wrapper": backend.identity(os.getppid()),
+        },
+        io.BytesIO(),
+    )
+    assert result == 1
+    assert not processes.matches(read_record(tmp_path / "native.json"))
+    receipt = read_record(tmp_path / "backend.json")
+    assert receipt["state"] == "failed"
+    assert receipt["filesystem"] == {"parent": None, "socket": None}
+    assert "cannot verify" in receipt["cleanup_error"]
+    assert socket.read_bytes() == b"owned fixture"
+
+
+def test_cleanup_preserves_parent_when_original_socket_was_never_observed(
+    tmp_path: Path,
+) -> None:
+    backend = load_backend()
+    socket = tmp_path / "incomplete endpoint" / "s"
+    socket.parent.mkdir()
+    endpoint = backend.Endpoint(socket)
+    endpoint.parent_identity = endpoint.identity(socket.parent)
+
+    with pytest.raises(RuntimeError, match="never captured its original socket"):
+        endpoint.remove()
+
+    assert socket.parent.is_dir()
+    assert endpoint.identity(socket.parent) == endpoint.parent_identity
 
 
 @pytest.mark.parametrize("changed", ["token", "wrapper"])
