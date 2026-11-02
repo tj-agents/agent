@@ -9,6 +9,7 @@
     "cli@tj-agents": true,
     "engineering@tj-agents": true,
     "github-actions@tj-agents": true,
+    "github@tj-agents": true,
     "python@tj-agents": true,
     "skill@tj-agents": true,
     "template@tj-agents": true,
