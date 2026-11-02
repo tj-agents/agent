@@ -101,15 +101,28 @@ def read_text(path: Path) -> str:
         documents = [json.loads(value) for value in (base, ours, theirs)]
         import plugin_selection
 
+        available = {}
         for document in documents:
-            plugin_selection.validate(document)
+            available.update(document["marketplaces"])
+        for document in documents:
+            used = {identity.rsplit("@", 1)[1] for identity in document["plugins"]}
+            plugin_selection.validate({**document, "marketplaces": {
+                key: value for key, value in available.items() if key in used}})
         selections = [set(document.pop("plugins")) for document in documents]
+        marketplaces = [document.pop("marketplaces") for document in documents]
         merged = merge(*documents, relative)
         original, left, right = selections
         merged["plugins"] = sorted((original & left & right) | (left - original) | (right - original))
         # A plugin removed on either side also retires its now-unused marketplace.
         used = {identity.rsplit("@", 1)[1] for identity in merged["plugins"]}
-        merged["marketplaces"] = {key: value for key, value in merged["marketplaces"].items() if key in used}
+        merged["marketplaces"] = {}
+        for key in sorted(used):
+            original_source, left_source, right_source = [value.get(key, MISSING) for value in marketplaces]
+            merged["marketplaces"][key] = merge(
+                original_source,
+                original_source if left_source is MISSING else left_source,
+                original_source if right_source is MISSING else right_source,
+                f"{relative}.marketplaces.{key}")
         plugin_selection.validate(merged)
         return json.dumps(merged, indent=2) + "\n"
     if relative == ".claude/settings.json":

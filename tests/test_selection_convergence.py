@@ -113,7 +113,7 @@ class SelectionConvergenceTests(unittest.TestCase):
                 mock.patch.object(claude_plugins, "tj_agents_marketplaces", side_effect=RuntimeError("after selection")), \
                 self.assertRaisesRegex(RuntimeError, "after selection"):
             claude_plugins.synchronize([self.project])
-        selection.assert_called_once_with(self.project)
+        selection.assert_called_once_with(self.project.resolve())
         self.assertNotIn("cpp-agents", path.read_text(encoding="utf-8"))
         self.assertIn("engineering@tj-agents", json.loads(path.read_text(encoding="utf-8"))["enabledPlugins"])
 

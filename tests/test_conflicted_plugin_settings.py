@@ -109,6 +109,30 @@ class ConflictRecoveryTests(unittest.TestCase):
                 self.assertEqual(before, self.snapshot())
                 self.git("reset", "--hard", "HEAD~1")
 
+    def test_independent_marketplace_addition_is_merged_with_plugin_membership(self):
+        ADOPT.run(self.root, [], ["legacy@concertable"], "write", marketplaces=["concertable=Concertable/agents"])
+        self.git("stash", "push")
+        ADOPT.run(self.root, [], ["python"], "write")
+        self.commit("Independent plugin update")
+        self.assertNotEqual(0, self.git("stash", "apply", success=False).returncode)
+        ADOPT.reconcile(self.root, "write")
+        document = json.loads((self.root / FILES[0]).read_text(encoding="utf-8"))
+        self.assertIn("legacy@concertable", document["plugins"])
+        self.assertIn("python@tj-agents", document["plugins"])
+
+    def test_removal_of_last_marketplace_plugin_does_not_drop_an_independent_addition(self):
+        ADOPT.run(self.root, [], ["legacy@concertable"], "write", marketplaces=["concertable=Concertable/agents"])
+        self.commit("Foreign plugin baseline")
+        ADOPT.run(self.root, [], [], "write", removals=["legacy@concertable"])
+        self.git("stash", "push")
+        ADOPT.run(self.root, [], ["new@concertable"], "write")
+        self.commit("New plugin in the same marketplace")
+        self.assertNotEqual(0, self.git("stash", "apply", success=False).returncode)
+        ADOPT.reconcile(self.root, "write")
+        document = json.loads((self.root / FILES[0]).read_text(encoding="utf-8"))
+        self.assertNotIn("legacy@concertable", document["plugins"])
+        self.assertIn("new@concertable", document["plugins"])
+
     def test_committed_markers_have_no_authority_to_reconstruct_configuration(self):
         self.stash_conflict()
         self.git("add", *FILES)
