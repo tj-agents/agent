@@ -110,6 +110,29 @@ class RemovePluginTests(unittest.TestCase):
         self.assertEqual([], ADOPT.reconcile(self.root, "write"))
         self.assertFalse((self.root / ".agents/plugins.json").exists())
 
+    def test_batch_reconciliation_uses_one_live_roster_and_plans_every_project_before_writing(self):
+        self.write_selection(["engineering@tj-agents"])
+        other = self.root.parent / "z-other"
+        (other / ".agents").mkdir(parents=True)
+        (other / ".agents/plugins.json").write_bytes((self.root / ".agents/plugins.json").read_bytes())
+        (other / ".claude").mkdir()
+        path = other / ".claude/settings.json"
+        path.write_text("{broken", encoding="utf-8")
+        before = (self.root / ".agents/plugins.json").read_bytes()
+        with mock.patch.object(ADOPT, "current_roster", return_value=ADOPT.load_roster()) as roster, \
+                self.assertRaises(LockError):
+            ADOPT.reconcile_many([self.root, other], "write")
+        roster.assert_called_once()
+        self.assertEqual(before, (self.root / ".agents/plugins.json").read_bytes())
+        self.assertFalse((self.root / ".claude").exists())
+        path.write_text("{}", encoding="utf-8")
+        with mock.patch.object(ADOPT, "current_roster", return_value=ADOPT.load_roster()) as roster:
+            ADOPT.reconcile_many([self.root, other], "write")
+        roster.assert_called_once()
+        self.assertTrue((self.root / ".codex/config.toml").is_file())
+        self.assertTrue((other / ".codex/config.toml").is_file())
+        self.assertEqual([], ADOPT.reconcile_many([self.root, other], "write"))
+
     def test_retirement_after_the_bundled_snapshot_is_reconciled(self):
         self.write_selection(["base@tj-agents", "docs@tj-agents"])
         roster = ADOPT.load_roster()

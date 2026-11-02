@@ -13,6 +13,7 @@ import sys
 import subprocess
 
 import harness_permissions
+import config_conflicts
 import lock_io
 import machine_paths
 import plugin_selection
@@ -134,7 +135,7 @@ def unmanaged_codex(text: str) -> str:
 
 
 def codex_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool]) -> str:
-    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    existing = config_conflicts.read_text(path, unmanaged=unmanaged_codex) if path.is_file() else ""
     prefix = unmanaged_codex(existing)
     return (prefix + "\n\n" if prefix else "") + codex_block(sources, identities)
 
@@ -334,8 +335,8 @@ def local_codex(path: Path, sources: dict, identities: dict, previous: str | Non
     return expected, block
 
 
-def exclusion_text(path: Path, root: Path, targets: list[Path]) -> str:
-    existing = text_at(path) or ""
+def exclusion_text(path: Path, root: Path, targets: list[Path], *, existing: str | None = None) -> str:
+    existing = (text_at(path) or "") if existing is None else existing
     owner = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()
     relatives = {relative for target in targets for relative in (target.relative_to(root).as_posix(), target.resolve().relative_to(root).as_posix())}
     patterns = {"/" + re.sub(r"([*?\[\] ])", r"\\\1", relative) for relative in relatives}
@@ -379,6 +380,7 @@ def plan(
     lock_document: dict | None = None,
     read_paths: list[Path] = (),
     execute=subprocess.run,
+    exclusions: dict[Path, str] | None = None,
 ) -> dict[Path, str | None]:
     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
     scope = resolve_scope(root, scope, execute)
@@ -405,7 +407,9 @@ def plan(
         targets = {claude: claude_text, codex: codex_text, rules_path: expected_rules, state_path: json.dumps(updated, indent=2, ensure_ascii=False) + "\n"}
         if exclude is not None:
             selection = [lock_path] if lock_path.resolve().is_relative_to(root) else []
-            targets[exclude] = exclusion_text(exclude, root, [*paths, *[contained(root, path) for path in [*prospective_paths, *selection]]])
+            targets[exclude] = exclusion_text(exclude, root, [*paths, *[contained(root, path) for path in [*prospective_paths, *selection]]], existing=exclusions.get(exclude) if exclusions is not None else None)
+            if exclusions is not None:
+                exclusions[exclude] = targets[exclude]
     else:
         targets = {claude: claude_settings(claude, sources, identities, allow), codex: codex_settings(codex, sources, identities), rules_path: expected_rules}
     try:
