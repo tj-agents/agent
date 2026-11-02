@@ -853,8 +853,7 @@ def check_native_cli(context: Context) -> list[str]:
     absent = native_runtime.missing()
     if absent:
         return ["install native CLI binaries: " + ", ".join(absent)]
-    current_path = context.environ.get("PATH", os.defpath)
-    return [] if current_path == native_runtime.search_path(current_path) else ["expose native CLI on this process PATH"]
+    return []
 
 
 def apply_native_cli(context: Context) -> list[str]:
@@ -977,6 +976,8 @@ def main(argv: list[str] | None = None) -> int:
     parsed = parser.parse_args(arguments)
     context = machine_context()
     context.onboard = parsed.onboard
+    native_runtime.expose()
+    context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
     return run_steps(selected_steps(set(parsed.step or ())), context, parsed.check)
 
 

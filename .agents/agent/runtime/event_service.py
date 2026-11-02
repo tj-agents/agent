@@ -38,9 +38,11 @@ def marker(context) -> str:
 
 def arguments(context) -> list[str]:
     script = context.state_directory / "bin/.agents/agent/runtime/machine_events.py"
+    native = context.environ.get("TJ_BIN_DIR")
+    native_arguments = ["--native-bin-dir=" + str(Path(native).expanduser().resolve())] if native else []
     return [str(script.resolve()), "--watch", "--state-directory", str(context.state_directory.resolve()),
             "--claude-home", str(context.claude_home.resolve()), "--codex-home", str(context.codex_home.resolve()),
-            "--search-path=" + context.environ.get("PATH", os.defpath)]
+            "--search-path=" + context.environ.get("PATH", os.defpath), *native_arguments]
 
 
 def command(context, argv: list[str], *, allowed=(0,)):

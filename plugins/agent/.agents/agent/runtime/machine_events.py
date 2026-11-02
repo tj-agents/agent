@@ -210,6 +210,7 @@ def main(argv=None):
     parser.add_argument("--claude-home", type=Path)
     parser.add_argument("--codex-home", type=Path)
     parser.add_argument("--search-path")
+    parser.add_argument("--native-bin-dir", type=Path)
     arguments = parser.parse_args(argv)
     if arguments.state_directory:
         os.environ["AGENT_STATE_DIRECTORY"] = str(arguments.state_directory.resolve())
@@ -219,6 +220,8 @@ def main(argv=None):
             os.environ[host.home_variable] = str(home.resolve())
     if arguments.search_path is not None:
         os.environ["PATH"] = arguments.search_path
+    if arguments.native_bin_dir is not None:
+        os.environ["TJ_BIN_DIR"] = str(arguments.native_bin_dir.resolve())
     directory = plugins.state_directory()
     directory.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(directory / "machine-events.log", maxBytes=262144, backupCount=2,
