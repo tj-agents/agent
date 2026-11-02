@@ -199,6 +199,27 @@ def reconcile(root: Path, mode: str) -> list[str]:
     return run(root, [], [], mode, roster=current_roster())
 
 
+def reconcile_many(roots: list[Path], mode: str) -> list[str]:
+    roots = sorted({root.expanduser().resolve() for root in roots
+                    if plugin_selection.resolve(root).is_file()})
+    if not roots:
+        return []
+    roster = current_roster()
+    changes = {}
+    drift = []
+    for root in roots:
+        targets, _ = plan(root, [], [], [], None, roster=roster)
+        for path, value in targets.items():
+            if repo_config.text_at(path) != value:
+                if path in changes and changes[path] != value:
+                    raise lock_io.LockError(f"Conflicting repository configuration targets: {path}")
+                changes[path] = value
+                drift.append(f"{root}: {path.relative_to(root).as_posix()}")
+    if mode == "write":
+        repo_config.write_batch(changes)
+    return drift
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path)
@@ -209,13 +230,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scope", choices=("project", "local"))
     parser.add_argument("--mode", required=True, choices=("preview", "check", "write"))
     parser.add_argument("--converge-existing", action="store_true")
+    parser.add_argument("--also-root", action="append", type=Path, default=[])
     arguments = parser.parse_args(argv)
     try:
         if arguments.converge_existing:
             if arguments.stack or arguments.plugin or arguments.remove_plugin or arguments.marketplace or arguments.scope:
                 raise lock_io.LockError("--converge-existing cannot change the requested selection or scope")
-            drift = reconcile(arguments.root, arguments.mode)
+            drift = (reconcile_many([arguments.root, *arguments.also_root], arguments.mode)
+                     if arguments.also_root else reconcile(arguments.root, arguments.mode))
         else:
+            if arguments.also_root:
+                raise lock_io.LockError("--also-root requires --converge-existing")
             drift = run(arguments.root, arguments.stack, arguments.plugin, arguments.mode, arguments.scope, arguments.marketplace, arguments.remove_plugin)
     except (lock_io.LockError, OSError, UnicodeError, ValueError, subprocess.SubprocessError) as error:
         print(f"Plugin adoption failed: {error}", file=sys.stderr)

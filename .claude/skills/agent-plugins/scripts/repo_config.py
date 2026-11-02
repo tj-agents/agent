@@ -13,6 +13,7 @@ import sys
 import subprocess
 
 import harness_permissions
+import config_conflicts
 import lock_io
 import machine_paths
 import plugin_selection
@@ -134,7 +135,7 @@ def unmanaged_codex(text: str) -> str:
 
 
 def codex_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool]) -> str:
-    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    existing = config_conflicts.read_text(path) if path.is_file() else ""
     prefix = unmanaged_codex(existing)
     return (prefix + "\n\n" if prefix else "") + codex_block(sources, identities)
 

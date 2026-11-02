@@ -384,14 +384,20 @@ def invoke(target: Target, arguments: list[str], timeout: int, inherit: bool = F
 
 
 def reconcile_selection(project: Path, *, check_only: bool = False) -> list[str]:
-    project = project_root(project)
-    if not (project / ".agents/plugins.json").is_file():
+    return reconcile_selections([project], check_only=check_only)
+
+
+def reconcile_selections(projects: Sequence[Path], *, check_only: bool = False) -> list[str]:
+    projects = sorted({project_root(project) for project in projects
+                       if (project_root(project) / ".agents/plugins.json").is_file()})
+    if not projects:
         return []
     script = Path(__file__).resolve().parents[1] / "utility/plugins/scripts/adopt_plugins.py"
+    additional = [argument for project in projects[1:] for argument in ("--also-root", str(project))]
     try:
         result = subprocess.run(
-            [sys.executable, "-B", str(script), "--root", str(project), "--converge-existing",
-             "--mode", "check" if check_only else "write"],
+            [sys.executable, "-B", str(script), "--root", str(projects[0]), "--converge-existing",
+             "--mode", "check" if check_only else "write", *additional],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False,
         )
     except (OSError, subprocess.SubprocessError) as error:
