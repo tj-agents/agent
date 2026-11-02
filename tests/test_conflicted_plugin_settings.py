@@ -185,6 +185,35 @@ def test_batch_worktrees_share_exclusions_without_losing_owners(
     assert ADOPT.reconcile_many([root, linked], "write") == []
 
 
+def test_real_conflict_inside_parseable_toml_string_is_not_accepted(
+    scenario: GitScenario,
+) -> None:
+    path = scenario.root / ".codex/config.toml"
+    original = path.read_text(encoding="utf-8")
+    path.write_text(
+        'developer_instructions = """\nbase\n"""\n' + original, encoding="utf-8"
+    )
+    scenario.commit("Instruction base")
+    path.write_text(
+        'developer_instructions = """\nstashed\n"""\n' + original, encoding="utf-8"
+    )
+    scenario.git("stash", "push")
+    path.write_text(
+        'developer_instructions = """\nupstream\n"""\n' + original, encoding="utf-8"
+    )
+    scenario.commit("Upstream instructions")
+    result = scenario.git("stash", "apply", success=False)
+    assert isinstance(result, subprocess.CompletedProcess) and result.returncode != 0
+    assert (
+        "<<<<<<<"
+        in tomllib.loads(path.read_text(encoding="utf-8"))["developer_instructions"]
+    )
+    before = scenario.snapshot()
+    with pytest.raises((ValueError, ADOPT.lock_io.LockError)):
+        ADOPT.reconcile(scenario.root, "write")
+    assert scenario.snapshot() == before
+
+
 @pytest.mark.parametrize("kind", ["json", "toml"])
 def test_conflicting_unmanaged_settings_block_the_entire_write(
     scenario: GitScenario, kind: str
