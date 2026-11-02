@@ -4,21 +4,21 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
-from types import SimpleNamespace
+import time
+from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
+import register_session
+import session_close
 from codex import client as cli_client
 from codex import hook_trust
-from tj_cli import processes
-import session_close
-import register_session
 from host import Host
+from tj_cli import processes
 
 
 def load(name, relative):
@@ -28,7 +28,6 @@ def load(name, relative):
     return module
 
 
-CLOSE = load("test_close_command", "plugins/agent/.agents/agent/utility/close/scripts/agent_close.py")
 WATCHER = load("test_close_watch", "plugins/agent/.agents/agent/utility/peer/scripts/client_close_watcher.py")
 LIFECYCLE = load("test_close_hooks", "plugins/agent/.agents/agent/runtime/close_lifecycle.py")
 
@@ -44,19 +43,20 @@ class CloseFixture:
         self.rollout.parent.mkdir(parents=True)
         self.patch(mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(self.root),
             "CODEX_HOME": str(self.profile), "CLAUDE_CONFIG_DIR": str(self.profile)}))
-        self.patch(mock.patch.object(CLOSE, "_session_close", return_value=session_close))
-        self.spawn = self.patch(mock.patch.object(session_close, "start_agent_watcher", return_value=99))
+        self.spawn = self.patch(mock.patch.object(session_close, "start_agent_watcher", side_effect=self.acknowledge_watcher))
         self.patch(mock.patch.object(LIFECYCLE.secrets, "token_urlsafe", return_value="token"))
         self.stop_patch = mock.patch.object(processes, "stop", side_effect=lambda _identity, *, before_signal: before_signal())
         self.primitive_stop = self.patch(self.stop_patch)
         self.registry = self.root / "cli-sessions/one.json"
         self.target = self.root / "target.json"
+        self.target.write_text("terminal acceptance source\n", encoding="utf-8")
         self.transcript = self.root / "one.jsonl"
         self.append({"type": "user", "uuid": "user-one", "message": {"content": "close"}})
         self.backend = {"pid": 10, "process_start_time": "daemon-start"}
         self.infos = {10: register_session.ProcessInfo(10, 1, "codex.exe", 10.0),
                       20: register_session.ProcessInfo(20, 1, host + ".exe", 20.0)}
         self.patch(mock.patch.object(session_close, "process_info", side_effect=self.infos.get))
+        self.patch(mock.patch.object(WATCHER.os, "getpid", return_value=20))
         self.patch(mock.patch.object(register_session, "build_process_lookup", return_value=self.infos.get))
         self.patch(mock.patch.object(register_session, "process_table", side_effect=lambda: self.infos))
         self.patch(mock.patch.object(session_close.os, "getppid", return_value=20))
@@ -132,16 +132,85 @@ class CloseFixture:
         with self.rollout.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record) + "\n")
 
-    def assess_args(self, decision="complete", reason="owned delivery is finished"):
-        return ["assess", "--host", self.host, "--session-id", "one", "--profile", str(self.profile),
-                "--decision", decision, "--reason", reason, "--transcript", str(self.transcript)]
+    def receipt(self, state="accepted"):
+        source = {"path": str(self.target), "sha256": hashlib.sha256(self.target.read_bytes()).hexdigest()}
+        sources = [source]
+        owner = {"host": self.host, "session_id": "one"}
+        bound_delivery = None
+        candidate_id = hashlib.sha256(
+            json.dumps(
+                {"owner": owner, "sources": sources, "bound_delivery": bound_delivery},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        sources_sha256 = hashlib.sha256(json.dumps(sources, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        audit_result = self.root / "audit-result.json"
+        audit_result.write_text("{\"findings\": []}\n", encoding="utf-8")
+        path = self.root / "terminal-acceptance.json"
+        self.write(path, {"schema_version": 1, "kind": "terminal-acceptance", "candidate_id": candidate_id,
+                          "acceptance_generation": candidate_id, "state": state,
+                          "owner": owner, "sources": sources, "bound_delivery": bound_delivery,
+                          "deterministic": {"blockers": []},
+                          "aggregate": {"known": True, "owned": [], "responsibilities": [], "children": [], "waits": []},
+                          "audit": {"state": "passed", "candidate_id": candidate_id, "sources_sha256": sources_sha256,
+                                    "reservation_id": "reservation-one", "native_child_id": "native-child-one",
+                                    "result": {"path": str(audit_result), "sha256": hashlib.sha256(audit_result.read_bytes()).hexdigest()}},
+                          "cleanup": {"state": "retained"}, "checked_at": time.time()})
+        return path
 
-    def assess(self, decision="keep-open", reason="work remains"):
-        return CLOSE.main(self.assess_args(decision, reason))
+    def pending_cleanup_receipt(self, *, worker=True, mismatch=None):
+        path = self.receipt()
+        obligation_path = self.root / "cleanup-obligation.json"
+        worker_path = self.root / "cleanup-worker.json"
+        owner = {"host": self.host, "session_id": "one"}
+        if mismatch == "owner":
+            worker_owner = {"host": self.host, "session_id": "other"}
+        else:
+            worker_owner = owner
+        worktree = self.root / "cleanup-worktree" if mismatch == "worktree" else self.root
+        obligation = {"schema_version": 1, "kind": "targeted-cleanup", "obligation_id": "cleanup-one",
+                      "state": "pending", "owner": owner, "worktree": str(self.root), "primary": True,
+                      "branch": "main", "head": "head", "pr": None, "repository": "repo", "holders": [],
+                      "identity_sha256": "b" * 64, "launch_token": "launch-one", "launch": None,
+                      "worker": None, "created_at": 1.0, "updated_at": 1.0, "reason": "closeout"}
+        self.write(obligation_path, obligation)
+        if worker:
+            self.write(worker_path, {**obligation, "state": "running", "owner": worker_owner,
+                                     "worktree": str(worktree), "launch": {"token": "launch-one",
+                                     "launcher": {"pid": 99, "started_at": 99.0}},
+                                     "worker": {"pid": 20, "started_at": 20.0}})
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        receipt["cleanup"] = {"state": "pending", "obligation_id": "cleanup-one",
+                               "obligation_path": str(obligation_path), "receipt_path": str(worker_path),
+                               "owner": owner, "worktree": str(self.root)}
+        self.write(path, receipt)
+        return path
+
+    def retired_goal_receipt(self):
+        path = self.receipt()
+        checkpoint = self.root / "checkpoint-goal.json"
+        checkpoint.write_bytes(self.target.read_bytes())
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        receipt["checkpoint"] = {"retired_goal": True, "sources": [
+            {"path": str(checkpoint), "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest()}
+        ]}
+        self.write(path, receipt)
+        self.target.unlink()
+        return path, checkpoint
+
+    def acknowledge_watcher(self, _script, arguments):
+        request = Path(arguments[1])
+        digest = arguments[3]
+        value = json.loads(request.read_text(encoding="utf-8"))
+        self.write(Path(value["acknowledgement"]), {"request_sha256": digest, "pid": 20, "started_at": 20.0})
+        return 99
 
     def arm(self):
-        assert self.assess("complete") == 0
-        self.request_path = self.root / "close-lifecycle/requests/token.json"
+        prepared = LIFECYCLE.prepare(Host(self.host), "one", self.profile, "task-completion", session_close, self.receipt())
+        LIFECYCLE.arm(Host(self.host), "one", self.profile, prepared["release_generation"], session_close)
+        self.request_path = self.root / "terminal-release/requests/token.json"
         self.digest = hashlib.sha256(self.request_path.read_bytes()).hexdigest()
         self.request = WATCHER.load_request(self.request_path, self.digest)
 

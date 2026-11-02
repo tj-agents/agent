@@ -79,7 +79,7 @@ installed runtime and reports the update failure.
 ## Skills
 
 - `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
-  `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`, `agent:close`
+  `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`
 - `agent-store:inspect`
 - `codex:hooks`, `codex:memory`
 

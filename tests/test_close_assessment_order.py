@@ -16,59 +16,69 @@ def session() -> Iterator[Any]:
         yield fixture
 
 
-def test_later_keep_open_during_attribution_prevents_publication(session: Any) -> None:
+def prepare(session: Any) -> dict[str, Any]:
+    return LIFECYCLE.prepare(
+        Host.CODEX,
+        "one",
+        session.profile,
+        "task-completion",
+        session_close,
+        session.receipt(),
+    )
+
+
+def test_keep_open_policy_during_attribution_prevents_preparation(session: Any) -> None:
     adapter = session_close.host_sessions("codex")
     original = adapter.arm_close
 
     def keep_open(*args: Any) -> Any:
-        assert session.assess("keep-open", "preserve this session") == 0
+        LIFECYCLE.policy(
+            Host.CODEX, "one", session.profile, "keep-open", "preserve this session"
+        )
         return original(*args)
 
-    with mock.patch.object(adapter, "arm_close", side_effect=keep_open):
-        assert session.assess("complete") == 2
+    with (
+        mock.patch.object(adapter, "arm_close", side_effect=keep_open),
+        pytest.raises(ValueError, match="keep-open"),
+    ):
+        prepare(session)
 
-    assessment = LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json")
-    assert assessment["status"] == "kept-open"
-    assert assessment["reason"] == "preserve this session"
-    assert not (session.root / "close-lifecycle/one.json").exists()
+    assert not LIFECYCLE._state_path("one").exists()
     session.spawn.assert_not_called()
 
 
-def test_later_keep_open_survives_an_earlier_attribution_failure(session: Any) -> None:
-    adapter = session_close.host_sessions("codex")
-
-    def keep_open_then_fail(*args: Any) -> Any:
-        assert session.assess("keep-open", "preserve this session") == 0
-        raise RuntimeError("attribution failed")
-
-    with mock.patch.object(adapter, "arm_close", side_effect=keep_open_then_fail):
-        assert session.assess("complete") == 2
-
-    assessment = LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json")
-    assert assessment["status"] == "kept-open"
-    session.spawn.assert_not_called()
-
-
-def test_repeated_complete_preserves_the_armed_assessment(session: Any) -> None:
-    session.arm()
-    original = LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json")
-    assert session.assess("complete") == 2
-    assert LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json") == original
-    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-one", {})
-    session.stop()
-    assert session.wait() == 0
-    assert session.outcome()["status"] == "closed"
-    session.primitive_stop.assert_called_once()
-
-
-def test_new_input_records_assessment_while_cancelled_request_remains(
-    session: Any,
-) -> None:
-    session.arm()
+def test_new_input_cancels_a_prepared_generation_before_an_arm(session: Any) -> None:
+    prepared = prepare(session)
     LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "one", "turn_id": "turn-two"})
-    assert session.assess("complete") == 2
-    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
-    assert session.wait() == 0
-    assert session.outcome()["status"] == "cancelled"
-    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
-    session.primitive_stop.assert_not_called()
+    with pytest.raises(ValueError, match="not prepared"):
+        LIFECYCLE.arm(
+            Host.CODEX,
+            "one",
+            session.profile,
+            prepared["release_generation"],
+            session_close,
+        )
+    session.spawn.assert_not_called()
+
+
+def test_only_the_current_release_generation_can_arm(session: Any) -> None:
+    with mock.patch.object(LIFECYCLE.secrets, "token_urlsafe", side_effect=("first", "second")):
+        first = prepare(session)
+        second = prepare(session)
+    with pytest.raises(ValueError, match="generation changed"):
+        LIFECYCLE.recheck(
+            Host.CODEX,
+            "one",
+            session.profile,
+            first["release_generation"],
+            session_close,
+        )
+    outcome = LIFECYCLE.arm(
+        Host.CODEX,
+        "one",
+        session.profile,
+        second["release_generation"],
+        session_close,
+    )
+    assert outcome["status"] == "armed"
+    assert session.spawn.call_count == 1
