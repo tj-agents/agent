@@ -143,3 +143,69 @@ def test_failed_native_install_prevents_dependent_steps(tmp_path: Path) -> None:
             == 2
         )
     dependent.assert_not_called()
+
+
+def test_explicit_refresh_bootstraps_before_any_native_admission(
+    tmp_path: Path,
+) -> None:
+    with (
+        mock.patch.object(
+            native_runtime, "prepare", side_effect=RuntimeError("release unavailable")
+        ),
+        mock.patch.object(reload, "prepare_required") as inventory,
+    ):
+        assert reload.main(["--all", "--project", str(tmp_path)]) == 1
+    inventory.assert_not_called()
+
+
+def test_installer_check_converges_when_parent_shell_path_omits_native_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path / "native"))
+    monkeypatch.setenv("PATH", os.defpath)
+
+    def context() -> object:
+        return install.Context(
+            home=tmp_path, environ={"PATH": os.defpath}, windows=os.name == "nt"
+        )
+
+    with (
+        mock.patch.object(install, "machine_context", side_effect=context),
+        mock.patch.object(events, "require_tommy"),
+        mock.patch.object(native_runtime, "missing", return_value=()),
+        mock.patch.object(native_runtime, "prepare") as prepare,
+    ):
+        assert install.main(["--check", "--step", "native CLI"]) == 0
+        assert install.main(["--check", "--step", "native CLI"]) == 0
+    prepare.assert_not_called()
+
+
+def test_supervisor_retains_the_selected_native_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "native bin ü"
+    context = install.Context(
+        home=tmp_path, environ={"TJ_BIN_DIR": str(directory)}, windows=os.name == "nt"
+    )
+    service = importlib.import_module("event_service")
+    assert "--native-bin-dir=" + str(directory.resolve()) in service.arguments(context)
+    monkeypatch.delenv("TJ_BIN_DIR", raising=False)
+    with (
+        mock.patch.object(events, "require_tommy"),
+        mock.patch.object(events, "catch_up_states", return_value=[]),
+        mock.patch.object(events, "Reconciler") as reconciler,
+    ):
+        reconciler.return_value.state = {}
+        reconciler.return_value.catch_up.return_value = []
+        assert (
+            events.main(
+                [
+                    "--native-bin-dir",
+                    str(directory),
+                    "--state-directory",
+                    str(tmp_path / "state"),
+                ]
+            )
+            == 0
+        )
+    assert native_install.default_bin_dir() == directory.resolve()

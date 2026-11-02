@@ -449,7 +449,7 @@ def _run(
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
-        if platform.system() == "Windows":
+        if sys.platform == "win32":
             result = subprocess.run(
                 command,
                 check=True,
@@ -473,7 +473,7 @@ def _run(
 
 def _run_download(command: list[str], stream: BinaryIO) -> None:
     try:
-        if platform.system() == "Windows":
+        if sys.platform == "win32":
             subprocess.run(
                 command,
                 check=True,

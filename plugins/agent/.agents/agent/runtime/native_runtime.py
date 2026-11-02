@@ -19,6 +19,11 @@ def search_path(value: str) -> str:
     )
 
 
+def expose() -> None:
+    """Prepare the current process environment without installing any files."""
+    os.environ["PATH"] = search_path(os.environ.get("PATH", os.defpath))
+
+
 def prepare(*, revision: str | None = None) -> tuple[str, ...]:
     """Repair missing binaries or apply an exact producer revision, then expose them."""
     changed: tuple[str, ...] = ()
@@ -36,5 +41,5 @@ def prepare(*, revision: str | None = None) -> tuple[str, ...]:
             )
         finally:
             lock.close()
-    os.environ["PATH"] = search_path(os.environ.get("PATH", os.defpath))
+    expose()
     return changed
