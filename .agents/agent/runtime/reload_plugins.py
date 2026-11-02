@@ -17,6 +17,7 @@ import agent_cli
 from host import Host
 from host_plugins import PLUGINS, Plugins
 import launch_check
+import managed_admission
 import plugin_refresh
 from plugin_refresh import RefreshError
 import required_plugins
@@ -40,13 +41,13 @@ def refresh(plugins: Plugins, executable: str, project: Path, marketplaces: dict
 
 
 def prepare_required(project: Path, host: Host, executable: str | None = None,
-                     inventory_options: tuple[str, ...] = (), updated: set[str] | None = None):
+                     inventory_options: tuple[str, ...] = (), updated: set[str] | None = None, *, admission: bool = False):
     required_plugins.reconcile_selection(project)
     try:
-        return required_plugins.check(project, host, executable, inventory_options)
+        return required_plugins.check(project, host, executable, inventory_options, admission=admission)
     except required_plugins.MissingRequiredPluginsError as error:
         repair_missing(host, error.project, error.missing, executable)
-        roots = required_plugins.check(project, host, executable, inventory_options)
+        roots = required_plugins.check(project, host, executable, inventory_options, admission=admission)
         if updated is not None:
             updated.update(error.missing)
         return roots
@@ -115,6 +116,11 @@ def verify_packages(plugins: Plugins, executable: str, project: Path, marketplac
                 install = plugins.install_path(entry, name, plugin)
                 if plugin_refresh.package_tree(install) != expected:
                     problems.append(f"Native installed bytes differ from marketplace: {identity} ({install})")
+    if not problems:
+        try:
+            managed_admission.verify(project, host, executable)
+        except managed_admission.AdmissionError as error:
+            problems.append(str(error))
     return {"host": host.value, "plugins": identities, "marketplaces": revisions, "problems": problems}
 
 

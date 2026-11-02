@@ -151,7 +151,7 @@ def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -
 
 
 def check(project: Path, host: Host, executable: str | None = None,
-          inventory_options: tuple[str, ...] = ()) -> dict[str, Path] | None:
+          inventory_options: tuple[str, ...] = (), *, admission: bool = True) -> dict[str, Path] | None:
     plugins = host_plugins.PLUGINS[host]
     launch_directory = project.resolve()
     project = project_root(launch_directory)
@@ -163,6 +163,10 @@ def check(project: Path, host: Host, executable: str | None = None,
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
     roots = inventory_roots(launch_directory, host, binary, inventory_options, identities=required)
+    import managed_admission
+
+    if admission:
+        managed_admission.verify(project, host, binary, roots)
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(
