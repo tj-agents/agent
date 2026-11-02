@@ -1,56 +1,56 @@
 """Regression coverage using actual Git stash application conflicts."""
 
+from __future__ import annotations
+
 import importlib.util
 import json
-from pathlib import Path
+import os
 import subprocess
 import sys
-import tempfile
 import tomllib
-import unittest
-from unittest import mock
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-from git_isolation import isolate_git_config
-
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/agent/.agents/agent/utility/plugins/scripts"
 sys.path.insert(0, str(SCRIPTS))
-spec = importlib.util.spec_from_file_location("conflict_adoption", SCRIPTS / "adopt_plugins.py")
-ADOPT = importlib.util.module_from_spec(spec)
+spec = importlib.util.spec_from_file_location(
+    "conflict_adoption", SCRIPTS / "adopt_plugins.py"
+)
+assert spec is not None and spec.loader is not None
+ADOPT: Any = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ADOPT)
 FILES = (".agents/plugins.json", ".claude/settings.json", ".codex/config.toml")
 
 
-class ConflictRecoveryTests(unittest.TestCase):
-    def setUp(self):
-        isolate_git_config()
-        temporary = tempfile.TemporaryDirectory(prefix="plugin stash ü ")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        patch = mock.patch.object(ADOPT, "current_roster", side_effect=ADOPT.load_roster)
-        patch.start()
-        self.addCleanup(patch.stop)
-        self.git("init", "--initial-branch=main")
-        self.git("config", "user.name", "Fixture")
-        self.git("config", "user.email", "fixture@example.invalid")
-        self.git("config", "core.hooksPath", "")
-        self.git("remote", "add", "origin", "https://github.com/tj-agents/fixture.git")
-        ADOPT.run(self.root, [], ["base"], "write")
-        self.commit("Base selection")
+@dataclass
+class GitScenario:
+    root: Path
 
-    def git(self, *arguments, success=True):
-        result = subprocess.run(["git", *arguments], cwd=self.root, capture_output=True,
-                                text=True, encoding="utf-8", timeout=15)
+    def git(
+        self, *arguments: str, success: bool = True
+    ) -> str | subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+        )
         if success:
-            self.assertEqual(0, result.returncode, result.stderr)
-        return result.stdout if success else result
+            assert result.returncode == 0, result.stderr
+            return result.stdout
+        return result
 
-    def commit(self, title):
+    def commit(self, title: str) -> None:
         self.git("add", ".")
         self.git("commit", "-m", title)
 
-    def stash_conflict(self, user_key=None):
+    def stash_conflict(self, user_key: str | None = None) -> None:
         ADOPT.run(self.root, [], ["python"], "write")
         if user_key:
             self.set_user_key("stashed", user_key)
@@ -60,10 +60,13 @@ class ConflictRecoveryTests(unittest.TestCase):
             self.set_user_key("upstream", user_key)
         self.commit("Published selection update")
         result = self.git("stash", "apply", success=False)
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn(".agents/plugins.json", self.git("diff", "--name-only", "--diff-filter=U"))
+        assert isinstance(result, subprocess.CompletedProcess)
+        assert result.returncode != 0
+        unmerged = self.git("diff", "--name-only", "--diff-filter=U")
+        assert isinstance(unmerged, str)
+        assert ".agents/plugins.json" in unmerged
 
-    def set_user_key(self, value, kind):
+    def set_user_key(self, value: str, kind: str) -> None:
         if kind == "json":
             path = self.root / ".claude/settings.json"
             document = json.loads(path.read_text(encoding="utf-8"))
@@ -74,83 +77,135 @@ class ConflictRecoveryTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             path.write_text(f'model = "{value}"\n' + text, encoding="utf-8")
 
-    def snapshot(self):
+    def snapshot(self) -> dict[str, bytes]:
         return {name: (self.root / name).read_bytes() for name in FILES}
 
-    def test_real_stash_conflicts_converge_both_hosts_preserving_user_edits(self):
-        self.stash_conflict()
-        index = self.git("ls-files", "-u")
-        # Edits made after the failed stash application must survive too.
-        path = self.root / ".codex/config.toml"
-        path.write_text('model = "custom-model"\n' + path.read_text(encoding="utf-8"), encoding="utf-8")
-        before = self.snapshot()
-        self.assertTrue(ADOPT.reconcile(self.root, "check"))
-        self.assertEqual(before, self.snapshot())
-        ADOPT.reconcile(self.root, "write")
-        selection = json.loads((self.root / FILES[0]).read_text(encoding="utf-8"))["plugins"]
-        self.assertIn("python@tj-agents", selection)
-        self.assertIn("github-actions@tj-agents", selection)
-        claude = json.loads((self.root / FILES[1]).read_text(encoding="utf-8"))
-        codex = tomllib.loads((self.root / FILES[2]).read_text(encoding="utf-8"))
-        self.assertEqual(set(selection), set(claude["enabledPlugins"]))
-        self.assertEqual(set(selection), set(codex["plugins"]))
-        self.assertEqual("custom-model", codex["model"])
-        self.assertEqual(index, self.git("ls-files", "-u"))
-        self.assertEqual([], ADOPT.reconcile(self.root, "write"))
 
-    def test_conflicting_unmanaged_settings_block_the_entire_write(self):
-        for kind in ("json", "toml"):
-            with self.subTest(kind=kind):
-                self.git("reset", "--hard", "HEAD")
-                self.stash_conflict(user_key=kind)
-                before = self.snapshot()
-                with self.assertRaises((ADOPT.lock_io.LockError, ValueError)):
-                    ADOPT.reconcile(self.root, "write")
-                self.assertEqual(before, self.snapshot())
-                self.git("reset", "--hard", "HEAD~1")
-
-    def test_independent_marketplace_addition_is_merged_with_plugin_membership(self):
-        ADOPT.run(self.root, [], ["legacy@concertable"], "write", marketplaces=["concertable=Concertable/agents"])
-        self.git("stash", "push")
-        ADOPT.run(self.root, [], ["python"], "write")
-        self.commit("Independent plugin update")
-        self.assertNotEqual(0, self.git("stash", "apply", success=False).returncode)
-        ADOPT.reconcile(self.root, "write")
-        document = json.loads((self.root / FILES[0]).read_text(encoding="utf-8"))
-        self.assertIn("legacy@concertable", document["plugins"])
-        self.assertIn("python@tj-agents", document["plugins"])
-
-    def test_removal_of_last_marketplace_plugin_does_not_drop_an_independent_addition(self):
-        ADOPT.run(self.root, [], ["legacy@concertable"], "write", marketplaces=["concertable=Concertable/agents"])
-        self.commit("Foreign plugin baseline")
-        ADOPT.run(self.root, [], [], "write", removals=["legacy@concertable"])
-        self.git("stash", "push")
-        ADOPT.run(self.root, [], ["new@concertable"], "write")
-        self.commit("New plugin in the same marketplace")
-        self.assertNotEqual(0, self.git("stash", "apply", success=False).returncode)
-        ADOPT.reconcile(self.root, "write")
-        document = json.loads((self.root / FILES[0]).read_text(encoding="utf-8"))
-        self.assertNotIn("legacy@concertable", document["plugins"])
-        self.assertIn("new@concertable", document["plugins"])
-
-    def test_committed_markers_have_no_authority_to_reconstruct_configuration(self):
-        self.stash_conflict()
-        self.git("add", *FILES)
-        self.git("commit", "-m", "Invalid committed conflict markers")
-        before = self.snapshot()
-        with self.assertRaisesRegex(ADOPT.lock_io.LockError, "no complete Git merge stages"):
-            ADOPT.reconcile(self.root, "write")
-        self.assertEqual(before, self.snapshot())
-
-    def test_invalid_unmanaged_toml_is_rejected_before_any_write(self):
-        self.stash_conflict()
-        path = self.root / ".codex/config.toml"
-        path.write_text("broken = [\n" + path.read_text(encoding="utf-8"), encoding="utf-8")
-        before = self.snapshot()
-        with self.assertRaises(ValueError):
-            ADOPT.reconcile(self.root, "write")
-        self.assertEqual(before, self.snapshot())
+@pytest.fixture
+def scenario(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GitScenario:
+    for name in tuple(os.environ):
+        if name == "GIT_CONFIG_COUNT" or name.startswith(
+            ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+        ):
+            monkeypatch.delenv(name)
+    monkeypatch.setattr(ADOPT, "current_roster", ADOPT.load_roster)
+    result = GitScenario(tmp_path)
+    result.git("init", "--initial-branch=main")
+    result.git("config", "user.name", "Fixture")
+    result.git("config", "user.email", "fixture@example.invalid")
+    result.git("config", "core.hooksPath", "")
+    result.git("remote", "add", "origin", "https://github.com/tj-agents/fixture.git")
+    ADOPT.run(result.root, [], ["base"], "write")
+    result.commit("Base selection")
+    return result
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_real_stash_conflicts_converge_both_hosts_preserving_user_edits(
+    scenario: GitScenario,
+) -> None:
+    scenario.stash_conflict()
+    index = scenario.git("ls-files", "-u")
+    assert isinstance(index, str)
+    # Edits made after the failed stash application must survive too.
+    path = scenario.root / ".codex/config.toml"
+    path.write_text(
+        'model = "custom-model"\n' + path.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    before = scenario.snapshot()
+    assert ADOPT.reconcile(scenario.root, "check")
+    assert before == scenario.snapshot()
+    ADOPT.reconcile(scenario.root, "write")
+    selection = json.loads((scenario.root / FILES[0]).read_text(encoding="utf-8"))[
+        "plugins"
+    ]
+    assert "python@tj-agents" in selection
+    assert "github-actions@tj-agents" in selection
+    claude = json.loads((scenario.root / FILES[1]).read_text(encoding="utf-8"))
+    codex = tomllib.loads((scenario.root / FILES[2]).read_text(encoding="utf-8"))
+    assert set(selection) == set(claude["enabledPlugins"])
+    assert set(selection) == set(codex["plugins"])
+    assert codex["model"] == "custom-model"
+    assert index == scenario.git("ls-files", "-u")
+    assert ADOPT.reconcile(scenario.root, "write") == []
+
+
+@pytest.mark.parametrize("kind", ["json", "toml"])
+def test_conflicting_unmanaged_settings_block_the_entire_write(
+    scenario: GitScenario, kind: str
+) -> None:
+    scenario.stash_conflict(user_key=kind)
+    before = scenario.snapshot()
+    with pytest.raises((ADOPT.lock_io.LockError, ValueError)):
+        ADOPT.reconcile(scenario.root, "write")
+    assert before == scenario.snapshot()
+    scenario.git("reset", "--hard", "HEAD~1")
+
+
+def test_independent_marketplace_addition_is_merged_with_plugin_membership(
+    scenario: GitScenario,
+) -> None:
+    ADOPT.run(
+        scenario.root,
+        [],
+        ["legacy@concertable"],
+        "write",
+        marketplaces=["concertable=Concertable/agents"],
+    )
+    scenario.git("stash", "push")
+    ADOPT.run(scenario.root, [], ["python"], "write")
+    scenario.commit("Independent plugin update")
+    result = scenario.git("stash", "apply", success=False)
+    assert isinstance(result, subprocess.CompletedProcess)
+    assert result.returncode != 0
+    ADOPT.reconcile(scenario.root, "write")
+    document = json.loads((scenario.root / FILES[0]).read_text(encoding="utf-8"))
+    assert "legacy@concertable" in document["plugins"]
+    assert "python@tj-agents" in document["plugins"]
+
+
+def test_removal_of_last_marketplace_plugin_does_not_drop_an_independent_addition(
+    scenario: GitScenario,
+) -> None:
+    ADOPT.run(
+        scenario.root,
+        [],
+        ["legacy@concertable"],
+        "write",
+        marketplaces=["concertable=Concertable/agents"],
+    )
+    scenario.commit("Foreign plugin baseline")
+    ADOPT.run(scenario.root, [], [], "write", removals=["legacy@concertable"])
+    scenario.git("stash", "push")
+    ADOPT.run(scenario.root, [], ["new@concertable"], "write")
+    scenario.commit("New plugin in the same marketplace")
+    result = scenario.git("stash", "apply", success=False)
+    assert isinstance(result, subprocess.CompletedProcess)
+    assert result.returncode != 0
+    ADOPT.reconcile(scenario.root, "write")
+    document = json.loads((scenario.root / FILES[0]).read_text(encoding="utf-8"))
+    assert "legacy@concertable" not in document["plugins"]
+    assert "new@concertable" in document["plugins"]
+
+
+def test_committed_markers_have_no_authority_to_reconstruct_configuration(
+    scenario: GitScenario,
+) -> None:
+    scenario.stash_conflict()
+    scenario.git("add", *FILES)
+    scenario.git("commit", "-m", "Invalid committed conflict markers")
+    before = scenario.snapshot()
+    with pytest.raises(ADOPT.lock_io.LockError, match="no complete Git merge stages"):
+        ADOPT.reconcile(scenario.root, "write")
+    assert before == scenario.snapshot()
+
+
+def test_invalid_unmanaged_toml_is_rejected_before_any_write(
+    scenario: GitScenario,
+) -> None:
+    scenario.stash_conflict()
+    path = scenario.root / ".codex/config.toml"
+    path.write_text("broken = [\n" + path.read_text(encoding="utf-8"), encoding="utf-8")
+    before = scenario.snapshot()
+    with pytest.raises(ValueError):
+        ADOPT.reconcile(scenario.root, "write")
+    assert before == scenario.snapshot()
