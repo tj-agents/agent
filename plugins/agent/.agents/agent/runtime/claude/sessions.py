@@ -159,9 +159,6 @@ def check_relaunch(project: Path, executable: str, native: list[str], session_id
     return None
 
 
-def close_arguments(entry: dict) -> list[str]:
-    return []
-
 
 def own_entry(nearest, cwd: Path, session_id: str | None, shared) -> dict | None:
     return None

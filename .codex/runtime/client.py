@@ -276,7 +276,8 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
         try:
             record = json.loads(path.read_text(encoding='utf-8'))
             if (not isinstance(record, dict) or path != binding_path(record.get('token'))
-                    or record.get('profile') != str(profile_directory()) or record.get('backend') != backend
+                    or comparable_path(Path(record.get('profile', ''))) != comparable_path(profile_directory())
+                    or record.get('backend') != backend
                     or type(record.get('pid')) is not int or record['pid'] <= 0):
                 continue
             info = lookup(record['pid'])
@@ -287,8 +288,10 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
                     or not times[0] <= times[1] or not times[0] - 2 <= info.started_at <= times[1] + 2):
                 continue
             context = process_context(info.pid)
-            event_path = str(path.with_name('events.jsonl'))
-            if (record.get('recording_path') != event_path or context.get(RECORD_PATH_ENV) != event_path
+            event_path = path.with_name('events.jsonl')
+            event_identity = comparable_path(event_path)
+            if (comparable_path(Path(record.get('recording_path', ''))) != event_identity
+                    or comparable_path(Path(context.get(RECORD_PATH_ENV, ''))) != event_identity
                     or context.get(RECORD_ENV) not in ('1', 'true', 'TRUE', 'yes', 'YES')
                     or Path(context['profile']) != profile_directory()):
                 continue
@@ -300,7 +303,8 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
             for other in table.values():
                 if other.pid == info.pid or Path(other.name).stem.casefold() != HOST.value:
                     continue
-                if peer_recording_path(other, peer_state) == event_path:
+                peer_path = peer_recording_path(other, peer_state)
+                if peer_path is not None and comparable_path(Path(peer_path)) == event_identity:
                     raise RuntimeError('Multiple native processes share a frontend recording; preserving every client')
             if (info.pid != nearest.pid
                     and (private or nearest.pid != backend['pid'])):

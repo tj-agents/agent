@@ -202,7 +202,11 @@ class RuntimeReceiptUpdateTests(unittest.TestCase):
         state = self.root / "state"
         managed = state / "bin/.agents/agent/runtime"
         managed.mkdir(parents=True)
-        with mock.patch.object(self.events.plugins, "state_directory", return_value=state), \
+        from claude import plugins as claude_plugins
+
+        with mock.patch.object(claude_plugins, "update_registered"), \
+                mock.patch.object(self.events.plugins, "load_codex_config", return_value={}), \
+                mock.patch.object(self.events.plugins, "state_directory", return_value=state), \
                 mock.patch.object(self.events.plugins, "main", return_value=0) as refresh, \
                 mock.patch.object(self.events.plugins, "__file__", str(managed / "plugin_autoupdate.py")):
             self.assertEqual(0, self.events.refresh_plugins())
