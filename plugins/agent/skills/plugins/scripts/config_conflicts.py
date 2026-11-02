@@ -6,11 +6,20 @@ import json
 import subprocess
 import tempfile
 import tomllib
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 MISSING = object()
+
+
+def marker_lines(text: str) -> Counter[str]:
+    return Counter(
+        line
+        for line in text.splitlines()
+        if line.startswith(("<<<<<<<", "|||||||", "=======", ">>>>>>>"))
+    )
 
 
 def merge(base: Any, ours: Any, theirs: Any, label: str) -> Any:
@@ -88,6 +97,14 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
     }:
         return text
     root = path.parent.parent.resolve()
+    valid_toml = False
+    if path.suffix == ".toml":
+        try:
+            tomllib.loads(text)
+        except tomllib.TOMLDecodeError:
+            pass
+        else:
+            valid_toml = True
     # A real unmerged index is required. Committed markers or arbitrary invalid
     # configuration are never treated as permission to reconstruct user data.
     stages = subprocess.run(
@@ -103,13 +120,8 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
     } != {"1", "2", "3"}:
         # Literal examples are valid TOML too, but actual conflicts inside a
         # multiline string remain parseable. Authenticate Git state first.
-        if path.suffix == ".toml":
-            try:
-                tomllib.loads(text)
-            except tomllib.TOMLDecodeError:
-                pass
-            else:
-                return text
+        if valid_toml:
+            return text
         raise ValueError(
             f"{path}: configuration markers have no complete Git merge stages"
         )
@@ -123,6 +135,25 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
         check=True,
     )
     base = result.stdout
+    if valid_toml:
+        # An unstaged manual resolution retains Git's unmerged stages. Literal
+        # marker lines already shared by every stage must not reopen that work.
+        markers = marker_lines(text)
+        staged = [base]
+        for stage in (2, 3):
+            staged.append(
+                subprocess.run(
+                    ["git", "show", f":{stage}:" + relative],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=10,
+                    check=True,
+                ).stdout
+            )
+        if all(markers <= marker_lines(value) for value in staged):
+            return text
     ours, theirs = variants(text)
     if relative == ".agents/plugins.json":
         documents: list[dict[str, Any]] = []
