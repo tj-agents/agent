@@ -135,7 +135,7 @@ def unmanaged_codex(text: str) -> str:
 
 
 def codex_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool]) -> str:
-    existing = config_conflicts.read_text(path) if path.is_file() else ""
+    existing = config_conflicts.read_text(path, unmanaged=unmanaged_codex) if path.is_file() else ""
     prefix = unmanaged_codex(existing)
     return (prefix + "\n\n" if prefix else "") + codex_block(sources, identities)
 
