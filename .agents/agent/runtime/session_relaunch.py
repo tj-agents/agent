@@ -6,16 +6,16 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-from pathlib import Path
 import secrets
 import shlex
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-from host import Host
 import host_plugins
 import host_sessions
+from host import Host
 
 HERE = Path(__file__).resolve().parent
 PROMPT = "Plugins were refreshed and this conversation resumed in a fresh process. Continue the requested work."
@@ -42,7 +42,7 @@ def write_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + "." + secrets.token_hex(4))
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    temporary.replace(path)
 
 
 def windows_split(command_line: str) -> list[str]:
@@ -84,6 +84,8 @@ def host_arguments(pid: int) -> list[str]:
 def utility_script(skill: str, name: str) -> Path:
     root_helper = HERE / "package_root.py"
     spec = importlib.util.spec_from_file_location("session_relaunch_package_root", root_helper)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("the packaged Agent package root helper is unavailable")
     package_root = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package_root)
     root = package_root.find_package_root(HERE)
@@ -97,6 +99,8 @@ def load(path: Path, name: str):
     if str(path.parent) not in sys.path:
         sys.path.insert(0, str(path.parent))
     spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"the Agent runtime module ({name}) is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -118,11 +122,20 @@ def recovery_script(project: Path, installed: dict) -> Path:
 def arm_client_close(project: Path, entry: dict, shared, host: Host) -> dict:
     import close_lifecycle
 
-    outcome = close_lifecycle.assess(host, entry["session_id"], Path(entry["profile"]),
-                                     "restart", "resume this session after plugin refresh", shared)
-    if outcome["status"] != "armed":
-        raise RuntimeError(outcome["reason"])
-    return {key: outcome[key] for key in ("request", "request_sha256", "result", "completion", "cancel", "completion_token")}
+    profile = Path(entry["profile"])
+    prepared = close_lifecycle.prepare(
+        host, entry["session_id"], profile, "refresh-restart", shared
+    )
+    close_lifecycle.recheck(
+        host, entry["session_id"], profile, prepared["release_generation"], shared
+    )
+    outcome = close_lifecycle.arm(
+        host, entry["session_id"], profile, prepared["release_generation"], shared
+    )
+    return {
+        key: outcome[key]
+        for key in ("request", "request_sha256", "result", "completion", "cancel", "completion_token")
+    }
 
 
 def claim_record(record: Path, value: dict) -> None:

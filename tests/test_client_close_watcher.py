@@ -2,11 +2,18 @@
 
 import json
 import os
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from close_fixtures import CloseFixture, Host, WATCHER, LIFECYCLE, session_close, cli_client, processes
+from close_fixtures import (
+    LIFECYCLE,
+    WATCHER,
+    CloseFixture,
+    Host,
+    processes,
+    session_close,
+)
 
 
 class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
@@ -188,14 +195,14 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         with self.assertRaisesRegex(session_close.Refusal, "frozen close request changed"):
             WATCHER.load_request(self.request_path, self.digest)
 
-    def test_prompt_end_or_second_stop_keeps_cancellation_routing_until_outcome(self):
+    def test_second_matching_stop_preserves_release_completion(self):
         self.arm()
         self.stop()
         LIFECYCLE.run("stop", Host.CODEX, {"session_id": "one", "turn_id": "turn-one"})
         self.assertTrue(WATCHER.canonical_path(self.request).exists())
         self.assertEqual(0, self.wait())
-        self.assertEqual("cancelled", self.outcome()["status"])
-        self.assertIsNone(self.row().ended_at)
+        self.assertEqual("closed", self.outcome()["status"])
+        self.assertIsNotNone(self.row().ended_at)
 
 
 class ClaudeWatcherTests(CloseFixture, unittest.TestCase):

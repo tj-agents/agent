@@ -86,7 +86,7 @@ class NeverAutoCloseTests(unittest.TestCase):
         return sorted(str(path.relative_to(self.state)) for name in CLOSE_STATE
                       for path in (self.state / name).rglob("*") if path.is_file() and path.parent.name != "inputs")
 
-    def test_ending_a_turn_after_a_rejected_question_in_a_landed_worktree_arms_no_close(self):
+    def test_ending_a_turn_after_a_rejected_question_neither_prompts_nor_arms_close(self):
         self.append(
             record("user", "u1", "finish the refactor and keep the PRs moving"),
             record("assistant", "a1", [{"type": "tool_use", "id": "toolu_ask", "name": "AskUserQuestion",
@@ -100,8 +100,7 @@ class NeverAutoCloseTests(unittest.TestCase):
                     record("assistant", "a2", [{"type": "text", "text": "Stopping. Here is what happened."}],
                            stop_reason="end_turn"))
         responses = self.dispatch("Stop", stop_hook_active=False)
-        self.assertTrue(any(value.get("decision") == "block" and "agent:close" in value.get("reason", "")
-                            for value in responses))
+        self.assertFalse(any(value.get("decision") == "block" for value in responses))
         self.assertFalse(any(value.get("decision") == "block"
                              for value in self.dispatch("Stop", stop_hook_active=True)))
         self.assertEqual([], self.close_requests())
