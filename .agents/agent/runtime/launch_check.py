@@ -289,13 +289,14 @@ def require_update_check(result: str) -> None:
 def prepare_launch_roots(project, host: Host, executable, arguments):
     import required_plugins
     import reload_plugins
+    import managed_admission
 
     effective_project, options = required_plugins.launch_context(project, host, arguments)
     if effective_project is None:
         return None, None
     try:
-        roots = reload_plugins.prepare_required(effective_project, host, executable, options)
-    except required_plugins.RequiredPluginsError:
+        roots = reload_plugins.prepare_required(effective_project, host, executable, options, admission=True)
+    except (required_plugins.RequiredPluginsError, managed_admission.AdmissionError):
         raise
     except (RuntimeError, OSError) as admission_error:
         if os.environ.get(INSTALL_RECOVERY):
@@ -307,7 +308,7 @@ def prepare_launch_roots(project, host: Host, executable, arguments):
                 f"Required plugin setup failed: {admission_error}\n"
                 f"Automatic plugin setup recovery failed: {recovery_error}"
             ) from recovery_error
-        roots = reload_plugins.prepare_required(effective_project, host, executable, options)
+        roots = reload_plugins.prepare_required(effective_project, host, executable, options, admission=True)
     return effective_project, roots
 
 
@@ -334,11 +335,15 @@ def main(argv: list[str] | None = None) -> int:
     effective_project = arguments.project.resolve()
     if arguments.host:
         import required_plugins
+        import managed_admission
 
         try:
             native_arguments = arguments.arguments[1:] if arguments.arguments[:1] == ["--"] else arguments.arguments
             effective_project = prepare_launch(arguments.project.resolve(), arguments.host,
                                                arguments.target, native_arguments)
+        except managed_admission.AdmissionError as error:
+            print(f"plugins: {error}", file=sys.stderr)
+            return 1
         except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
             print(f"plugins: {error}", file=sys.stderr)
             print("plugins: launching anyway.", file=sys.stderr)
@@ -360,6 +365,10 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             PLUGINS[host].ensure_hooks(effective_project, arguments.target)
+            managed_admission.verify(effective_project, host, arguments.target)
+        except managed_admission.AdmissionError as error:
+            print(f"plugins: {error}", file=sys.stderr)
+            return 1
         except Exception as error:
             print(f"plugins: required hook readiness failed: {error}", file=sys.stderr)
             print("plugins: launching anyway.", file=sys.stderr)
