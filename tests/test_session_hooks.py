@@ -6,7 +6,7 @@ import unittest
 PACKAGE = Path(__file__).resolve().parents[1] / "plugins" / "agent"
 CLAUDE_ROOT = "${CLAUDE_PLUGIN_ROOT}/"
 CODEX_ROOT = "${PLUGIN_ROOT}/"
-EVENTS = {"SessionStart", "UserPromptSubmit", "Stop"}
+EVENTS = {"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"}
 
 
 def hooks(host):
@@ -22,6 +22,20 @@ class SessionHookTests(unittest.TestCase):
         for host in ("claude", "codex"):
             with self.subTest(host=host):
                 self.assertTrue(EVENTS <= set(hooks(host)))
+
+    def test_lifecycle_decisions_are_synchronous_and_session_end_cancels_first(self):
+        for host in ("claude", "codex"):
+            for event in ("UserPromptSubmit", "Stop", "SessionEnd"):
+                for group in hooks(host)[event]:
+                    for hook in group["hooks"]:
+                        with self.subTest(host=host, event=event):
+                            self.assertFalse(hook.get("async", False))
+                            command = json.dumps(hook)
+                            self.assertIn("close_lifecycle.py", command)
+                            if event == "SessionEnd":
+                                self.assertLess(command.index("close_lifecycle.py"),
+                                                command.index("session_hook.py"))
+                                self.assertLessEqual(hook["timeout"], 3)
 
     def test_every_script_a_hook_names_ships_in_the_package(self):
         for host, root in (("claude", CLAUDE_ROOT), ("codex", CODEX_ROOT)):

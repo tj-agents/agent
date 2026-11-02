@@ -27,7 +27,6 @@
         "hooks": [
           {
             "type": "command",
-            "async": true,
             "timeout": 15,
             "command": "tj_hook",
             "args": [
@@ -57,7 +56,6 @@
         "hooks": [
           {
             "type": "command",
-            "async": true,
             "timeout": 60,
             "command": "tj_hook",
             "args": [
@@ -87,13 +85,21 @@
         "hooks": [
           {
             "type": "command",
-            "async": true,
-            "timeout": 10,
+            "timeout": 3,
             "command": "tj_hook",
             "args": [
               "--",
               "python",
               "-B",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/hook_dispatch.py",
+              "--deadline",
+              "2",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
+              "end",
+              "--host",
+              "claude",
+              "--hook",
               "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py",
               "session-end",
               "--host",

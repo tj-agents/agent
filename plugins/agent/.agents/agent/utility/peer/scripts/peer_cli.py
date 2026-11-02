@@ -128,6 +128,6 @@ def main(argv=None):
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (session_close.Refusal, close_tab.TerminalRefusal) as error:
+    except (session_close.Refusal, close_tab.processes.Refusal) as error:
         print("peer-cli: " + str(error), file=sys.stderr)
         raise SystemExit(2)
