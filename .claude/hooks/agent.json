@@ -5,7 +5,6 @@
         "hooks": [
           {
             "type": "command",
-            "async": true,
             "timeout": 10,
             "command": "python",
             "args": [

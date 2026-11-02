@@ -1,7 +1,7 @@
 import json
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1] / "plugins" / "agent"
 CLAUDE_ROOT = "${CLAUDE_PLUGIN_ROOT}/"
@@ -10,7 +10,9 @@ EVENTS = {"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"}
 
 
 def hooks(host):
-    return json.loads((PACKAGE / "hooks" / f"{host}.json").read_text(encoding="utf-8"))["hooks"]
+    return json.loads((PACKAGE / "hooks" / f"{host}.json").read_text(encoding="utf-8"))[
+        "hooks"
+    ]
 
 
 def packaged_paths(text, root):
@@ -18,10 +20,17 @@ def packaged_paths(text, root):
 
 
 class SessionHookTests(unittest.TestCase):
+    def test_claude_registers_its_frontend_before_the_first_turn(self):
+        for group in hooks("claude")["SessionStart"]:
+            for hook in group["hooks"]:
+                with self.subTest(hook=hook):
+                    self.assertFalse(hook.get("async", False))
+                    self.assertIn("register_session.py", json.dumps(hook))
+
     def test_both_hosts_register_the_session_lifecycle_events(self):
         for host in ("claude", "codex"):
             with self.subTest(host=host):
-                self.assertTrue(EVENTS <= set(hooks(host)))
+                self.assertTrue(set(hooks(host)) >= EVENTS)
 
     def test_lifecycle_decisions_are_synchronous_and_session_end_cancels_first(self):
         for host in ("claude", "codex"):
@@ -33,8 +42,10 @@ class SessionHookTests(unittest.TestCase):
                             command = json.dumps(hook)
                             self.assertIn("close_lifecycle.py", command)
                             if event == "SessionEnd":
-                                self.assertLess(command.index("close_lifecycle.py"),
-                                                command.index("session_hook.py"))
+                                self.assertLess(
+                                    command.index("close_lifecycle.py"),
+                                    command.index("session_hook.py"),
+                                )
                                 self.assertLessEqual(hook["timeout"], 3)
 
     def test_every_script_a_hook_names_ships_in_the_package(self):
@@ -51,8 +62,14 @@ class SessionHookTests(unittest.TestCase):
             for group in groups:
                 for hook in group["hooks"]:
                     with self.subTest(command=hook["command"][:60]):
-                        self.assertTrue(hook["command"].startswith("tj_hook -- python3 -I -B -c "))
-                        self.assertTrue(hook["commandWindows"].startswith("tj_hook -- python -I -B -c "))
+                        self.assertTrue(
+                            hook["command"].startswith("tj_hook -- python3 -I -B -c ")
+                        )
+                        self.assertTrue(
+                            hook["commandWindows"].startswith(
+                                "tj_hook -- python -I -B -c "
+                            )
+                        )
 
     def test_claude_hooks_use_the_native_launcher(self):
         for groups in hooks("claude").values():
