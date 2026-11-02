@@ -96,3 +96,42 @@ def test_new_input_records_assessment_while_cancelled_request_remains(
     assert session.outcome()["status"] == "cancelled"
     assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
     session.primitive_stop.assert_not_called()
+
+
+def test_keep_open_cannot_cancel_another_profile_published_during_resolution(
+    session: Any,
+) -> None:
+    session.arm()
+    original = LIFECYCLE.current_input
+    foreign_profile = str(session.root / "another-profile")
+    foreign_cancel = session.root / "foreign.cancel.json"
+
+    def switch_profile(*args: Any) -> Any:
+        pending = {
+            **session.request,
+            "profile": foreign_profile,
+            "cancel": str(foreign_cancel),
+        }
+        session.write(session.root / "close-lifecycle/one.json", pending)
+        assessment_path = LIFECYCLE.state_root() / "assessments/one.json"
+        assessment = LIFECYCLE._read(assessment_path)
+        session.write(assessment_path, {**assessment, "profile": foreign_profile})
+        return original(*args)
+
+    with (
+        mock.patch.object(LIFECYCLE, "current_input", side_effect=switch_profile),
+        pytest.raises(ValueError, match="different profile"),
+    ):
+        LIFECYCLE.assess(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "keep-open",
+            "preserve",
+            session_close,
+        )
+    assert not foreign_cancel.exists()
+    assert (
+        LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json")["profile"]
+        == foreign_profile
+    )

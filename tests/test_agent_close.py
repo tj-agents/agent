@@ -48,8 +48,18 @@ class AgentCloseTests(CloseFixture, unittest.TestCase):
 
     def test_missing_native_input_receipt_never_fabricates_an_assessment(self):
         LIFECYCLE._input_path("one").unlink()
-        self.assertEqual(2, self.assess())
+        self.assertEqual(2, self.assess("complete"))
         self.assertFalse((self.root / "close-lifecycle/assessments/one.json").exists())
+        self.spawn.assert_not_called()
+
+    def test_keep_open_without_any_input_proof_preserves_cancellation_intent(self):
+        LIFECYCLE._input_path("one").unlink()
+        self.recording.with_name("client.json").unlink()
+        self.assertEqual(2, self.assess("keep-open"))
+        self.assertEqual("unavailable", self.assessment()["status"])
+        self.assertEqual("keep-open", self.assessment()["decision"])
+        self.assertNotIn("input_generation", self.assessment())
+        self.assertFalse(LIFECYCLE._input_path("one").exists())
         self.spawn.assert_not_called()
 
     def test_new_native_input_during_attribution_cannot_arm(self):
