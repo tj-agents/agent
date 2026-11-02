@@ -14,6 +14,7 @@ import sys
 
 from host import Host
 import plugin_autoupdate as plugins
+import native_runtime
 
 OWNERS = ("tj-agents", "Concertable", "tomjseery")
 TOPIC_VARIABLE = "UPDATE_TOPIC"
@@ -133,6 +134,7 @@ def refresh_plugins():
     from claude import plugins as claude_plugins
     from codex import plugins as codex_plugins
 
+    native_runtime.prepare()
     arguments = ["--no-sweep", "--retry-failures"]
     managed_runtime = plugins.state_directory() / "bin" / ".agents" / "agent" / "runtime"
     if Path(plugins.__file__).resolve().parent != managed_runtime.resolve():
@@ -167,6 +169,10 @@ class Reconciler:
                         if (oid := (current.get(name) or {}).get("oid")))
         if old.get("revision") == revision:
             return
+        if repository.casefold() == "tj-agents/cli":
+            # Generic CI may complete before the native release build. Failure
+            # leaves this revision unacknowledged so the existing watcher retries.
+            native_runtime.prepare(revision=revision)
         if policy and policy != old.get("policy"):
             self.policy(repository)
         if catalog and (catalog != old.get("catalog") or repository.lower().startswith("tj-agents/")) and refresh_plugins:

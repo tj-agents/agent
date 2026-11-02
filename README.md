@@ -98,5 +98,12 @@ distribution ships inside Agent's generated runtime and managed installation. La
 a CLI source checkout or a separate package install. The development environment and CI use uv to resolve
 that same dependency and run both the migrated runtime suite and packaging checks.
 
+The installer, managed launches and machine-event refresh make the native `tj`/`tj_hook` pair available
+before native plugin operations. Missing binaries are downloaded through CLI's verified release installer,
+without a source checkout or Cargo. The installation directory is prepended to the current process PATH,
+including the environment inherited by the launched host. Routine launches with an existing pair do not
+query releases. CLI update events install their exact published revision before acknowledging the event;
+an unpublished release or an in-use Windows executable leaves the event pending for retry.
+
 The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).
 

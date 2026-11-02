@@ -61,6 +61,10 @@ class Machine(unittest.TestCase):
 
     def setUp(self):
         isolate_git_config()
+        for name, value in (("missing", ()), ("prepare", ())):
+            native = mock.patch.object(install.native_runtime, name, return_value=value)
+            native.start()
+            self.addCleanup(native.stop)
         temp = tempfile.TemporaryDirectory(prefix="install machine ü ")
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
@@ -753,7 +757,7 @@ class RunStepsTests(Machine):
             (["--check", "--step", "shell profiles", "--step", "launch-check runtime"],
              ["preconditions", "launch-check runtime", "shell profiles"]),
             (["--step", "plugin setup"],
-             ["preconditions", "plugin and merge-policy catch-up", "harness permissions", "plugin setup"]),
+             ["preconditions", "native CLI", "plugin and merge-policy catch-up", "harness permissions", "plugin setup"]),
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
@@ -840,7 +844,7 @@ class RunStepsTests(Machine):
 
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
-            "preconditions", "native permission defaults", "event channel and publishers",
+            "preconditions", "native CLI", "native permission defaults", "event channel and publishers",
             "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
             "Codex profile agents", "plugin and merge-policy catch-up", "harness permissions",
             "plugin setup", "background machine events",
