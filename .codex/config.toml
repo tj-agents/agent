@@ -25,6 +25,9 @@ enabled = true
 [plugins."github-actions@tj-agents"]
 enabled = true
 
+[plugins."github@tj-agents"]
+enabled = true
+
 [plugins."personal@tj-agents"]
 enabled = true
 
