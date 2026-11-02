@@ -92,6 +92,47 @@ class ClientCloseWatcherTests(CloseFixture, unittest.TestCase):
         self.assertEqual([], calls)
         self.assertEqual("cancelled", self.outcome()["status"])
 
+    def test_persistent_policy_alone_prevents_release(self):
+        self.arm()
+        self.stop()
+        self.write(LIFECYCLE._policy_path("one"), {
+            "host": "codex", "session_id": "one", "profile": str(self.profile.resolve()),
+            "reason": "preserve this session", "at": 0.0,
+        })
+        with mock.patch.object(session_close, "stop_cli_client") as stop:
+            self.assertEqual(0, self.wait())
+        stop.assert_not_called()
+        self.assertEqual("cancelled", self.outcome()["status"])
+        self.assertIn("keep-open", self.outcome()["reason"])
+
+    def test_keep_open_during_final_native_guard_prevents_signal(self):
+        self.arm()
+        self.stop()
+        adapter = session_close.host_sessions("codex")
+        original = adapter.close_guard
+
+        def changed(*args):
+            LIFECYCLE.policy(Host.CODEX, "one", self.profile, "keep-open", "continue")
+            original(*args)
+
+        with mock.patch.object(adapter, "close_guard", side_effect=changed):
+            self.assertEqual(0, self.wait())
+        self.assertEqual("cancelled", self.outcome()["status"])
+        self.assertIsNone(self.row().ended_at)
+
+    def test_retiring_an_old_watcher_preserves_the_current_generation(self):
+        self.arm()
+        old = self.request
+        with mock.patch.object(LIFECYCLE.secrets, "token_urlsafe", return_value="successor"):
+            prepared = LIFECYCLE.prepare(
+                Host.CODEX, "one", self.profile, "task-completion", session_close, self.receipt()
+            )
+        self.assertEqual(0, self.wait())
+        state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+        self.assertEqual("prepared", state["status"])
+        self.assertEqual(prepared["release_generation"], state["release_generation"])
+        self.assertTrue(Path(old["cancel"]).exists())
+
     def test_stop_between_activity_and_completion_reads_preserves_close(self):
         self.arm()
         self.stop()

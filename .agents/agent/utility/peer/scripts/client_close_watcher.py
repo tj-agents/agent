@@ -106,6 +106,7 @@ def final_local_guard(request, path, digest, activity):
             or any(current.get(key) != entry.get(key) for key in fields)):
         raise session_close.Cancelled("session registration changed before close")
     session_close.host_sessions(request["host"]).close_guard(request, activity, complete(request), session_close.SHARED)
+    require_current(request, path, digest)
 
 
 def _record_end(entry):
@@ -160,9 +161,7 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
         status, reason = "refused", str(error)
     session_close.write_json(request["result"], {"status": status, "reason": reason,
                               "session_id": request["session_id"], "at": time.time()})
-    state = canonical_path(request)
-    if session_close.read_json(state) == request:
-        state.unlink(missing_ok=True)
+    lifecycle().retire_release(request)
     return 0 if status in ("closed", "cancelled") else 2
 
 

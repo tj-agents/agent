@@ -11,6 +11,8 @@ import secrets
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
 
 RECEIPT_MAX_AGE_SECONDS = 300
 ACKNOWLEDGEMENT_TIMEOUT_SECONDS = 5
+STATE_LOCK_TIMEOUT_SECONDS = 0.5
 INTENTS = {"task-completion", "user-dismissal", "refresh-restart"}
 
 
@@ -73,6 +76,49 @@ def _input_path(session_id: str) -> Path:
 
 def _policy_path(session_id: str) -> Path:
     return state_root() / "policies" / (_safe_name(session_id) + ".json")
+
+
+@contextmanager
+def _session_lock(session_id: str) -> Iterator[None]:
+    from plugin_autoupdate import acquire_lock
+
+    path = state_root() / "locks" / (_safe_name(session_id) + ".lock")
+    deadline = time.monotonic() + STATE_LOCK_TIMEOUT_SECONDS
+    while (handle := acquire_lock(path)) is None:
+        if time.monotonic() >= deadline:
+            raise RuntimeError("terminal release state lock is unavailable")
+        time.sleep(0.01)
+    try:
+        yield
+    finally:
+        handle.close()
+
+
+def _revision_path(session_id: str) -> Path:
+    return state_root() / "mutations" / (_safe_name(session_id) + ".json")
+
+
+def _revision(session_id: str) -> int:
+    value = (_read(_revision_path(session_id)) or {}).get("revision", 0)
+    if not isinstance(value, int) or value < 0:
+        raise ValueError("terminal release mutation identity is invalid")
+    return value
+
+
+def _advance(session_id: str) -> None:
+    _write(_revision_path(session_id), {"revision": _revision(session_id) + 1})
+
+
+def _require_recorded_input(session_id: str, native: dict[str, Any]) -> None:
+    current = _read(_input_path(session_id))
+    if not current or any(native.get(key) != value for key, value in current.items()):
+        raise ValueError("native input changed during the terminal release")
+
+
+def _require_snapshot(session_id: str, revision: int, native: dict[str, Any]) -> None:
+    _require_recorded_input(session_id, native)
+    if _revision(session_id) != revision:
+        raise ValueError("terminal release generation changed during assessment")
 
 
 def _read(path: Path) -> dict[str, Any] | None:
@@ -530,11 +576,13 @@ def policy(host: Host, session_id: str, profile: Path, action: str, reason: str)
         raise ValueError("terminal release policy needs a nonempty reason")
     if profile.resolve() != host.configuration_root.resolve():
         raise ValueError("terminal release policy belongs to a different profile")
-    if action == "keep-open":
-        _write(_policy_path(session_id), {"host": host.value, "session_id": session_id, "profile": str(profile.resolve()), "reason": reason, "at": time.time()})
-        cancel(host, session_id, "persistent keep-open policy")
-        return {"status": "keep-open", "session_id": session_id}
-    _policy_path(session_id).unlink(missing_ok=True)
+    with _session_lock(session_id):
+        if action == "keep-open":
+            _write(_policy_path(session_id), {"host": host.value, "session_id": session_id, "profile": str(profile.resolve()), "reason": reason, "at": time.time()})
+            _cancel_locked(host, session_id, "persistent keep-open policy")
+            return {"status": "keep-open", "session_id": session_id}
+        _policy_path(session_id).unlink(missing_ok=True)
+        _advance(session_id)
     return {"status": "revoked", "session_id": session_id}
 
 
@@ -543,13 +591,27 @@ def _policy_blocks(host: Host, session_id: str, profile: Path) -> bool:
     return bool(value and value.get("host") == host.value and value.get("session_id") == session_id and value.get("profile") == str(profile.resolve()))
 
 
-def cancel(host: Host, session_id: str, reason: str) -> None:
+def _cancel_locked(host: Host, session_id: str, reason: str) -> None:
+    _advance(session_id)
     state = _read(_state_path(session_id))
-    if state and _owned(state, host, session_id):
-        if _armed(state):
+    if state and _owned(state, host, session_id) and state.get("status") in {"prepared", "armed"}:
+        if isinstance(state.get("cancel"), str):
             _signal(state["cancel"], {"cancelled": True, "reason": reason})
-        if state.get("status") in {"prepared", "armed"}:
-            _write(_state_path(session_id), {**state, "status": "cancelled", "cancelled_at": time.time(), "cancel_reason": reason})
+        _write(_state_path(session_id), {**state, "status": "cancelled", "cancelled_at": time.time(), "cancel_reason": reason})
+
+
+def cancel(host: Host, session_id: str, reason: str) -> None:
+    with _session_lock(session_id):
+        _cancel_locked(host, session_id, reason)
+
+
+def retire_release(state: dict[str, Any]) -> None:
+    session_id = state["session_id"]
+    with _session_lock(session_id):
+        path = _state_path(session_id)
+        if _read(path) == state:
+            _advance(session_id)
+            path.unlink(missing_ok=True)
 
 
 def prepare(
@@ -570,6 +632,9 @@ def prepare(
         raise ValueError("persistent keep-open policy is active")
     if intent == "user-dismissal" and not _text(dismissal_reason):
         raise ValueError("terminal dismissal needs explicit user authority")
+    with _session_lock(session_id):
+        revision = _revision(session_id)
+    native = current_input(host, session_id, supplied)
     if intent == "refresh-restart":
         if receipt_path is not None:
             raise ValueError("refresh restart does not use a terminal acceptance receipt")
@@ -585,7 +650,6 @@ def prepare(
             shared=shared,
             require_cleanup_worker=False,
         )
-    native = current_input(host, session_id, supplied)
     registry, entry, native = _prepared_entry(host, session_id, profile, native, shared)
     if _policy_blocks(host, session_id, profile):
         raise ValueError("persistent keep-open policy is active")
@@ -604,9 +668,15 @@ def prepare(
         "registry": str(registry.resolve()),
         "receipt": frozen,
     }
+    state["cancel"] = str(state_root() / "generations" / (state["release_generation"] + ".cancel.json"))
     if dismissal_reason is not None:
         state["dismissal_reason"] = dismissal_reason
-    _write(_state_path(session_id), state)
+    with _session_lock(session_id):
+        if _policy_blocks(host, session_id, profile):
+            raise ValueError("persistent keep-open policy is active")
+        _require_snapshot(session_id, revision, native)
+        _cancel_locked(host, session_id, "terminal release superseded")
+        _write(_state_path(session_id), state)
     return {"status": "prepared", "session_id": session_id, "release_generation": state["release_generation"], "acceptance_sha256": frozen["sha256"] if frozen else None}
 
 
@@ -627,17 +697,27 @@ def recheck(
     shared: Any,
     supplied: Path | None = None,
 ) -> dict[str, Any]:
-    state = _prepared(host, session_id, profile, release_generation)
+    with _session_lock(session_id):
+        state = _prepared(host, session_id, profile, release_generation)
+        revision = _revision(session_id)
     if _policy_blocks(host, session_id, profile):
         raise ValueError("persistent keep-open policy is active")
     _validate_frozen_receipt(state, shared)
-    native = current_input(host, session_id, supplied)
-    registry, entry, native = _prepared_entry(host, session_id, profile, native, shared)
-    if _policy_blocks(host, session_id, profile):
-        raise ValueError("persistent keep-open policy is active")
-    state = {**state, **native, "native": native, "entry": entry,
-             "registry": str(registry.resolve()), "rechecked_at": time.time()}
-    _write(_state_path(session_id), state)
+    require_input(host, session_id, state["native"])
+    if supplied is not None:
+        current_input(host, session_id, supplied)
+    registry, entry, native = _prepared_entry(host, session_id, profile, state["native"], shared)
+    require_input(host, session_id, state["native"])
+    updated = {**state, **native, "native": native, "entry": entry,
+               "registry": str(registry.resolve()), "rechecked_at": time.time()}
+    with _session_lock(session_id):
+        if _policy_blocks(host, session_id, profile):
+            raise ValueError("persistent keep-open policy is active")
+        _require_snapshot(session_id, revision, state["native"])
+        if _prepared(host, session_id, profile, release_generation) != state:
+            raise ValueError("terminal release generation changed during assessment")
+        _advance(session_id)
+        _write(_state_path(session_id), updated)
     return {"status": "rechecked", "session_id": session_id, "release_generation": release_generation}
 
 
@@ -661,13 +741,14 @@ def arm(
     supplied: Path | None = None,
 ) -> dict[str, Any]:
     recheck(host, session_id, profile, release_generation, shared, supplied)
-    state = _prepared(host, session_id, profile, release_generation)
+    with _session_lock(session_id):
+        state = _prepared(host, session_id, profile, release_generation)
+        revision = _revision(session_id)
     root = state_root()
     token = secrets.token_urlsafe(24)
     request = root / "requests" / (token + ".json")
     result_path = root / "requests" / (token + ".result.json")
     completion = root / "requests" / (token + ".complete.json")
-    cancel_path = root / "requests" / (token + ".cancel.json")
     acknowledgement = root / "requests" / (token + ".ack.json")
     armed = {
         **state,
@@ -675,17 +756,25 @@ def arm(
         "armed_at": time.time(),
         "completion_token": token,
         "completion": str(completion),
-        "cancel": str(cancel_path),
         "result": str(result_path),
         "request": str(request),
         "acknowledgement": str(acknowledgement),
     }
     raw = json.dumps(armed, sort_keys=True).encode("utf-8") + b"\n"
-    request.parent.mkdir(parents=True, exist_ok=True)
-    with request.open("xb") as stream:
-        stream.write(raw)
     digest = hashlib.sha256(raw).hexdigest()
-    _write(_state_path(session_id), armed)
+    with _session_lock(session_id):
+        if _policy_blocks(host, session_id, profile):
+            raise ValueError("persistent keep-open policy is active")
+        _require_snapshot(session_id, revision, state["native"])
+        if _prepared(host, session_id, profile, release_generation) != state:
+            raise ValueError("terminal release generation changed during assessment")
+        if Path(armed["cancel"]).exists():
+            raise ValueError("terminal release generation was cancelled")
+        request.parent.mkdir(parents=True, exist_ok=True)
+        with request.open("xb") as stream:
+            stream.write(raw)
+        _advance(session_id)
+        _write(_state_path(session_id), armed)
     try:
         shared.start_agent_watcher(
             Path(shared.__file__).resolve().with_name("client_close_watcher.py"),
@@ -693,7 +782,9 @@ def arm(
         )
         deadline = time.monotonic() + ACKNOWLEDGEMENT_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
+            require_release(armed, verify_receipt=False)
             if _acknowledged(armed, digest, shared):
+                require_release(armed, verify_receipt=False)
                 response = {
                     key: armed[key]
                     for key in (
@@ -711,7 +802,10 @@ def arm(
             time.sleep(0.05)
         raise RuntimeError("terminal release watcher did not acknowledge")
     except Exception:
-        cancel(host, session_id, "terminal release watcher was unavailable")
+        _signal(armed["cancel"], {"cancelled": True, "reason": "terminal release watcher was unavailable"})
+        with _session_lock(session_id):
+            if _read(_state_path(session_id)) == armed:
+                _cancel_locked(host, session_id, "terminal release watcher was unavailable")
         raise
 
 
@@ -733,9 +827,16 @@ def require_release(state: dict[str, Any], *, verify_receipt: bool = True) -> No
     host = Host(state["host"])
     if not _armed(state):
         raise ValueError("terminal release is not armed")
-    require_input(host, state["session_id"], state["native"])
+    session_id = state["session_id"]
     if verify_receipt:
         _validate_frozen_receipt(state, _load_shared())
+    require_input(host, session_id, state["native"])
+    with _session_lock(session_id):
+        if _policy_blocks(host, session_id, host.configuration_root):
+            raise ValueError("persistent keep-open policy is active")
+        if _read(_state_path(session_id)) != state or Path(state["cancel"]).exists():
+            raise ValueError("terminal release generation was cancelled or changed")
+        _require_recorded_input(session_id, state["native"])
 
 
 def run(event: str, host: Host, data: dict[str, Any]) -> int:
@@ -745,8 +846,9 @@ def run(event: str, host: Host, data: dict[str, Any]) -> int:
     if not session_id:
         return 0
     if event == "prompt":
-        cancel(host, session_id, "new prompt")
-        remember_input(host, session_id, turn_id, data)
+        with _session_lock(session_id):
+            _cancel_locked(host, session_id, "new prompt")
+            remember_input(host, session_id, turn_id, data)
         return 0
     if event == "stop":
         state = _read(_state_path(session_id)) or {}
@@ -754,9 +856,10 @@ def run(event: str, host: Host, data: dict[str, Any]) -> int:
             _signal(state["completion"], {"token": state["completion_token"]})
         return 0
     if event == "end":
-        cancel(host, session_id, "session ended")
-        _input_path(session_id).unlink(missing_ok=True)
-        _policy_path(session_id).unlink(missing_ok=True)
+        with _session_lock(session_id):
+            _cancel_locked(host, session_id, "session ended")
+            _input_path(session_id).unlink(missing_ok=True)
+            _policy_path(session_id).unlink(missing_ok=True)
         return 0
     raise ValueError("unknown lifecycle event")
 
