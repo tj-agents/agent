@@ -102,10 +102,18 @@ def test_later_keep_open_cancels_restart(session: Any) -> None:
     session.primitive_stop.assert_not_called()
 
 
-def test_later_keep_open_without_hook_receipt_cancels_restart(session: Any) -> None:
+def test_later_keep_open_without_hook_receipt_cancels_restart(
+    session: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     assert restart(session)["status"] == "armed"
     assert session.assess("keep-open") == 0
     assert not LIFECYCLE._input_path("one").exists()
+    capsys.readouterr()
+    session.stop()
+    assert capsys.readouterr().out == ""
+    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-one", {})
+    assert not LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
     assert session.wait() == 0
     assert session.outcome()["status"] == "cancelled"
     session.primitive_stop.assert_not_called()

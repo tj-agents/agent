@@ -424,8 +424,8 @@ def assessed(
         and (
             (
                 state.get("input_source") == "frontend"
-                and state.get("decision") == "restart"
-                and state.get("status") == "armed"
+                and (state.get("decision"), state.get("status"))
+                in (("restart", "armed"), ("keep-open", "kept-open"))
             )
             or (
                 isinstance(current, dict)
