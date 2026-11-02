@@ -20,6 +20,9 @@ exact repository or worktree; do not substitute another checkout.
 python -B '<package-root>/.agents/agent/utility/handoff/scripts/handoff.py' --host claude -- --working-directory '<absolute-checkout-path>' --prompt-path '<absolute-prompt-path>' --title '<short-title>' --lane L4
 ```
 
+`--title` is required and is the session's one name: the launcher stops the host retitling its tab, so the
+stored title and the visible tab match, and resume reuses it. Choose a short, descriptive, unique title.
+
 Use `--host claude` or `--host codex`, then `--`. Every option after the separator is passed unchanged to that host's launcher:
 Claude requires a lane, frontier tier, or explicit non-Haiku model; Codex may use its configured default.
 The selected launcher verifies native SessionStart before reporting success. Exit code 3 means terminal or
