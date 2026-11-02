@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import io
 import os
+import shutil
 import sys
 from pathlib import Path
 from unittest import mock
@@ -76,6 +77,30 @@ def test_launch_bootstraps_before_native_plugin_inventory(tmp_path: Path) -> Non
             {},
         )
     assert order == ["native", "plugins"]
+
+
+def test_relative_override_stays_bound_when_the_host_changes_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TJ_BIN_DIR", "native")
+    monkeypatch.setenv("PATH", os.defpath)
+    directory = tmp_path.resolve() / "native"
+    directory.mkdir()
+    names = ("tj.exe", "tj_hook.exe") if os.name == "nt" else ("tj", "tj_hook")
+    for name in names:
+        binary = directory / name
+        binary.write_bytes(b"fixture")
+        binary.chmod(0o755)
+    with mock.patch.object(native_install, "ensure_native") as ensure:
+        assert native_runtime.prepare() == ()
+    ensure.assert_not_called()
+    host_directory = tmp_path / "host"
+    host_directory.mkdir()
+    monkeypatch.chdir(host_directory)
+    assert native_install.default_bin_dir() == directory
+    assert native_runtime.missing() == ()
+    assert Path(shutil.which(names[1]) or "").resolve() == directory / names[1]
 
 
 def test_maintenance_launch_does_not_install_native_tools(tmp_path: Path) -> None:

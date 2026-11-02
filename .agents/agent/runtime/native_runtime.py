@@ -21,6 +21,8 @@ def search_path(value: str) -> str:
 
 def expose() -> None:
     """Prepare the current process environment without installing any files."""
+    if os.environ.get("TJ_BIN_DIR"):
+        os.environ["TJ_BIN_DIR"] = str(native_install.default_bin_dir())
     os.environ["PATH"] = search_path(os.environ.get("PATH", os.defpath))
 
 

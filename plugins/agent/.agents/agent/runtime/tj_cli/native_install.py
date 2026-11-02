@@ -29,7 +29,7 @@ class NativeInstallError(RuntimeError):
 def default_bin_dir() -> Path:
     """Return the native CLI directory, honoring ``TJ_BIN_DIR`` when set."""
     if configured := os.environ.get("TJ_BIN_DIR"):
-        return Path(configured).expanduser()
+        return Path(configured).expanduser().resolve()
     if platform.system() == "Windows":
         local_app_data = os.environ.get("LOCALAPPDATA")
         if not local_app_data:
@@ -262,7 +262,7 @@ def _download_release(
 
 
 def _gh_json(endpoint: str) -> dict[str, object]:
-    result = _run(["gh", "api", endpoint])
+    result = _run(["gh", "api", "--hostname", "github.com", endpoint])
     try:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as error:
@@ -276,6 +276,8 @@ def _download_asset(asset_id: int, destination: Path) -> None:
     command = [
         "gh",
         "api",
+        "--hostname",
+        "github.com",
         "--header",
         "Accept: application/octet-stream",
         f"repos/{_REPOSITORY}/releases/assets/{asset_id}",
