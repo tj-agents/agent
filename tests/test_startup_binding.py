@@ -137,7 +137,7 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual([{'kind': 'windows-terminal', 'session': 'terminal-session',
                            'binding': {'pid': 71, 'started_at': 8.0}}], captured)
 
-    def test_immediate_ack_records_once_with_prelaunch_terminal(self):
+    def test_claude_immediate_ack_records_once_with_prelaunch_terminal(self):
         process = mock.Mock(pid=72)
         process.wait.return_value = 0
         terminal = {'kind': 'windows-terminal', 'session': 'terminal-session',
@@ -145,15 +145,15 @@ class StartupBindingTests(unittest.TestCase):
                     'tab_binding': {'runtime_id': 'uia-tab', 'observed_title': 'launch nonce',
                                     'evidence': 'windows-uia-unique-title-at-launch'}}
         with mock.patch.object(self.binding.subprocess, 'Popen', return_value=process), \
-                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', return_value=([], {}, None)), \
+                mock.patch.object(SESSIONS[Host.CLAUDE], 'prepare_frontend', return_value=([], {}, None)), \
                 mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
                 mock.patch.object(self.binding, '_record_launch_binding') as record:
-            result = self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), (),
+            result = self.binding.run_session(Host.CLAUDE, 'native.exe', Path.cwd(), (),
                                               require_session_start=True, terminal=terminal)
 
         self.assertEqual(0, result)
-        record.assert_called_once_with(Host.CODEX, 72, terminal)
+        record.assert_called_once_with(Host.CLAUDE, 72, terminal)
 
     def test_ordinary_status_retains_prelaunch_terminal_binding(self):
         directory = tempfile.TemporaryDirectory(prefix='startup status ')

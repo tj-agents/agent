@@ -96,10 +96,8 @@ def resolve_model(args, agent_cli):
     return model, effort, tier
 
 
-def build_arguments(working_directory, model, effort, bypass_hook_trust, prompt_sentence, no_daemon=False, keep_title=()):
+def build_arguments(working_directory, model, effort, bypass_hook_trust, prompt_sentence, keep_title=()):
     arguments = ['--cd', str(working_directory)]
-    if no_daemon:
-        arguments.insert(0, '--no-daemon')
     if model:
         arguments += ['--model', model]
     if effort:
@@ -128,8 +126,7 @@ def main(argv=None):
 
         codex, version = agent_cli.resolve_codex_executable(minimum=args.minimum_version)
         model, effort, tier = resolve_model(args, agent_cli)
-        no_daemon = sys.platform == 'win32' and version['core'] >= (0, 157, 0)
-        arguments = build_arguments(working_directory, model, effort, args.bypass_hook_trust, prompt_sentence, no_daemon,
+        arguments = build_arguments(working_directory, model, effort, args.bypass_hook_trust, prompt_sentence,
                                     agent_cli.CODEX_KEEP_TAB_TITLE)
 
         # TERM is CLEARED here, never forced -- the opposite of handoff-claude, and not an oversight.

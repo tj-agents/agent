@@ -78,7 +78,7 @@ class FollowupTests(unittest.TestCase):
         self.receipt_path = self.root / 'receipt.json'
         self.message = self.root / 'message.txt'
         self.message.write_text('exact message', encoding='utf-8')
-        self.receipt = {'version': 1, 'thread_id': THREAD, 'client_id': CLIENT,
+        self.receipt = {'version': 2, 'launch_binding': None, 'thread_id': THREAD, 'client_id': CLIENT,
                         'cwd': FOLLOWUP.path_key(self.root),
                         'codex_home': FOLLOWUP.path_key(self.root),
                         'message_sha256': hashlib.sha256(b'exact message').hexdigest(),

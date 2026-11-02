@@ -54,6 +54,7 @@ class InputBindingTests(unittest.TestCase):
         self.addCleanup(self.native_input.stop)
         self.nearest = SimpleNamespace(pid=1, name='codex.exe')
         self.commands[1] = ['codex', 'app-server']
+        hook_trust.AppServer.return_value.__enter__.return_value.request.return_value = {'data': []}
 
     def bind(self, pid=123, identity='own-input'):
         arguments, environment, ticket = client.prepare(

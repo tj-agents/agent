@@ -78,7 +78,9 @@ def default_profile(profile: str) -> bool:
 
 
 def open_tab(cli, item: dict, directory, label: str, instruction: str, status_path: Path, *, model=None,
-             native_arguments=(), dangerously_skip_permissions=False) -> None:
+             native_arguments=(), dangerously_skip_permissions=False, owned_backend=False) -> None:
+    if owned_backend:
+        raise ValueError('Claude recovery does not use a Codex backend')
     # Claude reads ~/.claude.json only without CLAUDE_CONFIG_DIR; set to ~/.claude it starts first-run onboarding.
     if default_profile(item["profile"]):
         profile_environment = {"clear": (HOST.home_variable,)}
@@ -93,7 +95,7 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
     cli.open_claude_tab(directory, label, arguments, status_file=status_path, **profile_environment)
 
 
-def prepare_frontend(arguments, project: Path, environment, executable=None):
+def prepare_frontend(arguments, project: Path, environment, executable=None, *, handoff=False, hook_roots=None):
     return list(arguments), dict(environment), None
 
 
@@ -105,6 +107,18 @@ def release_frontend(ticket) -> None:
     return None
 
 
+def handoff_recipient(ticket, register_session, terminal):
+    return None
+
+
+def relaunch_backend(entry):
+    return None
+
+
+def backend_closed(binding, shared):
+    return binding is None
+
+
 def debug_arguments(arguments: list[str], directory: Path) -> tuple[list[str], str | None]:
     if any(value == "--debug-file" or value.startswith("--debug-file=") for value in arguments):
         return arguments, None
@@ -112,7 +126,7 @@ def debug_arguments(arguments: list[str], directory: Path) -> tuple[list[str], s
     return ["--debug-file", str(debug_log), *arguments], str(debug_log)
 
 
-def native_arguments(argv: list[str]) -> list[str]:
+def native_arguments(argv: list[str], entry=None) -> list[str]:
     kept, index = [], 0
     while index < len(argv):
         token = argv[index]
