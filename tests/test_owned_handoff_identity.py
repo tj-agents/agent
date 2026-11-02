@@ -112,6 +112,7 @@ def launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OwnedLaunch:
     socket = directory / "socket"
     socket.touch()
     stat = socket.stat()
+    parent = socket.parent.stat()
     executable = str(directory / "native executable")
     infos = {
         pid: processes.ProcessInfo(pid, parent, float(pid))
@@ -143,6 +144,7 @@ def launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OwnedLaunch:
         kind="handoff",
         socket_path=str(socket),
         socket_identity=[stat.st_dev, stat.st_ino],
+        parent_identity=[parent.st_dev, parent.st_ino],
     )
     table = {
         pid: SimpleNamespace(pid=pid, name="codex", started_at=info.started_at)
@@ -371,7 +373,7 @@ def test_backend_readiness_requires_hooks_and_an_empty_native_backend(
             }
         ]
     )
-    launch.record["backend"].pop("socket_identity")
+    captured = dict(launch.record["backend"])
     if problem is None:
         launch.client.await_backend(launch.record, {"agent@fixture": plugin})
         assert len(launch.record["backend"]["socket_identity"]) == 2
@@ -380,7 +382,17 @@ def test_backend_readiness_requires_hooks_and_an_empty_native_backend(
             RuntimeError, match=r"Required hooks are not ready|already contains"
         ):
             launch.client.await_backend(launch.record, {"agent@fixture": plugin})
-        assert "socket_identity" not in launch.record["backend"]
+    assert launch.record["backend"] == captured
+
+
+@pytest.mark.parametrize("identity", ["socket_identity", "parent_identity"])
+def test_backend_readiness_refuses_replaced_or_uncaptured_endpoint_before_transport(
+    launch: OwnedLaunch, identity: str
+) -> None:
+    launch.record["backend"].pop(identity)
+    with pytest.raises(RuntimeError, match="endpoint was replaced"):
+        launch.client.await_backend(launch.record, {})
+    assert launch.server.calls == []
 
 
 def test_native_completion_uses_native_input_and_rechecks_the_frontend_anchor(

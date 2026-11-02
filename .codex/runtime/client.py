@@ -1,6 +1,7 @@
 """Bind managed Codex launches to their frontend process (Python 3.9+)."""
 
 import errno
+from collections.abc import Mapping
 import json
 import math
 import os
@@ -208,24 +209,42 @@ def server_for(record, timeout=15):
                                socket_path=record['backend']['socket_path'], timeout=timeout)
 
 
+def verify_endpoint(backend: Mapping[str, object]) -> None:
+    endpoint = backend.get("socket_path")
+    if not isinstance(endpoint, str) or not Path(endpoint).is_absolute():
+        raise RuntimeError("Handoff native endpoint is not an absolute path")
+    socket = Path(endpoint)
+    for path, key in ((socket.parent, "parent_identity"), (socket, "socket_identity")):
+        value = path.lstat()
+        if [value.st_dev, value.st_ino] != backend.get(key):
+            raise RuntimeError("Handoff native endpoint was replaced")
+
+
 def await_backend(ticket, roots):
     from tj_cli import processes
 
-    socket = Path(ticket['backend']['socket_path'])
-    deadline = time.monotonic() + 10
-    while not socket.exists():
-        processes.require_live(ticket['backend'], 'Owned native backend exited before readiness')
-        if time.monotonic() >= deadline:
-            raise RuntimeError('Owned native backend did not open its endpoint')
-        time.sleep(0.05)
-    with server_for(ticket, max(0.1, deadline - time.monotonic())) as server:
-        required = {identity: hook_trust.required_definitions(root, identity) for identity, root in roots.items()}
-        hook_trust.require_ready(server.request('hooks/list', {'cwds': [ticket['launch_cwd']]}),
-                                 Path(ticket['launch_cwd']), required)
-        if server.request('thread/loaded/list', {}).get('data'):
-            raise RuntimeError('A new handoff backend already contains a loaded conversation')
-    stat = socket.stat()
-    ticket['backend']['socket_identity'] = [stat.st_dev, stat.st_ino]
+    processes.require_live(
+        ticket["backend"], "Owned native backend exited before readiness"
+    )
+    verify_endpoint(ticket["backend"])
+    with server_for(ticket, 10) as server:
+        required = {
+            identity: hook_trust.required_definitions(root, identity)
+            for identity, root in roots.items()
+        }
+        hook_trust.require_ready(
+            server.request("hooks/list", {"cwds": [ticket["launch_cwd"]]}),
+            Path(ticket["launch_cwd"]),
+            required,
+        )
+        if server.request("thread/loaded/list", {}).get("data"):
+            raise RuntimeError(
+                "A new handoff backend already contains a loaded conversation"
+            )
+    processes.require_live(
+        ticket["backend"], "Owned native backend exited during readiness"
+    )
+    verify_endpoint(ticket["backend"])
 
 
 def native_contains(server, session_id, identity):
@@ -275,10 +294,7 @@ def verify_owned(record, *, table=None, peer_state=None):
             or not processes.descends_from(record['supervisor'], record['wrapper'])):
         raise RuntimeError('Handoff process ownership changed')
     endpoint = record['backend']['socket_path']
-    socket = Path(endpoint)
-    stat = socket.stat()
-    if not socket.is_absolute() or [stat.st_dev, stat.st_ino] != record['backend']['socket_identity']:
-        raise RuntimeError('Handoff native endpoint was replaced')
+    verify_endpoint(record['backend'])
     for info, native in ((frontend, True), (backend, False)):
         arguments = process_arguments(info.pid)
         context = process_context(info.pid)

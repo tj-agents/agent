@@ -282,8 +282,7 @@ def backend_closed(binding, shared):
         return False
     if (receipt.get('state') != 'exited' or receipt.get('token') != binding['token']
             or receipt.get('wrapper') != binding['wrapper'] or receipt.get('supervisor') != binding['supervisor']
-            or any(receipt.get('backend', {}).get(key) != binding['backend'][key]
-                   for key in ('kind', 'pid', 'started_at', 'socket_path'))):
+            or receipt.get('backend') != binding['backend']):
         return False
     return not Path(binding['backend']['socket_path']).exists()
 
