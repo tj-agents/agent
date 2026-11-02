@@ -202,9 +202,15 @@ def current_input(
         or not isinstance(state.get("input_generation"), str)
         or state.get("profile") != str(host.configuration_root.resolve())
     ):
-        raise ValueError("native input hook receipt is unavailable; preserve the session")
+        raise ValueError(
+            "native input hook receipt is unavailable; preserve the session"
+        )
     recorded = state.get("transcript_path")
-    if supplied is not None and recorded and supplied.resolve() != Path(recorded).resolve():
+    if (
+        supplied is not None
+        and recorded
+        and supplied.resolve() != Path(recorded).resolve()
+    ):
         raise ValueError("transcript differs from the native input hook receipt")
     native = SESSIONS[host].close_target(
         session_id, supplied or (Path(recorded) if recorded else None)
@@ -247,24 +253,54 @@ def _receipt_bytes(path: Path) -> tuple[dict[str, Any], str]:
     return value, hashlib.sha256(raw).hexdigest()
 
 
-def _checkpoint_sources(value: object, checkpoint: object) -> list[dict[str, str]] | None:
-    if not isinstance(checkpoint, dict) or checkpoint.get("retired_goal") is not True:
+def _checkpoint_sources(
+    value: object, checkpoint: object
+) -> list[dict[str, str]] | None:
+    if checkpoint is None:
         return None
-    sources = checkpoint.get("sources")
-    if not isinstance(value, list) or not isinstance(sources, list) or len(sources) != len(value):
+    if not isinstance(checkpoint, dict) or set(checkpoint) != {
+        "sources",
+        "retired_sources",
+    }:
         raise ValueError("terminal acceptance checkpoint does not match its sources")
+    sources = checkpoint.get("sources")
+    if (
+        not isinstance(value, list)
+        or not isinstance(sources, list)
+        or len(sources) != len(value)
+    ):
+        raise ValueError("terminal acceptance checkpoint does not match its sources")
+    retired = checkpoint.get("retired_sources")
+    eligible = {
+        source.get("path")
+        for index, source in enumerate(value)
+        if index != 1
+        and isinstance(source, dict)
+        and isinstance(source.get("path"), str)
+    }
+    if (
+        not isinstance(retired, list)
+        or not all(isinstance(path, str) and path in eligible for path in retired)
+        or len(retired) != len(set(retired))
+    ):
+        raise ValueError("terminal acceptance checkpoint has invalid retired sources")
     for source, archived in zip(value, sources, strict=True):
         if (
             not isinstance(source, dict)
             or not isinstance(archived, dict)
             or source.get("sha256") != archived.get("sha256")
             or not isinstance(archived.get("path"), str)
+            or not Path(archived["path"]).is_absolute()
         ):
-            raise ValueError("terminal acceptance checkpoint does not match its sources")
+            raise ValueError(
+                "terminal acceptance checkpoint does not match its sources"
+            )
     return sources
 
 
-def _validate_sources(value: object, checkpoint: object) -> tuple[list[dict[str, str]], str]:
+def _validate_sources(
+    value: object, checkpoint: object
+) -> tuple[list[dict[str, str]], str]:
     if not isinstance(value, list) or not value:
         raise ValueError("terminal acceptance receipt has no sources")
     archived = _checkpoint_sources(value, checkpoint)
@@ -280,15 +316,19 @@ def _validate_sources(value: object, checkpoint: object) -> tuple[list[dict[str,
         path = Path(source["path"])
         if not path.is_absolute():
             raise ValueError("terminal acceptance receipt source is unavailable")
-        if not path.exists() and index == 0 and archived is not None:
+        retired = (
+            isinstance(checkpoint, dict) and str(path) in checkpoint["retired_sources"]
+        )
+        if retired and archived is not None:
             archived_path = Path(archived[index]["path"])
             if not archived_path.is_absolute() or not archived_path.is_file():
                 raise ValueError("terminal acceptance checkpoint source is unavailable")
             digest = hashlib.sha256(archived_path.read_bytes()).hexdigest()
             if digest != source["sha256"]:
                 raise ValueError("terminal acceptance checkpoint source changed")
-            sources.append({"path": str(path.resolve()), "sha256": digest})
-            continue
+            if not path.exists():
+                sources.append({"path": str(path.resolve()), "sha256": digest})
+                continue
         if not path.is_file():
             raise ValueError("terminal acceptance receipt source is unavailable")
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -320,14 +360,19 @@ def _validate_cleanup(
     obligation_path = Path(value["obligation_path"])
     receipt_path = Path(value["receipt_path"])
     worktree = Path(value["worktree"])
-    if not obligation_path.is_absolute() or not receipt_path.is_absolute() or not worktree.is_absolute():
+    if (
+        not obligation_path.is_absolute()
+        or not receipt_path.is_absolute()
+        or not worktree.is_absolute()
+    ):
         raise ValueError("terminal cleanup obligation has a relative path")
     obligation = _read(obligation_path)
     if (
         not obligation
         or obligation.get("schema_version") != 1
         or obligation.get("kind") != "targeted-cleanup"
-        or obligation.get("state") not in {"pending", "running", "verified", "retained", "refused", "timed_out"}
+        or obligation.get("state")
+        not in {"pending", "running", "verified", "retained", "refused", "timed_out"}
         or obligation.get("obligation_id") != value["obligation_id"]
         or obligation.get("owner") != owner
         or obligation.get("worktree") != str(worktree.resolve())
@@ -421,15 +466,27 @@ def _validate_receipt(
     receipt, digest = _receipt_bytes(path)
     if expected_sha256 is not None and digest != expected_sha256:
         raise ValueError("terminal acceptance receipt changed")
-    if receipt.get("schema_version") != 1 or receipt.get("kind") != "terminal-acceptance":
+    if (
+        receipt.get("schema_version") != 1
+        or receipt.get("kind") != "terminal-acceptance"
+    ):
         raise ValueError("invalid terminal acceptance receipt")
     owner = receipt.get("owner")
-    if not isinstance(owner, dict) or owner.get("host") != host.value or owner.get("session_id") != session_id:
+    if (
+        not isinstance(owner, dict)
+        or owner.get("host") != host.value
+        or owner.get("session_id") != session_id
+    ):
         raise ValueError("terminal acceptance receipt belongs to another session")
-    if not isinstance(receipt.get("candidate_id"), str) or not isinstance(receipt.get("acceptance_generation"), str):
+    if not isinstance(receipt.get("candidate_id"), str) or not isinstance(
+        receipt.get("acceptance_generation"), str
+    ):
         raise ValueError("terminal acceptance receipt has no candidate identity")
     checked_at = receipt.get("checked_at")
-    if not isinstance(checked_at, (int, float)) or not 0 <= time.time() - checked_at <= RECEIPT_MAX_AGE_SECONDS:
+    if (
+        not isinstance(checked_at, (int, float))
+        or not 0 <= time.time() - checked_at <= RECEIPT_MAX_AGE_SECONDS
+    ):
         raise ValueError("terminal acceptance receipt is stale")
     sources, sources_sha256 = _validate_sources(
         receipt.get("sources"), receipt.get("checkpoint")
@@ -463,7 +520,10 @@ def _validate_receipt(
         audit = receipt.get("audit")
         if not isinstance(audit, dict):
             raise ValueError("terminal acceptance receipt has no audit")
-        if audit.get("candidate_id") != receipt["candidate_id"] or audit.get("sources_sha256") != sources_sha256:
+        if (
+            audit.get("candidate_id") != receipt["candidate_id"]
+            or audit.get("sources_sha256") != sources_sha256
+        ):
             raise ValueError("terminal acceptance audit does not match its candidate")
         if audit.get("state") != "passed":
             raise ValueError("terminal acceptance audit is incomplete")
@@ -512,9 +572,15 @@ def _validate_frozen_receipt(state: dict[str, Any], shared: Any | None = None) -
     frozen = state.get("receipt")
     if intent == "refresh-restart":
         if frozen is not None:
-            raise ValueError("refresh restart cannot carry a terminal acceptance receipt")
+            raise ValueError(
+                "refresh restart cannot carry a terminal acceptance receipt"
+            )
         return
-    if not isinstance(frozen, dict) or not isinstance(frozen.get("path"), str) or not isinstance(frozen.get("sha256"), str):
+    if (
+        not isinstance(frozen, dict)
+        or not isinstance(frozen.get("path"), str)
+        or not isinstance(frozen.get("sha256"), str)
+    ):
         raise ValueError("terminal release has no frozen receipt")
     if not isinstance(intent, str):
         raise ValueError("terminal release has an invalid intent")
@@ -535,10 +601,18 @@ def _validate_frozen_receipt(state: dict[str, Any], shared: Any | None = None) -
 
 
 def _load_shared() -> Any:
-    path = Path(__file__).resolve().parents[1] / "utility" / "peer" / "scripts" / "session_close.py"
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "utility"
+        / "peer"
+        / "scripts"
+        / "session_close.py"
+    )
     if str(path.parent) not in sys.path:
         sys.path.insert(0, str(path.parent))
-    spec = importlib.util.spec_from_file_location("terminal_release_session_close", path)
+    spec = importlib.util.spec_from_file_location(
+        "terminal_release_session_close", path
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError("the packaged Agent peer runtime is unavailable")
     module = importlib.util.module_from_spec(spec)
@@ -562,14 +636,18 @@ def _prepared_entry(
         or entry.get("session_id") != session_id
         or shared.path_key(entry.get("profile", "")) != shared.path_key(profile)
     ):
-        raise ValueError("native frontend does not match the requested session and profile")
+        raise ValueError(
+            "native frontend does not match the requested session and profile"
+        )
     armed = sessions.arm_close(entry, native.get("turn_id"), native, None, shared)
     if shared.read_json(registry) != entry:
         raise ValueError("session registration changed before terminal release")
     return registry, entry, {**native, **armed}
 
 
-def policy(host: Host, session_id: str, profile: Path, action: str, reason: str) -> dict[str, Any]:
+def policy(
+    host: Host, session_id: str, profile: Path, action: str, reason: str
+) -> dict[str, Any]:
     if action not in {"keep-open", "revoke"}:
         raise ValueError("unknown terminal release policy action")
     if not reason.strip():
@@ -578,7 +656,16 @@ def policy(host: Host, session_id: str, profile: Path, action: str, reason: str)
         raise ValueError("terminal release policy belongs to a different profile")
     with _session_lock(session_id):
         if action == "keep-open":
-            _write(_policy_path(session_id), {"host": host.value, "session_id": session_id, "profile": str(profile.resolve()), "reason": reason, "at": time.time()})
+            _write(
+                _policy_path(session_id),
+                {
+                    "host": host.value,
+                    "session_id": session_id,
+                    "profile": str(profile.resolve()),
+                    "reason": reason,
+                    "at": time.time(),
+                },
+            )
             _cancel_locked(host, session_id, "persistent keep-open policy")
             return {"status": "keep-open", "session_id": session_id}
         _policy_path(session_id).unlink(missing_ok=True)
@@ -588,16 +675,33 @@ def policy(host: Host, session_id: str, profile: Path, action: str, reason: str)
 
 def _policy_blocks(host: Host, session_id: str, profile: Path) -> bool:
     value = _read(_policy_path(session_id))
-    return bool(value and value.get("host") == host.value and value.get("session_id") == session_id and value.get("profile") == str(profile.resolve()))
+    return bool(
+        value
+        and value.get("host") == host.value
+        and value.get("session_id") == session_id
+        and value.get("profile") == str(profile.resolve())
+    )
 
 
 def _cancel_locked(host: Host, session_id: str, reason: str) -> None:
     _advance(session_id)
     state = _read(_state_path(session_id))
-    if state and _owned(state, host, session_id) and state.get("status") in {"prepared", "armed"}:
+    if (
+        state
+        and _owned(state, host, session_id)
+        and state.get("status") in {"prepared", "armed"}
+    ):
         if isinstance(state.get("cancel"), str):
             _signal(state["cancel"], {"cancelled": True, "reason": reason})
-        _write(_state_path(session_id), {**state, "status": "cancelled", "cancelled_at": time.time(), "cancel_reason": reason})
+        _write(
+            _state_path(session_id),
+            {
+                **state,
+                "status": "cancelled",
+                "cancelled_at": time.time(),
+                "cancel_reason": reason,
+            },
+        )
 
 
 def cancel(host: Host, session_id: str, reason: str) -> None:
@@ -637,7 +741,9 @@ def prepare(
     native = current_input(host, session_id, supplied)
     if intent == "refresh-restart":
         if receipt_path is not None:
-            raise ValueError("refresh restart does not use a terminal acceptance receipt")
+            raise ValueError(
+                "refresh restart does not use a terminal acceptance receipt"
+            )
         frozen = None
     else:
         if receipt_path is None:
@@ -668,7 +774,9 @@ def prepare(
         "registry": str(registry.resolve()),
         "receipt": frozen,
     }
-    state["cancel"] = str(state_root() / "generations" / (state["release_generation"] + ".cancel.json"))
+    state["cancel"] = str(
+        state_root() / "generations" / (state["release_generation"] + ".cancel.json")
+    )
     if dismissal_reason is not None:
         state["dismissal_reason"] = dismissal_reason
     with _session_lock(session_id):
@@ -677,14 +785,28 @@ def prepare(
         _require_snapshot(session_id, revision, native)
         _cancel_locked(host, session_id, "terminal release superseded")
         _write(_state_path(session_id), state)
-    return {"status": "prepared", "session_id": session_id, "release_generation": state["release_generation"], "acceptance_sha256": frozen["sha256"] if frozen else None}
+    return {
+        "status": "prepared",
+        "session_id": session_id,
+        "release_generation": state["release_generation"],
+        "acceptance_sha256": frozen["sha256"] if frozen else None,
+    }
 
 
-def _prepared(host: Host, session_id: str, profile: Path, release_generation: str) -> dict[str, Any]:
+def _prepared(
+    host: Host, session_id: str, profile: Path, release_generation: str
+) -> dict[str, Any]:
     state = _read(_state_path(session_id))
-    if not state or not _owned(state, host, session_id) or state.get("status") != "prepared":
+    if (
+        not state
+        or not _owned(state, host, session_id)
+        or state.get("status") != "prepared"
+    ):
         raise ValueError("terminal release is not prepared")
-    if state.get("profile") != str(profile.resolve()) or state.get("release_generation") != release_generation:
+    if (
+        state.get("profile") != str(profile.resolve())
+        or state.get("release_generation") != release_generation
+    ):
         raise ValueError("terminal release generation changed")
     return state
 
@@ -706,10 +828,18 @@ def recheck(
     require_input(host, session_id, state["native"])
     if supplied is not None:
         current_input(host, session_id, supplied)
-    registry, entry, native = _prepared_entry(host, session_id, profile, state["native"], shared)
+    registry, entry, native = _prepared_entry(
+        host, session_id, profile, state["native"], shared
+    )
     require_input(host, session_id, state["native"])
-    updated = {**state, **native, "native": native, "entry": entry,
-               "registry": str(registry.resolve()), "rechecked_at": time.time()}
+    updated = {
+        **state,
+        **native,
+        "native": native,
+        "entry": entry,
+        "registry": str(registry.resolve()),
+        "rechecked_at": time.time(),
+    }
     with _session_lock(session_id):
         if _policy_blocks(host, session_id, profile):
             raise ValueError("persistent keep-open policy is active")
@@ -718,7 +848,11 @@ def recheck(
             raise ValueError("terminal release generation changed during assessment")
         _advance(session_id)
         _write(_state_path(session_id), updated)
-    return {"status": "rechecked", "session_id": session_id, "release_generation": release_generation}
+    return {
+        "status": "rechecked",
+        "session_id": session_id,
+        "release_generation": release_generation,
+    }
 
 
 def _acknowledged(request: dict[str, Any], digest: str, shared: Any) -> bool:
@@ -802,10 +936,15 @@ def arm(
             time.sleep(0.05)
         raise RuntimeError("terminal release watcher did not acknowledge")
     except Exception:
-        _signal(armed["cancel"], {"cancelled": True, "reason": "terminal release watcher was unavailable"})
+        _signal(
+            armed["cancel"],
+            {"cancelled": True, "reason": "terminal release watcher was unavailable"},
+        )
         with _session_lock(session_id):
             if _read(_state_path(session_id)) == armed:
-                _cancel_locked(host, session_id, "terminal release watcher was unavailable")
+                _cancel_locked(
+                    host, session_id, "terminal release watcher was unavailable"
+                )
         raise
 
 
@@ -817,7 +956,15 @@ def dismiss(
     reason: str,
     shared: Any,
 ) -> dict[str, Any]:
-    prepared = prepare(host, session_id, profile, "user-dismissal", shared, receipt_path, dismissal_reason=reason)
+    prepared = prepare(
+        host,
+        session_id,
+        profile,
+        "user-dismissal",
+        shared,
+        receipt_path,
+        dismissal_reason=reason,
+    )
     return arm(host, session_id, profile, prepared["release_generation"], shared)
 
 
@@ -852,7 +999,11 @@ def run(event: str, host: Host, data: dict[str, Any]) -> int:
         return 0
     if event == "stop":
         state = _read(_state_path(session_id)) or {}
-        if _owned(state, host, session_id) and _armed(state) and SESSIONS[host].completes(state.get("native", {}), data, turn_id):
+        if (
+            _owned(state, host, session_id)
+            and _armed(state)
+            and SESSIONS[host].completes(state.get("native", {}), data, turn_id)
+        ):
             _signal(state["completion"], {"token": state["completion_token"]})
         return 0
     if event == "end":
@@ -873,13 +1024,23 @@ def _command(args: argparse.Namespace) -> dict[str, Any]:
     if args.command == "policy":
         return policy(host, args.session_id, profile, args.action, args.reason)
     if args.command == "prepare":
-        return prepare(host, args.session_id, profile, args.intent, shared, args.receipt, dismissal_reason=args.reason)
+        return prepare(
+            host,
+            args.session_id,
+            profile,
+            args.intent,
+            shared,
+            args.receipt,
+            dismissal_reason=args.reason,
+        )
     if args.command == "recheck":
         return recheck(host, args.session_id, profile, args.release_generation, shared)
     if args.command == "arm":
         return arm(host, args.session_id, profile, args.release_generation, shared)
     if args.command == "dismiss":
-        return dismiss(host, args.session_id, profile, args.receipt, args.reason, shared)
+        return dismiss(
+            host, args.session_id, profile, args.receipt, args.reason, shared
+        )
     raise ValueError("unknown terminal release command")
 
 
