@@ -188,6 +188,45 @@ class CloseLifecycleTests(CloseFixture, unittest.TestCase):
                 Host(self.host), "one", self.profile, "task-completion", session_close, receipt
             )
 
+    def test_retired_plan_and_ledger_keep_the_same_audit(self):
+        receipt, _checkpoint = self.retired_goal_receipt(companion=True)
+        prepared = LIFECYCLE.prepare(
+            Host(self.host), 'one', self.profile, 'task-completion', session_close, receipt)
+        self.assertEqual('rechecked', LIFECYCLE.recheck(
+            Host(self.host), 'one', self.profile, prepared['release_generation'], session_close)['status'])
+        self.spawn.assert_not_called()
+
+    def test_retired_pair_still_requires_live_unretired_evidence(self):
+        receipt, _checkpoint = self.retired_goal_receipt(companion=True)
+        for name in ('aggregate.json', 'evidence.txt'):
+            with self.subTest(name=name):
+                artifact = self.root / name
+                content = artifact.read_bytes()
+                artifact.unlink()
+                with self.assertRaisesRegex(ValueError, 'source is unavailable'):
+                    LIFECYCLE.prepare(
+                        Host(self.host), 'one', self.profile, 'task-completion', session_close, receipt)
+                artifact.write_bytes(content)
+
+    def test_retired_pair_refuses_changed_plan_or_snapshot(self):
+        receipt, _checkpoint = self.retired_goal_receipt(companion=True)
+        plan = self.root / 'PLAN.md'
+        plan.write_text('changed', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'source changed'):
+            LIFECYCLE.prepare(Host(self.host), 'one', self.profile, 'task-completion', session_close, receipt)
+        plan.unlink()
+        (self.root / 'checkpoint-PLAN.md').write_text('changed', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'checkpoint source changed'):
+            LIFECYCLE.prepare(Host(self.host), 'one', self.profile, 'task-completion', session_close, receipt)
+
+    def test_aggregate_cannot_be_marked_retired(self):
+        receipt, _checkpoint = self.retired_goal_receipt(companion=True)
+        value = json.loads(receipt.read_text(encoding='utf-8'))
+        value['checkpoint']['retired_sources'].append(value['sources'][1]['path'])
+        self.write(receipt, value)
+        with self.assertRaisesRegex(ValueError, 'invalid retired sources'):
+            LIFECYCLE.prepare(Host(self.host), 'one', self.profile, 'task-completion', session_close, receipt)
+
     def test_pending_cleanup_with_a_live_exact_worker_allows_arm(self):
         prepared = LIFECYCLE.prepare(
             Host(self.host),

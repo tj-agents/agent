@@ -132,9 +132,11 @@ class CloseFixture:
         with self.rollout.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record) + "\n")
 
-    def receipt(self, state="accepted"):
+    def receipt(self, state="accepted", artifacts=()):
         source = {"path": str(self.target), "sha256": hashlib.sha256(self.target.read_bytes()).hexdigest()}
         sources = [source]
+        sources.extend({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                       for path in artifacts)
         owner = {"host": self.host, "session_id": "one"}
         bound_delivery = None
         candidate_id = hashlib.sha256(
@@ -188,14 +190,28 @@ class CloseFixture:
         self.write(path, receipt)
         return path
 
-    def retired_goal_receipt(self):
-        path = self.receipt()
+    def retired_goal_receipt(self, companion=False):
+        artifacts = []
+        if companion:
+            for name in ('aggregate.json', 'PLAN.md', 'evidence.txt'):
+                artifact = self.root / name
+                artifact.write_text(name, encoding='utf-8')
+                artifacts.append(artifact)
+        path = self.receipt(artifacts=artifacts)
         checkpoint = self.root / "checkpoint-goal.json"
         checkpoint.write_bytes(self.target.read_bytes())
         receipt = json.loads(path.read_text(encoding="utf-8"))
-        receipt["checkpoint"] = {"retired_goal": True, "sources": [
+        receipt["checkpoint"] = {"retired_sources": [str(self.target)], "sources": [
             {"path": str(checkpoint), "sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest()}
         ]}
+        for artifact in artifacts:
+            preserved = artifact.with_name('checkpoint-' + artifact.name)
+            preserved.write_bytes(artifact.read_bytes())
+            receipt['checkpoint']['sources'].append({
+                'path': str(preserved), 'sha256': hashlib.sha256(preserved.read_bytes()).hexdigest()})
+        if companion:
+            receipt['checkpoint']['retired_sources'].append(str(artifacts[1]))
+            artifacts[1].unlink()
         self.write(path, receipt)
         self.target.unlink()
         return path, checkpoint
