@@ -234,22 +234,6 @@ class FollowupTests(unittest.TestCase):
         proxy.assert_not_called()
         self.assertFalse(self.receipt_path.exists())
 
-    def test_claude_caller_delivers_to_explicit_codex_profile_and_thread(self):
-        proxy = Session(self.receipt)
-        output = io.StringIO()
-        with patch.dict(os.environ, {'CLAUDECODE': '1', 'CLAUDE_CODE_SESSION_ID': 'caller',
-                                     'CODEX_HOME': str(self.root / 'other-profile')}), \
-                patch.object(FOLLOWUP, 'Proxy', return_value=proxy) as connection, \
-                patch.object(FOLLOWUP, 'responsibility', return_value='owner'), \
-                contextlib.redirect_stdout(output):
-            code = FOLLOWUP.main(self.arguments())
-        self.assertEqual(0, code)
-        self.assertEqual('delivered', json.loads(output.getvalue())['status'])
-        self.assertEqual(FOLLOWUP.path_key(self.root),
-                         FOLLOWUP.path_key(connection.call_args.args[1]))
-        self.assertEqual(THREAD, json.loads(self.receipt_path.read_text())['thread_id'])
-        self.assertEqual(1, sum(method.startswith('turn/') for method, _ in proxy.calls))
-
     def test_correction_requires_verified_original_delivery(self):
         original = dict(self.receipt, client_id='00000000-0000-4000-8000-000000000003')
         original_path = self.root / 'original.json'

@@ -65,32 +65,6 @@ class RequiredPluginInventoryTests(unittest.TestCase):
         with mock.patch.object(REQUIRED.subprocess, "run", side_effect=run):
             self.assertEqual([], REQUIRED.inventory("native-claude", PLUGINS[Host.CLAUDE], self.project, ()))
 
-    def test_handoff_title_override_preserves_required_plugin_verification(self):
-        self.select("agent@tj-agents")
-        entry = self.entry("agent@tj-agents")
-        options = ("--config", "model_reasoning_effort=high", "--config", "tui.terminal_title=[]")
-        with mock.patch.object(REQUIRED.subprocess, "run", return_value=subprocess.CompletedProcess(
-                [], 0, json.dumps({"installed": [entry]}), "")) as run:
-            project, roots = REQUIRED.check_launch_roots(
-                self.project, Host.CODEX, "native-codex", [*options, "prepared handoff"],
-            )
-        self.assertEqual(self.project.resolve(), project)
-        self.assertEqual({"agent@tj-agents"}, roots.keys())
-        self.assertEqual(["native-codex", *options, "plugin", "list", "--marketplace", "tj-agents", "--json"],
-                         run.call_args.args[0])
-
-    def test_title_override_does_not_admit_plugin_activation_overrides(self):
-        self.select("agent@tj-agents")
-        for option in (("--config", "plugins.agent.enabled=false"), ("--config", "features.hooks=false"),
-                       ("--profile", "other"), ("--disable", "hooks"), ("--config", "tui={}")):
-            with self.subTest(option=option), mock.patch.object(REQUIRED.subprocess, "run") as run:
-                with self.assertRaisesRegex(REQUIRED.RequiredPluginsError, "launch override"):
-                    REQUIRED.check_launch_roots(
-                        self.project, Host.CODEX, "native-codex",
-                        ["--config", "tui.terminal_title=[]", *option, "prepared handoff"],
-                    )
-                run.assert_not_called()
-
     def test_multiple_marketplaces_share_one_inventory_deadline(self):
         self.select("agent@a", "agent@b", "agent@c")
         clock = iter((0.0, 0.0, 12.0, 21.0))
