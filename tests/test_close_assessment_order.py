@@ -1,11 +1,13 @@
+import json
 from collections.abc import Iterator
 from contextlib import ExitStack
 from itertools import count
+from pathlib import Path
 from typing import Any, cast
 from unittest import mock
 
 import pytest
-from close_fixtures import LIFECYCLE, CloseFixture, Host, session_close
+from close_fixtures import LIFECYCLE, WATCHER, CloseFixture, Host, session_close
 
 
 @pytest.fixture
@@ -119,6 +121,142 @@ def arm(session: Any, prepared: dict[str, Any]) -> dict[str, Any]:
             session_close,
         ),
     )
+
+
+def arm_watcher(session: Any) -> dict[str, Any]:
+    armed = arm(session, prepare(session))
+    session.request_path = Path(armed["request"])
+    session.digest = armed["request_sha256"]
+    session.request = WATCHER.load_request(session.request_path, session.digest)
+    return armed
+
+
+def test_persistent_policy_alone_prevents_release(session: Any) -> None:
+    arm_watcher(session)
+    session.stop()
+    session.write(
+        LIFECYCLE._policy_path("one"),
+        {
+            "host": "codex",
+            "session_id": "one",
+            "profile": str(session.profile.resolve()),
+            "reason": "preserve this session",
+            "at": 0.0,
+        },
+    )
+    with mock.patch.object(session_close, "stop_cli_client") as stop:
+        assert session.wait() == 0
+    stop.assert_not_called()
+    assert session.outcome()["status"] == "cancelled"
+    assert "keep-open" in session.outcome()["reason"]
+
+
+def test_keep_open_during_final_native_guard_prevents_signal(session: Any) -> None:
+    arm_watcher(session)
+    session.stop()
+    adapter = session_close.host_sessions("codex")
+    original = adapter.close_guard
+
+    def changed(*args: Any) -> Any:
+        LIFECYCLE.policy(Host.CODEX, "one", session.profile, "keep-open", "continue")
+        return original(*args)
+
+    with mock.patch.object(adapter, "close_guard", side_effect=changed):
+        assert session.wait() == 0
+    assert session.outcome()["status"] == "cancelled"
+    assert session.row().ended_at is None
+
+
+def test_retiring_an_old_watcher_preserves_the_current_generation(session: Any) -> None:
+    arm_watcher(session)
+    old = session.request
+    with mock.patch.object(
+        LIFECYCLE.secrets, "token_urlsafe", return_value="successor"
+    ):
+        prepared = prepare(session)
+    assert session.wait() == 0
+    state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+    assert state["status"] == "prepared"
+    assert state["release_generation"] == prepared["release_generation"]
+    assert Path(old["cancel"]).exists()
+
+
+def test_retired_plan_and_ledger_keep_the_same_audit(session: Any) -> None:
+    receipt, _checkpoint = session.retired_goal_receipt(companion=True)
+    prepared = LIFECYCLE.prepare(
+        Host.CODEX, "one", session.profile, "task-completion", session_close, receipt
+    )
+    rechecked = LIFECYCLE.recheck(
+        Host.CODEX,
+        "one",
+        session.profile,
+        prepared["release_generation"],
+        session_close,
+    )
+    assert rechecked["status"] == "rechecked"
+    session.spawn.assert_not_called()
+
+
+@pytest.mark.parametrize("artifact_name", ["aggregate.json", "evidence.txt"])
+def test_retired_pair_still_requires_live_unretired_evidence(
+    session: Any, artifact_name: str
+) -> None:
+    receipt, _checkpoint = session.retired_goal_receipt(companion=True)
+    artifact = session.root / artifact_name
+    content = artifact.read_bytes()
+    artifact.unlink()
+    with pytest.raises(ValueError, match="source is unavailable"):
+        LIFECYCLE.prepare(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            receipt,
+        )
+    artifact.write_bytes(content)
+
+
+def test_retired_pair_refuses_changed_plan_or_snapshot(session: Any) -> None:
+    receipt, _checkpoint = session.retired_goal_receipt(companion=True)
+    plan = session.root / "PLAN.md"
+    plan.write_text("changed", encoding="utf-8")
+    with pytest.raises(ValueError, match="source changed"):
+        LIFECYCLE.prepare(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            receipt,
+        )
+    plan.unlink()
+    (session.root / "checkpoint-PLAN.md").write_text("changed", encoding="utf-8")
+    with pytest.raises(ValueError, match="checkpoint source changed"):
+        LIFECYCLE.prepare(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            receipt,
+        )
+
+
+def test_aggregate_cannot_be_marked_retired(session: Any) -> None:
+    receipt, _checkpoint = session.retired_goal_receipt(companion=True)
+    value = json.loads(receipt.read_text(encoding="utf-8"))
+    value["checkpoint"]["retired_sources"].append(value["sources"][1]["path"])
+    session.write(receipt, value)
+    with pytest.raises(ValueError, match="invalid retired sources"):
+        LIFECYCLE.prepare(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            receipt,
+        )
 
 
 @pytest.mark.parametrize("change", [prompt, keep_open])
