@@ -112,7 +112,7 @@ def verify_resume(executable: str) -> None:
 
 
 def open_tab(cli, item: dict, directory, label: str, instruction: str, status_path: Path, *, model=None,
-             native_arguments=(), dangerously_skip_permissions=False) -> None:
+             native_arguments=(), dangerously_skip_permissions=False, owned_backend=False) -> None:
     executable, _ = cli.resolve_codex_executable()
     verify_resume(executable)
     old_profile = os.environ.get(HOST.home_variable)
@@ -124,7 +124,8 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
     try:
         cli.launch_tab(
             directory, sys.executable, label,
-            cli.bound_terminal_arguments(HOST.value, directory, executable, arguments, status_path),
+            cli.bound_terminal_arguments(HOST.value, directory, executable, arguments, status_path,
+                                         require_session_start=owned_backend),
             clear=("TERM",),
             force={HOST.home_variable: item["profile"]},
         )
@@ -135,8 +136,8 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
             os.environ[HOST.home_variable] = old_profile
 
 
-def prepare_frontend(arguments, project: Path, environment, executable=None):
-    return client.prepare(arguments, project, environment, executable=executable)
+def prepare_frontend(arguments, project: Path, environment, executable=None, *, handoff=False, hook_roots=None):
+    return client.prepare(arguments, project, environment, executable=executable, handoff=handoff, hook_roots=hook_roots)
 
 
 def attach_frontend(ticket, pid: int) -> None:
@@ -147,11 +148,75 @@ def release_frontend(ticket) -> None:
     client.release(ticket)
 
 
+def handoff_recipient(ticket, register_session, terminal):
+    if ticket is None or (ticket.get('backend') or {}).get('kind') != 'handoff':
+        raise RuntimeError('Codex handoff has no owned native backend binding')
+    table = register_session.process_table()
+    lookup = register_session.build_process_lookup()
+    def peer_state(pid):
+        info = lookup(pid)
+        return ('present', info) if info is not None else ('absent', None)
+    try:
+        record, submitted = client.bind_recipient(ticket, table, peer_state)
+    except client.RecipientPending:
+        return None
+    recipient = record['recipient']
+    store_module = register_session._load_session_store()
+    if store_module is None:
+        raise RuntimeError('Agent Store is unavailable for the verified handoff recipient')
+    with store_module.SessionStore() as store:
+        session = store.get_session(store_module.session_handle(HOST.value, recipient['thread_id']))
+        if session is None or session.ended_at is not None:
+            raise RuntimeError('Handoff SessionStart has no existing live Agent Store registration')
+        if (not session.profile or client.comparable_path(Path(session.profile).resolve())
+                != client.comparable_path(Path(record['profile']).resolve())):
+            raise RuntimeError('Handoff Agent Store registration has a different profile')
+    details = client_details({**record, **submitted})
+    if terminal is not None:
+        details['terminal'] = terminal
+    entry = register_session.record({'session_id': recipient['thread_id'], 'cwd': recipient['cwd']}, client={
+        'pid': record['frontend']['pid'], 'host': HOST.value,
+        'pid_started_at': record['frontend']['started_at'], **details,
+    }, require_existing=True)
+    if entry is None:
+        raise RuntimeError('Verified handoff recipient could not be attached to Agent Store')
+    with store_module.SessionStore() as store:
+        session = store.get_session(store_module.session_handle(HOST.value, recipient['thread_id']))
+        if (session is None or session.ended_at is not None or session.pid != record['frontend']['pid']
+                or session.pid_started_at != record['frontend']['started_at']
+                or client.comparable_path(Path(session.cwd).resolve()) != client.comparable_path(Path(recipient['cwd']).resolve())
+                or client.comparable_path(Path(session.profile).resolve()) != client.comparable_path(Path(record['profile']).resolve())):
+            raise RuntimeError('Agent Store did not retain the exact verified handoff client')
+    return {'token': record['token'], 'recipient': recipient, 'profile': record['profile']}
+
+
 def debug_arguments(arguments: list[str], directory: Path) -> tuple[list[str], str | None]:
     return arguments, None
 
 
-def native_arguments(argv: list[str]) -> list[str]:
+def native_arguments(argv: list[str], entry=None) -> list[str]:
+    if entry is not None and (entry.get('backend') or {}).get('kind') == 'handoff':
+        kept, index, endpoints = [], 0, 0
+        while index < len(argv):
+            token = argv[index]
+            index += 1
+            name, equals, value = token.partition('=')
+            if name == '--remote':
+                if not equals:
+                    if index >= len(argv):
+                        raise RuntimeError('Owned handoff endpoint is missing from its frontend')
+                    value = argv[index]
+                    index += 1
+                endpoints += 1
+                if (not value.startswith('unix://') or not Path(value[7:]).is_absolute()
+                        or client.comparable_path(Path(value[7:]).resolve())
+                        != client.comparable_path(Path(entry['backend']['socket_path']).resolve())):
+                    raise RuntimeError('Owned handoff frontend selected a different endpoint')
+            else:
+                kept.append(token)
+        if endpoints != 1:
+            raise RuntimeError('Owned handoff frontend requires exactly one endpoint')
+        argv = kept
     kept, index, selector, subcommand = [], 0, False, False
     while index < len(argv):
         token = argv[index]
@@ -188,6 +253,41 @@ def native_arguments(argv: list[str]) -> list[str]:
     return kept
 
 
+def relaunch_backend(entry):
+    if (entry.get('backend') or {}).get('kind') != 'handoff':
+        return None
+    record = json.loads(client.binding_path(entry['launch_token']).read_text(encoding='utf-8'))
+    frozen = client.freeze_binding(record)
+    if (frozen['frontend']['pid'] != entry['pid'] or frozen['backend'] != entry['backend']
+            or frozen['recipient']['thread_id'] != entry['session_id']):
+        raise RuntimeError('Owned refresh backend differs from its verified source client')
+    return frozen
+
+
+def backend_closed(binding, shared):
+    if binding is None:
+        return True
+    for name in ('backend', 'supervisor'):
+        if shared.identity_status(binding[name]['pid'], binding[name]['started_at']) != 'exited':
+            return False
+    path = client.binding_path(binding['token']).with_name('backend.json')
+    try:
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+        record = json.loads(path.with_name('client.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(receipt, dict) or not isinstance(record, dict):
+        return False
+    if any(record.get(key) != value for key, value in binding.items() if key != 'frontend_message_id'):
+        return False
+    if (receipt.get('state') != 'exited' or receipt.get('token') != binding['token']
+            or receipt.get('wrapper') != binding['wrapper'] or receipt.get('supervisor') != binding['supervisor']
+            or any(receipt.get('backend', {}).get(key) != binding['backend'][key]
+                   for key in ('kind', 'pid', 'started_at', 'socket_path'))):
+        return False
+    return not Path(binding['backend']['socket_path']).exists()
+
+
 def validate_relaunch(entry: dict, project: Path) -> None:
     native_cwd = entry.get("native_cwd")
     if (not isinstance(native_cwd, str) or not Path(native_cwd).is_absolute()
@@ -204,15 +304,21 @@ def current_client(session_id: str, nearest, shared, *, project=None):
     info, record = client.recorded_client(session_id, nearest, shared.process_info,
                                           shared.register_session.process_table(), project=project,
                                           peer_state=shared.process_state)
-    return info, {
+    return info, client_details(record, shared.register_session)
+
+
+def client_details(record, registration=None):
+    return {
         "client_identity": "managed-input", "launch_cwd": record["launch_cwd"],
         "title": record.get("title"), "client_message_id": record["client_message_id"],
         "native_turn_id": record["turn_id"],
+        "frontend_message_id": record.get("frontend_message_id", record["client_message_id"]),
+        "launch_token": record.get("token"),
         "native_rollout": record["native_rollout"],
         "native_cwd": record.get("native_cwd"),
         "recording_path": record["recording_path"], "backend": record["backend"],
         "profile": record["profile"],
-        "terminal": shared.register_session.terminal_identity(record.get("terminal_environment", {})),
+        "terminal": registration.terminal_identity(record.get("terminal_environment", {})) if registration else None,
     }
 
 
@@ -244,6 +350,8 @@ def revalidate_client(entry: dict, shared) -> None:
 
 def verify_frontend(entry: dict, shared) -> None:
     revalidate_client(entry, shared)
+    if (entry.get('backend') or {}).get('kind') == 'handoff':
+        return
     context = client.process_context(entry["pid"])
     if (client.comparable_path(Path(context.get(client.RECORD_PATH_ENV) or ''))
             != client.comparable_path(Path(entry.get("recording_path") or ''))
@@ -252,7 +360,7 @@ def verify_frontend(entry: dict, shared) -> None:
             or (entry.get("backend") is not None and client.daemon_identity(
                 {HOST.home_variable: entry["profile"]}, expected_pid=entry["backend"]["pid"],
             ) != entry["backend"])
-            or client.latest_input(entry["recording_path"]) != entry.get("client_message_id")):
+            or client.latest_input(entry["recording_path"]) != entry.get("frontend_message_id", entry.get("client_message_id"))):
         raise shared.Refusal("the frontend input or backend binding changed before close")
 
 

@@ -676,7 +676,9 @@ def await_pickup(host, session_id, status_path, since, history_path=None, timeou
 
 def open_session(host, session_id, prompt="Continue the requested work.", title=None, roots=None, confirm_closed=False,
                  prompt_path=None, model=None, dangerously_skip_permissions=False, cli=None, native_arguments=(),
-                 expected_cwd=None):
+                 expected_cwd=None, owned_backend=False):
+    if owned_backend and host != Host.CODEX:
+        raise ValueError('Only Codex recovery can own a native backend')
     item = find(host, session_id, roots)
     if expected_cwd is not None and Path(item["cwd"]).resolve() != Path(expected_cwd).resolve():
         raise ValueError("The exact session does not match the expected refresh checkout.")
@@ -706,6 +708,7 @@ def open_session(host, session_id, prompt="Continue the requested work.", title=
         instruction = cli.prompt_file_argument(prompt_path)[0] if prompt_path else prompt
         SESSIONS[host].open_tab(cli, item, directory, label, instruction, status_path, model=model,
                                 native_arguments=native_arguments,
+                                **({'owned_backend': True} if owned_backend else {}),
                                 dangerously_skip_permissions=dangerously_skip_permissions)
         launched = True
         try:
@@ -817,6 +820,7 @@ def main(argv=None):
     parser.add_argument("--select", action="append", default=[])
     parser.add_argument("--confirm-closed", action="store_true")
     parser.add_argument("--native-argument", action="append", default=[])
+    parser.add_argument("--owned-backend", action="store_true", help=argparse.SUPPRESS)
     for host in Host:
         parser.add_argument(f"--{host}-history-root", dest=f"{host}_history_root")
     args = parser.parse_args(argv)
@@ -877,7 +881,7 @@ def main(argv=None):
             raise ValueError("open requires one --host and an exact --id.")
         item = open_session(hosts[0], args.id, args.prompt if args.prompt_path else args.prompt or "Continue the requested work.", args.title, roots, args.confirm_closed,
                             args.prompt_path, args.model, native_arguments=args.native_argument,
-                            expected_cwd=args.expected_cwd)
+                            expected_cwd=args.expected_cwd, owned_backend=args.owned_backend)
         print(json.dumps(item, indent=2))
         return 0
     except LaunchUnverified as exc:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -166,20 +167,24 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         raise RuntimeError("the calling session is not the expected registered CLI")
     sessions.validate_relaunch(entry, project)
     session_id = entry["session_id"]
-    native = sessions.native_arguments(arguments(entry["pid"]))
+    native = sessions.native_arguments(arguments(entry["pid"]), entry)
+    owned_backend = sessions.relaunch_backend(entry)
     executable = host_plugins.PLUGINS[host].resolve_executable()
     sessions.check_relaunch(project, executable, native, session_id, PROMPT)
     token = secrets.token_hex(16)
     record = record_path(session_id)
     claim_record(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
                           "host": host.value, "profile": entry.get("profile"), "cwd": str(project.resolve()),
-                          "native_arguments": native, "at": time.time()})
+                          "native_arguments": native, "owned_backend": owned_backend, "at": time.time()})
     options = ["--host", host.value, "--session-id", session_id, "--pid", str(entry["pid"]),
                "--pid-started-at", repr(entry["pid_started_at"]), "--record", str(record), "--token", token,
                "--recovery", str(recovery_script(project, installed)), "--title", entry.get("title") or host.value.title(),
                "--prompt", PROMPT, "--timeout", str(WAIT_SECONDS),
                "--expected-cwd", str(project.resolve()),
                *[f"--native-argument={value}" for value in native]]
+    if owned_backend is not None:
+        digest = hashlib.sha256(json.dumps(owned_backend, sort_keys=True).encode('utf-8')).hexdigest()
+        options += ['--owned-backend-binding', digest]
     armed = None
     if entry.get("profile"):
         options += ["--history-root", str(Path(entry["profile"]) / host.history_directory)]

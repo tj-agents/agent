@@ -91,8 +91,30 @@ def path_key(value):
     return os.path.normcase(os.path.abspath(value))
 
 
+def client_runtime():
+    for root in Path(__file__).resolve().parents:
+        runtime = root / '.agents' / 'agent' / 'runtime'
+        if (runtime / 'codex/client.py').is_file():
+            if str(runtime) not in sys.path:
+                sys.path.insert(0, str(runtime))
+            from codex import client
+
+            return client
+    raise FollowupError('The packaged managed Codex client is unavailable')
+
+
+def verify_launch(receipt):
+    frozen = receipt.get('launch_binding')
+    if frozen is not None:
+        try:
+            return client_runtime().frozen_binding(frozen)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise FollowupError(str(error)) from error
+    return None
+
+
 class Proxy:
-    def __init__(self, executable, profile, deadline):
+    def __init__(self, executable, profile, deadline, binding=None):
         self.deadline = deadline
         env = dict(os.environ, CODEX_HOME=str(profile))
         for root in Path(__file__).resolve().parents:
@@ -106,8 +128,13 @@ class Proxy:
                 spec = importlib.util.spec_from_file_location('codex_followup_transport', path)
                 transport = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(transport)
+                if binding is not None:
+                    client_runtime().frozen_binding(binding)
+                    executable = binding['executable']
                 self.server = transport.AppServer(executable, Path.cwd(), environment=env,
-                                                  timeout=max(0.1, deadline - time.monotonic()), existing=True)
+                                                  timeout=max(0.1, deadline - time.monotonic()), existing=True,
+                                                  **({'socket_path': binding['backend']['socket_path']}
+                                                     if binding is not None else {}))
                 self.process = self.server.process
                 return
         raise FollowupError('The packaged Codex WebSocket transport was not found')
@@ -170,9 +197,13 @@ def pages(proxy, method, params):
 
 
 def read_thread(proxy, receipt):
+    binding = verify_launch(receipt)
     thread = proxy.request('thread/read', {'threadId': receipt['thread_id']})['thread']
     if thread['id'] != receipt['thread_id'] or path_key(thread['cwd']) != receipt['cwd']:
         raise FollowupError('Recipient thread ID or cwd does not match; refusing to send')
+    if binding is not None and not client_runtime().native_contains(
+            proxy, receipt['thread_id'], receipt['launch_binding']['frontend_message_id']):
+        raise FollowupError('Frozen frontend input is absent from the recipient history')
     return thread
 
 
@@ -241,18 +272,25 @@ def send(proxy, receipt, receipt_path, message):
         existing = json.loads(receipt_path.read_text(encoding='utf-8'))
         validate_receipt(existing, receipt)
         return wait_for_delivery(proxy, existing, False)
+    verify_launch(receipt)
     proxy.request(method, params)
     return wait_for_delivery(proxy, receipt, True)
 
 
 def validate_receipt(receipt, expected=None):
-    if receipt.get('version') != 1:
+    if receipt.get('version') != 2 or 'launch_binding' not in receipt:
         raise FollowupError('Unsupported receipt version')
     for key in ('thread_id', 'client_id'):
         uuid.UUID(receipt[key])
     for key in ('cwd', 'codex_home', 'message_sha256'):
         if not isinstance(receipt.get(key), str) or not receipt[key]:
             raise FollowupError(f'Invalid receipt field: {key}')
+    frozen = receipt['launch_binding']
+    if frozen is not None:
+        if (not isinstance(frozen, dict) or frozen['recipient']['thread_id'] != receipt['thread_id']
+                or path_key(frozen['recipient']['cwd']) != receipt['cwd']
+                or path_key(frozen['profile']) != receipt['codex_home']):
+            raise FollowupError('Frozen launch binding does not match this recipient')
     if expected and any(receipt[key] != expected[key] for key in (
         'thread_id', 'cwd', 'codex_home', 'message_sha256',
     )):
@@ -270,6 +308,7 @@ def main(argv=None):
     submit.add_argument('--codex-home', default=os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
     submit.add_argument('--message-file', required=True, type=Path)
     submit.add_argument('--receipt', required=True, type=Path)
+    submit.add_argument('--launch-receipt', type=Path)
     route = submit.add_mutually_exclusive_group(required=True)
     route.add_argument('--execution-key')
     route.add_argument('--corrects', type=Path)
@@ -291,12 +330,16 @@ def main(argv=None):
                 raise FollowupError('Message file is empty')
             if not Path(args.cwd).is_dir() or not Path(args.codex_home).is_dir():
                 raise FollowupError('Expected cwd and Codex profile must be existing directories')
-            expected = {'version': 1, 'thread_id': str(args.thread), 'client_id': str(uuid.uuid4()),
+            expected = {'version': 2, 'thread_id': str(args.thread), 'client_id': str(uuid.uuid4()),
                         'cwd': path_key(args.cwd), 'codex_home': path_key(args.codex_home),
-                        'message_sha256': hashlib.sha256(message.encode('utf-8')).hexdigest()}
+                        'message_sha256': hashlib.sha256(message.encode('utf-8')).hexdigest(),
+                        'launch_binding': None}
             expected['routing'] = {'reason': args.reason,
                                    **({'execution_key': args.execution_key} if args.execution_key
                                       else {'corrects': str(args.corrects.resolve())})}
+            if not exists and args.launch_receipt is not None:
+                expected['launch_binding'] = client_runtime().launch_binding(
+                    args.launch_receipt, str(args.thread), args.cwd, args.codex_home)
             receipt = json.loads(args.receipt.read_text(encoding='utf-8')) if exists else expected
             validate_receipt(receipt, expected)
             if exists:
@@ -309,13 +352,15 @@ def main(argv=None):
             receipt = json.loads(args.receipt.read_text(encoding='utf-8'))
             validate_receipt(receipt)
             reserved = True
-        proxy = Proxy(args.codex, receipt['codex_home'], deadline)
+        verify_launch(receipt)
+        proxy = Proxy(args.codex, receipt['codex_home'], deadline,
+                      **({'binding': receipt['launch_binding']} if receipt['launch_binding'] is not None else {}))
         proxy.initialize()
         if args.command == 'status' or exists:
             result = wait_for_delivery(proxy, receipt, False)
         else:
             result = send(proxy, receipt, args.receipt, message)
-    except (FollowupError, OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+    except (FollowupError, OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError) as error:
         mismatch = isinstance(error, ReceiptMismatch)
         if mismatch:
             status, next_action = 'unavailable', (

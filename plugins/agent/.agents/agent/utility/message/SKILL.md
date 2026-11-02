@@ -18,17 +18,22 @@ Use this only when the user authorized messaging the other session. Keep ownersh
 For a child agent in the current conversation, use the host's native collaboration message tool instead.
 This utility addresses an independent, already running Codex session; it does not perform a handoff.
 
-Requires Python 3.9+, a native Codex executable with `app-server proxy` and the experimental direct-input
-and paginated-history APIs, and an existing shared app-server daemon in the selected Codex profile.
+Requires Python 3.12+, a native Codex executable with `app-server proxy` and the experimental direct-input
+and paginated-history APIs, and a verified existing endpoint in the selected Codex profile. A new Codex
+handoff uses its owned endpoint; other existing direct-input sessions use their shared app-server daemon.
 The helper never starts a daemon, launches/resumes a session, edits Codex databases, changes configuration,
 or injects terminal keystrokes. A standalone embedded TUI may have no reachable messaging endpoint.
 Missing/older capabilities fail explicitly. Verified against the local 0.157.1 protocol schemas;
 fixture validation is not proof that a particular live session is reachable.
 
 1. Bind the exact thread UUID, expected working directory and Codex profile from the prior launch result
-   or user-authorized session inspection. Resolve the recipient's execution key and concrete reason for
-   delivery. Never guess the newest conversation, a PID, or a window title. The helper admits ordinary
-   sends only to one unended Agent Store owner or bounded responsibility for that execution.
+   or user-authorized session inspection. For a new owned handoff, use the `client_binding` in its
+   verified `running` status receipt and pass its path as `--launch-receipt`.
+   Supply `--thread`, `--cwd` and `--codex-home` explicitly even with the launch receipt. Missing or
+   mismatched identity refuses delivery; never substitute a shared daemon for the owned endpoint.
+   Resolve the recipient's execution key and concrete reason for delivery. Never guess the newest
+   conversation, a PID, or a window title. The helper admits ordinary sends only to one unended Agent
+   Store owner or bounded responsibility for that execution.
 2. Write the exact authorized message to a UTF-8 file. Choose a new receipt path outside version control
    and reuse it for this message. Do not put private message/history data into repository fixtures.
 3. Invoke the shipped helper with properly quoted shell arguments. `--codex` accepts a native executable
@@ -36,8 +41,10 @@ fixture validation is not proof that a particular live session is reachable.
    Use `python` on Windows or `python3` on Linux/macOS for both helper commands below.
 
 ```text
-python -B "<skill-directory>/scripts/codex_followup.py" --codex "<codex-executable>" --timeout 20 send --thread <exact-uuid> --cwd "<expected-directory>" --codex-home "<selected-profile>" --message-file "<message-file>" --receipt "<receipt-file>" --execution-key "<verified-execution-key>" --reason "<decision or action this information supports>"
+python -B "<skill-directory>/scripts/codex_followup.py" --codex "<codex-executable>" --timeout 20 send --thread <exact-uuid> --cwd "<expected-directory>" --codex-home "<selected-profile>" --launch-receipt "<handoff-status-path>" --message-file "<message-file>" --receipt "<receipt-file>" --execution-key "<verified-execution-key>" --reason "<decision or action this information supports>"
 ```
+
+Omit `--launch-receipt` only for an existing direct-input recipient using the verified shared-daemon route.
 
 For a correction to an earlier mistaken delivery, use `--corrects <original-receipt>` instead of
 `--execution-key`. The original delivery must be observable in the same recipient history; a correction
@@ -48,11 +55,14 @@ It steers the identified active turn using `expectedTurnId`, or starts a turn on
 thread. It preserves the recipient's model, permissions, working directory and configuration. If the server
 requests an approval or another client action, the helper closes without answering it; the recipient UI
 remains responsible.
-Before submission it exclusively creates a receipt containing a client message ID and message hash.
-It then checks recipient history for that client ID. Receipt files are private runtime evidence.
+Before submission it exclusively creates a version 2 receipt containing a client message ID and message
+hash. For an owned handoff it also freezes the endpoint, process identities and native frontend input
+anchor. It then checks recipient history for that client ID. Receipt files are private runtime evidence.
 
-Reusing a receipt only checks status; it never submits again. A disconnect or timeout after reserving a
-receipt is uncertain delivery, not permission to retry with a fresh receipt. Check with:
+Reusing a receipt only checks status; it never submits again. For an owned handoff, reuse and status
+checks verify the frozen binding and connect only to that endpoint; missing or changed identity refuses
+the check. A disconnect or timeout after reserving a receipt is uncertain delivery, not permission to
+retry with a fresh receipt. Check with:
 
 ```text
 python -B "<skill-directory>/scripts/codex_followup.py" --codex "<codex-executable>" --timeout 20 status --receipt "<receipt-file>"

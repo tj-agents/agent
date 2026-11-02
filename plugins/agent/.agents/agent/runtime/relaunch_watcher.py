@@ -37,6 +37,7 @@ def arguments(argv=None):
     parser.add_argument("--expected-cwd", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=960.0)
     parser.add_argument("--native-argument", action="append", default=[])
+    parser.add_argument("--owned-backend-binding")
     return parser.parse_args(argv)
 
 
@@ -64,6 +65,7 @@ def wait_for_exit(args, exited=session_close.verified_exited, clock=time.monoton
         record = read_record(args.record)
         if record.get("token") != args.token or record.get("state") != "waiting":
             return False
+        owned_backend = frozen_backend(args, record)
         close = record.get("close")
         if not isinstance(close, dict):
             sleep(POLL_SECONDS)
@@ -78,6 +80,13 @@ def wait_for_exit(args, exited=session_close.verified_exited, clock=time.monoton
         if hashlib.sha256(raw).hexdigest() != close.get("request_sha256"):
             settle(args, "cancelled", reason="the exact close request changed")
             return False
+        if owned_backend is not None:
+            entry = json.loads(raw).get('entry') or {}
+            if (entry.get('backend') != owned_backend['backend']
+                    or entry.get('launch_token') != owned_backend['token']
+                    or entry.get('pid') != owned_backend['frontend']['pid']):
+                settle(args, 'cancelled', reason='the owned backend differs from the exact close request')
+                return False
         if not outcome:
             sleep(POLL_SECONDS)
             continue
@@ -87,13 +96,38 @@ def wait_for_exit(args, exited=session_close.verified_exited, clock=time.monoton
         if not exited(args.pid, args.pid_started_at):
             sleep(POLL_SECONDS)
             continue
+        if owned_backend is not None:
+            from host import Host
+            from host_sessions import SESSIONS
+
+            if not SESSIONS[Host(args.host)].backend_closed(owned_backend, session_close):
+                sleep(POLL_SECONDS)
+                continue
         return True
     settle(args, "expired")
     return False
 
 
+def frozen_backend(args, record):
+    binding = record.get('owned_backend')
+    digest = getattr(args, 'owned_backend_binding', None)
+    if binding is None and digest is None:
+        return None
+    actual = hashlib.sha256(json.dumps(binding, sort_keys=True).encode('utf-8')).hexdigest()
+    if binding is None or actual != digest:
+        raise ValueError('the frozen owned backend changed before refresh')
+    return binding
+
+
 def launch_command(args):
     record = read_record(args.record)
+    owned_backend = frozen_backend(args, record)
+    if owned_backend is not None:
+        from host import Host
+        from host_sessions import SESSIONS
+
+        if not SESSIONS[Host(args.host)].backend_closed(owned_backend, session_close):
+            raise ValueError('the old owned backend cleanup is unconfirmed')
     cwd = record.get("cwd")
     if not isinstance(cwd, str) or Path(cwd).resolve() != args.expected_cwd.resolve():
         raise ValueError("the recorded refresh checkout changed before relaunch")
@@ -101,6 +135,7 @@ def launch_command(args):
     return [sys.executable, "-B", str(args.recovery), "open", "--host", args.host, "--id", args.session_id,
             "--title", args.title, "--prompt", args.prompt,
             "--expected-cwd", cwd,
+            *(['--owned-backend'] if owned_backend is not None else []),
             *profile,
             *[f"--native-argument={value}" for value in args.native_argument]]
 

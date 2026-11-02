@@ -61,6 +61,7 @@ class ClientAttributionTests(unittest.TestCase):
         for patcher in self.patchers:
             patcher.start()
             self.addCleanup(patcher.stop)
+        hook_trust.AppServer.return_value.__enter__.return_value.request.return_value = {'data': []}
 
     def bind(self, pid=123, identity="own-input"):
         prepared, environment, ticket = CLIENT.prepare(["resume", "thread"], self.root, os.environ,
