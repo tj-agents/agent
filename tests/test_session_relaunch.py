@@ -248,6 +248,7 @@ class SyncTests(State):
             environment["CLAUDE_CODE_CHILD_SESSION"] = "1"
         relaunched = mock.Mock(return_value=relaunch or {"relaunch": "armed", "session_id": SESSION})
         with mock.patch.dict(os.environ, environment), \
+                mock.patch.object(REFRESH.native_runtime, "prepare", return_value=()), \
                 mock.patch.object(REFRESH.launch_check, "check", return_value=result), \
                 mock.patch.object(CLAUDE, "selected", return_value=({}, ["workflow@tj-agents"])), \
                 mock.patch.object(CLAUDE, "stale_plugins", return_value=list(stale)), \
