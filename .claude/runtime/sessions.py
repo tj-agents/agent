@@ -72,6 +72,20 @@ def resume_command(session_id: str) -> str:
     return f'claude --resume {session_id}'
 
 
+def requires_verified_handoff(require_session_start: bool) -> bool:
+    return False
+
+
+def validate_open(owned_backend: bool) -> None:
+    if owned_backend:
+        raise ValueError('Claude recovery does not use a Codex backend')
+
+
+def recovery_receipt(status_path: Path, item: dict, owned_backend: bool) -> dict:
+    validate_open(owned_backend)
+    return {}
+
+
 def default_profile(profile: str) -> bool:
     return os.path.normcase(str(Path(profile).resolve())) == os.path.normcase(
         str((Path.home() / HOST.home_directory).resolve()))
@@ -79,8 +93,7 @@ def default_profile(profile: str) -> bool:
 
 def open_tab(cli, item: dict, directory, label: str, instruction: str, status_path: Path, *, model=None,
              native_arguments=(), dangerously_skip_permissions=False, owned_backend=False) -> None:
-    if owned_backend:
-        raise ValueError('Claude recovery does not use a Codex backend')
+    validate_open(owned_backend)
     # Claude reads ~/.claude.json only without CLAUDE_CONFIG_DIR; set to ~/.claude it starts first-run onboarding.
     if default_profile(item["profile"]):
         profile_environment = {"clear": (HOST.home_variable,)}

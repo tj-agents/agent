@@ -102,6 +102,22 @@ def resume_command(session_id: str) -> str:
     return f'codex resume {session_id}'
 
 
+def requires_verified_handoff(require_session_start: bool) -> bool:
+    return require_session_start
+
+
+def validate_open(owned_backend: bool) -> None:
+    return None
+
+
+def recovery_receipt(status_path: Path, item: dict, owned_backend: bool) -> dict:
+    if not owned_backend:
+        return {}
+    binding = client.launch_binding(status_path, item['id'], item['cwd'], item['profile'])
+    return {'status_path': str(status_path.resolve()),
+            'client_binding': {key: binding[key] for key in ('token', 'recipient', 'profile')}}
+
+
 def verify_resume(executable: str) -> None:
     try:
         result = subprocess.run([executable, "resume", "--help"], text=True, capture_output=True, timeout=15)
