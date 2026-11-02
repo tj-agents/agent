@@ -80,14 +80,6 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
     text = path.read_text(encoding="utf-8")
     if not any(line.startswith("<<<<<<< ") for line in text.splitlines()):
         return text
-    # TOML multiline strings may legitimately include conflict-marker examples.
-    if path.suffix == ".toml":
-        try:
-            tomllib.loads(text)
-        except tomllib.TOMLDecodeError:
-            pass
-        else:
-            return text
     relative = path.parent.name + "/" + path.name
     if relative not in {
         ".agents/plugins.json",
@@ -109,6 +101,15 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
     if stages.returncode or {
         line.split("\t", 1)[0].rsplit(" ", 1)[-1] for line in stages.stdout.splitlines()
     } != {"1", "2", "3"}:
+        # Literal examples are valid TOML too, but actual conflicts inside a
+        # multiline string remain parseable. Authenticate Git state first.
+        if path.suffix == ".toml":
+            try:
+                tomllib.loads(text)
+            except tomllib.TOMLDecodeError:
+                pass
+            else:
+                return text
         raise ValueError(
             f"{path}: configuration markers have no complete Git merge stages"
         )
