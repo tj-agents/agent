@@ -151,8 +151,29 @@ def launch(args, run=subprocess.run):
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         settle(args, "failed", error=str(error))
         return 1
+    details = {}
+    if result.returncode == 0 and record.get('owned_backend') is not None:
+        from host import Host
+        from host_sessions import SESSIONS
+
+        try:
+            reported = json.loads(result.stdout)
+            if not isinstance(reported, dict) or not isinstance(reported.get('status_path'), str):
+                raise ValueError('owned refresh returned no new launch receipt')
+            old_binding = frozen_backend(args, record)
+            details = SESSIONS[Host(args.host)].recovery_receipt(
+                Path(reported['status_path']),
+                {'id': args.session_id, 'cwd': str(args.expected_cwd), 'profile': old_binding['profile']}, True,
+            )
+            if (reported.get('launch') != 'verified' or details.get('client_binding') != reported.get('client_binding')
+                    or details['client_binding']['token'] == old_binding['token']):
+                raise ValueError('owned refresh did not return its exact new recipient binding')
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as error:
+            settle(args, 'unverified', returncode=3, error=str(error),
+                   output=(result.stdout + result.stderr)[-4000:])
+            return 3
     settle(args, "launched" if result.returncode == 0 else "unverified" if result.returncode == 3 else "failed", returncode=result.returncode,
-           output=(result.stdout + result.stderr)[-4000:])
+           output=(result.stdout + result.stderr)[-4000:], **details)
     return result.returncode
 
 

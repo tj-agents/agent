@@ -199,6 +199,64 @@ def refresh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Refresh:
     return fixture
 
 
+@pytest.fixture
+def new_launch(refresh: Refresh, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    binding = json.loads(json.dumps(refresh.binding))
+    binding["token"] = "b" * 64
+    binding["backend"]["socket_path"] += "-new"
+    binding["backend"]["pid"] += 100
+    binding["supervisor"]["pid"] += 100
+    binding["frontend"]["pid"] += 100
+    binding.pop("frontend_message_id")
+    path = refresh.sessions.client.binding_path(binding["token"])
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(binding), encoding="utf-8")
+    reference = {key: binding[key] for key in ("token", "recipient", "profile")}
+    status = refresh.args.record.with_name("new-launch.status.json")
+    status.write_text(
+        json.dumps({"state": "running", "client_binding": reference}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        refresh.sessions.client, "verify_owned", lambda _record: "anchor"
+    )
+    return {
+        "launch": "verified",
+        "status_path": str(status),
+        "client_binding": reference,
+    }
+
+
+@pytest.fixture
+def recovery(
+    refresh: Refresh, new_launch: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> Any:
+    module = load_source(
+        "owned_refresh_recovery", ROOT / ".agents/agent/runtime/agent_recovery.py"
+    )
+    item = {
+        "id": "thread",
+        "session": "thread",
+        "host": "codex",
+        "cwd": str(refresh.args.expected_cwd),
+        "profile": refresh.binding["profile"],
+        "status": "closed",
+        "history_file": str(refresh.args.record.with_name("history.jsonl")),
+    }
+    monkeypatch.setattr(module, "find", lambda *_args: item)
+    monkeypatch.setattr(
+        module, "_status_path", lambda _receipt: Path(new_launch["status_path"])
+    )
+    monkeypatch.setattr(
+        module, "await_pickup", lambda *_args: "registered in sessions.db"
+    )
+    monkeypatch.setattr(
+        module, "_wrapper_identity", lambda _status: {"pid": 201, "started_at": 201.0}
+    )
+    monkeypatch.setattr(module, "_attach_launch_binding", lambda *_args: None)
+    monkeypatch.setattr(refresh.sessions, "open_tab", mock.Mock())
+    return module
+
+
 @pytest.mark.parametrize("attached", [False, True], ids=["split", "attached"])
 def test_refresh_removes_exactly_the_owned_remote_option(
     refresh: Refresh, attached: bool
@@ -231,10 +289,13 @@ def test_refresh_refuses_missing_ambiguous_or_foreign_remote_selection(
 
 def test_refresh_relaunches_owned_backend_only_after_complete_cleanup(
     refresh: Refresh,
+    new_launch: dict[str, Any],
 ) -> None:
     assert refresh.closed()
     assert refresh.wait()
-    run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, "ready", ""))
+    run = mock.Mock(
+        return_value=subprocess.CompletedProcess([], 0, json.dumps(new_launch), "")
+    )
     assert refresh.watcher.launch(refresh.args, run=run) == 0
     arguments = run.call_args.args[0]
     assert "--owned-backend" in arguments
@@ -244,10 +305,144 @@ def test_refresh_relaunches_owned_backend_only_after_complete_cleanup(
         == refresh.binding["profile"]
     )
     assert not any("--remote" in value for value in arguments)
-    assert (
-        json.loads(refresh.args.record.read_text(encoding="utf-8"))["state"]
-        == "launched"
+    result = json.loads(refresh.args.record.read_text(encoding="utf-8"))
+    assert result["state"] == "launched"
+    assert result["status_path"] == new_launch["status_path"]
+    assert result["client_binding"] == new_launch["client_binding"]
+    assert Path(result["status_path"]).is_file()
+    assert refresh.watcher.launch(refresh.args, run=run) == 1
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "output",
+        "missing-receipt",
+        "state",
+        "thread",
+        "cwd",
+        "profile",
+        "reported-binding",
+        "old-binding",
+        "unverified-launch",
+    ],
+)
+def test_refresh_preserves_one_unverified_launch_when_new_receipt_is_invalid(
+    refresh: Refresh,
+    new_launch: dict[str, Any],
+    changed: str,
+) -> None:
+    status = Path(new_launch["status_path"])
+    if changed == "missing-receipt":
+        status.unlink()
+    elif changed == "state":
+        status.write_text(json.dumps({"state": "unconfirmed"}), encoding="utf-8")
+    elif changed in ("thread", "cwd", "profile"):
+        path = refresh.sessions.client.binding_path(
+            new_launch["client_binding"]["token"]
+        )
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if changed == "profile":
+            record["profile"] += "-other"
+        else:
+            record["recipient"]["thread_id" if changed == "thread" else "cwd"] += (
+                "-other"
+            )
+        path.write_text(json.dumps(record), encoding="utf-8")
+    elif changed == "reported-binding":
+        new_launch["client_binding"]["token"] = "c" * 64
+    elif changed == "old-binding":
+        new_launch["client_binding"]["token"] = refresh.binding["token"]
+        status.write_text(
+            json.dumps(
+                {"state": "running", "client_binding": new_launch["client_binding"]}
+            ),
+            encoding="utf-8",
+        )
+    elif changed == "unverified-launch":
+        new_launch["launch"] = "unverified"
+    output = "not JSON" if changed == "output" else json.dumps(new_launch)
+    run = mock.Mock(return_value=subprocess.CompletedProcess([], 0, output, ""))
+    assert refresh.watcher.launch(refresh.args, run=run) == 3
+    result = json.loads(refresh.args.record.read_text(encoding="utf-8"))
+    assert result["state"] == "unverified"
+    assert result["returncode"] == 3
+    assert refresh.watcher.launch(refresh.args, run=run) == 1
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize("owned", [False, True], ids=["ordinary", "owned"])
+def test_recovery_returns_and_retains_only_owned_verified_receipt(
+    refresh: Refresh,
+    recovery: Any,
+    new_launch: dict[str, Any],
+    owned: bool,
+) -> None:
+    cli = mock.Mock()
+    cli.resolve_tab_directory.return_value = refresh.args.expected_cwd
+    result = recovery.open_session(
+        recovery.Host.CODEX, "thread", cli=cli, owned_backend=owned
     )
+    assert result["launch"] == "verified"
+    receipt = recovery._receipt(
+        recovery.Host.CODEX, "thread", refresh.binding["profile"]
+    )
+    record = json.loads(receipt.read_text(encoding="utf-8"))
+    assert record["state"] == "launched"
+    assert Path(new_launch["status_path"]).exists() == owned
+    if owned:
+        assert result["status_path"] == new_launch["status_path"]
+        assert result["client_binding"] == new_launch["client_binding"]
+        assert record["status_file"] == new_launch["status_path"]
+    else:
+        assert "status_path" not in result
+        assert "client_binding" not in result
+        assert record["status_file"] is None
+
+
+def test_recovery_retains_ambiguous_receipt_and_refuses_duplicate_after_invalid_binding(
+    refresh: Refresh,
+    recovery: Any,
+    new_launch: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = Path(new_launch["status_path"])
+    status.write_text(json.dumps({"state": "unconfirmed"}), encoding="utf-8")
+    cli = mock.Mock()
+    cli.resolve_tab_directory.return_value = refresh.args.expected_cwd
+    with pytest.raises(
+        recovery.LaunchUnverified, match="receipt could not be verified"
+    ):
+        recovery.open_session(
+            recovery.Host.CODEX, "thread", cli=cli, owned_backend=True
+        )
+    receipt = recovery._receipt(
+        recovery.Host.CODEX, "thread", refresh.binding["profile"]
+    )
+    record = json.loads(receipt.read_text(encoding="utf-8"))
+    assert record["state"] == "ambiguous"
+    assert record["status_file"] == str(status)
+    assert status.is_file()
+    monkeypatch.setattr(recovery, "_launch_ended", lambda _receipt: False)
+    with pytest.raises(ValueError, match="prior launch"):
+        recovery.open_session(
+            recovery.Host.CODEX, "thread", cli=cli, owned_backend=True
+        )
+    refresh.sessions.open_tab.assert_called_once()
+
+
+def test_claude_rejects_owned_backend_before_recovery_lookup(
+    recovery: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = load_source("owned_refresh_claude", ROOT / ".claude/runtime/sessions.py")
+    monkeypatch.setitem(recovery.SESSIONS, recovery.Host.CLAUDE, adapter)
+    find = mock.Mock()
+    monkeypatch.setattr(recovery, "find", find)
+    with pytest.raises(ValueError, match="Claude recovery"):
+        recovery.open_session(recovery.Host.CLAUDE, "thread", owned_backend=True)
+    find.assert_not_called()
 
 
 @pytest.mark.parametrize("pid", [102, 103], ids=["supervisor", "backend"])

@@ -677,8 +677,8 @@ def await_pickup(host, session_id, status_path, since, history_path=None, timeou
 def open_session(host, session_id, prompt="Continue the requested work.", title=None, roots=None, confirm_closed=False,
                  prompt_path=None, model=None, dangerously_skip_permissions=False, cli=None, native_arguments=(),
                  expected_cwd=None, owned_backend=False):
-    if owned_backend and host != Host.CODEX:
-        raise ValueError('Only Codex recovery can own a native backend')
+    adapter = SESSIONS[host]
+    adapter.validate_open(owned_backend)
     item = find(host, session_id, roots)
     if expected_cwd is not None and Path(item["cwd"]).resolve() != Path(expected_cwd).resolve():
         raise ValueError("The exact session does not match the expected refresh checkout.")
@@ -706,7 +706,7 @@ def open_session(host, session_id, prompt="Continue the requested work.", title=
         directory = cli.resolve_tab_directory(item["cwd"])
         label = title or item.get("title") or f"{host.value.title()} {session_id[:8]}"
         instruction = cli.prompt_file_argument(prompt_path)[0] if prompt_path else prompt
-        SESSIONS[host].open_tab(cli, item, directory, label, instruction, status_path, model=model,
+        adapter.open_tab(cli, item, directory, label, instruction, status_path, model=model,
                                 native_arguments=native_arguments,
                                 **({'owned_backend': True} if owned_backend else {}),
                                 dangerously_skip_permissions=dangerously_skip_permissions)
@@ -720,13 +720,19 @@ def open_session(host, session_id, prompt="Continue the requested work.", title=
                 status_path.unlink(missing_ok=True)
             raise
         wrapper = _wrapper_identity(status_path)
-        status_path.unlink(missing_ok=True)
         try:
-            _receipt_state(receipt, host, session_id, item["profile"], "launched", wrapper)
+            details = adapter.recovery_receipt(status_path, item, owned_backend)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as error:
+            raise LaunchUnverified(f'The new launch receipt could not be verified: {error}') from error
+        if not details:
+            status_path.unlink(missing_ok=True)
+        try:
+            _receipt_state(receipt, host, session_id, item["profile"], "launched", wrapper,
+                           status_path if details else None)
             _attach_launch_binding(host, session_id, item["profile"], receipt, wrapper)
         except OSError:
             pass
-        return {**item, "launch": "verified", "evidence": evidence}
+        return {**item, "launch": "verified", "evidence": evidence, **details}
     except Exception as exc:
         if receipt is not None:
             timeout_type = getattr(cli, "LaunchTimeout", None)

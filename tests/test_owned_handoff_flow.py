@@ -56,6 +56,44 @@ def test_owned_backend_prepare_failure_never_starts_a_frontend(binding: Any) -> 
     spawn.assert_not_called()
 
 
+@pytest.mark.parametrize("host", [startup.Host.CLAUDE, startup.Host.CODEX])
+def test_required_hook_failure_preserves_each_host_startup_contract(
+    binding: Any,
+    host: Any,
+) -> None:
+    adapter = startup.SESSIONS[host]
+    process = mock.Mock(pid=72)
+    process.wait.return_value = 0
+    with (
+        mock.patch.object(
+            binding.required_plugins,
+            "check_launch_roots",
+            side_effect=RuntimeError("hook fixture failed"),
+        ),
+        mock.patch.object(adapter, "prepare_frontend", return_value=([], {}, None)),
+        mock.patch.object(adapter, "attach_frontend"),
+        mock.patch.object(adapter, "release_frontend"),
+        mock.patch.object(binding.subprocess, "Popen", return_value=process) as spawn,
+    ):
+        if host == startup.Host.CODEX:
+            with pytest.raises(
+                binding.StartupBindingError,
+                match="required hooks could not be verified",
+            ):
+                binding.run_session(
+                    host, "native", Path.cwd(), [], require_session_start=True
+                )
+            spawn.assert_not_called()
+        else:
+            assert (
+                binding.run_session(
+                    host, "native", Path.cwd(), [], require_session_start=True
+                )
+                == 0
+            )
+            spawn.assert_called_once()
+
+
 def test_owned_frontend_attach_failure_stops_child_and_releases_lease(
     binding: Any,
 ) -> None:

@@ -193,7 +193,8 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                 terminal: Mapping[str, object] | None = None) -> int:
     phase = on_phase or (lambda _name: None)
     running = on_running or (lambda child_pid=None, **_details: None)
-    owned_handoff = require_session_start and host == Host.CODEX
+    adapter = SESSIONS[host]
+    owned_handoff = adapter.requires_verified_handoff(require_session_start)
     environment = without_binding_state(os.environ)
     if extra_environment:
         environment.update(without_binding_state(extra_environment))
@@ -219,19 +220,19 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                 environment[REQUIRED_HOOKS_ENV] = json.dumps(startup_participants(host, roots))
             except (required_plugins.RequiredPluginsError, RuntimeError, OSError, ValueError) as error:
                 if owned_handoff:
-                    raise StartupBindingError(f"Codex handoff required hooks could not be verified: {error}") from error
+                    raise StartupBindingError(f"{host} handoff required hooks could not be verified: {error}") from error
                 print(f"launch: {host} hook check skipped: {error}", file=sys.stderr)
                 require_session_start = False
         phase("starting-native")
         command = command_for_target(target, list(arguments))
         try:
-            arguments, environment, ticket = SESSIONS[host].prepare_frontend(
+            arguments, environment, ticket = adapter.prepare_frontend(
                 command[1:], project, environment, executable=command[0],
                 **({"handoff": True, "hook_roots": roots} if owned_handoff else {}),
             )
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
             if owned_handoff:
-                raise StartupBindingError(f"Codex handoff backend could not be prepared: {error}") from error
+                raise StartupBindingError(f"{host} handoff backend could not be prepared: {error}") from error
             print(f"launch: {host} session binding skipped: {error}", file=sys.stderr)
             arguments, ticket = command[1:], None
         process = None
@@ -239,14 +240,14 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
             process = subprocess.Popen([command[0], *arguments],
                                        cwd=project, env=environment, start_new_session=os.name != "nt")
         except OSError as error:
-            SESSIONS[host].release_frontend(ticket)
+            adapter.release_frontend(ticket)
             raise StartupBindingError(f"native {host} could not start: {error}") from error
         try:
             try:
-                SESSIONS[host].attach_frontend(ticket, process.pid)
+                adapter.attach_frontend(ticket, process.pid)
             except (OSError, RuntimeError, ValueError) as error:
                 if owned_handoff:
-                    raise StartupBindingError(f"Codex handoff frontend could not be attached: {error}") from error
+                    raise StartupBindingError(f"{host} handoff frontend could not be attached: {error}") from error
                 print(f"launch: {host} session binding skipped: {error}", file=sys.stderr)
             if require_session_start:
                 phase("waiting-session-start")
@@ -259,7 +260,7 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                         raise StartupBindingError(failure.read_text(encoding="utf-8"))
                     if _acknowledged(directory, token):
                         if owned_handoff:
-                            recipient = SESSIONS[host].handoff_recipient(ticket, register_session, terminal)
+                            recipient = adapter.handoff_recipient(ticket, register_session, terminal)
                             if recipient is not None:
                                 break
                         else:
@@ -288,7 +289,7 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                     print(f"launch: native child cleanup failed: {error}", file=sys.stderr)
             raise
         finally:
-            SESSIONS[host].release_frontend(ticket)
+            adapter.release_frontend(ticket)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -303,6 +304,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--require-session-start", action="store_true")
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     parsed = parser.parse_args(argv)
+    adapter = SESSIONS[parsed.host]
     arguments = parsed.arguments[1:] if parsed.arguments[:1] == ["--"] else parsed.arguments
     if launch_check.BYPASS_FLAG in arguments:
         native = [argument for argument in arguments if argument != launch_check.BYPASS_FLAG]
@@ -310,7 +312,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     status: dict[str, object] = {"pid": os.getpid(), "terminal": register_session.terminal_identity(),
                                  "title": os.environ.get(register_session.TITLE_ENV)}
     if parsed.require_session_start and parsed.status_file is not None:
-        arguments, debug_log = SESSIONS[parsed.host].debug_arguments(arguments, parsed.status_file.resolve().parent)
+        arguments, debug_log = adapter.debug_arguments(arguments, parsed.status_file.resolve().parent)
         if debug_log is not None:
             status["debug_log"] = debug_log
 
@@ -379,8 +381,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
             degrade(f"launch: {error}")
-    if parsed.require_session_start and parsed.host == Host.CODEX and degraded:
-        report("failed", error="Codex handoff requires verified plugins before starting its owned backend")
+    if adapter.requires_verified_handoff(parsed.require_session_start) and degraded:
+        report("failed", error=f"{parsed.host} handoff requires verified plugins before starting its owned backend")
         return 1
     require_session_start = parsed.require_session_start and not degraded
 
