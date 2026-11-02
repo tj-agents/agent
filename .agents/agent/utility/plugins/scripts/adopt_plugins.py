@@ -146,7 +146,7 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
     return document
 
 
-def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None) -> tuple[dict[Path, str | None], Path]:
+def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None) -> tuple[dict[Path, str | None], Path]:
     root = root.expanduser().resolve()
     if root.exists() and not root.is_dir():
         raise lock_io.LockError(f"Repository root is not a directory: {root}")
@@ -160,7 +160,7 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
         declared[name] = source
     document = selection_document(root, names, foreign, removal_identities(removals), declared, roster)
     selection = root / ".agents" / plugin_selection.SELECTION_NAME
-    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document)
+    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document, exclusions=exclusions)
     targets = {selection: json.dumps(document, indent=2, ensure_ascii=False) + "\n", **host_targets}
     return targets, root
 
@@ -206,15 +206,22 @@ def reconcile_many(roots: list[Path], mode: str) -> list[str]:
         return []
     roster = current_roster()
     changes = {}
+    exclusions = {}
     drift = []
     for root in roots:
-        targets, _ = plan(root, [], [], [], None, roster=roster)
+        targets, _ = plan(root, [], [], [], None, roster=roster, exclusions=exclusions)
         for path, value in targets.items():
+            if path in exclusions:
+                continue
             if repo_config.text_at(path) != value:
                 if path in changes and changes[path] != value:
                     raise lock_io.LockError(f"Conflicting repository configuration targets: {path}")
                 changes[path] = value
                 drift.append(f"{root}: {path.relative_to(root).as_posix()}")
+    for path, value in exclusions.items():
+        if repo_config.text_at(path) != value:
+            changes[path] = value
+            drift.append(str(path))
     if mode == "write":
         repo_config.write_batch(changes)
     return drift

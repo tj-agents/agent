@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,14 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
     text = path.read_text(encoding="utf-8")
     if not any(line.startswith("<<<<<<< ") for line in text.splitlines()):
         return text
+    # TOML multiline strings may legitimately include conflict-marker examples.
+    if path.suffix == ".toml":
+        try:
+            tomllib.loads(text)
+        except tomllib.TOMLDecodeError:
+            pass
+        else:
+            return text
     relative = path.parent.name + "/" + path.name
     if relative not in {
         ".agents/plugins.json",
@@ -181,7 +190,5 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
         )
     if result.returncode:
         raise ValueError(f"{path}: conflicting unmanaged TOML requires resolution")
-    import tomllib
-
     tomllib.loads(result.stdout)
     return result.stdout

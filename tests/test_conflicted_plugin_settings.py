@@ -129,6 +129,62 @@ def test_real_stash_conflicts_converge_both_hosts_preserving_user_edits(
     assert ADOPT.reconcile(scenario.root, "write") == []
 
 
+def test_valid_toml_conflict_example_is_preserved(scenario: GitScenario) -> None:
+    path = scenario.root / ".codex/config.toml"
+    example = (
+        'developer_instructions = """\n'
+        '<<<<<<< HEAD\nexample\n=======\nother\n>>>>>>> branch\n"""\n'
+    )
+    path.write_text(example + path.read_text(encoding="utf-8"), encoding="utf-8")
+    ADOPT.reconcile(scenario.root, "write")
+    assert (
+        tomllib.loads(path.read_text(encoding="utf-8"))["developer_instructions"]
+        == tomllib.loads(example)["developer_instructions"]
+    )
+
+
+def test_batch_worktrees_share_exclusions_without_losing_owners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ADOPT, "current_roster", ADOPT.load_roster)
+    root, linked = tmp_path / "first", tmp_path / "linked"
+    root.mkdir()
+    git = GitScenario(root)
+    git.git("init", "--initial-branch=main")
+    git.git("config", "user.name", "Fixture")
+    git.git("config", "user.email", "fixture@example.invalid")
+    git.git("config", "core.hooksPath", "")
+    git.git("remote", "add", "origin", "https://github.com/foreign/fixture.git")
+    (root / "README.md").write_text("fixture\n", encoding="utf-8")
+    git.commit("Initial fixture")
+    git.git("worktree", "add", "-b", "linked", str(linked))
+    for checkout in (root, linked):
+        (checkout / ".agents").mkdir()
+        (checkout / ".agents/plugins.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "marketplaces": {
+                        "tj-agents": {"repository": "tj-agents/marketplace"}
+                    },
+                    "plugins": ["base@tj-agents"],
+                }
+            ),
+            encoding="utf-8",
+        )
+    exclude = root / ".git/info/exclude"
+    exclude.write_text("# User exclusion\nprivate.txt\n", encoding="utf-8")
+    before = exclude.read_bytes()
+    assert ADOPT.reconcile_many([root, linked], "check")
+    assert exclude.read_bytes() == before
+    assert not (root / ".codex").exists()
+    ADOPT.reconcile_many([root, linked], "write")
+    contents = exclude.read_text(encoding="utf-8")
+    assert exclude.read_bytes().startswith(before)
+    assert contents.count(ADOPT.repo_config.EXCLUDE_START) == 2
+    assert ADOPT.reconcile_many([root, linked], "write") == []
+
+
 @pytest.mark.parametrize("kind", ["json", "toml"])
 def test_conflicting_unmanaged_settings_block_the_entire_write(
     scenario: GitScenario, kind: str
