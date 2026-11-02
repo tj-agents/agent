@@ -58,6 +58,14 @@ An unreachable marketplace leaves repository files untouched and reports the fai
 Unconfigured projects are not enrolled. Installer `--check` reports
 selection drift without changing repository files, and a converged rerun writes nothing.
 
+Unresolved Git conflicts in the selection and generated native settings are planned through that same
+transaction before native configuration is read. Plugin membership uses a three-way set merge;
+generated host declarations are rebuilt from it, while unrelated settings retain their changes.
+Recovery requires Git's complete unmerged index and refuses conflicting user settings or committed
+conflict markers. Check mode writes nothing, and recovery leaves the index and stash intact for the
+repository's normal Git resolution workflow. The regression suite creates real stash conflicts on
+Windows and Linux, including paths with spaces and Unicode.
+
 The subscriber runs as a hidden current-user scheduled task on Windows or a systemd user service on
 Linux. Watcher lock contention exits as a failure so the supervisor retries after the previous watcher
 releases ownership, including during runtime upgrades. It reads the existing event channel, verifies repository hints against GitHub, and updates every

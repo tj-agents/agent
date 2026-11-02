@@ -18,6 +18,7 @@ import install
 import reload_plugins
 import required_plugins
 from host import Host
+from claude import plugins as claude_plugins
 
 
 class SelectionConvergenceTests(unittest.TestCase):
@@ -98,6 +99,23 @@ class SelectionConvergenceTests(unittest.TestCase):
             reload_plugins.prepare_required(self.project, Host.CODEX)
         inventory.assert_not_called()
         self.assertEqual("{broken", path.read_text(encoding="utf-8"))
+
+    def test_registered_worktrees_rebuild_stale_host_settings_before_selection(self):
+        required_plugins.reconcile_selection(self.project)
+        path = self.project / ".claude/settings.json"
+        path.write_text(json.dumps({
+            "extraKnownMarketplaces": {"cpp-agents": {"source": {"source": "github", "repo": "tj-agents/cpp"}}},
+            "enabledPlugins": {"cpp@cpp-agents": True},
+        }), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.project / "claude home")}), \
+                mock.patch.object(claude_plugins, "repository_projects", return_value=[self.project]), \
+                mock.patch.object(claude_plugins, "selected", wraps=claude_plugins.selected) as selection, \
+                mock.patch.object(claude_plugins, "tj_agents_marketplaces", side_effect=RuntimeError("after selection")), \
+                self.assertRaisesRegex(RuntimeError, "after selection"):
+            claude_plugins.synchronize([self.project])
+        selection.assert_called_once_with(self.project.resolve())
+        self.assertNotIn("cpp-agents", path.read_text(encoding="utf-8"))
+        self.assertIn("engineering@tj-agents", json.loads(path.read_text(encoding="utf-8"))["enabledPlugins"])
 
     def test_managed_installed_runtime_converges_without_a_checkout_or_plugin_manifest(self):
         runtime = self.project / "installed"
