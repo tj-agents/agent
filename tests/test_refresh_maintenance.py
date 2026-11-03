@@ -5,11 +5,13 @@ import importlib.util
 import io
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 from unittest import mock
 
 import pytest
@@ -20,6 +22,7 @@ sys.path.insert(0, str(RUNTIME))
 
 plugin_refresh = importlib.import_module("plugin_refresh")
 required_plugins = importlib.import_module("required_plugins")
+automatic_refresh = importlib.import_module("automatic_refresh")
 Host = importlib.import_module("host").Host
 
 
@@ -165,6 +168,69 @@ def test_deferred_maintenance_returns_three_when_writer_settlement_is_unproven()
     plugins.adopt.assert_not_called()
 
 
+def test_managed_verification_unsettled_returns_three() -> None:
+    reload_plugins = load_reload_plugins()
+    plugins = SimpleNamespace(
+        HOST=Host.CODEX,
+        CATALOG="plugins.json",
+        resolve_executable=mock.Mock(return_value="native"),
+        installations=mock.Mock(return_value=[]),
+        inventory_entries=mock.Mock(side_effect=lambda value: value),
+        entry_errors=mock.Mock(return_value=[]),
+        marketplace_location=mock.Mock(return_value=str(ROOT)),
+        ensure_hooks=mock.Mock(return_value=None),
+        adopt=mock.Mock(),
+    )
+    output = io.StringIO()
+    unsettled = plugin_refresh.MaintenanceUnsettledError("writer unsettled")
+
+    def native_run(arguments: list[str], project: Path) -> str:
+        if arguments == ["native", "plugin", "list", "--json"]:
+            return "[]"
+        raise unsettled
+
+    with (
+        mock.patch.dict(reload_plugins.PLUGINS, {Host.CODEX: plugins}),
+        mock.patch.object(reload_plugins, "prepare_required"),
+        mock.patch.object(reload_plugins, "selection", return_value=({}, [])),
+        mock.patch.object(reload_plugins, "refresh", return_value=[]),
+        mock.patch.object(reload_plugins.plugin_refresh, "run", side_effect=native_run),
+        mock.patch.object(
+            reload_plugins.managed_admission.required_plugins,
+            "project_root",
+            return_value=ROOT,
+        ),
+        mock.patch.object(
+            reload_plugins.managed_admission.required_plugins,
+            "selected",
+            return_value=["agent@tj-agents"],
+        ),
+        mock.patch.object(
+            reload_plugins.managed_admission,
+            "cached",
+            side_effect=reload_plugins.managed_admission.AdmissionError("stale"),
+        ),
+        contextlib.redirect_stdout(output),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        assert (
+            reload_plugins.main(
+                [
+                    "--host",
+                    "codex",
+                    "--verify",
+                    "--no-relaunch",
+                    "--defer-adoption",
+                    "--maintenance-budget",
+                    "180",
+                ]
+            )
+            == 3
+        )
+    assert json.loads(output.getvalue())["reports"][0]["writer_unsettled"] is True
+    plugins.adopt.assert_not_called()
+
+
 def test_maintenance_budget_uses_the_remaining_deadline_for_each_native_command() -> (
     None
 ):
@@ -251,3 +317,52 @@ def test_maintenance_uses_the_installed_tj_hook_runner_when_available() -> None:
         pytest.skip("tj_hook is unavailable")
     with plugin_refresh.maintenance_budget(5):
         assert plugin_refresh.run([sys.executable, "-c", "print('ok')"], ROOT) == "ok\n"
+
+
+def test_outer_maintenance_timeout_settles_the_reload_writer_tree() -> None:
+    if shutil.which("tj_hook") is None and shutil.which("tj_hook.exe") is None:
+        pytest.skip("tj_hook is unavailable")
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        runtime = root / "runtime"
+        runtime.mkdir()
+        ready = root / "ready"
+        writer = root / "writer"
+        child = (
+            "from pathlib import Path; import time; "
+            f"Path({str(ready)!r}).write_text('ready', encoding='utf-8'); "
+            "time.sleep(4); "
+            f"Path({str(writer)!r}).write_text('late', encoding='utf-8')"
+        )
+        reload = (
+            "import subprocess, sys, time; "
+            f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(20)"
+        )
+        (runtime / "reload_plugins.py").write_text(reload, encoding="utf-8")
+        state = root / "refresh.json"
+        real_run = automatic_refresh.process.run
+        timeouts: list[int] = []
+
+        def shortened(
+            *arguments: Any, **kwargs: Any
+        ) -> subprocess.CompletedProcess[Any]:
+            assert kwargs["timeout"] == 240
+            timeouts.append(kwargs["timeout"])
+            kwargs["timeout"] = 3
+            return cast(
+                subprocess.CompletedProcess[Any], real_run(*arguments, **kwargs)
+            )
+
+        with (
+            mock.patch.object(
+                automatic_refresh, "__file__", str(runtime / "automatic_refresh.py")
+            ),
+            mock.patch.object(automatic_refresh.process, "run", side_effect=shortened),
+            pytest.raises(automatic_refresh.MaintenanceUnsettledError),
+        ):
+            automatic_refresh.maintain(root, Host.CODEX, state)
+        time.sleep(4.2)
+        assert timeouts == [240]
+        assert state.with_suffix(".log").is_file()
+        assert ready.is_file()
+        assert not writer.exists()
