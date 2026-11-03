@@ -23,6 +23,13 @@ def binding() -> Iterator[Any]:
         fixture: Any = startup.StartupBindingTests()
         fixture.addCleanup = stack.callback
         fixture.setUp()
+        stack.enter_context(
+            mock.patch.object(
+                startup.SESSIONS[startup.Host.CODEX],
+                "handoff_executable",
+                side_effect=lambda target, _project, _environment, **_options: target,
+            )
+        )
         yield fixture.binding
 
 
@@ -54,6 +61,184 @@ def test_owned_backend_prepare_failure_never_starts_a_frontend(binding: Any) -> 
             hook_roots={},
         )
     spawn.assert_not_called()
+
+
+def test_handoff_runtime_failure_prevents_plugin_checks_and_native_launch(
+    binding: Any, tmp_path: Path
+) -> None:
+    with (
+        mock.patch.object(
+            startup.SESSIONS[startup.Host.CODEX],
+            "handoff_executable",
+            side_effect=RuntimeError("Codex handoff requires native Codex 0.166.0"),
+        ),
+        mock.patch.object(binding.launch_check, "prepare_launch_roots") as plugins,
+        mock.patch.object(binding, "run_session") as launch,
+        contextlib.redirect_stderr(io.StringIO()) as error,
+    ):
+        assert (
+            binding.main(
+                [
+                    "--host",
+                    "codex",
+                    "--project",
+                    str(tmp_path),
+                    "--target",
+                    "native",
+                    "--require-session-start",
+                ]
+            )
+            == 1
+        )
+    assert "0.166.0" in error.getvalue()
+    plugins.assert_not_called()
+    launch.assert_not_called()
+
+
+def test_handoff_runtime_is_shared_by_preflight_backend_and_frontend(
+    binding: Any, tmp_path: Path
+) -> None:
+    adapter = startup.SESSIONS[startup.Host.CODEX]
+    process = mock.Mock(pid=72)
+    process.wait.return_value = 0
+    with (
+        mock.patch.object(adapter, "handoff_executable", return_value="frozen-native"),
+        mock.patch.object(
+            binding.launch_check, "prepare_launch_roots", return_value=(tmp_path, {})
+        ) as plugins,
+        mock.patch.object(binding.launch_check, "check", return_value="current"),
+        mock.patch.object(binding.PLUGINS[startup.Host.CODEX], "ensure_hooks") as hooks,
+        mock.patch.object(
+            adapter, "prepare_frontend", return_value=([], {}, {})
+        ) as prepare,
+        mock.patch.object(adapter, "attach_frontend"),
+        mock.patch.object(adapter, "release_frontend"),
+        mock.patch.object(
+            adapter, "handoff_recipient", return_value={"token": "fixture"}
+        ),
+        mock.patch.object(binding, "_acknowledged", return_value=True),
+        mock.patch.object(binding, "_prelaunch_terminal", return_value=None),
+        mock.patch.object(binding.subprocess, "Popen", return_value=process) as spawn,
+    ):
+        assert (
+            binding.main(
+                [
+                    "--host",
+                    "codex",
+                    "--project",
+                    str(tmp_path),
+                    "--target",
+                    "old-native",
+                    "--require-session-start",
+                ]
+            )
+            == 0
+        )
+    assert [call.args[2] for call in plugins.call_args_list] == ["frozen-native"] * 2
+    hooks.assert_called_once_with(tmp_path.resolve(), "frozen-native")
+    assert prepare.call_args.kwargs["executable"] == "frozen-native"
+    assert spawn.call_args.args[0] == ["frozen-native"]
+
+
+def test_ordinary_launch_does_not_resolve_a_handoff_runtime(binding: Any) -> None:
+    adapter = startup.SESSIONS[startup.Host.CODEX]
+    process = mock.Mock(pid=72)
+    process.wait.return_value = 0
+    with (
+        mock.patch.object(adapter, "handoff_executable") as resolve,
+        mock.patch.object(adapter, "prepare_frontend", return_value=([], {}, None)),
+        mock.patch.object(adapter, "attach_frontend"),
+        mock.patch.object(adapter, "release_frontend"),
+        mock.patch.object(binding.subprocess, "Popen", return_value=process),
+    ):
+        assert binding.run_session(startup.Host.CODEX, "native", Path.cwd(), []) == 0
+    resolve.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "capable",
+        "managed",
+        "missing",
+        "unreachable",
+        "mismatch",
+        "relative",
+        "old",
+        "cli-mismatch",
+        "probe-failed",
+        "prerelease",
+        "invalid-json",
+    ],
+)
+def test_handoff_runtime_uses_only_verified_public_version_metadata(
+    tmp_path: Path, scenario: str
+) -> None:
+    adapter = startup.SESSIONS[startup.Host.CODEX]
+    selected = tmp_path / "selected codex.exe"
+    managed = tmp_path / "managed café codex.exe"
+    for path in (selected, managed):
+        path.write_bytes(b"native fixture")
+        path.chmod(0o700)
+    selected_version = "0.166.0" if scenario == "capable" else "0.163.0-alpha.1"
+    metadata = {
+        "status": "running",
+        "cliVersion": selected_version,
+        "managedCodexPath": str(managed),
+        "managedCodexVersion": "0.166.0",
+    }
+    if scenario == "missing":
+        metadata.pop("managedCodexPath")
+    elif scenario == "relative":
+        metadata["managedCodexPath"] = "codex.exe"
+    elif scenario == "cli-mismatch":
+        metadata["cliVersion"] = "0.162.0"
+    installed = {"old": "0.165.0", "prerelease": "0.166.0-alpha.1"}.get(
+        scenario, "0.166.0"
+    )
+    metadata["managedCodexVersion"] = "0.167.0" if scenario == "mismatch" else installed
+    environment = {"CODEX_HOME": str(tmp_path / "selected profile")}
+
+    def native(arguments: list[str], **kwargs: Any) -> SimpleNamespace:
+        assert kwargs["env"] == environment
+        assert kwargs["cwd"] == tmp_path
+        assert kwargs["timeout"] == 15
+        if os.name == "nt":
+            assert kwargs["creationflags"] == adapter.subprocess.CREATE_NO_WINDOW
+        if arguments == [str(selected.resolve()), "--version"]:
+            return SimpleNamespace(returncode=0, stdout=f"codex-cli {selected_version}")
+        if arguments == [str(managed.resolve()), "--version"]:
+            return SimpleNamespace(
+                returncode=int(scenario == "probe-failed"),
+                stdout=f"codex-cli {installed}",
+            )
+        assert arguments == [str(selected.resolve()), "app-server", "daemon", "version"]
+        if scenario == "unreachable":
+            raise adapter.subprocess.TimeoutExpired(arguments, 15)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="invalid" if scenario == "invalid-json" else json.dumps(metadata),
+        )
+
+    with mock.patch.object(adapter.subprocess, "run", side_effect=native) as run:
+        if scenario in {"capable", "managed"}:
+            assert adapter.handoff_executable(
+                str(selected), tmp_path, environment
+            ) == str((selected if scenario == "capable" else managed).resolve())
+            assert run.call_count == (1 if scenario == "capable" else 3)
+        else:
+            with pytest.raises(RuntimeError, match=r"requires.*0\.166\.0.*paginated"):
+                adapter.handoff_executable(str(selected), tmp_path, environment)
+
+    if scenario == "managed":
+        with (
+            mock.patch.object(adapter.subprocess, "run", side_effect=native) as run,
+            pytest.raises(RuntimeError, match="selected runtime"),
+        ):
+            adapter.handoff_executable(
+                str(selected), tmp_path, environment, allow_managed=False
+            )
+        run.assert_called_once()
 
 
 @pytest.mark.parametrize("host", [startup.Host.CLAUDE, startup.Host.CODEX])

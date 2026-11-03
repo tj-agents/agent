@@ -267,7 +267,7 @@ class LaunchCodexTests(unittest.TestCase):
     def test_success_message_with_no_selection_reports_the_cli_default_model(self):
         code, out, _ = self.run_main('--title', 'Tab Name')
         self.assertEqual(code, 0)
-        self.assertIn('Launched codex-cli 0.160.0 from /bin/codex on the CLI default model', out)
+        self.assertIn('Launched Codex on the CLI default model', out)
 
     def test_success_message_with_a_lane_reports_the_lane_model_and_effort(self):
         code, out, _ = self.run_main('--lane', 'L4')
