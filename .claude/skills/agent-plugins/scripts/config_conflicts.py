@@ -29,6 +29,8 @@ def merge(base: Any, ours: Any, theirs: Any, label: str) -> Any:
         return theirs
     if theirs == base:
         return ours
+    if base is MISSING and isinstance(ours, dict) and isinstance(theirs, dict):
+        base = {}
     if all(isinstance(value, dict) for value in (base, ours, theirs)):
         result: dict[Any, Any] = {}
         for key in sorted(base.keys() | ours.keys() | theirs.keys()):
@@ -76,11 +78,11 @@ def unmanaged_json(text: str) -> dict[str, Any]:
         raise ValueError("Configuration must be a JSON object")
     document.pop("extraKnownMarketplaces", None)
     document.pop("enabledPlugins", None)
-    # Approval declarations are generated from repository-harness.json too.
+    # Keep approvals visible to the planner's ownership validation. Discarding
+    # them here would silently erase user edits made before or after a conflict.
     permissions = document.get("permissions", {})
     if not isinstance(permissions, dict):
         raise ValueError("Configuration permissions must be an object")
-    permissions.pop("allow", None)
     document["permissions"] = permissions
     return document
 
