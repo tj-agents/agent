@@ -1,26 +1,22 @@
 """Explicit CLI dependency integration uses only disposable Python children."""
 
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
 import unittest
 
-from close_fixtures import CLOSE, CloseFixture, register_session, session_close
+from close_fixtures import CloseFixture, processes, register_session, session_close
 
 
-@unittest.skipUnless(os.environ.get("AGENT_TEST_CLI_CLOSE"), "set AGENT_TEST_CLI_CLOSE to a declared CLI capability")
 class DisposableCloseIntegration(CloseFixture, unittest.TestCase):
     def setUp(self):
         self.setup_close("claude")
-        self.capability = Path(os.environ["AGENT_TEST_CLI_CLOSE"])
-        cli_root = CLOSE.cli_capability_root(self.capability)
-        primitive = session_close.process_identity_runtime(cli_root)
+        self.stop_patch.stop()
         self.children = [subprocess.Popen([sys.executable, "-B", "-c", "import time; time.sleep(120)"],
                                            cwd=self.root) for _ in range(2)]
         self.addCleanup(self.cleanup_children)
-        info = primitive.process_info(self.children[0].pid)
+        info = processes.process_info(self.children[0].pid)
         self.assertIsNotNone(info)
         self.infos[info.pid] = register_session.ProcessInfo(info.pid, info.ppid, "claude.exe", info.started_at)
         entry = json.loads(self.registry.read_text(encoding="utf-8"))
@@ -46,7 +42,7 @@ class DisposableCloseIntegration(CloseFixture, unittest.TestCase):
         def cancelled():
             raise session_close.Refusal("cancelled at signal")
         with self.assertRaisesRegex(session_close.Refusal, "cancelled at signal"):
-            session_close.stop_cli_client(entry, cancelled, CLOSE.cli_capability_root(self.capability))
+            session_close.stop_cli_client(entry, cancelled)
         self.assertTrue(all(child.poll() is None for child in self.children))
         self.assertIsNone(self.row().ended_at)
         self.arm()

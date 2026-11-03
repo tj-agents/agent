@@ -36,6 +36,10 @@ the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.
 
 ## Install
 
+Install [TJ CLI](https://github.com/tj-agents/cli#install) first and keep `tj_hook` on `PATH`.
+Generated Claude and Codex command hooks run through this native launcher. Template's generator owns
+the wrapping; authored hook manifests keep the payload executable and arguments.
+
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
 the machine event channel, a supervised background subscriber, the launch runtime in `~/.agents-state/bin`, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
@@ -53,6 +57,14 @@ removes retired TJ Agents packages, including retirements after the bundled offl
 An unreachable marketplace leaves repository files untouched and reports the failure.
 Unconfigured projects are not enrolled. Installer `--check` reports
 selection drift without changing repository files, and a converged rerun writes nothing.
+
+Unresolved Git conflicts in the selection and generated native settings are planned through that same
+transaction before native configuration is read. Plugin membership uses a three-way set merge;
+generated host declarations are rebuilt from it, while unrelated settings retain their changes.
+Recovery requires Git's complete unmerged index and refuses conflicting user settings or committed
+conflict markers. Check mode writes nothing, and recovery leaves the index and stash intact for the
+repository's normal Git resolution workflow. The regression suite creates real stash conflicts on
+Windows and Linux, including paths with spaces and Unicode.
 
 The subscriber runs as a hidden current-user scheduled task on Windows or a systemd user service on
 Linux. Watcher lock contention exits as a failure so the supervisor retries after the previous watcher
@@ -84,13 +96,22 @@ installed runtime and reports the update failure.
 ```powershell
 pwsh .agents/sync-generated.ps1
 pwsh .agents/sync-generated.ps1 -Check
-python -B -m unittest discover -s .agents/tests -p "test_*.py"
+uv sync --locked
+uv run pytest
 ```
 
-The runtime uses the standard library and retains Core's portable utility conventions. Use `python`
-on Windows and `python3` on Linux. The shared plugin CI discovers the migrated runtime suite through
-`.agents/tests`; generation is tooling, and these utilities do not introduce an application package or
-third-party runtime dependencies.
+The runtime requires Python 3.12 or newer and retains Core's portable utility conventions. Use `python`
+on Windows and `python3` on Linux. CLI owns shared PATH operations in `tj_cli.paths`; the locked `tj-cli`
+distribution ships inside Agent's generated runtime and managed installation. Launching does not require
+a CLI source checkout or a separate package install. The development environment and CI use uv to resolve
+that same dependency and run both the migrated runtime suite and packaging checks.
+
+The installer, managed launches and machine-event refresh make the native `tj`/`tj_hook` pair available
+before native plugin operations. Missing binaries are downloaded through CLI's verified release installer,
+without a source checkout or Cargo. The installation directory is prepended to the current process PATH,
+including the environment inherited by the launched host. Routine launches with an existing pair do not
+query releases. CLI update events install their exact published revision before acknowledging the event;
+an unpublished release or an in-use Windows executable leaves the event pending for retry.
 
 The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).
 

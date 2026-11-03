@@ -137,7 +137,6 @@ class Shared:
 class ArmTests(State):
     def arm(self, arm_close):
         for patcher in (mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"),
-                        mock.patch.object(RELAUNCH, "cli_close_capability", return_value=self.root / "close.py"),
                         mock.patch.object(RELAUNCH, "arm_client_close", side_effect=arm_close)):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -249,6 +248,7 @@ class SyncTests(State):
             environment["CLAUDE_CODE_CHILD_SESSION"] = "1"
         relaunched = mock.Mock(return_value=relaunch or {"relaunch": "armed", "session_id": SESSION})
         with mock.patch.dict(os.environ, environment), \
+                mock.patch.object(REFRESH.native_runtime, "prepare", return_value=()), \
                 mock.patch.object(REFRESH.launch_check, "check", return_value=result), \
                 mock.patch.object(CLAUDE, "selected", return_value=({}, ["workflow@tj-agents"])), \
                 mock.patch.object(CLAUDE, "stale_plugins", return_value=list(stale)), \

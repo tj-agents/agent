@@ -107,13 +107,15 @@ class FrontendBindingTests(unittest.TestCase):
         import close_tab
         self.receipt_file()
         target = session_close.close_target(self.entry)
-        actual = {'title': 'own tab', 'identity': {'kind': 'windows-terminal', 'runtime_id': 'own-tab'}}
         with mock.patch.object(session_close, 'liveness', return_value=True), \
-                mock.patch.object(close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(close_tab, 'windows_inventory', return_value=[actual]), \
-                mock.patch.object(close_tab, 'close_actual') as close:
+                mock.patch.object(close_tab.terminal, 'verify_process_binding') as verify, \
+                mock.patch.object(close_tab.terminal, 'close_identity',
+                                  side_effect=lambda identity, *, before_close: before_close()) as close:
             close_tab.close_entry(target)
-        close.assert_called_once_with(actual, force=True)
+        self.assertEqual('own-tab', close.call_args.args[0]['runtime_id'])
+        verify.assert_called_once_with(close.call_args.args[0],
+                                       {'pid': target['pid'], 'started_at': target['pid_started_at']})
+
 
 
 if __name__ == '__main__':

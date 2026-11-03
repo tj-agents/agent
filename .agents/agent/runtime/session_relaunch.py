@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import importlib.util
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,7 +16,6 @@ import time
 from host import Host
 import host_plugins
 import host_sessions
-import required_plugins
 
 HERE = Path(__file__).resolve().parent
 PROMPT = "Plugins were refreshed and this conversation resumed in a fresh process. Continue the requested work."
@@ -117,41 +115,14 @@ def recovery_script(project: Path, installed: dict) -> Path:
     return HERE / "agent_recovery.py"
 
 
-def cli_close_capability(project: Path, host: Host, executable: str) -> Path:
-    root = required_plugins.inventory_roots(project, host, executable).get("cli@tj-agents")
-    if root is None:
-        raise RuntimeError("Automatic refresh requires enabled cli@tj-agents with its close capability")
-    script = root / ".agents" / "cli" / "utility" / "close" / "scripts" / "process_identity.py"
-    if not script.is_file():
-        raise RuntimeError("The enabled cli@tj-agents package does not ship process_identity.py")
-    return script
+def arm_client_close(project: Path, entry: dict, shared, host: Host) -> dict:
+    import close_lifecycle
 
-
-def arm_client_close(project: Path, entry: dict, cli_close: Path, token: str, host: Host) -> dict:
-    close = utility_script("close", "agent_close.py")
-    root = state_directory() / "refresh-close" / token
-    target, completion, cancel = root / "target.json", root / "complete.json", root / "cancel.json"
-    environment = {**os.environ, host.home_variable: entry["profile"]}
-    prepared = subprocess.run([sys.executable, "-B", str(close), "prepare", "--session-id", entry["session_id"],
-                               "--profile", entry["profile"], "--target", str(target)], cwd=project,
-                              env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
-    if prepared.returncode:
-        raise RuntimeError((prepared.stderr or prepared.stdout).strip() or "cannot prepare exact client close")
-    command = [sys.executable, "-B", str(close), "arm", "--host", host.value,
-                             "--session-id", entry["session_id"],
-                             "--target", str(target), "--profile", entry["profile"], "--cli-close", str(cli_close),
-                             "--completion", str(completion), "--cancel", str(cancel), "--completion-token", token]
-    command += host_sessions.SESSIONS[host].close_arguments(entry)
-    armed = subprocess.run(command,
-                            cwd=project, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
-    if armed.returncode:
-        raise RuntimeError((armed.stderr or armed.stdout).strip() or "cannot arm exact client close")
-    request = state_directory() / "client-close" / f"{token}.json"
-    result = state_directory() / "client-close" / f"{token}.result.json"
-    raw = request.read_bytes()
-    return {"request": str(request.resolve()), "request_sha256": hashlib.sha256(raw).hexdigest(),
-            "result": str(result.resolve()), "completion": str(completion.resolve()), "cancel": str(cancel.resolve()),
-            "completion_token": token}
+    outcome = close_lifecycle.assess(host, entry["session_id"], Path(entry["profile"]),
+                                     "restart", "resume this session after plugin refresh", shared)
+    if outcome["status"] != "armed":
+        raise RuntimeError(outcome["reason"])
+    return {key: outcome[key] for key in ("request", "request_sha256", "result", "completion", "cancel", "completion_token")}
 
 
 def claim_record(record: Path, value: dict) -> None:
@@ -198,7 +169,6 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
     native = sessions.native_arguments(arguments(entry["pid"]))
     executable = host_plugins.PLUGINS[host].resolve_executable()
     sessions.check_relaunch(project, executable, native, session_id, PROMPT)
-    cli_close = cli_close_capability(project, host, executable)
     token = secrets.token_hex(16)
     record = record_path(session_id)
     claim_record(record, {"state": "waiting", "token": token, "session_id": session_id, "pid": entry["pid"],
@@ -215,7 +185,7 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         options += ["--history-root", str(Path(entry["profile"]) / host.history_directory)]
     try:
         shared.start_detached(HERE / "relaunch_watcher.py", options)
-        armed = arm_client_close(project, entry, cli_close, token, host)
+        armed = arm_client_close(project, entry, shared, host)
         write_json(record, {**read_json(record), "close": armed, "at": time.time()})
     except Exception as error:
         if armed is not None:

@@ -1,1 +1,4 @@
 * text=auto eol=lf
+/.codex/config.toml -merge
+/.claude/settings.json -merge
+/.agents/plugins.json -merge

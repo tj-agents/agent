@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch a native CLI and report handoff acknowledgement (Python 3.9+)."""
+"""Launch a native CLI and report handoff acknowledgement (Python 3.12+)."""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ from host_plugins import PLUGINS
 from host_sessions import SESSIONS
 import required_plugins
 from terminal_command import command_for_target, without_binding_state
+from tj_cli.paths import prepend
+from tj_cli.close import terminal as native_terminal
 
 ACK_DIRECTORY_ENV = "TJ_AGENTS_STARTUP_ACK_DIRECTORY"
 ACK_TOKEN_ENV = "TJ_AGENTS_STARTUP_ACK_TOKEN"
@@ -77,27 +79,17 @@ def _windows_tab_binding(terminal: dict) -> dict | None:
     title = os.environ.get(register_session.TITLE_ENV)
     if not isinstance(title, str) or not title:
         return None
-    for root in Path(__file__).resolve().parents:
-        if not (root / ".agents" / "agent" / "runtime").is_dir():
-            continue
-        path = root / ".agents" / "agent" / "utility" / "peer" / "scripts" / "close_tab.py"
-        if not path.is_file():
+    try:
+        matches = [item for item in native_terminal.inventory({"kind": "windows-terminal"}) if item.get("title") == title]
+        if len(matches) != 1:
             return None
-        try:
-            spec = importlib.util.spec_from_file_location("agent_startup_close_tab", path)
-            close_tab = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(close_tab)
-            matches = [item for item in close_tab.windows_inventory() or [] if item.get("title") == title]
-            if len(matches) != 1:
-                return None
-            runtime_id = matches[0].get("identity", {}).get("runtime_id")
-            if not isinstance(runtime_id, str) or not runtime_id:
-                return None
-            return {"runtime_id": runtime_id, "observed_title": title,
-                    "evidence": "windows-uia-unique-title-at-launch"}
-        except Exception:
+        runtime_id = matches[0].get("runtime_id")
+        if not isinstance(runtime_id, str) or not runtime_id:
             return None
-    return None
+        return {"runtime_id": runtime_id, "observed_title": title,
+                "evidence": "windows-uia-unique-title-at-launch"}
+    except (OSError, RuntimeError, ValueError):
+        return None
 
 
 def _prelaunch_terminal() -> dict | None:
@@ -209,7 +201,9 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                    if (key.upper() if os.name == "nt" else key) not in inherited}
     interpreter = launch_check.state_directory() / "bin" / "python"
     if os.name != "nt" and interpreter.is_file():
-        environment["PATH"] = str(interpreter.parent) + os.pathsep + environment.get("PATH", "")
+        environment["PATH"] = os.pathsep.join(
+            prepend(environment.get("PATH", "").split(os.pathsep), str(interpreter.parent))
+        )
     with tempfile.TemporaryDirectory(prefix="tj-agents-launch-") as temporary:
         directory = Path(temporary)
         token = secrets.token_urlsafe(32)
@@ -277,6 +271,9 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if sys.version_info < (3, 12):
+        print("launch requires Python 3.12 or newer", file=sys.stderr)
+        return 2
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     parser.add_argument("--project", type=Path, required=True)

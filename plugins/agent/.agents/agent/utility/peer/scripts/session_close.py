@@ -97,30 +97,15 @@ def host_sessions(host):
         raise Refusal("unsupported native host") from None
 
 
-def process_identity_runtime(cli_root):
-    root = Path(cli_root).resolve()
-    markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-    if not any(marker.exists() for marker in markers):
-        raise Refusal("the declared CLI capability root is unavailable")
-    path = root / ".agents" / "cli" / "utility" / "close" / "scripts" / "process_identity.py"
-    if not path.is_file():
-        raise Refusal("the declared CLI process-identity capability is unavailable")
-    spec = importlib.util.spec_from_file_location("agent_cli_process_identity", path)
-    if spec is None or spec.loader is None:
-        raise Refusal("the declared CLI process-identity capability is unavailable")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    if not callable(getattr(module, "stop", None)):
-        raise Refusal("the declared CLI process-identity capability is unavailable")
-    return module
-
 
 CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile", "backend",
                          "recording_path", "client_message_id", "native_turn_id", "native_rollout", "native_cwd",
                          "client_identity", "launch_cwd")
 
 
-def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
+def stop_cli_client(entry, before_signal=lambda: None):
+    from tj_cli import processes
+
     info = process_info(entry.get("pid"))
     if (info is None or register_session.stem(info.name) != entry.get("host")
             or not verified_live(entry["pid"], entry["pid_started_at"])):
@@ -132,7 +117,7 @@ def stop_cli_client(entry, before_signal=lambda: None, cli_root=None):
         before_signal()
 
     try:
-        process_identity_runtime(cli_root).stop(
+        processes.stop(
             {"pid": entry["pid"], "started_at": entry["pid_started_at"]}, before_signal=guard,
         )
     except Refusal:
