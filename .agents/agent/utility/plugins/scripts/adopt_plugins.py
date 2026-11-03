@@ -18,6 +18,8 @@ import repo_config
 
 LOCK = Path(__file__).resolve().parent / "marketplace_plugins.lock.json"
 STACKS = Path(__file__).resolve().parent / "plugin_stacks.json"
+ADOPTION_GATED = "personal"
+HOST = plugin_selection.runtime_module("host").Host
 
 
 def load_roster(snapshot: dict | None = None) -> dict:
@@ -69,6 +71,17 @@ def expand(requested: set[str], roster: dict) -> list[str]:
             selected.add(name)
             pending.extend(known[name])
     return sorted(selected)
+
+
+def always_plugins(roster: dict) -> set[str]:
+    tiers: dict[str, tuple[float, object]] = {}
+    for host in HOST:
+        cache = host.configuration_root / "plugins" / "cache" / plugin_selection.MARKETPLACE_NAME
+        for path in cache.glob("*/*/tier.json"):
+            name, modified = path.parent.parent.name, path.stat().st_mtime
+            if name in roster["plugins"] and modified >= tiers.get(name, (0.0, None))[0]:
+                tiers[name] = (modified, lock_io.load_json(path).get("applies"))
+    return {name for name, (_, applies) in tiers.items() if applies == "always" and name != ADOPTION_GATED}
 
 
 def requested_plugins(stacks: list[str], plugins: list[str], roster: dict) -> tuple[set[str], set[str]]:
@@ -123,6 +136,8 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
                       and plugin_selection.split(identity)[0] in roster["plugins"]}
     elif not requested and not foreign and not removals:
         requested = set(plugin_selection.CORE_PLUGINS)
+    excluded = repo_config.explicit_exclusions(root) | removals
+    requested |= {name for name in always_plugins(roster) if plugin_selection.plugin_id(name) not in excluded}
     selected = {plugin_selection.plugin_id(name) for name in expand(requested, roster)} | set(kept) | foreign
     selected -= removals
     local = {plugin_selection.split(identity)[0] for identity in selected

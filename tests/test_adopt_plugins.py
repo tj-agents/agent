@@ -135,5 +135,76 @@ class RemovePluginTests(unittest.TestCase):
         self.assertEqual(before, (self.root / ".agents" / "plugins.json").read_bytes())
 
 
+class AlwaysTierTests(unittest.TestCase):
+    def setUp(self):
+        live = mock.patch.object(ADOPT, "current_roster", side_effect=ADOPT.load_roster)
+        live.start()
+        self.addCleanup(live.stop)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "project"
+        (self.root / ".agents").mkdir(parents=True)
+        self.cache("claude", "base", "always")
+        self.cache("claude", "template", "always")
+        self.cache("codex", "skill", "always")
+        self.cache("claude", "personal", "always")
+        self.cache("claude", "python", "stack-present")
+        self.cache("codex", "dotnet", "stack-present")
+
+    def cache(self, host, name, applies):
+        root = ADOPT.HOST(host).configuration_root / "plugins/cache/tj-agents" / name / "v1"
+        root.mkdir(parents=True)
+        (root / "tier.json").write_text(json.dumps({"schema_version": 1, "tier": name, "applies": applies}),
+                                        encoding="utf-8")
+
+    def write_selection(self, plugins):
+        (self.root / ".agents/plugins.json").write_text(json.dumps({
+            "schema_version": 1,
+            "marketplaces": {"tj-agents": {"repository": "tj-agents/marketplace"}},
+            "plugins": plugins,
+        }), encoding="utf-8")
+
+    def selected(self):
+        return json.loads((self.root / ".agents/plugins.json").read_text(encoding="utf-8"))["plugins"]
+
+    def test_agent_homes_are_isolated_from_the_real_home(self):
+        for host in ADOPT.HOST:
+            self.assertNotEqual(Path.home() / host.home_directory, host.configuration_root)
+            self.assertTrue(host.configuration_root.resolve().is_relative_to(Path(tempfile.gettempdir()).resolve()))
+
+    def test_converging_a_selection_adds_always_tiers_but_not_personal_or_stack_plugins(self):
+        self.write_selection(["engineering@tj-agents"])
+        self.assertIn(".agents/plugins.json", ADOPT.reconcile(self.root, "check"))
+        ADOPT.reconcile(self.root, "write")
+        selected = self.selected()
+        for identity in ("base@tj-agents", "engineering@tj-agents", "skill@tj-agents", "template@tj-agents"):
+            self.assertIn(identity, selected)
+        for identity in ("personal@tj-agents", "python@tj-agents", "dotnet@tj-agents"):
+            self.assertNotIn(identity, selected)
+        before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        self.assertEqual([], ADOPT.reconcile(self.root, "write"))
+        self.assertEqual(before, {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()})
+
+    def test_explicit_false_keeps_an_always_tier_out_of_the_selection(self):
+        self.write_selection(["engineering@tj-agents"])
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude/settings.json").write_text(json.dumps({
+            "enabledPlugins": {"engineering@tj-agents": True, "template@tj-agents": False}}), encoding="utf-8")
+        ADOPT.reconcile(self.root, "write")
+        self.assertIn("skill@tj-agents", self.selected())
+        self.assertNotIn("template@tj-agents", self.selected())
+        claude = json.loads((self.root / ".claude/settings.json").read_text(encoding="utf-8"))
+        self.assertIs(False, claude["enabledPlugins"]["template@tj-agents"])
+        self.assertIn('[plugins."template@tj-agents"]\nenabled = false',
+                      (self.root / ".codex/config.toml").read_text(encoding="utf-8"))
+        self.assertEqual([], ADOPT.reconcile(self.root, "check"))
+
+    def test_a_new_selection_includes_always_tiers(self):
+        ADOPT.run(self.root, ["python"], [], "write")
+        self.assertIn("python@tj-agents", self.selected())
+        self.assertIn("template@tj-agents", self.selected())
+        self.assertNotIn("personal@tj-agents", self.selected())
+
+
 if __name__ == "__main__":
     unittest.main()
