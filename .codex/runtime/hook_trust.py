@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+import importlib.util
 import io
 import json
 import os
@@ -221,12 +222,24 @@ def committed_files(root, revision, relative, cwd):
     return result
 
 
+def generated_cache(path: Path) -> bool:
+    if path.parent.name != "__pycache__" or path.suffix != ".pyc":
+        return False
+    try:
+        importlib.util.source_from_cache(str(path))
+    except ValueError:
+        return False
+    return True
+
+
 def package_files(root):
+    if root.is_symlink() or root.is_junction():
+        raise RuntimeError(f"Plugin package contains a symbolic link: {root}")
     result = {}
     for path in root.rglob("*"):
-        if path.is_symlink():
+        if path.is_symlink() or path.is_junction():
             raise RuntimeError(f"Plugin package contains a symbolic link: {path}")
-        if path.is_file():
+        if path.is_file() and not generated_cache(path):
             result[path.relative_to(root).as_posix()] = normalized_bytes(path.read_bytes())
     return result
 
