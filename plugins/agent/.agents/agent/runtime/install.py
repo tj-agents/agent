@@ -974,6 +974,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--step", action="append", choices=[step.name for step in STEPS],
                         help="run named steps with their dependencies and required preconditions; repeat to select several")
     parsed = parser.parse_args(arguments)
+    native_runtime.prepare_git_environment()
     context = machine_context()
     context.onboard = parsed.onboard
     native_runtime.expose()
