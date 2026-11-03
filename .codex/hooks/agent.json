@@ -5,6 +5,16 @@
         "hooks": [
           {
             "type": "command",
+            "timeout": 15,
+            "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py\" hook --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py\" hook --host codex"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
             "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
             "timeout": 10
@@ -18,8 +28,8 @@
           {
             "type": "command",
             "timeout": 15,
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex",
-            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex"
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py\" hook --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py\" hook --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex"
           }
         ]
       }
@@ -46,6 +56,19 @@
             "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex"
           }
         ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15,
+            "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py\" hook --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py\" hook --host codex"
+          }
+        ],
+        "matcher": "*"
       }
     ]
   }

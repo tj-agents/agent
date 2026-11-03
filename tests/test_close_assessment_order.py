@@ -1,4 +1,8 @@
+import importlib.util
+import io
 import json
+import shlex
+import sys
 from collections.abc import Iterator
 from contextlib import ExitStack
 from itertools import count
@@ -6,16 +10,17 @@ from pathlib import Path
 from typing import Any, cast
 from unittest import mock
 
+import managed_admission as admission
 import pytest
 from close_fixtures import LIFECYCLE, WATCHER, CloseFixture, Host, session_close
 
 
 @pytest.fixture
-def session() -> Iterator[Any]:
+def session(request: pytest.FixtureRequest) -> Iterator[Any]:
     with ExitStack() as stack:
         fixture: Any = CloseFixture()
         fixture.addCleanup = stack.callback
-        fixture.setup_close()
+        fixture.setup_close(getattr(request, "param", "codex"))
         tokens = count()
         stack.enter_context(
             mock.patch.object(
@@ -31,7 +36,7 @@ def prepare(session: Any) -> dict[str, Any]:
     return cast(
         dict[str, Any],
         LIFECYCLE.prepare(
-            Host.CODEX,
+            Host(session.host),
             "one",
             session.profile,
             "task-completion",
@@ -114,7 +119,7 @@ def arm(session: Any, prepared: dict[str, Any]) -> dict[str, Any]:
     return cast(
         dict[str, Any],
         LIFECYCLE.arm(
-            Host.CODEX,
+            Host(session.host),
             "one",
             session.profile,
             prepared["release_generation"],
@@ -489,3 +494,150 @@ def test_cancellation_inside_acknowledgement_validation_is_observed(
     assert state["status"] == "cancelled"
     assert LIFECYCLE.Path(state["cancel"]).exists()
     assert session.spawn.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "session,host",
+    [("claude", Host.CLAUDE), ("codex", Host.CODEX)],
+    indirect=["session"],
+)
+def test_rejected_prompt_cancels_before_admission_without_completing(
+    session: Any, tmp_path: Path, host: Host
+) -> None:
+    prepared = prepare(session)
+    armed = arm(session, prepared)
+    root = Path(__file__).resolve().parents[1]
+    hooks = json.loads(
+        (root / f".{host.value}/hooks/agent.json").read_text(encoding="utf-8")
+    )["hooks"]["UserPromptSubmit"]
+    assert len(hooks) == 1
+    hook = hooks[0]["hooks"][0]
+    arguments = (
+        hook["args"][2:] if host == Host.CLAUDE else shlex.split(hook["command"])[3:]
+    )
+    scripts = []
+    for name, module in (
+        ("close_lifecycle.py", "integration_lifecycle"),
+        ("managed_admission.py", "integration_admission"),
+        ("session_hook.py", "integration_store"),
+    ):
+        script = tmp_path / name
+        script.write_text(
+            f"import {module} as handler\nraise SystemExit(handler.main())\n",
+            encoding="utf-8",
+        )
+        scripts.append(script)
+        arguments = [
+            str(script) if value.endswith("/" + name) else value for value in arguments
+        ]
+    assert [
+        Path(arguments[index + 1]).name
+        for index, value in enumerate(arguments)
+        if value == "--hook"
+    ] == [script.name for script in scripts]
+    spec = importlib.util.spec_from_file_location(
+        "integration_dispatch", root / ".agents/hooks/hook_dispatch.py"
+    )
+    assert spec is not None and spec.loader is not None
+    dispatcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dispatcher)
+    store = mock.Mock()
+    store.main.return_value = 0
+    output = io.StringIO()
+    raw = io.TextIOWrapper(
+        io.BytesIO(
+            json.dumps(
+                {
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "one",
+                    "turn_id": "turn-two",
+                    "cwd": str(session.root),
+                }
+            ).encode()
+        ),
+        encoding="utf-8",
+    )
+
+    observed: list[str] = []
+
+    def reject(*args: Any) -> None:
+        state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+        observed.append(state["status"])
+        raise admission.AdmissionError("fixture admission rejected")
+
+    with (
+        mock.patch.dict(
+            sys.modules,
+            {
+                "integration_lifecycle": LIFECYCLE,
+                "integration_admission": admission,
+                "integration_store": store,
+            },
+        ),
+        mock.patch.object(admission, "gate", side_effect=reject),
+        mock.patch.object(
+            admission, "package_root", return_value=root / "plugins/agent"
+        ),
+        mock.patch.object(LIFECYCLE, "prepare") as prepare_release,
+        mock.patch.object(LIFECYCLE, "_validate_frozen_receipt") as assess,
+        mock.patch.object(sys, "stdin", raw),
+        mock.patch.object(sys, "stdout", output),
+    ):
+        assert dispatcher.main(["hook_dispatch.py", *arguments]) == 0
+    result = json.loads(output.getvalue())
+    assert result["decision"] == "block"
+    assert "fixture admission rejected" in result["reason"]
+    assert observed == ["cancelled"]
+    assert Path(armed["cancel"]).exists()
+    assert not Path(armed["completion"]).exists()
+    prepare_release.assert_not_called()
+    assess.assert_not_called()
+    store.main.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failure", ["crash", "overrun"])
+def test_prompt_dispatch_keeps_required_admission_failures_blocking(
+    failure: str,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "failed_admission_dispatch", root / ".agents/hooks/hook_dispatch.py"
+    )
+    assert spec is not None and spec.loader is not None
+    dispatcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dispatcher)
+    if failure == "crash":
+        output, diagnostic = dispatcher.merge(
+            "UserPromptSubmit", [("managed_admission.py", 1, "", "fixture crash")]
+        )
+        assert output["decision"] == "block"
+        assert "fixture crash" in diagnostic
+        optional, _ = dispatcher.merge(
+            "UserPromptSubmit", [("optional.py", 1, "", "fixture crash")]
+        )
+        assert optional == {}
+        return
+    raw = io.TextIOWrapper(
+        io.BytesIO(b'{"hook_event_name":"UserPromptSubmit"}'), encoding="utf-8"
+    )
+    stdout = io.StringIO()
+    with (
+        mock.patch.object(dispatcher.threading, "Thread"),
+        mock.patch.object(dispatcher.os, "_exit") as exit_process,
+        mock.patch.object(sys, "stdin", raw),
+        mock.patch.object(sys, "stdout", stdout),
+    ):
+        assert (
+            dispatcher.main(
+                [
+                    "hook_dispatch.py",
+                    "--deadline",
+                    "0",
+                    "--hook",
+                    "managed_admission.py",
+                ]
+            )
+            == 0
+        )
+    assert json.loads(stdout.getvalue())["decision"] == "block"
+    exit_process.assert_called_once_with(0)

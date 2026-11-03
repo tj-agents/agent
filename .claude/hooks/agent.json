@@ -5,6 +5,22 @@
         "hooks": [
           {
             "type": "command",
+            "timeout": 15,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py",
+              "hook",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "async": true,
             "timeout": 10,
             "command": "python",
@@ -35,6 +51,11 @@
               "--hook",
               "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
               "prompt",
+              "--host",
+              "claude",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py",
+              "hook",
               "--host",
               "claude",
               "--hook",
@@ -99,6 +120,25 @@
             ]
           }
         ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 15,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py",
+              "hook",
+              "--host",
+              "claude"
+            ]
+          }
+        ],
+        "matcher": "*"
       }
     ]
   }
