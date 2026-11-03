@@ -15,10 +15,11 @@ route: infer
 
 The runtime is Python 3.9+ on Windows and Linux. Use `python3` on Linux/macOS and `python` on Windows.
 
-Two naming systems describe the same window. A session's own name is derived by the harness from its
-branch or directory (`refactor-postgresauthconsumer-ec`), while its tab is titled by whoever launched it
-("Postgres sweep: Search"). Naming a peer by the first is naming something the user cannot see on screen.
-This skill addresses peers by tab title.
+A launched session keeps its launch title ("Postgres sweep: Search") as both its stored title and its tab;
+the host is told not to retitle it. A session started by hand records no title and its host owns its tab.
+A stored title names an open tab only when `close_tab.py --list` reports it `actual: true`; never present
+an `actual: false` row as an open tab. The harness's branch-derived name is not on screen. This skill
+addresses peers by tab title.
 
 `ListAgents` and `SendMessage` remain the way to enumerate and talk to in-harness peers. This skill is for
 the two things they do not do: resolving the title the user sees, and ending a session.

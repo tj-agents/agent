@@ -655,6 +655,21 @@ Observed blocker: no send was attempted."""
         self.assertEqual((Host.CLAUDE, "claude_id"), opened.call_args.args[:2])
         focus.assert_not_called()
 
+    def test_reopen_keeps_the_stored_title_as_the_tab_name(self):
+        self.write_codex()
+        registry = RECOVERY._registry_root()
+        registry.mkdir(parents=True, exist_ok=True)
+        (registry / "exact_id.json").write_text(json.dumps({"session_id": "exact_id", "title": "Fix handoff tab names"}),
+                                               encoding="utf-8")
+        cli = RECOVERY._load("agent_cli")
+        with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
+             mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
+             mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
+             mock.patch.object(cli, "launch_tab") as launch:
+            RECOVERY.reopen("exact_id", hosts=(Host.CODEX,), roots={Host.CODEX: self.root / "sessions"},
+                            focus=mock.Mock(), cli=cli)
+        self.assertEqual("Fix handoff tab names", launch.call_args.args[2])
+
     def test_reopen_closed_codex_enters_verified_startup_before_native_resume(self):
         self.write_codex()
         cli = RECOVERY._load("agent_cli")
@@ -674,7 +689,8 @@ Observed blocker: no send was attempted."""
         self.assertEqual(["--host", "codex", "--project", str(self.cwd), "--target", "native-codex"], arguments[3:9])
         self.assertEqual("--status-file", arguments[9])
         self.assertEqual("codex-", Path(arguments[10]).name[:6])
-        self.assertEqual(["--", "resume", "exact_id", "Continue the requested work."], arguments[11:])
+        self.assertEqual(["--", "--config", "tui.terminal_title=[]", "resume", "exact_id", "Continue the requested work."],
+                         arguments[11:])
         focus.assert_not_called()
 
     def test_reopen_live_session_focuses_its_tab_and_never_launches_a_second_writer(self):

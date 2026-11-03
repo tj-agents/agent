@@ -34,9 +34,9 @@ INFORMATION_OPTIONS = frozenset({"--help", "-h", "--version", "-V"})
 MAINTENANCE_COMMANDS = frozenset({
     "plugin", "login", "logout", "doctor", "help", "completion", "update", "mcp", "features",
 })
-MODEL_CONFIG_KEYS = frozenset({
+INVENTORY_CONFIG_KEYS = frozenset({
     "model", "model_provider", "model_reasoning_effort", "model_reasoning_summary",
-    "model_verbosity", "service_tier", "personality",
+    "model_verbosity", "service_tier", "personality", "tui.terminal_title",
 })
 NODE_SHIM_BYPASSED = True
 
@@ -77,12 +77,12 @@ def location(entry: dict, project: Path) -> tuple[str, Path] | None:
 def require_inventory_options(options: tuple[str, ...]) -> None:
     for option, value in zip(options[::2], options[1::2]):
         key = value.partition("=")[0].strip().strip("\"'")
-        if option not in ("-c", "--config") or key not in MODEL_CONFIG_KEYS:
+        if option not in ("-c", "--config") or key not in INVENTORY_CONFIG_KEYS:
             raise required_plugins.RequiredPluginsError(
                 f"Cannot verify required Codex plugins with launch override {option}: native plugin "
                 "inventory does not apply session activation overrides. Use the persisted repository "
                 "configuration for plugin, profile and feature settings, then relaunch. "
-                "Model and reasoning overrides remain available."
+                "Model, reasoning and terminal-title overrides remain available."
             )
 
 

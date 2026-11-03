@@ -37,6 +37,11 @@ SESSION_ENVIRONMENT = (
     'WORKBOARD_WORKFLOW_TOKEN',
 )
 
+# The launch title is the session's one name: peer lookup and recovery resolve the stored copy, so a host
+# retitling its tab would leave that name pointing at nothing on screen.
+CODEX_KEEP_TAB_TITLE = ('--config', 'tui.terminal_title=[]')
+CLAUDE_KEEP_TAB_TITLE = {'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1'}
+
 
 class LaunchError(Exception):
     """A launch precondition failed; the message is the whole report."""
@@ -408,7 +413,15 @@ def _launch_tmux(directory, executable, title, arguments, cleared, forced, envir
     # Passing several argv elements after `--` is what makes tmux 3.0+ exec them directly without an
     # intermediate shell; a single joined string would be re-split by tmux's own command parser. No `-d`:
     # the new window comes to the front, as a new tab does in every other terminal.
-    _client(run, ['tmux', 'new-window', '-n', title, '--', *inner], 'tmux new-window')
+    pane = _client(run, ['tmux', 'new-window', '-n', title, '-P', '-F', '#{pane_id}', '--', *inner], 'tmux new-window')
+    # The session is already running in that window, so a failure past this point must not read as a
+    # failed launch: a caller would retry and start a second writer.
+    try:
+        if not pane:
+            raise LaunchError('tmux new-window did not report the new pane id')
+        _client(run, ['tmux', 'select-pane', '-t', pane, '-T', title], 'tmux select-pane')
+    except LaunchError as exc:
+        print(f'warning: the session started, but its tmux pane title was not set to {title!r}: {exc}', file=sys.stderr)
 
 
 def _launch_kitty(directory, executable, title, arguments, cleared, forced, environ, run, popen):
@@ -424,7 +437,7 @@ def _launch_kitty(directory, executable, title, arguments, cleared, forced, envi
     # For `launch`, --match selects a tab, and `id:` is a tab id; `window_id:` selects the tab holding the
     # caller's own window. The two id counters are independent, so `id:` lands in the wrong place.
     _client(run, ['kitty', '@', '--to', listen_on, 'launch', '--type=tab', '--match', f'window_id:{window_id}',
-                  '--tab-title', title, *inner], 'kitty @ launch')
+                  '--tab-title', title, '--title', title, *inner], 'kitty @ launch')
 
 
 def _konsole_qdbus():
@@ -687,4 +700,4 @@ def open_claude_tab(working_directory, title, arguments, out=print, status_file=
     # starts the tab sets TERM for that session itself, and forcing or clearing it here would fight that.
     launch_tab(working_directory, sys.executable, title,
                arguments=bound_terminal_arguments("claude", working_directory, claude, list(arguments), status_file, require_session_start),
-               clear=clear, force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', **(force or {})})
+               clear=clear, force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', **CLAUDE_KEEP_TAB_TITLE, **(force or {})})
