@@ -16,6 +16,7 @@ import plugin_autoupdate
 import required_plugins
 import session_relaunch
 from host import Host
+from tj_cli import process
 
 
 class MaintenanceUnsettledError(admission.AdmissionError):
@@ -117,9 +118,21 @@ def maintain(project: Path, host: Host, path: Path) -> None:
         "180",
     ]
     with path.with_suffix(".log").open("w", encoding="utf-8") as stream:
-        result = subprocess.run(
-            arguments, cwd=project, stdout=stream, stderr=subprocess.STDOUT, check=False
-        )
+        try:
+            result = process.run(
+                arguments,
+                cwd=project,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+                timeout=240,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise MaintenanceUnsettledError(
+                "Plugin maintenance exceeded its containment timeout; inspect "
+                + str(path.with_suffix(".log"))
+                + " before retrying"
+            ) from None
     if result.returncode == 3:
         raise MaintenanceUnsettledError(
             "Plugin maintenance could not prove that its writer stopped; "

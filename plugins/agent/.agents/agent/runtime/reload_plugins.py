@@ -115,6 +115,8 @@ def verify_packages(plugins: Plugins, executable: str, project: Path, marketplac
                 continue
             try:
                 expected = sources.tree(catalog_sources.get(plugin), Path(location), project, temporary, publishers)
+            except plugin_refresh.MaintenanceUnsettledError:
+                raise
             except RefreshError as error:
                 problems.append(f"{identity}: {error}")
                 continue
