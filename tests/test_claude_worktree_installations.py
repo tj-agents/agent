@@ -65,6 +65,11 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
 
     def setUp(self):
         isolate_git_config()
+        home = tempfile.TemporaryDirectory(prefix='claude home ')
+        self.addCleanup(home.cleanup)
+        environment = mock.patch.dict(os.environ, {'CLAUDE_CONFIG_DIR': home.name})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.commands = []
 
     def entry(self, owner, version='old', **extra):

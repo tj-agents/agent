@@ -526,16 +526,18 @@ def synchronize(projects: list[Path], *, identities: set[str] | None = None, for
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
     retired = retire_unpublished_user_plugins(marketplaces)
     retired.extend(uninstall_unpublished(executable, marketplaces))
+    ubiquitous = converge_user_scope(project)
+    installed = apply(executable, project, ubiquitous, []) if ubiquitous else []
     plugins = [identity for identity in plugins if identity not in retired or declared_scopes(identity, project)]
     if not plugins:
-        return []
+        return sorted(installed)
     scoped = {identity for identity in plugins if declared_scopes(identity, project)}
     if scoped:
         refresh_heads(None)
-    changed = synchronize([project], identities=scoped, force=True) if scoped else []
+    changed = installed + (synchronize([project], identities=scoped, force=True) if scoped else [])
     plugins = [identity for identity in plugins if identity not in scoped]
     if not plugins:
-        return changed
+        return sorted(set(changed))
     inventory = json.loads(plugin_refresh.run([executable, "plugin", "list", "--json"], project))
     effective = installations(project, inventory)
     installs = [(identity, scope) for identity in plugins for scope in declared_scopes(identity, project)
@@ -597,6 +599,42 @@ def retire_unpublished_user_plugins(refreshed) -> list[str]:
     return retired
 
 
+def ubiquitous_plugins() -> list[str]:
+    published, pending = published_plugins(), []
+    newest = {entry["id"]: entry for entry in sorted(installed_entries(), key=lambda entry: str(entry.get("lastUpdated") or ""))
+              if isinstance(entry.get("installPath"), str)}
+    for identity, entry in newest.items():
+        plugin, _, marketplace = identity.partition("@")
+        if (plugin != "personal" and plugin in published.get(marketplace, ())
+                and plugin_refresh.read_json(Path(entry["installPath"]) / "tier.json").get("applies") == "always"):
+            pending.append(identity)
+    dependencies, wanted = catalog_dependencies(), set()
+    while pending:
+        identity = pending.pop()
+        if identity not in wanted:
+            wanted.add(identity)
+            pending.extend(dependencies.get(identity, []))
+    return sorted(wanted)
+
+
+def converge_user_scope(project: Path) -> list[tuple[str, str]]:
+    path = HOST.configuration_root / "settings.json"
+    settings = plugin_refresh.read_json(path)
+    enabled = settings.setdefault("enabledPlugins", {})
+    if not isinstance(enabled, dict):
+        raise plugin_refresh.RefreshError(f"{path}: enabledPlugins is not an object")
+    wanted = ubiquitous_plugins()
+    added = [identity for identity in wanted if identity not in enabled]
+    if added:
+        enabled.update(dict.fromkeys(added, True))
+        plugin_autoupdate.write_json(path, settings)
+        print("plugins: enabled always-applicable plugins at user scope: " + ", ".join(added), file=sys.stderr)
+    users = {entry["id"] for entry in installed_entries() if entry.get("scope") == "user"}
+    _, selection = selected(project)
+    return [(identity, "user") for identity in wanted
+            if enabled.get(identity) is True and identity in selection and identity not in users]
+
+
 def uninstall_unpublished(executable: str, refreshed) -> list[str]:
     published = {name: names for name, names in published_plugins().items() if name in refreshed}
     removed = []
@@ -654,6 +692,7 @@ def attempt_key(identity: str, scope: str, owner: Path) -> str:
 def reconcile(project: Path, event: bool = False, repositories: set[str] | None = None,
               fresh: frozenset[str] = frozenset()) -> list[str]:
     retire_unpublished_user_plugins(fresh)
+    ubiquitous = converge_user_scope(project)
     marketplaces, plugins = selected(project)
     scoped = {identity for identity in plugins if declared_scopes(identity, project)}
     changed = synchronize([project], identities=scoped) if scoped else []
@@ -682,6 +721,7 @@ def reconcile(project: Path, event: bool = False, repositories: set[str] | None 
                 updates.append((identity, scope, owner))
                 if head is not None:
                     attempts[attempt_key(identity, scope, owner)] = head
+    installs = list(dict.fromkeys(installs + ubiquitous))
     dependencies = dependency_installs(present)
     if not installs and not updates and not dependencies:
         return changed
