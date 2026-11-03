@@ -151,7 +151,7 @@ def attach_frontend(ticket, pid: int) -> None:
             ticket["_shell_executable"] = executable
     if ticket is not None and ticket.get("backend") and executable:
         ticket["pid"] = pid
-        shell_commands.start(ticket)
+        shell_commands.start(ticket, client)
 
 
 def release_frontend(ticket) -> None:

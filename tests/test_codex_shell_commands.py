@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / ".codex/runtime"))
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 
 import shell_commands  # noqa: E402
-from codex import client  # noqa: E402
+from codex import client, sessions  # noqa: E402
 
 COMMAND = "echo tj-shell-continuation-proof"
 
@@ -127,7 +127,7 @@ def monitor(
     monkeypatch.setattr(
         client, "process_arguments", lambda _pid: [ticket["_shell_executable"]]
     )
-    instance = shell_commands.ShellMonitor(ticket)
+    instance = shell_commands.ShellMonitor(ticket, client)
     return instance, FakeServer(profile, tmp_path, rollout)
 
 
@@ -288,7 +288,7 @@ def test_receipt_survives_observer_restart_and_prevents_duplicates(
 ) -> None:
     instance, server = monitor
     instance.step(server)
-    replacement = shell_commands.ShellMonitor(instance.ticket)
+    replacement = shell_commands.ShellMonitor(instance.ticket, client)
     replacement.step(server)
     assert len(server.sent) == 1
 
@@ -435,8 +435,6 @@ def test_malformed_turn_identity_is_rejected(
 def test_frontend_release_waits_for_observer_before_deleting_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from codex import sessions
-
     actions: list[str] = []
     monkeypatch.setattr(
         sessions.shell_commands, "stop", lambda _ticket: actions.append("stop")
