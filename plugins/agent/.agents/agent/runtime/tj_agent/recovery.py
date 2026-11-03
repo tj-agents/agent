@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import argparse
 import hashlib
 import importlib.util
@@ -15,11 +14,10 @@ import secrets
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
+from host import Host
+from host_sessions import SESSIONS
 
-from host import Host  # noqa: E402
-from host_sessions import SESSIONS  # noqa: E402
+HERE = Path(__file__).resolve().parents[1]
 
 SESSION_ID = re.compile(r"(?!-)[A-Za-z0-9_-]+\Z")
 TOKEN = re.compile(r"[a-z0-9]+")
@@ -898,6 +896,3 @@ def main(argv=None):
             return cli.report_launch_failure(exc)
         raise
 
-
-if __name__ == "__main__":
-    sys.exit(main())
