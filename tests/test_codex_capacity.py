@@ -31,7 +31,8 @@ class FakeServer:
         self.loaded = True
         self.can_accept_direct_input = True
         self.source = "cli"
-        self.thread_status = "idle"
+        self.thread_status = "systemError"
+        self.error_code = "serverOverloaded"
 
     def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         if method == "thread/turns/list":
@@ -40,7 +41,7 @@ class FakeServer:
                     {
                         "id": "failed-turn",
                         "status": "failed",
-                        "error": {"codexErrorInfo": "serverOverloaded"},
+                        "error": {"codexErrorInfo": self.error_code},
                     }
                 ]
             }
@@ -184,8 +185,7 @@ def test_candidate_hook_subprocess_records_no_prompt_text(tmp_path: Path) -> Non
         Path(__file__).resolve().parents[1]
         / "plugins/agent/.agents/agent/runtime/codex/capacity.py"
     )
-    if not script.is_file():
-        script = RUNTIME / "capacity.py"
+    assert script.is_file()
     environment = dict(
         os.environ,
         AGENT_STATE_DIRECTORY=str(tmp_path / "state"),
@@ -340,6 +340,105 @@ def test_disconnect_after_submission_reconciles_the_same_receipt_without_resend(
         observer = capacity.CapacityMonitor(ticket, clock=lambda: 1.0)
         observer._recover(server, client, candidate, "manual-input", 1)
     assert len(server.sent) == 1
+
+
+def test_repeated_native_system_errors_retry_five_times_then_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recording = tmp_path / "events.jsonl"
+    recording.write_text(
+        json.dumps(
+            {
+                "dir": "from_tui",
+                "kind": "op",
+                "payload": {"UserTurn": {"client_user_message_id": "manual-input"}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    ticket = {
+        "created_at": 0,
+        "recording_path": str(recording),
+        "profile": "/profile",
+        "backend": {"pid": 10, "process_start_time": "123"},
+        "pid": 20,
+        "launch_cwd": str(tmp_path.resolve()),
+        "token": "binding-token",
+        "_capacity_executable": "/profile/codex",
+        "_capacity_record_identity": capacity.RecordingReader(recording).poll()[2],
+    }
+    client = FakeClient(recording)
+    client.binding.write_text(
+        json.dumps(
+            {
+                key: ticket[key]
+                for key in (
+                    "token",
+                    "pid",
+                    "backend",
+                    "profile",
+                    "recording_path",
+                    "created_at",
+                )
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(capacity, "DELAYS", (0, 0, 0, 0, 0))
+    monkeypatch.setattr(capacity, "state_root", lambda: tmp_path / "state")
+
+    class RepeatedCapacity(FakeServer):
+        def __init__(self) -> None:
+            super().__init__(tmp_path)
+            self.sequence = 0
+            self.messages = {"retry-0": "manual-input", "manual-turn": "manual-input"}
+            self.completed = False
+
+        def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+            if method == "thread/turns/list":
+                return {
+                    "data": [
+                        {
+                            "id": f"retry-{self.sequence}",
+                            "status": "completed" if self.completed else "failed",
+                            "error": {"codexErrorInfo": "serverOverloaded"},
+                        }
+                    ]
+                }
+            if method == "thread/items/list":
+                return {
+                    "data": [
+                        {
+                            "item": {
+                                "type": "userMessage",
+                                "clientId": self.messages[params["turnId"]],
+                            }
+                        }
+                    ],
+                    "nextCursor": None,
+                }
+            result = super().request(method, params)
+            if method == "turn/start":
+                self.sequence += 1
+                self.messages[f"retry-{self.sequence}"] = params["clientUserMessageId"]
+            return result
+
+    server = RepeatedCapacity()
+    monitor = capacity.CapacityMonitor(ticket, clock=lambda: 1)
+    candidate = {
+        "thread_id": "thread-1",
+        "turn_id": "manual-turn",
+        "cwd": str(tmp_path.resolve()),
+    }
+    for _ in range(7):
+        monitor._recover(server, client, candidate, "manual-input", 1)
+    assert len(server.sent) == 5
+    assert len({params["clientUserMessageId"] for _, params in server.sent}) == 5
+    server.completed = True
+    monitor._recover(server, client, candidate, "manual-input", 1)
+    assert len(server.sent) == 5
 
 
 def test_capacity_attempt_budget_stops_at_five(tmp_path: Path) -> None:
@@ -508,20 +607,28 @@ def test_bound_thread_survives_candidate_inbox_churn_until_input_epoch_changes(
     assert monitor.bound_candidate is None
 
 
-def test_final_preflight_requires_idle_and_same_failed_capacity_turn(
+@pytest.mark.parametrize("runtime_state", ["idle", "systemError"])
+def test_final_preflight_requires_inactive_and_same_failed_capacity_turn(
     tmp_path: Path,
+    runtime_state: str,
 ) -> None:
     monitor = capacity.CapacityMonitor(
         {"created_at": 0, "profile": "/profile", "launch_cwd": str(tmp_path)}
     )
     server = FakeServer(tmp_path)
+    server.thread_status = runtime_state
     candidate = {
         "thread_id": "thread-1",
         "turn_id": "manual-turn",
         "cwd": str(tmp_path.resolve()),
     }
     assert monitor._final_preflight(server, candidate, "manual-input", "failed-turn")
-    server.thread_status = "inProgress"
+    server.error_code = "unauthorized"
+    assert not monitor._final_preflight(
+        server, candidate, "manual-input", "failed-turn"
+    )
+    server.error_code = "serverOverloaded"
+    server.thread_status = "active"
     assert not monitor._final_preflight(
         server, candidate, "manual-input", "failed-turn"
     )

@@ -683,7 +683,8 @@ class CapacityMonitor:
             or thread.get("cwd") != candidate["cwd"]
             or thread.get("canAcceptDirectInput") is not True
             or not isinstance(thread.get("status"), dict)
-            or thread["status"].get("type") != "idle"
+            # Codex retains systemError after a failed turn until the next turn starts.
+            or thread["status"].get("type") not in {"idle", "systemError"}
             or source not in ("cli", "vscode")
         ):
             return False
