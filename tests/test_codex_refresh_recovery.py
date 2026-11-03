@@ -60,6 +60,12 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         ])
         self.assertEqual(["--profile", "work", "--model=gpt-6", "--no-daemon", "--sandbox", "read-only", "--config", "model=fast"], options)
 
+    def test_codex_options_leave_the_tab_title_override_to_the_launcher(self):
+        self.assertEqual(["--no-daemon", "--config", "model=fast"], CODEX_SESSIONS.native_arguments([
+            "--no-daemon", "--config", "tui.terminal_title=[]", "--config", "model=fast", "-ctui.terminal_title=[]",
+            "resume", "thread", "old prompt",
+        ]))
+
     def test_codex_options_refuse_hook_trust_bypass(self):
         with self.assertRaisesRegex(RuntimeError, "hook-trust bypass"):
             CODEX_SESSIONS.native_arguments(["--dangerously-bypass-hook-trust"])

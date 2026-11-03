@@ -52,7 +52,7 @@ class HandoffStartupTests(unittest.TestCase):
         cli.await_handoff_startup.side_effect = lambda path: real_wait(path, timeout=0, wrapper_timeout=0)
         output, error = io.StringIO(), io.StringIO()
         with mock.patch.object(launcher, '_load_agent_cli', return_value=cli), contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
-            result = launcher.main(['--working-directory', str(self.directory), '--prompt-path', str(self.prompt), '--model', 'explicit-model'])
+            result = launcher.main(['--working-directory', str(self.directory), '--prompt-path', str(self.prompt), '--title', 'Test handoff', '--model', 'explicit-model'])
         cli.launch_tab.assert_called_once()
         return result, output.getvalue(), error.getvalue(), receipt
 
