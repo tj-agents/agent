@@ -94,6 +94,24 @@ def declarations(lock_path: Path, lock: dict) -> tuple[dict[str, dict], dict[str
     return sources, identities, claude_allow, codex_rules
 
 
+def explicit_exclusions(root: Path) -> set[str]:
+    excluded = set()
+    for name in ("settings.json", "settings.local.json"):
+        path = root / ".claude" / name
+        enabled = lock_io.load_json(path).get("enabledPlugins") if path.is_file() else None
+        if isinstance(enabled, dict):
+            excluded |= {identity for identity, flag in enabled.items() if flag is False}
+    codex = text_at(root / ".codex/config.toml")
+    if codex:
+        import tomllib
+
+        plugins = tomllib.loads(codex).get("plugins")
+        if isinstance(plugins, dict):
+            excluded |= {identity for identity, settings in plugins.items()
+                         if isinstance(settings, dict) and settings.get("enabled") is False}
+    return excluded
+
+
 def claude_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool], allow: list[str]) -> str:
     settings = lock_io.load_json(path) if path.is_file() else {}
     settings["extraKnownMarketplaces"] = {
@@ -321,6 +339,9 @@ def local_codex(path: Path, sources: dict, identities: dict, previous: str | Non
         parsed = tomllib.loads(prefix)
     except tomllib.TOMLDecodeError as error:
         raise lock_io.LockError(f"{path}: invalid unmanaged TOML: {error}") from error
+    unmanaged = parsed.get("plugins", {})
+    identities = {identity: enabled for identity, enabled in identities.items()
+                  if enabled or not isinstance(unmanaged, dict) or identity not in unmanaged}
     for key, desired in (("marketplaces", sources), ("plugins", identities)):
         foreign = parsed.get(key, {})
         if not isinstance(foreign, dict) or set(foreign) & set(desired):
@@ -393,6 +414,9 @@ def plan(
     exclude = preflight_paths(root, [*paths, *prospective_paths], scope=scope, read_paths=inputs, run=execute)
     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
     sources, identities, allow, rules = declarations(lock_path, lock)
+    excluded = {identity: False for identity in explicit_exclusions(root)
+                if plugin_selection.split(identity)[1] in sources}
+    identities = dict(sorted({**excluded, **identities}.items()))
     expected_rules = codex_rules(rules) if rules else None
     if scope == "local":
         state = local_state(state_path)

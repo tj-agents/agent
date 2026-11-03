@@ -6,6 +6,15 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def isolate_agent_homes(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    homes = tmp_path_factory.mktemp("agent homes")
+    for variable in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "AGENT_STATE_DIRECTORY"):
+        monkeypatch.setenv(variable, str(homes / variable.casefold()))
+
+
+@pytest.fixture(autouse=True)
 def preserve_empty_process_environment() -> Iterator[None]:
     empty = [key for key, value in os.environ.items() if value == ""]
     yield
