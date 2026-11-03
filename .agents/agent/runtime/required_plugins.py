@@ -158,13 +158,18 @@ def check(project: Path, host: Host, executable: str | None = None,
     required = selected(project)
     if not required:
         return None
-    plugins.require_inventory_options(inventory_options)
-    binary = executable or shutil.which(host.value)
-    if not binary:
-        raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
-    roots = inventory_roots(launch_directory, host, binary, inventory_options, identities=required)
     import managed_admission
 
+    plugins.require_inventory_options(inventory_options)
+    try:
+        binary = executable or shutil.which(host.value)
+        if not binary:
+            raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
+        roots = inventory_roots(launch_directory, host, binary, inventory_options, identities=required)
+    except RequiredPluginsError as error:
+        if admission and any(identity.endswith("@tj-agents") for identity in required):
+            raise managed_admission.AdmissionError(f"Managed readiness could not be established: {error}") from error
+        raise
     if admission:
         managed_admission.verify(project, host, binary, roots)
     missing = sorted(set(required) - roots.keys())

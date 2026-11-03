@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import atexit
 import argparse
 import json
 from pathlib import Path
@@ -10,6 +11,12 @@ import re
 import subprocess
 import sys
 import tempfile
+
+if __name__ == "__main__":
+    _source_cache = tempfile.TemporaryDirectory(prefix="tj-source-cache-")
+    atexit.register(_source_cache.cleanup)
+    sys.pycache_prefix = _source_cache.name
+    sys.dont_write_bytecode = True
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 

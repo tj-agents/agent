@@ -7,6 +7,7 @@ installs with the recorded publisher heads. A process starts only for an install
 
 from __future__ import annotations
 
+import atexit
 import json
 import math
 import os
@@ -15,8 +16,15 @@ import re
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+
+if __name__ == "__main__":
+    _source_cache = tempfile.TemporaryDirectory(prefix="tj-source-cache-")
+    atexit.register(_source_cache.cleanup)
+    sys.pycache_prefix = _source_cache.name
+    sys.dont_write_bytecode = True
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -296,7 +304,11 @@ def prepare_launch_roots(project, host: Host, executable, arguments):
         return None, None
     try:
         roots = reload_plugins.prepare_required(effective_project, host, executable, options, admission=True)
-    except (required_plugins.RequiredPluginsError, managed_admission.AdmissionError):
+    except required_plugins.RequiredPluginsError as error:
+        if any(identity.endswith("@tj-agents") for identity in required_plugins.selected(required_plugins.project_root(effective_project))):
+            raise managed_admission.AdmissionError(f"Managed readiness could not be established: {error}") from error
+        raise
+    except managed_admission.AdmissionError:
         raise
     except (RuntimeError, OSError) as admission_error:
         if os.environ.get(INSTALL_RECOVERY):
@@ -361,10 +373,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"plugins: {error}", file=sys.stderr)
             print("plugins: launching anyway.", file=sys.stderr)
             return 0
-        from host_plugins import PLUGINS
-
         try:
-            PLUGINS[host].ensure_hooks(effective_project, arguments.target)
+            managed_admission.ensure_hooks(effective_project, host, arguments.target)
             managed_admission.verify(effective_project, host, arguments.target)
         except managed_admission.AdmissionError as error:
             print(f"plugins: {error}", file=sys.stderr)
