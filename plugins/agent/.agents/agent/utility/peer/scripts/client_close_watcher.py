@@ -65,7 +65,7 @@ def require_current(request, path, digest, *, verify_receipt=False):
         raise session_close.Cancelled("close request was cancelled")
     try:
         lifecycle().require_release(request, verify_receipt=verify_receipt)
-    except ValueError as error:
+    except (OSError, ValueError, RuntimeError) as error:
         raise session_close.Cancelled(str(error)) from error
 
 
@@ -99,11 +99,7 @@ def final_local_guard(request, path, digest, activity):
     require_current(request, path, digest, verify_receipt=True)
     entry = request["entry"]
     current = session_close.read_json(request["registry"])
-    fields = (*session_close.CLIENT_BINDING_FIELDS, "frontend", "provenance", "terminal")
-    if (not isinstance(current, dict) or not session_close.nonempty_string(current.get("cwd"))
-            or not Path(current["cwd"]).is_absolute()
-            or session_close.path_key(current["cwd"]) != session_close.path_key(entry["cwd"])
-            or any(current.get(key) != entry.get(key) for key in fields)):
+    if not session_close.registration_matches(current, entry):
         raise session_close.Cancelled("session registration changed before close")
     session_close.host_sessions(request["host"]).close_guard(request, activity, complete(request), session_close.SHARED)
     require_current(request, path, digest)
@@ -158,7 +154,10 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
     except session_close.Cancelled as error:
         status, reason = "cancelled", str(error)
     except (OSError, ValueError, RuntimeError) as error:
-        status, reason = "refused", str(error)
+        status = "cancelled" if request.get("intent") == "refresh-restart" else "refused"
+        reason = str(error)
+    if request.get("intent") == "refresh-restart" and status != "closed":
+        session_close.write_json(request["cancel"], {"cancelled": True, "reason": reason})
     session_close.write_json(request["result"], {"status": status, "reason": reason,
                               "session_id": request["session_id"], "at": time.time()})
     lifecycle().retire_release(request)
