@@ -508,3 +508,36 @@ def test_publisher_checkout_materializes_original_bytes_with_replacement_refs(
         assert sources.tree(source, publisher, tmp_path, tmp_path / "staging", {}) == {
             "value.txt": b"original"
         }
+
+
+def test_host_adapters_share_the_canonical_cli_module() -> None:
+    canonical = importlib.import_module("agent_cli")
+    for host in ("claude", "codex"):
+        adapter = importlib.import_module(host + ".plugins")
+        assert adapter.agent_cli is canonical
+        assert adapter.agent_cli.LaunchError is canonical.LaunchError
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_observer_visibility_fixture_skips_windows_apis(platform: str) -> None:
+    spec = importlib.util.spec_from_file_location(
+        "portable_observer_fixture", ROOT / "tests/fixtures/hidden_observer.py"
+    )
+    assert spec is not None and spec.loader is not None
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    with (
+        patch.object(sys, "platform", platform),
+        patch.object(
+            fixture.ctypes,
+            "WinDLL",
+            side_effect=AssertionError("Windows API"),
+            create=True,
+        ),
+    ):
+        assert fixture.visible_windows() == []
+        assert fixture.console_state() == {
+            "console": None,
+            "visible": False,
+            "windows": [],
+        }
