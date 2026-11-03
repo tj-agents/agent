@@ -124,7 +124,8 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
     try:
         cli.launch_tab(
             directory, sys.executable, label,
-            cli.bound_terminal_arguments(HOST.value, directory, executable, arguments, status_path),
+            cli.bound_terminal_arguments(HOST.value, directory, executable, arguments, status_path,
+                                         require_session_start=True),
             clear=("TERM",),
             force={HOST.home_variable: item["profile"]},
         )
