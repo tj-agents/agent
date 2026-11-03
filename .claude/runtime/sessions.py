@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 from pathlib import Path
 import re
@@ -76,7 +77,7 @@ def requires_verified_handoff(require_session_start: bool) -> bool:
     return False
 
 
-def handoff_executable(target: str, project: Path, environment, *, allow_managed=True) -> str:
+def handoff_executable(target: str, project: Path, environment: Mapping[str, str], *, allow_managed: bool = True) -> str:
     return target
 
 

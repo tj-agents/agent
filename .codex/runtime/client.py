@@ -341,7 +341,8 @@ def bind_recipient(ticket, table, peer_state):
             raise RuntimeError('Owned handoff loaded-thread inventory is invalid')
         for session_id in loaded:
             thread = server.request('thread/read', {'threadId': session_id, 'includeTurns': False})['thread']
-            if (thread.get('id') != session_id or isinstance(thread.get('source'), dict)
+            if (thread.get('id') != session_id or thread.get('ephemeral') is True
+                    or isinstance(thread.get('source'), dict)
                     or thread.get('threadSource') in ('agent', 'subagent')
                     or comparable_path(Path(thread.get('cwd', '')).resolve())
                     != comparable_path(Path(record['launch_cwd']).resolve())):

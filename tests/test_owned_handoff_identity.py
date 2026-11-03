@@ -280,6 +280,36 @@ def test_bound_recipient_keeps_frontend_and_latest_native_input_separate(
     assert saved["recipient"] == record["recipient"]
 
 
+@pytest.mark.parametrize("ephemeral", [True, False, None])
+def test_recipient_excludes_only_explicitly_ephemeral_native_threads(
+    launch: OwnedLaunch, monkeypatch: pytest.MonkeyPatch, ephemeral: bool | None
+) -> None:
+    launch.server.loaded = ["thread", "title-thread"]
+    request = launch.server.request
+
+    def with_title(method: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        if parameters.get("threadId") == "title-thread":
+            if method == "thread/items/list":
+                raise RuntimeError("title thread history is unavailable")
+            result = request(method, parameters)
+            if method == "thread/read" and ephemeral is not None:
+                result["thread"]["ephemeral"] = ephemeral
+            return result
+        return request(method, parameters)
+
+    monkeypatch.setattr(launch.server, "request", with_title)
+    if ephemeral is True:
+        record, submitted = launch.client.bind_recipient(
+            launch.record, launch.table, launch.peer_state
+        )
+        assert record["recipient"]["thread_id"] == "thread"
+        assert submitted["frontend_message_id"] == FRONTEND_MESSAGE
+        assert submitted["client_message_id"] == NATIVE_MESSAGE
+    else:
+        with pytest.raises(RuntimeError, match="title thread history is unavailable"):
+            launch.client.bind_recipient(launch.record, launch.table, launch.peer_state)
+
+
 @pytest.mark.parametrize(
     "loaded", [[], ["thread", "other-thread"]], ids=["missing", "ambiguous"]
 )
