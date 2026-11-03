@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and converge this machine's tj-agents environment (Python 3.11+).
+"""Install and converge this machine's tj-agents environment (Python 3.12+).
 
 Runs an ordered list of steps, each with a check and an apply. A step whose check reports no drift is
 left alone, so rerunning converges and writes nothing once the machine is current. `--check` reports
@@ -37,6 +37,7 @@ import event_service
 import host_permissions
 import required_plugins
 import runtime_delivery
+import native_runtime
 from tj_agent import content
 
 COMMAND_TIMEOUT_SECONDS = 60
@@ -818,6 +819,8 @@ def plugin_setup_executables(context: Context) -> dict[Host, str | None]:
 
 
 def check_plugin_setup(context: Context) -> list[str]:
+    if native_runtime.missing():
+        return check_native_cli(context)
     return required_plugins.check_setup(plugin_setup_project(context), tuple(Host), plugin_setup_executables(context))
 
 
@@ -846,8 +849,22 @@ def apply_background(context: Context) -> list[str]:
     return pending + ["machine-event supervisor installation verified"]
 
 
+def check_native_cli(context: Context) -> list[str]:
+    absent = native_runtime.missing()
+    if absent:
+        return ["install native CLI binaries: " + ", ".join(absent)]
+    return []
+
+
+def apply_native_cli(context: Context) -> list[str]:
+    changed = native_runtime.prepare()
+    context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
+    return ["installed native CLI binaries: " + ", ".join(changed)] if changed else ["native CLI available on PATH"]
+
+
 STEPS = (
     Step("preconditions", check_preconditions, nothing, required=True),
+    Step("native CLI", check_native_cli, apply_native_cli),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("event channel and publishers", check_channel, apply_channel),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
@@ -869,6 +886,9 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
     failed = False
     failed_steps = set()
     for step in steps:
+        if "native CLI" in failed_steps:
+            print(f"n/a    {step.name}: native CLI prerequisite failed", file=out)
+            continue
         if step.name == "background machine events" and failed_steps & {
                 "event channel and publishers", "launch-check runtime", "plugin and merge-policy catch-up",
                 "harness permissions", "plugin setup"}:
@@ -912,6 +932,8 @@ def selected_steps(names: set[str]) -> tuple[Step, ...]:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
         selected.update({"plugin and merge-policy catch-up", "harness permissions"})
+    if selected & {"plugin setup", "plugin and merge-policy catch-up", "background machine events"}:
+        selected.add("native CLI")
     return tuple(step for step in STEPS if not selected or step.required or step.name in selected)
 
 
@@ -941,8 +963,8 @@ def machine_context() -> Context:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if sys.version_info < (3, 11):
-        print("install requires Python 3.11 or newer", file=sys.stderr)
+    if sys.version_info < (3, 12):
+        print("install requires Python 3.12 or newer", file=sys.stderr)
         return 2
     arguments = list(argv if argv is not None else sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
@@ -954,6 +976,8 @@ def main(argv: list[str] | None = None) -> int:
     parsed = parser.parse_args(arguments)
     context = machine_context()
     context.onboard = parsed.onboard
+    native_runtime.expose()
+    context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
     return run_steps(selected_steps(set(parsed.step or ())), context, parsed.check)
 
 

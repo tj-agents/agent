@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+import agent_cli
 from codex import client
 from host import Host
 import required_plugins
@@ -23,7 +24,8 @@ RELAUNCH_SINGLE = {"--config", "-c", "--model", "-m", "--profile", "-p", "--sand
                    "--remote", "--remote-auth-token-env", "--local-provider"}
 RELAUNCH_FLAGS = {"--no-daemon", "--no-alt-screen", "--search", "--oss", "--strict-config",
                   "--approve-for-me", "--dangerously-bypass-approvals-and-sandbox"}
-RECORDER = {f'shell_environment_policy.set.{name}=""' for name in (client.RECORD_ENV, client.RECORD_PATH_ENV)}
+LAUNCHER_CONFIG = {*(f'shell_environment_policy.set.{name}=""' for name in (client.RECORD_ENV, client.RECORD_PATH_ENV)),
+                   agent_cli.CODEX_KEEP_TAB_TITLE[1]}
 
 
 def history_roots(root: Path) -> tuple[Path, ...]:
@@ -115,7 +117,7 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
     verify_resume(executable)
     old_profile = os.environ.get(HOST.home_variable)
     os.environ[HOST.home_variable] = item["profile"]
-    arguments = [*native_arguments, "resume", item["id"]]
+    arguments = [*cli.CODEX_KEEP_TAB_TITLE, *native_arguments, "resume", item["id"]]
     if model:
         arguments += ["-m", model]
     arguments.append(instruction)
@@ -171,10 +173,10 @@ def native_arguments(argv: list[str]) -> list[str]:
             kept.append(token)
         elif name in RELAUNCH_SINGLE and equals:
             value = token[2:].removeprefix("=") if name in {"-c", "-m", "-p", "-s", "-a"} else token.partition("=")[2]
-            if name not in {"-c", "--config"} or value not in RECORDER:
+            if name not in {"-c", "--config"} or value not in LAUNCHER_CONFIG:
                 kept.append(token)
         elif name in RELAUNCH_SINGLE and index < len(argv):
-            if name not in {"-c", "--config"} or argv[index] not in RECORDER:
+            if name not in {"-c", "--config"} or argv[index] not in LAUNCHER_CONFIG:
                 kept += [token, argv[index]]
             index += 1
         elif name in {"--cd", "-C", "--image", "-i"} and not equals:
@@ -196,9 +198,6 @@ def validate_relaunch(entry: dict, project: Path) -> None:
 def check_relaunch(project: Path, executable: str, native: list[str], session_id: str, prompt: str) -> None:
     required_plugins.check_launch(project, HOST, executable, [*native, "resume", session_id, prompt])
 
-
-def close_arguments(entry: dict) -> list[str]:
-    return ["--turn-id", entry["native_turn_id"]]
 
 
 def current_client(session_id: str, nearest, shared, *, project=None):
@@ -246,7 +245,8 @@ def revalidate_client(entry: dict, shared) -> None:
 def verify_frontend(entry: dict, shared) -> None:
     revalidate_client(entry, shared)
     context = client.process_context(entry["pid"])
-    if (context.get(client.RECORD_PATH_ENV) != entry.get("recording_path")
+    if (client.comparable_path(Path(context.get(client.RECORD_PATH_ENV) or ''))
+            != client.comparable_path(Path(entry.get("recording_path") or ''))
             or context.get(client.RECORD_ENV) not in ("1", "true", "TRUE", "yes", "YES")
             or Path(context["profile"]) != Path(entry.get("profile"))
             or (entry.get("backend") is not None and client.daemon_identity(

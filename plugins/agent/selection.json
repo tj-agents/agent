@@ -31,7 +31,7 @@
         "agent sessions"
       ],
       "requires": [
-        "cli close capability"
+        "bundled CLI process runtime"
       ],
       "provenance": [
         "house"

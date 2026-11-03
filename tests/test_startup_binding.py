@@ -287,7 +287,8 @@ class StartupBindingTests(unittest.TestCase):
                 mock.patch.object(SESSIONS[Host.CLAUDE], 'prepare_frontend', side_effect=native_prepare), \
                 mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn, \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
-                mock.patch.object(self.binding, '_record_launch_binding'):
+                mock.patch.object(self.binding, '_record_launch_binding'), \
+                mock.patch.object(self.binding, '_prelaunch_terminal', return_value=None):
             result = self.binding.main([
                 '--host', 'claude', '--project', directory.name, '--target', 'native-claude',
                 '--require-session-start', '--', '--settings', 'override.json', '--', 'literal prompt',

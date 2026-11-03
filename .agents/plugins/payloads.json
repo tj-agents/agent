@@ -9,6 +9,7 @@
     "codex": ["agent"]
   },
   "resources": [
+    {"plugin": "agent", "distribution": "tj-cli", "destination": ".agents/agent/runtime"},
     {"plugin": "agent-store", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
     {"plugin": "agent", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
     {"plugin": "agent", "source": ".agents/agent/runtime", "destination": ".agents/agent/runtime"},

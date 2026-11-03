@@ -25,8 +25,10 @@ def claude_hooks(event):
 
 
 def command(hook):
-    executable = sys.executable if hook["command"] == "python" else hook["command"]
-    return [executable, *(argument.replace("${CLAUDE_PLUGIN_ROOT}", str(PACKAGE)) for argument in hook["args"])]
+    arguments = [argument.replace("${CLAUDE_PLUGIN_ROOT}", str(PACKAGE)) for argument in hook["args"]]
+    if arguments[:2] == ["--", "python"]:
+        arguments[1] = sys.executable
+    return [hook["command"], *arguments]
 
 
 def git(cwd, *arguments):
@@ -82,7 +84,7 @@ class NeverAutoCloseTests(unittest.TestCase):
 
     def close_requests(self):
         return sorted(str(path.relative_to(self.state)) for name in CLOSE_STATE
-                      for path in (self.state / name).rglob("*") if path.is_file())
+                      for path in (self.state / name).rglob("*") if path.is_file() and path.parent.name != "inputs")
 
     def test_ending_a_turn_after_a_rejected_question_in_a_landed_worktree_arms_no_close(self):
         self.append(
