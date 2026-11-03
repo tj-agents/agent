@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from codex import hook_trust
+
 MAX_RECORD_BYTES = 8 * 1024 * 1024
 CONTINUATION = (
     "The user shell command has finished. Read its recorded command, exit status "
@@ -304,9 +306,8 @@ class Rollout:
 
 
 class ShellMonitor:
-    def __init__(self, ticket: dict[str, Any]) -> None:
-        from codex import client
-
+    def __init__(self, ticket: dict[str, Any], client: Any) -> None:
+        self.client = client
         self.ticket = ticket
         self.frontend = FrontendInput(
             Path(ticket["recording_path"]), client.VIEW_CHANGES
@@ -340,8 +341,6 @@ class ShellMonitor:
                 )
 
     def run(self) -> None:
-        from codex import hook_trust
-
         try:
             connection = hook_trust.AppServer(
                 self.ticket["_shell_executable"],
@@ -517,8 +516,7 @@ class ShellMonitor:
             self.rollout = matches[0]
 
     def step(self, server: Any) -> None:
-        from codex import client
-
+        client = self.client
         self.frontend.poll()
         latest, pending = self.frontend.latest, self.frontend.pending
         if latest is None or pending is None:
@@ -647,8 +645,8 @@ def attributed_input(recording: FrontendInput) -> str | None:
     return latest
 
 
-def start(ticket: dict[str, Any]) -> None:
-    monitor = ShellMonitor(ticket)
+def start(ticket: dict[str, Any], client: Any) -> None:
+    monitor = ShellMonitor(ticket, client)
     ticket["_shell_monitor"] = monitor
     monitor.start()
 
