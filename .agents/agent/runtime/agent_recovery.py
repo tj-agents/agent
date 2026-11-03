@@ -147,7 +147,7 @@ def _title_index(root):
             session_id = entry.get("id") or entry.get("session_id") or entry.get("sessionId")
             title = entry.get("thread_name") or entry.get("title")
             if isinstance(session_id, str) and isinstance(title, str):
-                titles[session_id] = title
+                titles[session_id] = [title]
     try:
         registry = _registry_root().glob("*.json")
     except OSError:
@@ -158,18 +158,18 @@ def _title_index(root):
         except (OSError, ValueError):
             continue
         if isinstance(entry, dict) and isinstance(entry.get("session_id"), str) and isinstance(entry.get("title"), str):
-            titles[entry["session_id"]] = " | ".join(dict.fromkeys(filter(None, (titles.get(entry["session_id"]), entry["title"]))))
+            titles[entry["session_id"]] = [entry["title"], *titles.get(entry["session_id"], ())]
     return titles
 
 
-def _matches(item, topic, checkout, history, title):
+def _matches(item, topic, checkout, history, names):
     if checkout:
         variants = history._worktree_variants(checkout)
         if not history._cwd_under(item.get("cwd"), variants) and not any(history._contains_path_token(text, variants) for text in item.get("tool_strings", ())):
             return False
     if topic:
         query = topic.casefold()
-        values = [item["session"], title or ""] + [text for _, _, text in item.get("messages", ())]
+        values = [item["session"], *names] + [text for _, _, text in item.get("messages", ())]
         if not any(query in value.casefold() for value in values):
             return False
     return True
@@ -325,12 +325,12 @@ def _store_search(hosts, topic, checkout, history):
     return results
 
 
-def _native_matched_by(item, topic, title):
+def _native_matched_by(item, topic, names):
     if not topic:
         return []
     query = topic.casefold()
-    fields = (("id", item["session"]), ("title", title or ""))
-    matched = [name for name, value in fields if query in value.casefold()]
+    fields = (("id", item["session"]), *(("title", name) for name in names))
+    matched = list(dict.fromkeys(name for name, value in fields if query in value.casefold()))
     return matched or ["message"]
 
 
@@ -354,11 +354,11 @@ def search(hosts=tuple(Host), topic=None, checkout=None, count=10, roots=None, i
         for item in _record_items(host, root, history):
             if (host.value, item["session"]) in found:
                 continue
-            title = titles.get(item["session"])
-            if _matches(item, topic, checkout, history, title):
+            names = titles.get(item["session"], [])
+            if _matches(item, topic, checkout, history, names):
                 normal = _normalise(item, root)
-                normal["title"] = title
-                normal["matched_by"] = _native_matched_by(item, topic, title)
+                normal["title"] = names[0] if names else None
+                normal["matched_by"] = _native_matched_by(item, topic, names)
                 normal["source"] = "native-history"
                 results.append(normal)
     results.sort(key=lambda item: item.get("activity") or "", reverse=True)
@@ -396,6 +396,7 @@ def find(host, session_id, roots=None):
             item = _normalise(item, root)
             if not item["cwd"] or not Path(item["cwd"]).is_dir():
                 raise ValueError("The recorded session directory is missing; refusing to resume it elsewhere.")
+            item["title"] = next(iter(_title_index(root).get(session_id, ())), None)
             return item
     raise ValueError("The requested native session was not found in the selected profile history.")
 
@@ -701,7 +702,7 @@ def open_session(host, session_id, prompt="Continue the requested work.", title=
             host, session_id, item["profile"])
         since = time.time()
         directory = cli.resolve_tab_directory(item["cwd"])
-        label = title or f"{host.value.title()} {session_id[:8]}"
+        label = title or item.get("title") or f"{host.value.title()} {session_id[:8]}"
         instruction = cli.prompt_file_argument(prompt_path)[0] if prompt_path else prompt
         SESSIONS[host].open_tab(cli, item, directory, label, instruction, status_path, model=model,
                                 native_arguments=native_arguments,
