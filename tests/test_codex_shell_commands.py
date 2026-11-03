@@ -95,7 +95,14 @@ def monitor(
     append(
         recording,
         {"dir": "meta", "kind": "session_start"},
-        frontend_op({"UserTurn": {"client_user_message_id": "manual-input"}}),
+        frontend_op(
+            {
+                "UserTurn": {
+                    "client_user_message_id": "manual-input",
+                    "cwd": str(tmp_path),
+                }
+            }
+        ),
         frontend_op({"RunUserShellCommand": {"command": COMMAND}}),
     )
     ticket: dict[str, Any] = {
@@ -344,7 +351,9 @@ def test_rollout_outside_verified_profile_is_rejected(tmp_path: Path) -> None:
     outside = tmp_path / "outside.jsonl"
     outside.write_text("", encoding="utf-8")
     with pytest.raises(RuntimeError, match="outside its verified profile"):
-        shell_commands.Rollout(outside, tmp_path / "profile", "thread-1")
+        shell_commands.Rollout(
+            outside, tmp_path / "profile", "thread-1", client.comparable_path
+        )
 
 
 def test_replaced_native_rollout_is_rejected(
@@ -529,3 +538,56 @@ def test_native_notification_queue_is_drained_without_answering_requests(
     instance.discard_notifications(SimpleNamespace(messages=messages))
     assert messages.empty()
     assert not server.sent
+
+
+@pytest.mark.parametrize("identity", [None, "", 7])
+def test_unattributed_native_input_invalidates_the_prior_anchor(
+    monitor: tuple[shell_commands.ShellMonitor, FakeServer], identity: Any
+) -> None:
+    instance, server = monitor
+    path = Path(server.metadata["path"])
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    other = native_input()
+    other["payload"]["item"]["client_id"] = identity
+    rows.insert(2, other)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    instance.step(server)
+    assert not server.sent
+
+
+def test_current_recorded_directory_can_differ_from_launcher_directory(
+    monitor: tuple[shell_commands.ShellMonitor, FakeServer], tmp_path: Path
+) -> None:
+    instance, server = monitor
+    current = tmp_path / "selected-project"
+    current.mkdir()
+    server.metadata["cwd"] = str(current)
+    path = instance.frontend.stream.path
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    rows[1]["payload"]["UserTurn"]["cwd"] = str(current)
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    instance.step(server)
+    assert len(server.sent) == 1
+
+
+@pytest.mark.parametrize("directory", [None, "relative-directory"])
+def test_unattributed_directory_never_starts_a_continuation(
+    monitor: tuple[shell_commands.ShellMonitor, FakeServer], directory: str | None
+) -> None:
+    instance, server = monitor
+    path = instance.frontend.stream.path
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    rows[1]["payload"]["UserTurn"]["cwd"] = directory
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    instance.step(server)
+    assert not server.sent
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows extended-length paths")
+def test_equivalent_windows_rollout_spelling_is_accepted(
+    monitor: tuple[shell_commands.ShellMonitor, FakeServer],
+) -> None:
+    instance, server = monitor
+    server.metadata["path"] = "\\\\?\\" + server.metadata["path"]
+    instance.step(server)
+    assert len(server.sent) == 1
