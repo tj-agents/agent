@@ -206,6 +206,8 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
         environment["PATH"] = os.pathsep.join(
             prepend(environment.get("PATH", "").split(os.pathsep), str(interpreter.parent))
         )
+    if owned_handoff:
+        target = adapter.handoff_executable(target, project, environment, allow_managed=False)
     with tempfile.TemporaryDirectory(prefix="tj-agents-launch-") as temporary:
         directory = Path(temporary)
         token = secrets.token_urlsafe(32)
@@ -346,6 +348,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         degraded = True
         print(message, file=sys.stderr)
         print(f"launch: starting {parsed.host} without verified plugins.", file=sys.stderr)
+
+    if adapter.requires_verified_handoff(parsed.require_session_start):
+        phase("resolving-handoff-runtime")
+        try:
+            parsed.target = adapter.handoff_executable(parsed.target, parsed.project, without_binding_state(os.environ))
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+            report("failed", error=str(error))
+            print(f"launch: {error}", file=sys.stderr)
+            return 1
 
     phase("checking-plugins")
     try:

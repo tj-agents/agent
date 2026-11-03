@@ -76,6 +76,10 @@ def requires_verified_handoff(require_session_start: bool) -> bool:
     return False
 
 
+def handoff_executable(target: str, project: Path, environment, *, allow_managed=True) -> str:
+    return target
+
+
 def validate_open(owned_backend: bool) -> None:
     if owned_backend:
         raise ValueError('Claude recovery does not use a Codex backend')

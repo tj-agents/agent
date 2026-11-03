@@ -124,7 +124,7 @@ def main(argv=None):
         working_directory = agent_cli.resolve_tab_directory(args.working_directory)
         prompt_sentence, prompt_path = agent_cli.prompt_file_argument(args.prompt_path)
 
-        codex, version = agent_cli.resolve_codex_executable(minimum=args.minimum_version)
+        codex, _version = agent_cli.resolve_codex_executable(minimum=args.minimum_version)
         model, effort, tier = resolve_model(args, agent_cli)
         arguments = build_arguments(working_directory, model, effort, args.bypass_hook_trust, prompt_sentence,
                                     agent_cli.CODEX_KEEP_TAB_TITLE)
@@ -151,7 +151,7 @@ def main(argv=None):
         selection = f'{tier}{model}' if model else 'the CLI default model'
         if effort:
             selection += f' at {effort}'
-        print(f"Launched codex-cli {version['text']} from {codex} on {selection}")
+        print(f"Launched Codex on {selection}")
         print(json.dumps({"worktree": str(working_directory), "prompt_path": str(prompt_path), "startup": "verified", "status_path": str(status_path)}))
         return 0
     except agent_cli.LaunchError as exc:

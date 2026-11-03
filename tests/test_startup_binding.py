@@ -73,6 +73,7 @@ class StartupBindingTests(unittest.TestCase):
             return argv, environment, None
 
         with mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
+                mock.patch.object(SESSIONS[Host.CODEX], 'handoff_executable', return_value=sys.executable), \
                 mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', side_effect=prepare):
             with self.assertRaisesRegex(self.binding.StartupBindingError, 'fixture hook failed'):
                 self.binding.run_session(Host.CODEX, sys.executable, root, [str(script)], require_session_start=True)
