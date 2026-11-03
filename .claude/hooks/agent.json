@@ -68,7 +68,9 @@
               "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
               "stop",
               "--host",
-              "claude"
+              "claude",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/user_command_gate.py"
             ]
           }
         ]

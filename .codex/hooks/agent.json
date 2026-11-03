@@ -30,8 +30,8 @@
           {
             "type": "command",
             "timeout": 60,
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex",
-            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex"
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/user_command_gate.py\"",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/user_command_gate.py\""
           }
         ]
       }
