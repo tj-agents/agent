@@ -109,14 +109,23 @@ def _advance(session_id: str) -> None:
     _write(_revision_path(session_id), {"revision": _revision(session_id) + 1})
 
 
-def _require_recorded_input(session_id: str, native: dict[str, Any]) -> None:
-    current = _read(_input_path(session_id))
-    if not current or any(native.get(key) != value for key, value in current.items()):
+def _input_record(session_id: str) -> dict[str, Any] | None:
+    path = _input_path(session_id)
+    recorded = _read(path)
+    if recorded is None and path.exists():
+        raise ValueError("native input hook receipt is invalid")
+    return recorded
+
+
+def _require_recorded_input(session_id: str, recorded: dict[str, Any] | None) -> None:
+    if _input_record(session_id) != recorded:
         raise ValueError("native input changed during the terminal release")
 
 
-def _require_snapshot(session_id: str, revision: int, native: dict[str, Any]) -> None:
-    _require_recorded_input(session_id, native)
+def _require_snapshot(
+    session_id: str, revision: int, recorded: dict[str, Any] | None
+) -> None:
+    _require_recorded_input(session_id, recorded)
     if _revision(session_id) != revision:
         raise ValueError("terminal release generation changed during assessment")
 
@@ -223,6 +232,30 @@ def current_input(
 def require_input(host: Host, session_id: str, state: dict[str, Any]) -> None:
     current = current_input(host, session_id)
     if any(state.get(key) != value for key, value in current.items()):
+        raise ValueError("native input changed during the terminal release")
+
+
+def _require_native(
+    state: dict[str, Any], shared: Any, supplied: Path | None = None
+) -> None:
+    from host import Host
+    from host_sessions import SESSIONS
+
+    host = Host(state["host"])
+    if state["intent"] != "refresh-restart":
+        require_input(host, state["session_id"], state["native"])
+        if supplied is not None:
+            current_input(host, state["session_id"], supplied)
+        return
+    if not shared.registration_matches(
+        shared.read_json(state["registry"]), state["entry"]
+    ):
+        raise ValueError("session registration changed before terminal release")
+    bound = state["native"].get("transcript")
+    native = SESSIONS[host].restart_input(
+        state["entry"], supplied or (Path(bound) if bound else None), shared
+    )
+    if any(state["native"].get(key) != value for key, value in native.items()):
         raise ValueError("native input changed during the terminal release")
 
 
@@ -624,13 +657,21 @@ def _prepared_entry(
     host: Host,
     session_id: str,
     profile: Path,
-    native: dict[str, Any],
+    native: dict[str, Any] | None,
     shared: Any,
+    supplied: Path | None = None,
+    expected: dict[str, Any] | None = None,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     registry = state_root().parent / "cli-sessions" / (_safe_name(session_id) + ".json")
     sessions = shared.host_sessions(host.value)
     record = shared.read_json(registry) or {}
-    entry = sessions.prepared_record(record, session_id, shared)
+    if expected is None:
+        entry = sessions.prepared_record(record, session_id, shared)
+    else:
+        if not shared.registration_matches(record, expected):
+            raise ValueError("session registration changed before terminal release")
+        entry = expected
+        sessions.verify_frontend(entry, shared)
     if (
         entry.get("host") != host.value
         or entry.get("session_id") != session_id
@@ -639,8 +680,10 @@ def _prepared_entry(
         raise ValueError(
             "native frontend does not match the requested session and profile"
         )
-    armed = sessions.arm_close(entry, native.get("turn_id"), native, None, shared)
-    if shared.read_json(registry) != entry:
+    if native is None:
+        native = sessions.restart_input(entry, supplied, shared)
+    armed = sessions.arm_close(entry, native.get("turn_id"), native, supplied, shared)
+    if not shared.registration_matches(shared.read_json(registry), entry):
         raise ValueError("session registration changed before terminal release")
     return registry, entry, {**native, **armed}
 
@@ -727,6 +770,7 @@ def prepare(
     receipt_path: Path | None = None,
     supplied: Path | None = None,
     dismissal_reason: str | None = None,
+    bound_entry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if intent not in INTENTS:
         raise ValueError("unknown terminal release intent")
@@ -738,7 +782,12 @@ def prepare(
         raise ValueError("terminal dismissal needs explicit user authority")
     with _session_lock(session_id):
         revision = _revision(session_id)
-    native = current_input(host, session_id, supplied)
+        input_hook = _input_record(session_id)
+    native = (
+        None
+        if intent == "refresh-restart"
+        else current_input(host, session_id, supplied)
+    )
     if intent == "refresh-restart":
         if receipt_path is not None:
             raise ValueError(
@@ -756,7 +805,9 @@ def prepare(
             shared=shared,
             require_cleanup_worker=False,
         )
-    registry, entry, native = _prepared_entry(host, session_id, profile, native, shared)
+    registry, entry, native = _prepared_entry(
+        host, session_id, profile, native, shared, supplied, bound_entry
+    )
     if _policy_blocks(host, session_id, profile):
         raise ValueError("persistent keep-open policy is active")
     state = {
@@ -770,6 +821,7 @@ def prepare(
         "prepared_at": time.time(),
         **native,
         "native": native,
+        "input_hook": input_hook,
         "entry": entry,
         "registry": str(registry.resolve()),
         "receipt": frozen,
@@ -779,10 +831,11 @@ def prepare(
     )
     if dismissal_reason is not None:
         state["dismissal_reason"] = dismissal_reason
+    _require_native(state, shared, supplied)
     with _session_lock(session_id):
         if _policy_blocks(host, session_id, profile):
             raise ValueError("persistent keep-open policy is active")
-        _require_snapshot(session_id, revision, native)
+        _require_snapshot(session_id, revision, input_hook)
         _cancel_locked(host, session_id, "terminal release superseded")
         _write(_state_path(session_id), state)
     return {
@@ -825,13 +878,11 @@ def recheck(
     if _policy_blocks(host, session_id, profile):
         raise ValueError("persistent keep-open policy is active")
     _validate_frozen_receipt(state, shared)
-    require_input(host, session_id, state["native"])
-    if supplied is not None:
-        current_input(host, session_id, supplied)
+    _require_native(state, shared, supplied)
     registry, entry, native = _prepared_entry(
-        host, session_id, profile, state["native"], shared
+        host, session_id, profile, state["native"], shared, supplied, state["entry"]
     )
-    require_input(host, session_id, state["native"])
+    _require_native(state, shared, supplied)
     updated = {
         **state,
         **native,
@@ -843,7 +894,7 @@ def recheck(
     with _session_lock(session_id):
         if _policy_blocks(host, session_id, profile):
             raise ValueError("persistent keep-open policy is active")
-        _require_snapshot(session_id, revision, state["native"])
+        _require_snapshot(session_id, revision, state["input_hook"])
         if _prepared(host, session_id, profile, release_generation) != state:
             raise ValueError("terminal release generation changed during assessment")
         _advance(session_id)
@@ -896,10 +947,11 @@ def arm(
     }
     raw = json.dumps(armed, sort_keys=True).encode("utf-8") + b"\n"
     digest = hashlib.sha256(raw).hexdigest()
+    _require_native(state, shared, supplied)
     with _session_lock(session_id):
         if _policy_blocks(host, session_id, profile):
             raise ValueError("persistent keep-open policy is active")
-        _require_snapshot(session_id, revision, state["native"])
+        _require_snapshot(session_id, revision, state["input_hook"])
         if _prepared(host, session_id, profile, release_generation) != state:
             raise ValueError("terminal release generation changed during assessment")
         if Path(armed["cancel"]).exists():
@@ -975,15 +1027,20 @@ def require_release(state: dict[str, Any], *, verify_receipt: bool = True) -> No
     if not _armed(state):
         raise ValueError("terminal release is not armed")
     session_id = state["session_id"]
+    shared = (
+        _load_shared()
+        if verify_receipt or state["intent"] == "refresh-restart"
+        else None
+    )
     if verify_receipt:
-        _validate_frozen_receipt(state, _load_shared())
-    require_input(host, session_id, state["native"])
+        _validate_frozen_receipt(state, shared)
+    _require_native(state, shared)
     with _session_lock(session_id):
         if _policy_blocks(host, session_id, host.configuration_root):
             raise ValueError("persistent keep-open policy is active")
         if _read(_state_path(session_id)) != state or Path(state["cancel"]).exists():
             raise ValueError("terminal release generation was cancelled or changed")
-        _require_recorded_input(session_id, state["native"])
+        _require_recorded_input(session_id, state["input_hook"])
 
 
 def run(event: str, host: Host, data: dict[str, Any]) -> int:

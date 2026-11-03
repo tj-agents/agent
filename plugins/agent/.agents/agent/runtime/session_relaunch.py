@@ -124,7 +124,7 @@ def arm_client_close(project: Path, entry: dict, shared, host: Host) -> dict:
 
     profile = Path(entry["profile"])
     prepared = close_lifecycle.prepare(
-        host, entry["session_id"], profile, "refresh-restart", shared
+        host, entry["session_id"], profile, "refresh-restart", shared, bound_entry=entry
     )
     close_lifecycle.recheck(
         host, entry["session_id"], profile, prepared["release_generation"], shared

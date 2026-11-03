@@ -259,6 +259,14 @@ def close_target(session_id: str, supplied: Path | None) -> dict:
     return {"transcript": str(path), "claude_user_uuid": user_turn(path)}
 
 
+def restart_input(entry: dict, supplied: Path | None, shared) -> dict:
+    verify_frontend(entry, shared)
+    path = transcript(entry["session_id"], None)
+    if supplied is not None and supplied.resolve() != path:
+        raise ValueError("refresh transcript differs from the native Claude session")
+    return close_target(entry["session_id"], path)
+
+
 def arm_close(entry: dict, turn_id: str | None, target: dict, supplied: Path | None, shared) -> dict:
     verify_receipt(entry, shared)
     activity = shared.active_turn_activity(entry)
@@ -274,6 +282,11 @@ def close_monitor(request: dict, shared):
 
 def settled(request: dict, monitor, completed: bool, shared):
     session = shared.session_activity(request["entry"])
+    if request.get("intent") == "refresh-restart":
+        completed = finished(request, {"transcript_path": request["transcript"]})
+        if (completed and session.turn_state == "working"
+                and session.last_activity_at == request["working_activity"]):
+            return None
     if completed:
         if session.turn_state != "awaiting_input" or session.last_activity_at <= request["armed_at"]:
             raise shared.Cancelled("completed turn is no longer awaiting input")
@@ -284,6 +297,8 @@ def settled(request: dict, monitor, completed: bool, shared):
 
 
 def close_guard(request: dict, activity, completed: bool, shared) -> None:
+    if request.get("intent") == "refresh-restart":
+        completed = finished(request, {"transcript_path": request["transcript"]})
     if not completed:
         raise shared.Cancelled("completion changed before close")
     if not finished(request, {"transcript_path": request["transcript"]}):

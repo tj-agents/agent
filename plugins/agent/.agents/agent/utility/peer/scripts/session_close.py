@@ -103,6 +103,14 @@ CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile
                          "client_identity", "launch_cwd")
 
 
+def registration_matches(current, entry):
+    fields = (*CLIENT_BINDING_FIELDS, "frontend", "provenance", "terminal")
+    return (isinstance(current, dict) and nonempty_string(current.get("cwd"))
+            and Path(current["cwd"]).is_absolute()
+            and path_key(current["cwd"]) == path_key(entry["cwd"])
+            and all(current.get(key) == entry.get(key) for key in fields))
+
+
 def stop_cli_client(entry, before_signal=lambda: None):
     from tj_cli import processes
 

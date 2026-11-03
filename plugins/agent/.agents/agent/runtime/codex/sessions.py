@@ -268,6 +268,11 @@ def close_target(session_id: str, supplied: Path | None) -> dict:
     return {}
 
 
+def restart_input(entry: dict, supplied: Path | None, shared) -> dict:
+    verify_frontend(entry, shared)
+    return {"turn_id": entry["native_turn_id"], "client_message_id": entry["client_message_id"]}
+
+
 def arm_close(entry: dict, turn_id: str | None, target: dict, supplied: Path | None, shared) -> dict:
     if turn_id != entry.get("native_turn_id"):
         raise ValueError("Codex arming requires the current native turn")
