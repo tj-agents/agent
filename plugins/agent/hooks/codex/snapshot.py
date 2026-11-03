@@ -1,5 +1,6 @@
 import contextlib
 import hashlib
+import importlib.util
 import os
 import re
 import runpy
@@ -22,7 +23,19 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(2)
 
 
+def generated_cache(path: Path) -> bool:
+    if not path.is_file() or path.parent.name != "__pycache__" or path.suffix != ".pyc":
+        return False
+    try:
+        importlib.util.source_from_cache(str(path))
+    except ValueError:
+        return False
+    return True
+
+
 def digest_tree(root: Path) -> str:
+    if root.is_symlink() or getattr(root, "is_junction", lambda: False)():
+        fail("Codex hook package contains a symbolic link")
     excluded = {"hooks/codex.json"}
     entries: list[tuple[str, str]] = []
     directories = [(str(root), "")]
@@ -31,12 +44,14 @@ def digest_tree(root: Path) -> str:
         with os.scandir(directory) as children:
             for entry in children:
                 relative = prefix + entry.name
-                if entry.is_symlink():
+                path = Path(entry.path)
+                if entry.is_symlink() or getattr(path, "is_junction", lambda: False)():
                     fail("Codex hook package contains a symbolic link")
                 if entry.is_dir(follow_symlinks=False):
                     directories.append((entry.path, relative + "/"))
                 elif entry.is_file(follow_symlinks=False):
-                    entries.append((relative, entry.path))
+                    if not generated_cache(path):
+                        entries.append((relative, entry.path))
                 else:
                     fail("Codex hook package contains an unsupported entry")
     files = [
@@ -70,8 +85,19 @@ def digest_tree(root: Path) -> str:
 
 
 def verified(root: Path, expected: str) -> None:
-    if not root.is_dir() or root.is_symlink() or digest_tree(root) != expected:
+    if not root.is_dir() or root.is_symlink() or getattr(root, "is_junction", lambda: False)() or digest_tree(root) != expected:
         fail("Codex hook package integrity check failed")
+
+
+def generated_caches(directory: str, names: list[str]) -> list[str]:
+    ignored = []
+    for name in names:
+        path = Path(directory) / name
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+            fail("Codex hook package contains a symbolic link")
+        if generated_cache(path):
+            ignored.append(name)
+    return ignored
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +132,7 @@ class Snapshot:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.sibling()
         try:
-            shutil.copytree(self.package, temporary, symlinks=True)
+            shutil.copytree(self.package, temporary, symlinks=True, ignore=generated_caches)
             if digest_tree(temporary) != self.digest:
                 raise OSError("Codex hook snapshot copy differs from its package")
             (temporary / MARKER).write_text(self.digest, encoding="utf-8")
