@@ -188,6 +188,11 @@ def cancel(host: Host, session_id: str, reason: str) -> None:
         _signal(state["cancel"], {"cancelled": True, "reason": reason})
 
 
+def has_pending_close(host: Host, session_id: str) -> bool:
+    state = _read(_state_path(session_id))
+    return bool(state and state.get("host") == host.value)
+
+
 def _arm(
     host: Host,
     session_id: str,
@@ -284,10 +289,13 @@ def assess(
     reason: str,
     shared: Any,
     supplied: Path | None = None,
+    expected_input: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if decision not in ("keep-open", "complete", "restart") or not reason.strip():
         raise ValueError("assessment needs an explicit decision and a nonempty reason")
     native = current_input(host, session_id, supplied)
+    if expected_input is not None:
+        native = expected_input
     if shared.path_key(native["profile"]) != shared.path_key(profile):
         raise ValueError("native input belongs to a different profile")
     assessment = {

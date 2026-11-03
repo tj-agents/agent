@@ -45,6 +45,13 @@
           "claude",
           "codex"
         ]
+      },
+      {
+        "path": ".agents/agent/runtime/automatic_refresh.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
       }
     ],
     "setup": {

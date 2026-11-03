@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import functools
 import importlib.util
 import json
@@ -58,7 +59,7 @@ def selected(sources: dict[str, str | None], enabled: list[str]) -> tuple[dict[s
 
 
 @contextmanager
-def maintenance_budget(seconds: float):
+def maintenance_budget(seconds: float) -> Iterator[float]:
     deadline = time.monotonic() + seconds
     token = _maintenance_deadline.set(deadline)
     try:
@@ -73,7 +74,7 @@ def remaining(deadline: float | None = None) -> float | None:
 
 
 def _run_bounded(command: list[str], project: Path, deadline: float,
-                 timeout: float, inherit: bool) -> subprocess.CompletedProcess:
+                 timeout: float, inherit: bool) -> subprocess.CompletedProcess[str]:
     remaining_time = remaining(deadline)
     if remaining_time is None or remaining_time <= 0:
         raise RefreshError(f"{' '.join(command[1:])}: maintenance budget expired")
@@ -95,7 +96,7 @@ def _run_bounded(command: list[str], project: Path, deadline: float,
 
 
 def execute(command: list[str], project: Path, *, timeout: float = TIMEOUT,
-            creationflags: int = 0, inherit: bool = False) -> subprocess.CompletedProcess:
+            creationflags: int = 0, inherit: bool = False) -> subprocess.CompletedProcess[str]:
     deadline = _maintenance_deadline.get()
     if deadline is not None:
         return _run_bounded(command, project, deadline, timeout, inherit)
