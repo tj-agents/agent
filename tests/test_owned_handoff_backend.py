@@ -97,6 +97,9 @@ def wrappers(
             "TMP": str(temporary),
             "TEMP": str(temporary),
         }
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
         process = subprocess.Popen(
             [
                 sys.executable,
@@ -109,7 +112,7 @@ def wrappers(
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=creationflags,
         )
         running.append(process)
         directories.append(directory)
@@ -277,7 +280,7 @@ def test_startup_cleanup_preserves_never_captured_endpoint(
         io.BytesIO(),
     )
     assert result == 1
-    assert not processes.matches(read_record(tmp_path / "native.json"))
+    wait_for_process_exit(read_record(tmp_path / "native.json"))
     receipt = read_record(tmp_path / "backend.json")
     assert receipt["state"] == "failed"
     assert receipt["filesystem"] == {"parent": None, "socket": None}
@@ -308,12 +311,15 @@ def test_supervisor_refuses_a_foreign_launch_before_starting_native_code(
     backend = load_backend()
     monkeypatch.setenv("OWNED_FIXTURE_DIRECTORY", str(tmp_path))
     socket = tmp_path / "private socket" / "s"
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = subprocess.CREATE_NO_WINDOW
     with subprocess.Popen(
         [sys.executable, str(Path(__file__).resolve()), "--idle-fixture"],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        creationflags=creationflags,
     ) as foreign:
         specification = {
             "directory": str(tmp_path),

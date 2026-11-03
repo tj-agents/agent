@@ -133,6 +133,9 @@ class Lease:
             / "s"
         )
         wrapper = identity(os.getpid())
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
         self.process = subprocess.Popen(
             [sys.executable, "-I", "-B", str(Path(__file__).resolve())],
             cwd=project,
@@ -140,7 +143,7 @@ class Lease:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=creationflags,
             start_new_session=os.name != "nt",
         )
         assert self.process.stdin is not None
@@ -238,6 +241,9 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
             or not all(isinstance(value, str) for value in specification["arguments"])
         ):
             raise RuntimeError("Owned native backend specification is invalid")
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
         with (directory / "backend.log").open("ab") as diagnostic:
             child = subprocess.Popen(
                 [
@@ -251,7 +257,7 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
                 stdin=subprocess.DEVNULL,
                 stdout=diagnostic,
                 stderr=diagnostic,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                creationflags=creationflags,
                 close_fds=True,
             )
             endpoint.capture(child)

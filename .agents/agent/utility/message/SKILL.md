@@ -23,8 +23,8 @@ and paginated-history APIs, and a verified existing endpoint in the selected Cod
 handoff uses its owned endpoint; other existing direct-input sessions use their shared app-server daemon.
 The helper never starts a daemon, launches/resumes a session, edits Codex databases, changes configuration,
 or injects terminal keystrokes. A standalone embedded TUI may have no reachable messaging endpoint.
-Missing/older capabilities fail explicitly. Verified against the local 0.157.1 protocol schemas;
-fixture validation is not proof that a particular live session is reachable.
+Owned handoffs require native Codex 0.166.0 or newer for paginated input verification. Missing or older
+capabilities fail explicitly. Fixture validation does not prove that a particular live session is reachable.
 
 1. Bind the exact thread UUID, expected working directory and Codex profile from the prior launch result
    or user-authorized session inspection. For a new owned handoff, use the `client_binding` in its

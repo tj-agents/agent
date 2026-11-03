@@ -319,7 +319,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         with mock.patch.object(self.recovery, "find", return_value=item), \
                 mock.patch.object(self.recovery, "_claim") as claim:
             with self.assertRaisesRegex(ValueError, "expected refresh checkout"):
-                self.recovery.open_session("codex", "thread", expected_cwd=self.root)
+                self.recovery.open_session(Host.CODEX, "thread", expected_cwd=self.root)
         claim.assert_not_called()
 
     def test_peer_runtime_accepts_a_nearest_receipted_agent_root(self):
