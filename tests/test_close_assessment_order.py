@@ -72,3 +72,24 @@ def test_new_input_records_assessment_while_cancelled_request_remains(
     assert session.outcome()["status"] == "cancelled"
     assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
     session.primitive_stop.assert_not_called()
+
+
+def test_stale_expected_input_cannot_arm_or_record_a_restart(session: Any) -> None:
+    expected = LIFECYCLE.current_input(Host.CODEX, "one")
+    LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "one", "turn_id": "turn-two"})
+    with (
+        mock.patch.object(LIFECYCLE, "_arm") as arm,
+        mock.patch.object(LIFECYCLE, "record_assessment") as record,
+        pytest.raises(ValueError, match="native input changed"),
+    ):
+        LIFECYCLE.assess(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "restart",
+            "resume after automatic plugin refresh",
+            session_close,
+            expected_input=expected,
+        )
+    arm.assert_not_called()
+    record.assert_not_called()

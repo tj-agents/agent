@@ -27,9 +27,11 @@ def load_reload_plugins() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "reload_plugins_maintenance", RUNTIME / "reload_plugins.py"
     )
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader
-    spec.loader.exec_module(module)
+    loader = spec.loader
+    assert loader is not None
+    loader.exec_module(module)
     return module
 
 
@@ -168,12 +170,17 @@ def test_maintenance_budget_uses_the_remaining_deadline_for_each_native_command(
 ):
     observed: list[float] = []
     completed = plugin_refresh.subprocess.CompletedProcess(["native"], 0, "ok", "")
+
+    def run(*args: object, **kwargs: object) -> object:
+        timeout = kwargs["timeout"]
+        assert isinstance(timeout, float)
+        observed.append(timeout)
+        return completed
+
     with mock.patch.object(
         plugin_refresh.process,
         "run",
-        side_effect=lambda *args, **kwargs: (
-            observed.append(kwargs["timeout"]) or completed
-        ),
+        side_effect=run,
     ):
         assert (
             plugin_refresh.run(
