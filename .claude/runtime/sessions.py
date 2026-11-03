@@ -180,7 +180,7 @@ def _is_assistant(record: dict) -> bool:
 
 def user_turn(path: Path) -> str:
     token = None
-    for _number, record in transcripts.records(path):
+    for _number, record in transcripts.records(path, strict=True):
         if _is_user(record):
             candidate = record.get("uuid")
             token = candidate if isinstance(candidate, str) and candidate else None
@@ -211,7 +211,7 @@ def finished(state: dict, data: dict) -> bool:
         return False
     latest_user = None
     complete = False
-    for _number, record in transcripts.records(Path(expected)):
+    for _number, record in transcripts.records(Path(expected), strict=True):
         if _is_user(record):
             candidate = record.get("uuid")
             latest_user = candidate if isinstance(candidate, str) and candidate else None

@@ -480,3 +480,128 @@ def test_changed_registry_binding_cannot_replace_the_armed_frontend(
         assert signals == []
     assert session.outcome()["status"] == "cancelled"
     assert session.row().ended_at is None
+
+
+@pytest.mark.parametrize("session", ["claude"], indirect=True)
+@pytest.mark.parametrize("record", ['{"type":"user","uuid":', "invalid\n", "[]\n"])
+@pytest.mark.parametrize(
+    "stage", ["prepare", "recheck", "arm", "acknowledgement", "poll", "final-signal"]
+)
+def test_uncertain_claude_history_preserves_frontend_without_input_hook(
+    session: Any, record: str, stage: str
+) -> None:
+    adapter = session_close.host_sessions("claude")
+    session.append({"type": "assistant", "message": {"stop_reason": "end_turn"}})
+
+    def uncertain(*, complete: bool = False) -> None:
+        if complete:
+            session.store.record_stop(
+                session.handle, session.store_module.Checkout.probe(session.root)
+            )
+        with session.transcript.open("a", encoding="utf-8") as stream:
+            stream.write(record)
+
+    if stage in {"prepare", "recheck"}:
+        prepared = prepare(session) if stage == "recheck" else None
+        original = adapter.arm_close
+
+        def attributed(*args: Any) -> Any:
+            result = original(*args)
+            uncertain(complete=True)
+            return result
+
+        with (
+            mock.patch.object(adapter, "arm_close", side_effect=attributed),
+            pytest.raises(ValueError, match="transcript"),
+        ):
+            if prepared is None:
+                prepare(session)
+            else:
+                LIFECYCLE.recheck(
+                    Host.CLAUDE,
+                    "one",
+                    session.profile,
+                    prepared["release_generation"],
+                    session_close,
+                )
+        session.spawn.assert_not_called()
+    elif stage in {"arm", "acknowledgement"}:
+        prepared = prepare(session)
+        if stage == "arm":
+            original_recheck = LIFECYCLE.recheck
+
+            def rechecked(*args: Any) -> Any:
+                result = original_recheck(*args)
+                uncertain(complete=True)
+                return result
+
+            target, attribute, effect = LIFECYCLE, "recheck", rechecked
+        else:
+            original_acknowledged = LIFECYCLE._acknowledged
+
+            def acknowledged(*args: Any) -> bool:
+                result = bool(original_acknowledged(*args))
+                uncertain(complete=True)
+                return result
+
+            target, attribute, effect = LIFECYCLE, "_acknowledged", acknowledged
+        with (
+            mock.patch.object(target, attribute, side_effect=effect),
+            pytest.raises(ValueError, match="transcript"),
+        ):
+            LIFECYCLE.arm(
+                Host.CLAUDE,
+                "one",
+                session.profile,
+                prepared["release_generation"],
+                session_close,
+            )
+        if stage == "acknowledgement":
+            state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+            assert state["status"] == "cancelled"
+            assert Path(state["cancel"]).exists()
+        else:
+            session.spawn.assert_not_called()
+    else:
+        arm(session)
+        session.stop()
+        if stage == "poll":
+            original_settled = adapter.settled
+
+            def settled(*args: Any) -> Any:
+                uncertain()
+                return original_settled(*args)
+
+            with mock.patch.object(adapter, "settled", side_effect=settled):
+                assert session.wait() == 0
+            session.primitive_stop.assert_not_called()
+        else:
+            signals: list[object] = []
+
+            def stop(identity: object, *, before_signal: Any) -> None:
+                uncertain()
+                before_signal()
+                signals.append(identity)
+
+            with mock.patch.object(session.primitive_stop, "side_effect", stop):
+                assert session.wait() == 0
+            assert signals == []
+        assert session.outcome()["status"] == "cancelled"
+        assert Path(session.request["cancel"]).exists()
+    assert session.row().turn_state == "awaiting_input"
+    assert session.row().ended_at is None
+    assert not LIFECYCLE._input_path("one").exists()
+
+
+@pytest.mark.parametrize("session", ["claude"], indirect=True)
+@pytest.mark.parametrize("record", ['{"type":"user","uuid":', "invalid\n", "[]\n"])
+def test_claude_recovery_can_read_valid_records_from_uncertain_history(
+    session: Any, record: str
+) -> None:
+    with session.transcript.open("a", encoding="utf-8") as stream:
+        stream.write(record)
+    adapter = session_close.host_sessions("claude")
+    recovered = adapter.read_session(session.transcript)
+    assert recovered["messages"] == [(1, "user", "close")]
+    with pytest.raises(ValueError, match="transcript"):
+        adapter.user_turn(session.transcript)
