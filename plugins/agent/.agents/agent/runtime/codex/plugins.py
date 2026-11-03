@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 import tempfile
@@ -34,9 +35,9 @@ INFORMATION_OPTIONS = frozenset({"--help", "-h", "--version", "-V"})
 MAINTENANCE_COMMANDS = frozenset({
     "plugin", "login", "logout", "doctor", "help", "completion", "update", "mcp", "features",
 })
-MODEL_CONFIG_KEYS = frozenset({
+INVENTORY_CONFIG_KEYS = frozenset({
     "model", "model_provider", "model_reasoning_effort", "model_reasoning_summary",
-    "model_verbosity", "service_tier", "personality",
+    "model_verbosity", "service_tier", "personality", "tui.terminal_title",
 })
 NODE_SHIM_BYPASSED = True
 
@@ -77,12 +78,12 @@ def location(entry: dict, project: Path) -> tuple[str, Path] | None:
 def require_inventory_options(options: tuple[str, ...]) -> None:
     for option, value in zip(options[::2], options[1::2]):
         key = value.partition("=")[0].strip().strip("\"'")
-        if option not in ("-c", "--config") or key not in MODEL_CONFIG_KEYS:
+        if option not in ("-c", "--config") or key not in INVENTORY_CONFIG_KEYS:
             raise required_plugins.RequiredPluginsError(
                 f"Cannot verify required Codex plugins with launch override {option}: native plugin "
                 "inventory does not apply session activation overrides. Use the persisted repository "
                 "configuration for plugin, profile and feature settings, then relaunch. "
-                "Model and reasoning overrides remain available."
+                "Model, reasoning and terminal-title overrides remain available."
             )
 
 
@@ -205,13 +206,30 @@ def update(repositories: set[str] | None, project: Path, updated: set[str] | Non
     return plugin_autoupdate.main(arguments) == 0
 
 
-def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False) -> str | None:
+def configuration_paths(project: Path) -> list[Path]:
+    home = HOST.configuration_root
+    paths = [home / "config.toml", home / "plugins/config.json"]
+    paths.extend(root / ".codex/config.toml" for root in (project, *project.parents))
+    return paths
+
+
+def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False,
+                 required_roots: Mapping[str, Path] | None = None) -> str | None:
     required = required_plugins.selected(required_plugins.project_root(project))
     if not required:
         return None
     binary = executable or resolve_executable()
     expected = {}
-    roots = required_plugins.check(project, HOST, binary)
+    roots = required_plugins.check(project, HOST, binary) if required_roots is None else required_roots
+    if required_roots is None:
+        import managed_admission
+
+        document = managed_admission.verify(project, HOST, binary)
+        if document is not None:
+            roots = {**(roots or {}), **{
+                identity: Path(package["root"])
+                for identity, package in document["packages"].items()
+            }}
     for identity, root in (roots or {}).items():
         definitions = hook_trust.required_definitions(root, identity)
         if definitions:

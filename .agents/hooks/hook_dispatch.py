@@ -4,12 +4,13 @@ Repeated ``--hook <script> [arguments...]`` groups pass arguments to each script
 The host's sibling-hook merge is reproduced here, so one event costs one
 interpreter launch instead of one per gate. Each gate still runs as its own ``__main__`` with its
 own stdin, stdout and stderr. A leading ``--deadline <seconds>`` stays under the host timeout: a gate
-still running then is reported, and every finished gate's verdict is kept. Only PreToolUse fails closed; for
-every other event a crashed, failing or overrunning gate is reported on stderr and contributes no output.
+still running then is reported, and every finished gate's verdict is kept. PreToolUse and required prompt admission fail closed;
+other crashed, failing or overrunning gates are reported on stderr and contribute no output.
 """
 
 from __future__ import annotations
 
+import atexit
 import io
 import hashlib
 import json
@@ -17,9 +18,16 @@ import os
 from pathlib import Path
 import runpy
 import sys
+import tempfile
 import threading
 import traceback
 
+
+if __name__ == "__main__":
+    _source_cache = tempfile.TemporaryDirectory(prefix="tj-source-cache-")
+    atexit.register(_source_cache.cleanup)
+    sys.pycache_prefix = _source_cache.name
+    sys.dont_write_bytecode = True
 
 HOOKS = Path(__file__).resolve().parent
 DECISIONS = ("deny", "defer", "ask", "allow")
@@ -87,6 +95,8 @@ def merge(event: str, results: list[tuple[str, int, str, str]]) -> tuple[dict, s
 
     for name, code, stdout, stderr in results:
         if code and event != "PreToolUse":
+            if event == "UserPromptSubmit" and Path(name).name == "managed_admission.py":
+                blocks.append("Managed admission failed. Repair the gate and retry this prompt.")
             diagnostics.append(f"{name}: exited with status {code}" + (f"\n{stderr.strip()}" if stderr.strip() else ""))
             continue
         data = parse(stdout)
@@ -293,6 +303,11 @@ def main(argv: list[str]) -> int:
         diagnostics = f"{diagnostics}\n{notice}" if diagnostics else notice
         if event == "PreToolUse":
             merged = deny_overrun(merged, notice)
+        elif event == "UserPromptSubmit" and any(
+            Path(name).name == "managed_admission.py" for name in names[len(finished):]
+        ):
+            merged["decision"] = "block"
+            merged["reason"] = notice + " Retry when managed admission can finish."
     succeeded = not overrun and not any(code for _, code, _, _ in finished) \
         and merged.get("continue") is not False and merged.get("decision") != "block"
     acknowledge(succeeded, diagnostics or merged.get('stopReason') or str(merged))

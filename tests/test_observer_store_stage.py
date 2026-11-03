@@ -150,5 +150,6 @@ class ObserverStoreStageTests(unittest.TestCase):
         self.assertEqual('session-closed', json.loads(output.read_text(encoding='utf-8'))['status'])
 
 
+
 if __name__ == '__main__':
     unittest.main()
