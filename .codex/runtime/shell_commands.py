@@ -10,10 +10,10 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 from codex import hook_trust
@@ -89,6 +89,7 @@ class FrontendInput:
         self.stream = JsonLines(path)
         self.view_changes = view_changes
         self.latest: str | None = None
+        self.cwd: Path | None = None
         self.pending: ShellInput | None = None
         self.epoch = 0
         self.control_offset = 0
@@ -100,7 +101,9 @@ class FrontendInput:
                 if row.get("kind") == "session_start":
                     self.headers += 1
                     if self.headers != 1:
-                        raise RuntimeError("Frontend has no unique startup identity")
+                        raise RuntimeError(
+                            "Native frontend recording has no unique startup header"
+                        )
                 if row.get("kind") in {"session_start", "session_end"}:
                     self.invalidate()
             elif row.get("dir") == "to_tui" and (
@@ -140,6 +143,12 @@ class FrontendInput:
                     self.latest = (
                         identity if isinstance(identity, str) and identity else None
                     )
+                    directory = turn.get("cwd")
+                    self.cwd = (
+                        Path(directory)
+                        if isinstance(directory, str) and Path(directory).is_absolute()
+                        else None
+                    )
                 shell = payload.get("RunUserShellCommand")
                 if isinstance(shell, dict) and isinstance(shell.get("command"), str):
                     self.epoch += 1
@@ -156,16 +165,24 @@ class FrontendInput:
         self.epoch += 1
         self.control_offset = self.stream.offset
         self.latest = None
+        self.cwd = None
         self.pending = None
 
 
 class Rollout:
-    def __init__(self, path: Path, profile: Path, thread_id: str) -> None:
-        resolved = path.resolve(strict=True)
-        sessions = (profile.resolve() / "sessions").resolve()
+    def __init__(
+        self,
+        path: Path,
+        profile: Path,
+        thread_id: str,
+        normalize: Callable[[Path], PurePath],
+    ) -> None:
+        self.normalize = normalize
+        resolved = normalize(path.resolve(strict=True))
+        sessions = normalize((profile.resolve() / "sessions").resolve())
         if (
             not path.is_absolute()
-            or resolved != path
+            or resolved != normalize(path)
             or not resolved.is_relative_to(sessions)
         ):
             raise RuntimeError("Native rollout is outside its verified profile")
@@ -180,7 +197,9 @@ class Rollout:
         self.completed = False
 
     def poll(self) -> None:
-        if self.stream.path.resolve(strict=True) != self.stream.path:
+        if self.normalize(self.stream.path.resolve(strict=True)) != self.normalize(
+            self.stream.path
+        ):
             raise RuntimeError("Native rollout path changed after attribution")
         for row in self.stream.read():
             payload = row.get("payload")
@@ -219,9 +238,11 @@ class Rollout:
             if item.get("type") == "UserMessage":
                 self.standalone = False
                 identity = item.get("client_id")
-                if isinstance(identity, str) and identity:
-                    self.inputs.add(identity)
-                    self.latest_input = identity
+                self.latest_input = (
+                    identity if isinstance(identity, str) and identity else None
+                )
+                if self.latest_input is not None:
+                    self.inputs.add(self.latest_input)
             elif (
                 item.get("type") == "CommandExecution"
                 and item.get("source") == "user_shell"
@@ -460,13 +481,14 @@ class ShellMonitor:
 
     def metadata_matches(self, metadata: dict[str, Any], client: Any) -> bool:
         return bool(
-            isinstance(metadata.get("cwd"), str)
+            self.frontend.cwd is not None
+            and isinstance(metadata.get("cwd"), str)
             and Path(metadata["cwd"]).is_absolute()
             and metadata.get("canAcceptDirectInput") is True
             and metadata.get("source") in ("cli", "vscode")
             and metadata.get("parentThreadId") is None
             and client.comparable_path(Path(metadata.get("cwd", "")).resolve())
-            == client.comparable_path(Path(self.ticket["launch_cwd"]).resolve())
+            == client.comparable_path(self.frontend.cwd.resolve())
         )
 
     def bind(self, server: Any, client: Any, latest: str) -> None:
@@ -492,7 +514,10 @@ class ShellMonitor:
                 rollout = self.candidates.get(identity)
                 if rollout is None:
                     rollout = Rollout(
-                        Path(path), Path(self.ticket["profile"]), identity
+                        Path(path),
+                        Path(self.ticket["profile"]),
+                        identity,
+                        client.comparable_path,
                     )
                     self.candidates[identity] = rollout
                 elif rollout.stream.path != Path(path):
