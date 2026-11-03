@@ -5,6 +5,7 @@ import json
 import os
 import queue
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -22,6 +23,10 @@ import pytest
 import required_plugins
 from host import Host
 from tj_agent.plugins import sources
+
+codex_plugins = importlib.import_module("codex.plugins")
+NATIVE_INVENTORY = required_plugins.inventory
+NATIVE_ENSURE_HOOKS = codex_plugins.ensure_hooks
 
 
 class AdmissionFixture:
@@ -299,7 +304,11 @@ def test_exact_snapshot_binds_once_then_cheap_event_checks(
     snapshot = case.root / "snapshot"
     shutil.copytree(case.roots["agent@tj-agents"], snapshot)
     (snapshot / ".snapshot-digest").write_text("sha256:" + "0" * 64)
+    cache = snapshot / "__pycache__/module.cpython-312.pyc"
+    cache.parent.mkdir()
+    cache.write_bytes(b"generated before binding")
     case.bind(roots={"agent": snapshot, "base": case.roots["base@tj-agents"]})
+    cache.write_bytes(b"generated after binding")
     with patch.object(
         plugin_refresh, "package_tree", side_effect=AssertionError("event hash")
     ):
@@ -632,3 +641,293 @@ def test_unrelated_selected_stack_follows_frozen_relevant_dependency_closure(
         encoding="utf-8",
     )
     assert set(case.verify()["guards"]) == {"agent@tj-agents", "base@tj-agents"}
+
+
+@pytest.mark.parametrize("host", list(Host))
+@pytest.mark.parametrize("startup", [False, True])
+@pytest.mark.parametrize("failure", ["timeout", "invalid-json"])
+def test_managed_inventory_failure_blocks_before_native_launch(
+    case: AdmissionFixture, host: Host, startup: bool, failure: str
+) -> None:
+    launch = importlib.import_module("launch_check")
+    binding = importlib.import_module("startup_binding")
+    result = subprocess.CompletedProcess(["fixture"], 0, "invalid", "")
+    with (
+        patch.object(required_plugins, "reconcile_selection"),
+        patch.object(required_plugins, "inventory", NATIVE_INVENTORY),
+        patch.object(
+            required_plugins.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("fixture", 20)
+            if failure == "timeout"
+            else None,
+            return_value=result,
+        ),
+        patch.object(binding, "run_session") as native,
+        patch.object(admission, "verify") as verify,
+        contextlib.redirect_stderr(io.StringIO()) as output,
+    ):
+        entrypoint = binding.main if startup else launch.main
+        assert (
+            entrypoint(
+                [
+                    "--host",
+                    host.value,
+                    "--project",
+                    str(case.project),
+                    "--target",
+                    "fixture",
+                ]
+            )
+            == 1
+        )
+        native.assert_not_called()
+        verify.assert_not_called()
+        assert "Managed readiness" in output.getvalue()
+
+
+def test_unrelated_inventory_failure_preserves_degraded_launch(
+    case: AdmissionFixture,
+) -> None:
+    launch = importlib.import_module("launch_check")
+    (case.project / ".agents/plugins.json").write_text(
+        json.dumps({"schema_version": 1, "plugins": ["other@example"]}),
+        encoding="utf-8",
+    )
+    with (
+        patch.object(required_plugins, "reconcile_selection"),
+        patch.object(
+            required_plugins,
+            "inventory_roots",
+            side_effect=required_plugins.RequiredPluginsError("inventory unavailable"),
+        ),
+        contextlib.redirect_stderr(io.StringIO()) as output,
+    ):
+        assert (
+            launch.main(
+                [
+                    "--host",
+                    "codex",
+                    "--project",
+                    str(case.project),
+                    "--target",
+                    "fixture",
+                ]
+            )
+            == 0
+        )
+        assert "launching anyway" in output.getvalue()
+
+
+@pytest.mark.parametrize("host", list(Host))
+def test_native_readiness_receives_every_admitted_dependency(
+    case: AdmissionFixture, host: Host
+) -> None:
+    case.catalog["plugins"][0]["requires"] = ["base"]
+    case.save_catalog()
+    (case.project / ".agents/plugins.json").write_text(
+        json.dumps({"schema_version": 1, "plugins": ["agent@tj-agents"]}),
+        encoding="utf-8",
+    )
+    with patch.object(
+        host_plugins.PLUGINS[host], "ensure_hooks", return_value=None
+    ) as ready:
+        document = case.verify(host)
+        assert ready.call_args.kwargs["required_roots"] == case.roots
+        assert set(document["guards"]) == set(case.roots)
+
+
+def test_codex_default_readiness_retains_cached_admitted_dependencies(
+    case: AdmissionFixture,
+) -> None:
+    document = case.verify()
+    with (
+        patch.object(
+            required_plugins,
+            "check",
+            return_value={"agent@tj-agents": case.roots["agent@tj-agents"]},
+        ),
+        patch.object(admission, "verify", return_value=document),
+        patch.object(
+            codex_plugins.hook_trust, "required_definitions", return_value=["guard"]
+        ),
+        patch.object(codex_plugins.hook_trust, "apply_trust") as trust,
+    ):
+        assert NATIVE_ENSURE_HOOKS(case.project, "fixture") is None
+        assert set(trust.call_args.kwargs["required"]) == set(case.roots)
+
+
+@pytest.mark.parametrize("startup", [False, True])
+def test_later_managed_hook_failure_blocks_launch_and_acknowledgement(
+    case: AdmissionFixture, startup: bool
+) -> None:
+    launch = importlib.import_module("launch_check")
+    binding = importlib.import_module("startup_binding")
+    with (
+        patch.object(
+            launch, "prepare_launch_roots", return_value=(case.project, case.roots)
+        ),
+        patch.object(launch, "check", return_value="current"),
+        patch.object(
+            codex_plugins,
+            "ensure_hooks",
+            side_effect=RuntimeError("readiness unavailable"),
+        ),
+        patch.object(binding, "run_session") as native,
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        entrypoint = binding.main if startup else launch.main
+        assert (
+            entrypoint(
+                [
+                    "--host",
+                    "codex",
+                    "--project",
+                    str(case.project),
+                    "--target",
+                    "fixture",
+                ]
+            )
+            == 1
+        )
+        native.assert_not_called()
+
+
+@pytest.mark.parametrize("host", list(Host))
+def test_host_adapter_owns_configuration_watches(
+    case: AdmissionFixture, host: Host
+) -> None:
+    sentinel = case.root / "adapter-settings"
+    with patch.object(
+        host_plugins.PLUGINS[host], "configuration_paths", return_value=[sentinel]
+    ):
+        document = case.verify(host)
+        assert str(sentinel) in document["watch"]
+        assert admission.configuration_paths(case.project, host) == [
+            *(
+                root / ".agents/plugins.json"
+                for root in (case.project, *case.project.parents)
+            ),
+            sentinel,
+        ]
+
+
+@pytest.mark.parametrize("host", list(Host))
+def test_hook_reads_the_host_session_variable(
+    case: AdmissionFixture, host: Host
+) -> None:
+    payload = json.dumps({"hook_event_name": "SessionStart", "cwd": str(case.project)})
+    with (
+        patch.object(sys, "argv", ["guard", "hook", "--host", host.value]),
+        patch.object(sys, "stdin", io.StringIO(payload)),
+        patch.dict(os.environ, {host.session_variable: "adapter-session"}),
+        patch.object(
+            admission, "package_root", return_value=case.roots["agent@tj-agents"]
+        ),
+        patch.object(admission, "gate") as gate,
+    ):
+        assert admission.main() == 0
+        assert gate.call_args.args[2] == "adapter-session"
+
+
+def test_generated_caches_do_not_break_full_admission_or_bound_hot_guards(
+    case: AdmissionFixture,
+) -> None:
+    root = case.roots["agent@tj-agents"]
+    cache = root / "__pycache__/module.cpython-312.pyc"
+    cache.parent.mkdir()
+    (root / "nested").mkdir()
+    cache.write_bytes(b"ordinary generated cache")
+    case.verify()
+    case.bind()
+    cache.write_bytes(b"updated generated cache")
+    nested = root / "nested/__pycache__/module.cpython-312.pyc"
+    nested.parent.mkdir(parents=True)
+    nested.write_bytes(b"new cache")
+    with (
+        patch.object(
+            plugin_refresh, "package_tree", side_effect=AssertionError("hot hash")
+        ),
+        patch.object(
+            required_plugins, "inventory", side_effect=AssertionError("hot inventory")
+        ),
+    ):
+        admission.gate(case.project, Host.CODEX, "session", "PreToolUse", root)
+    admission.receipt_path(case.project, Host.CODEX).unlink()
+    assert case.verify() is not None
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "module.py",
+        "module.pyc",
+        "__pycache__/legacy.pyc",
+        "__pycache__/unexpected.txt",
+        "__pycache__/nested/module.pyc",
+    ],
+)
+def test_source_standalone_bytecode_and_unexpected_cache_contents_invalidate(
+    case: AdmissionFixture, relative: str
+) -> None:
+    case.verify()
+    path = case.roots["agent@tj-agents"] / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"changed")
+    with pytest.raises(admission.AdmissionError, match="identity changed"):
+        admission.cached(case.project, Host.CODEX)
+    with pytest.raises(admission.AdmissionError, match="differs from selected"):
+        case.verify()
+
+
+def test_marketplace_replacement_refs_cannot_substitute_the_frozen_catalog(
+    case: AdmissionFixture,
+) -> None:
+    def git(*arguments: str) -> str:
+        return subprocess.run(
+            ["git", "--no-replace-objects", "-C", str(case.market), *arguments],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout.strip()
+
+    git("init")
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.test")
+    roster = {"plugins": [{"name": entry["name"]} for entry in case.catalog["plugins"]]}
+    (case.market / "plugins.json").write_text(json.dumps(roster), encoding="utf-8")
+    git("add", ".")
+    git("commit", "-m", "Original publication")
+    original = git("rev-parse", "HEAD")
+    original_catalog = json.dumps(case.catalog)
+    case.catalog["plugins"][0]["source"]["sha"] = "b" * 40
+    case.save_catalog()
+    git("add", ".")
+    git("commit", "-m", "Replacement publication")
+    replacement = git("rev-parse", "HEAD")
+    git("replace", original, replacement)
+    git("checkout", "--detach", original)
+
+    def publication(command: list[str], project: Path) -> str:
+        if "ls-remote" in command:
+            return original + " refs/heads/main"
+        return subprocess.run(
+            command,
+            cwd=project,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        ).stdout
+
+    with patch.object(plugin_refresh, "run", side_effect=publication):
+        assert case.verify()["producers"]["tj-agents/agent"] == "a" * 40
+        admission.receipt_path(case.project, Host.CODEX).unlink()
+        case.save_catalog()
+        assert (case.market / host_plugins.PLUGINS[Host.CODEX].CATALOG).read_text(
+            encoding="utf-8"
+        ) != original_catalog
+        with pytest.raises(admission.AdmissionError, match="catalog differs"):
+            case.verify()
+    assert git("replace", "-l") == original

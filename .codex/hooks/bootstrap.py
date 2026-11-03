@@ -12,6 +12,8 @@ sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).repl
 source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == LOADER_DIGEST), None)
 source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2))
 workspace = tempfile.TemporaryDirectory()
+sys.pycache_prefix = str(Path(workspace.name) / 'pycache')
+sys.dont_write_bytecode = True
 staged = Path(workspace.name) / 'loader.py'
 staged.write_bytes(source)
 runpy.run_path(str(staged), run_name='__main__')

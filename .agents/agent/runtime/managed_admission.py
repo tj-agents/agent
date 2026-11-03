@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import json
 import os
@@ -15,6 +16,12 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+if __name__ == "__main__":
+    _source_cache = tempfile.TemporaryDirectory(prefix="tj-source-cache-")
+    atexit.register(_source_cache.cleanup)
+    sys.pycache_prefix = _source_cache.name
+    sys.dont_write_bytecode = True
 
 import host_plugins
 import plugin_autoupdate
@@ -64,15 +71,15 @@ def signatures(paths: list[Path]) -> dict[str, list[int]]:
         root = root.resolve()
         entries = [root, *root.rglob("*")] if root.is_dir() else [root]
         for path in entries:
-            if (
-                ".git" in path.relative_to(root).parts
-                or "__pycache__" in path.parts
-                or plugin_refresh.IN_USE in path.parts
-                or path.suffix == ".pyc"
-            ):
-                continue
             if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
                 raise AdmissionError(f"Admission identity contains a link: {path}")
+            if (
+                ".git" in path.relative_to(root).parts
+                or plugin_refresh.IN_USE in path.parts
+                or (path.is_dir() and path.name == "__pycache__")
+                or plugin_refresh.generated_cache(path)
+            ):
+                continue
             try:
                 stat = path.stat()
                 result[str(path)] = [stat.st_dev, stat.st_ino, stat.st_mode]
@@ -86,24 +93,10 @@ def signatures(paths: list[Path]) -> dict[str, list[int]]:
 
 
 def configuration_paths(project: Path, host: Host) -> list[Path]:
-    home = host.configuration_root
-    paths = [
-        home / "config.toml",
-        home / "settings.json",
-        home / "plugins/installed_plugins.json",
-        home / "plugins/known_marketplaces.json",
-        home / "plugins/config.json",
+    return [
+        *(root / ".agents/plugins.json" for root in (project, *project.parents)),
+        *host_plugins.PLUGINS[host].configuration_paths(project),
     ]
-    for root in (project, *project.parents):
-        paths.extend(
-            [
-                root / ".agents/plugins.json",
-                root / ".codex/config.toml",
-                root / ".claude/settings.json",
-                root / ".claude/settings.local.json",
-            ]
-        )
-    return paths
 
 
 def pinned_sources(
@@ -208,6 +201,21 @@ def selected_closure(required: tuple[str, ...], roster: dict[str, Any]) -> set[s
     return {name + "@tj-agents" for name in selected}
 
 
+def ensure_hooks(project: Path, host: Host, executable: str | None = None) -> None:
+    required = required_plugins.selected(required_plugins.project_root(project))
+    managed = any(identity.endswith("@tj-agents") for identity in required)
+    try:
+        reason = host_plugins.PLUGINS[host].ensure_hooks(project, executable)
+        if managed and reason:
+            raise AdmissionError("Required hook adoption is pending: " + reason)
+    except (RuntimeError, OSError) as error:
+        if managed:
+            raise AdmissionError(
+                f"Managed hook readiness could not be established: {error}"
+            ) from error
+        raise
+
+
 def verify(
     project: Path,
     host: Host,
@@ -236,13 +244,28 @@ def verify(
             raise AdmissionError("Selected marketplace checkout is unavailable")
         marketplace = Path(location).resolve()
         revision = plugin_refresh.run(
-            ["git", "-C", str(marketplace), "rev-parse", "HEAD"], project
+            [
+                "git",
+                "--no-replace-objects",
+                "-C",
+                str(marketplace),
+                "rev-parse",
+                "HEAD",
+            ],
+            project,
         ).strip()
         if not REVISION.fullmatch(revision):
             raise AdmissionError("Selected marketplace is not at an immutable revision")
         catalog_path = marketplace / plugins.CATALOG
         expected_catalog = plugin_refresh.run(
-            ["git", "-C", str(marketplace), "show", f"{revision}:{plugins.CATALOG}"],
+            [
+                "git",
+                "--no-replace-objects",
+                "-C",
+                str(marketplace),
+                "show",
+                f"{revision}:{plugins.CATALOG}",
+            ],
             project,
         )
         catalog = read(catalog_path)
@@ -252,7 +275,14 @@ def verify(
             )
         roster = json.loads(
             plugin_refresh.run(
-                ["git", "-C", str(marketplace), "show", f"{revision}:plugins.json"],
+                [
+                    "git",
+                    "--no-replace-objects",
+                    "-C",
+                    str(marketplace),
+                    "show",
+                    f"{revision}:plugins.json",
+                ],
                 project,
             )
         )
@@ -303,11 +333,6 @@ def verify(
             catalog_path,
         ]
         catalog_proof = signatures(catalog_watch)
-        reason = plugins.ensure_hooks(project, binary)
-        if reason:
-            raise AdmissionError("Required hook adoption is pending: " + reason)
-        configuration_watch = configuration_paths(project, host)
-        configuration_proof = signatures(configuration_watch)
         native = required_plugins.inventory(
             binary, plugins, project, (), "tj-agents" if host is Host.CODEX else None
         )
@@ -323,6 +348,21 @@ def verify(
             ):
                 observed[located[0]] = observed.get(located[0], 0) + 1
         roots = required_plugins.enabled_roots(plugins, project, native)
+        missing = relevant - roots.keys()
+        if missing:
+            raise AdmissionError(
+                "Selected publication is only partially installed: "
+                + ", ".join(sorted(missing))
+            )
+        reason = plugins.ensure_hooks(
+            project,
+            binary,
+            required_roots={identity: roots[identity] for identity in sorted(relevant)},
+        )
+        if reason:
+            raise AdmissionError("Required hook adoption is pending: " + reason)
+        configuration_watch = configuration_paths(project, host)
+        configuration_proof = signatures(configuration_watch)
         installed: dict[str, dict[str, str]] = {}
         guards: list[str] = []
         package_proof: dict[str, list[int]] = {}
@@ -565,9 +605,7 @@ def main() -> int:
             raise AdmissionError("Admission hook requires a host")
         event = payload.get("hook_event_name", "")
         project = Path(payload.get("cwd") or args.project)
-        session = payload.get("session_id") or os.environ.get(
-            "CLAUDE_CODE_SESSION_ID" if host is Host.CLAUDE else "CODEX_THREAD_ID", ""
-        )
+        session = payload.get("session_id") or os.environ.get(host.session_variable, "")
         outcome: queue.Queue[Exception | None] = queue.Queue()
 
         def run_gate() -> None:
