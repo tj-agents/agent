@@ -3,15 +3,21 @@
 import json
 
 
-def records(path):
+def records(path, *, strict=False):
     with path.open(encoding='utf-8') as stream:
         for number, line in enumerate(stream, 1):
+            if strict and not line.endswith('\n'):
+                raise ValueError(f"native transcript record {number} is incomplete")
             try:
                 value = json.loads(line)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as error:
+                if strict:
+                    raise ValueError(f"native transcript record {number} is malformed") from error
                 continue  # A running session can have an incomplete trailing record.
             if isinstance(value, dict):
                 yield number, value
+            elif strict:
+                raise ValueError(f"native transcript record {number} is not an object")
 
 
 def text_content(value):
