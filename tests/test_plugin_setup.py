@@ -74,6 +74,23 @@ class PluginSetupTests(unittest.TestCase):
             self.assertEqual([], required_plugins.converge_setup(self.project, ("codex",), {"codex": None}, onboard=True))
         self.assertEqual("--onboard", self.state.read_text(encoding="utf-8"))
 
+    def test_setup_and_checks_run_in_the_selected_project_instead_of_the_callers_checkout(self):
+        script = self.runtime / "scripts/setup.py"
+        script.write_text("import os\nfrom pathlib import Path\n"
+                          "assert Path.cwd().resolve() == Path(os.environ['PLUGIN_SETUP_PROJECT']).resolve()\n" + SCRIPT,
+                          encoding="utf-8")
+        nested = self.project / "nested directory"
+        nested.mkdir()
+        caller = Path.cwd()
+        with mock.patch.dict(os.environ, {"PLUGIN_SETUP_PROJECT": str(self.project)}), self.roots():
+            for onboard in (False, True):
+                with self.subTest(onboard=onboard):
+                    self.state.unlink(missing_ok=True)
+                    self.assertEqual([], required_plugins.converge_setup(nested, ("codex",),
+                                                                        {"codex": None}, onboard=onboard))
+                    self.assertEqual([], required_plugins.check_setup(nested, ("codex",), {"codex": None}))
+        self.assertEqual(caller, Path.cwd())
+
     def test_unselected_runtime_is_not_examined_or_executed(self):
         unrelated = self.root / "unrelated"
         unrelated.mkdir()
