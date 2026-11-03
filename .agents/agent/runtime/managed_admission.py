@@ -234,6 +234,8 @@ def ensure_hooks(project: Path, host: Host, executable: str | None = None) -> No
         reason = host_plugins.PLUGINS[host].ensure_hooks(project, executable)
         if managed and reason:
             raise AdmissionError("Required hook adoption is pending: " + reason)
+    except plugin_refresh.MaintenanceUnsettledError:
+        raise
     except (RuntimeError, OSError) as error:
         if managed:
             raise AdmissionError(
@@ -476,6 +478,8 @@ def verify(
             plugin_autoupdate.write_json(receipt_path(project, host), document)
         return document
     except AdmissionError:
+        raise
+    except plugin_refresh.MaintenanceUnsettledError:
         raise
     except (
         OSError,

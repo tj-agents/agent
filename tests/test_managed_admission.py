@@ -270,6 +270,24 @@ def test_partial_install_cannot_create_receipt_and_retry_succeeds(
     assert case.verify() is not None
 
 
+def test_maintenance_unsettled_survives_admission_boundaries(
+    case: AdmissionFixture,
+) -> None:
+    error = plugin_refresh.MaintenanceUnsettledError("writer unsettled")
+    with (
+        patch.object(plugin_refresh, "run", side_effect=error),
+        pytest.raises(plugin_refresh.MaintenanceUnsettledError),
+    ):
+        case.verify()
+    with (
+        patch.object(
+            host_plugins.PLUGINS[Host.CODEX], "ensure_hooks", side_effect=error
+        ),
+        pytest.raises(plugin_refresh.MaintenanceUnsettledError),
+    ):
+        admission.ensure_hooks(case.project, Host.CODEX, "fixture")
+
+
 def test_session_start_does_not_wait_on_other_guards_but_ordinary_work_does(
     case: AdmissionFixture,
 ) -> None:
