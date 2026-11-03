@@ -433,8 +433,8 @@ def test_each_host_dispatches_refresh_after_prompt_bookkeeping_and_before_stop_c
         f"${{{root_name}}}/.agents/agent/runtime/automatic_refresh.py",
     ]
     assert stop_scripts[-3:] == [
-        f"${{{root_name}}}/.agents/agent-store/runtime/session_hook.py",
         f"${{{root_name}}}/.agents/agent/runtime/automatic_refresh.py",
+        f"${{{root_name}}}/.agents/agent-store/runtime/session_hook.py",
         f"${{{root_name}}}/.agents/agent/runtime/close_lifecycle.py",
     ]
     refresh = next(
