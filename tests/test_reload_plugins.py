@@ -628,6 +628,91 @@ class ClaudeHome:
         return [{**entry, "id": identity, "enabled": True} for identity, entries in plugins.items() for entry in entries]
 
 
+class UbiquitousUserScopeTests(unittest.TestCase):
+    TIERS = {"base": "always", "engineering": "always", "skill": "always", "template": "always",
+             "personal": "always", "python": "stack-present", "dotnet": "stack-present", "cpp": None}
+
+    def setUp(self):
+        self.home = ClaudeHome(self)
+        patcher = mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        write(self.home.root / "market/.claude-plugin/marketplace.json", {"plugins": [
+            {"name": "base"}, {"name": "engineering", "dependencies": ["base"]},
+            {"name": "skill", "dependencies": ["engineering"]},
+            {"name": "template", "dependencies": ["engineering", "skill"]},
+            {"name": "personal", "dependencies": ["engineering"]}, {"name": "python", "dependencies": ["engineering"]},
+            {"name": "dotnet", "dependencies": ["engineering"]}, {"name": "cpp"}]})
+        self.other = self.home.root / "plugin-repository"
+        self.other.mkdir()
+        self.project = self.home.root / "employer"
+        self.project.mkdir()
+        self.settings = self.home.config / "settings.json"
+        self.settings.write_text(json.dumps({"theme": "dunkel – ü", "enabledPlugins": {
+            "base@tj-agents": True, "engineering@tj-agents": True, "clangd-lsp@claude-plugins-official": True}},
+            indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.entries = self.registry([
+            ("base", "user"), ("engineering", "user"), ("clangd-lsp@claude-plugins-official", "user"),
+            ("skill", "project"), ("template", "project"), ("personal", "project"),
+            ("python", "project"), ("dotnet", "project"), ("cpp", "project")])
+
+    def registry(self, rows):
+        plugins = {}
+        for name, scope in rows:
+            identity = name if "@" in name else f"{name}@tj-agents"
+            install = self.home.config / "plugins/cache" / identity.replace("@", "-") / "v1"
+            install.mkdir(parents=True, exist_ok=True)
+            if self.TIERS.get(name):
+                write(install / "tier.json", {"schema_version": 1, "tier": name, "applies": self.TIERS[name]})
+            entry = {"scope": scope, "installPath": str(install), "version": "v1"}
+            if scope == "project":
+                entry["projectPath"] = str(self.other)
+            plugins.setdefault(identity, []).append(entry)
+        write(self.home.config / "plugins/installed_plugins.json", {"version": 2, "plugins": plugins})
+        return [{**entry, "id": identity, "enabled": True} for identity, entries in plugins.items() for entry in entries]
+
+    def installs(self, fake):
+        return [command[3:6] for command, _ in fake.commands if command[1:3] == ["plugin", "install"]]
+
+    def test_refresh_enables_always_tiers_at_user_scope_without_personal_or_stack_plugins(self):
+        fake = FakeClaude(self.entries)
+        with mock.patch.object(plugin_refresh, "run", side_effect=fake), mock.patch("sys.stderr"):
+            self.assertEqual(["skill@tj-agents", "template@tj-agents"], CLAUDE.reconcile(self.project))
+        value = json.loads(self.settings.read_text(encoding="utf-8"))
+        self.assertEqual({"base@tj-agents": True, "engineering@tj-agents": True,
+                          "clangd-lsp@claude-plugins-official": True, "skill@tj-agents": True,
+                          "template@tj-agents": True}, value["enabledPlugins"])
+        self.assertEqual("dunkel – ü", value["theme"])
+        self.assertEqual([["skill@tj-agents", "--scope", "user"], ["template@tj-agents", "--scope", "user"]],
+                         self.installs(fake))
+        self.assertFalse((self.project / ".claude").exists())
+
+        before = self.settings.read_bytes()
+        rerun = FakeClaude(self.registry([("base", "user"), ("engineering", "user"),
+                                          ("clangd-lsp@claude-plugins-official", "user"), ("skill", "user"),
+                                          ("template", "user"), ("personal", "project"), ("python", "project")]))
+        with mock.patch.object(plugin_refresh, "run", side_effect=rerun):
+            self.assertEqual([], CLAUDE.reconcile(self.project))
+        self.assertEqual(before, self.settings.read_bytes())
+        self.assertEqual([], rerun.commands)
+
+    def test_full_refresh_installs_always_tiers_at_user_scope(self):
+        fake = FakeClaude([])
+        with mock.patch.object(plugin_refresh, "run", side_effect=fake), mock.patch("sys.stderr"):
+            self.assertEqual(["skill@tj-agents", "template@tj-agents"],
+                             CLAUDE.refresh_plugins("claude", self.project, {}, []))
+        self.assertEqual([["skill@tj-agents", "--scope", "user"], ["template@tj-agents", "--scope", "user"]],
+                         self.installs(fake))
+        self.assertNotIn("personal@tj-agents", json.loads(self.settings.read_text(encoding="utf-8"))["enabledPlugins"])
+
+    def test_user_choices_are_never_overridden(self):
+        self.settings.write_text(json.dumps({"enabledPlugins": {"skill@tj-agents": False}}), encoding="utf-8")
+        with mock.patch.object(plugin_refresh, "run") as native, mock.patch("sys.stderr"):
+            self.assertEqual([("template@tj-agents", "user")], CLAUDE.converge_user_scope(self.project))
+        native.assert_not_called()
+        self.assertFalse(json.loads(self.settings.read_text(encoding="utf-8"))["enabledPlugins"]["skill@tj-agents"])
+
+
 class HeadReconcileTests(unittest.TestCase):
 
     def test_an_update_first_installs_dependencies_the_catalog_newly_declares(self):
