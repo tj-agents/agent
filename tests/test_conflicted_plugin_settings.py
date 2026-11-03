@@ -143,6 +143,51 @@ def test_valid_toml_conflict_example_is_preserved(scenario: GitScenario) -> None
     )
 
 
+def test_new_independent_environment_settings_merge_without_losing_either_side(
+    scenario: GitScenario,
+) -> None:
+    path = scenario.root / ".claude/settings.json"
+
+    def write_environment(values: dict[str, str]) -> None:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["env"] = values
+        path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+
+    ADOPT.run(scenario.root, [], ["python"], "write")
+    write_environment({"STASHED_SETTING": "left"})
+    scenario.git("stash", "push")
+    ADOPT.run(scenario.root, [], ["github-actions"], "write")
+    write_environment({"UPSTREAM_SETTING": "right"})
+    scenario.commit("Upstream environment")
+    result = scenario.git("stash", "apply", success=False)
+    assert isinstance(result, subprocess.CompletedProcess) and result.returncode != 0
+    before = scenario.snapshot()
+    assert ADOPT.reconcile(scenario.root, "check")
+    assert scenario.snapshot() == before
+    ADOPT.reconcile(scenario.root, "write")
+    assert json.loads(path.read_text(encoding="utf-8"))["env"] == {
+        "STASHED_SETTING": "left",
+        "UPSTREAM_SETTING": "right",
+    }
+    assert ADOPT.reconcile(scenario.root, "write") == []
+
+
+def test_approval_added_after_conflict_is_not_silently_discarded(
+    scenario: GitScenario,
+) -> None:
+    scenario.stash_conflict()
+    path = scenario.root / ".claude/settings.json"
+    text = path.read_text(encoding="utf-8")
+    assert '"allow": []' in text
+    path.write_text(
+        text.replace('"allow": []', '"allow": ["Read(secret.txt)"]'), encoding="utf-8"
+    )
+    before = scenario.snapshot()
+    with pytest.raises(ADOPT.lock_io.LockError, match=r"unmanaged permissions\.allow"):
+        ADOPT.reconcile(scenario.root, "write")
+    assert scenario.snapshot() == before
+
+
 def test_batch_worktrees_share_exclusions_without_losing_owners(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
