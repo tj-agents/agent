@@ -59,7 +59,8 @@ class SelectionConvergenceTests(unittest.TestCase):
         collect.assert_not_called()
         self.assertEqual(before, (self.project / ".agents/plugins.json").read_bytes())
 
-        def inventory(project, *_args):
+        def inventory(project, *_args, admission=False):
+            self.assertFalse(admission)
             selection = required_plugins.selected(project)
             self.assertIn("agent@tj-agents", selection)
             self.assertIn("cli@tj-agents", selection)
@@ -76,7 +77,8 @@ class SelectionConvergenceTests(unittest.TestCase):
     def test_launch_repairs_declarations_before_attempting_missing_plugin_install(self):
         calls = []
 
-        def inventory(project, *_args):
+        def inventory(project, *_args, admission=False):
+            self.assertFalse(admission)
             selected = required_plugins.selected(project)
             self.assertIn("cli@tj-agents", selected)
             calls.append("inventory")
