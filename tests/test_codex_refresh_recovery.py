@@ -22,6 +22,7 @@ from claude import sessions as CLAUDE_SESSIONS  # noqa: E402
 from codex import plugins as CODEX  # noqa: E402
 from codex import sessions as CODEX_SESSIONS  # noqa: E402
 from host import Host  # noqa: E402
+from tj_agent import recovery  # noqa: E402
 
 
 def load(name):
@@ -35,7 +36,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
     def setUp(self):
         self.relaunch = load("session_relaunch")
         self.watcher = load("relaunch_watcher")
-        self.recovery = load("agent_recovery")
+        self.recovery = recovery
         self.refresh = load("reload_plugins")
         native = mock.patch.object(self.refresh.native_runtime, "prepare", return_value=())
         native.start()
