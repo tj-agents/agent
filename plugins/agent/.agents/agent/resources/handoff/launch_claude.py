@@ -43,13 +43,15 @@ def parse_args(argv, agent_cli):
     parser = argparse.ArgumentParser(description='Hand prepared work to an independent Claude Code session in a new terminal tab.')
     parser.add_argument('--working-directory', required=True)
     parser.add_argument('--prompt-path', required=True)
-    parser.add_argument('--title', default='Claude handoff')
+    parser.add_argument('--title', required=True)
     parser.add_argument('--model')
     parser.add_argument('--effort', choices=('low', 'medium', 'high', 'xhigh', 'max'))
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'))
     parser.add_argument('--frontier', action='store_true')
     parser.add_argument('--dangerously-skip-permissions', action='store_true')
     args = parser.parse_args(argv)
+    if not args.title.strip():
+        raise agent_cli.LaunchError('--title must name the session; it becomes the tab title.')
 
     # --frontier is the tier no lane resolves to and tolerates no competing selection beside it, so
     # passing it alongside --lane or --model is a contradiction to reject rather than an ambiguity to

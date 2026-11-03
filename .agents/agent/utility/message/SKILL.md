@@ -11,9 +11,8 @@ provenance: house
 
 # Verified Codex follow-up
 
-Owns one verified message attempt to an independent Codex session. In a Claude session this transport is
-unavailable and must report `unavailable` without sending; use native child-agent message tools for
-in-conversation peers on either host.
+Owns one verified message attempt to an independent Codex session. The same shipped Python helper runs
+from either a Claude or Codex caller.
 
 Use this only when the user authorized messaging the other session. Keep ownership of the current task.
 For a child agent in the current conversation, use the host's native collaboration message tool instead.
