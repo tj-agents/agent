@@ -12,7 +12,7 @@ import tempfile
 import time
 import sys
 
-from codex import hook_trust
+from codex import hook_trust, shell_commands
 from host import Host
 
 HOST = Host.CODEX
@@ -163,6 +163,7 @@ def release(ticket):
     if ticket.get('_attached'):
         path.unlink(missing_ok=True)
         path.with_name('events.jsonl').unlink(missing_ok=True)
+        path.with_name('shell-continuation.json').unlink(missing_ok=True)
     try:
         path.parent.rmdir()
     except OSError:
@@ -170,35 +171,17 @@ def release(ticket):
 
 
 def latest_input(path):
-    latest = None
-    headers = 0
-    with Path(path).open('r', encoding='utf-8') as stream:
-        while True:
-            line = stream.readline(8 * 1024 * 1024 + 1)
-            if not line:
-                break
-            if len(line) > 8 * 1024 * 1024 or not line.endswith('\n'):
-                raise RuntimeError('Native frontend recording is incomplete or oversized')
-            row = json.loads(line)
-            if not isinstance(row, dict):
-                raise RuntimeError('Native frontend recording is invalid')
-            if row.get('dir') == 'meta' and row.get('kind') == 'session_start':
-                headers += 1
-                latest = None
-            elif row.get('dir') == 'meta' and row.get('kind') == 'session_end':
-                latest = None
-            elif row.get('dir') == 'to_tui' and (row.get('kind') in ('new_session', 'clear_ui')
-                    or row.get('variant') in VIEW_CHANGES):
-                latest = None
-            elif row.get('dir') == 'from_tui' and row.get('kind') == 'op':
-                payload = row.get('payload')
-                turn = payload.get('UserTurn') if isinstance(payload, dict) else None
-                if isinstance(turn, dict):
-                    identity = turn.get('client_user_message_id')
-                    latest = identity if isinstance(identity, str) and identity else None
-    if headers != 1:
+    recording = shell_commands.FrontendInput(Path(path), VIEW_CHANGES)
+    while True:
+        offset = recording.stream.offset
+        recording.poll()
+        if recording.stream.settled():
+            break
+        if recording.stream.offset == offset:
+            raise RuntimeError('Native frontend recording is incomplete or oversized')
+    if recording.headers != 1:
         raise RuntimeError('Native frontend recording has no unique startup header')
-    return latest
+    return shell_commands.attributed_input(recording)
 
 
 def current_input(server, session_id):
