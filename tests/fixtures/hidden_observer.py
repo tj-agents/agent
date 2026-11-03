@@ -18,57 +18,59 @@ def write(path: Path, value: dict[str, Any]) -> None:
 
 
 def visible_windows() -> list[dict[str, Any]]:
-    if os.name != "nt":
-        return []
-    from ctypes import wintypes
-
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    user.IsWindowVisible.argtypes = [wintypes.HWND]
-    user.IsWindowVisible.restype = wintypes.BOOL
-    user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-    user.GetWindowThreadProcessId.argtypes = [
-        wintypes.HWND,
-        ctypes.POINTER(wintypes.DWORD),
-    ]
-    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
     visible: list[dict[str, Any]] = []
+    if sys.platform == "win32":
+        from ctypes import wintypes
 
-    def collect(handle: int, _parameter: int) -> bool:
-        if user.IsWindowVisible(handle):
-            class_name = ctypes.create_unicode_buffer(256)
-            user.GetClassNameW(handle, class_name, len(class_name))
-            pid = wintypes.DWORD()
-            user.GetWindowThreadProcessId(handle, ctypes.byref(pid))
-            visible.append(
-                {"handle": handle, "pid": pid.value, "class": class_name.value}
-            )
-        return True
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        user.IsWindowVisible.argtypes = [wintypes.HWND]
+        user.IsWindowVisible.restype = wintypes.BOOL
+        user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user.GetWindowThreadProcessId.argtypes = [
+            wintypes.HWND,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        callback_type = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+        )
+        user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
 
-    user.EnumWindows(callback_type(collect), 0)
+        def collect(handle: int, _parameter: int) -> bool:
+            if user.IsWindowVisible(handle):
+                class_name = ctypes.create_unicode_buffer(256)
+                user.GetClassNameW(handle, class_name, len(class_name))
+                pid = wintypes.DWORD()
+                user.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+                visible.append(
+                    {"handle": handle, "pid": pid.value, "class": class_name.value}
+                )
+            return True
+
+        user.EnumWindows(callback_type(collect), 0)
     return visible
 
 
 def console_state() -> dict[str, Any]:
-    if os.name != "nt":
-        return {"console": None, "visible": False, "windows": []}
-    from ctypes import wintypes
+    result: dict[str, Any] = {"console": None, "visible": False, "windows": []}
+    if sys.platform == "win32":
+        from ctypes import wintypes
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    kernel.GetConsoleWindow.restype = wintypes.HWND
-    user.IsWindowVisible.argtypes = [wintypes.HWND]
-    user.IsWindowVisible.restype = wintypes.BOOL
-    window = int(kernel.GetConsoleWindow() or 0)
-    return {
-        "console": window,
-        "visible": bool(user.IsWindowVisible(window)),
-        "windows": [
-            entry
-            for entry in visible_windows()
-            if entry["pid"] == os.getpid() or entry["handle"] == window
-        ],
-    }
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        user = ctypes.WinDLL("user32", use_last_error=True)
+        kernel.GetConsoleWindow.restype = wintypes.HWND
+        user.IsWindowVisible.argtypes = [wintypes.HWND]
+        user.IsWindowVisible.restype = wintypes.BOOL
+        window = int(kernel.GetConsoleWindow() or 0)
+        result = {
+            "console": window,
+            "visible": bool(user.IsWindowVisible(window)),
+            "windows": [
+                entry
+                for entry in visible_windows()
+                if entry["pid"] == os.getpid() or entry["handle"] == window
+            ],
+        }
+    return result
 
 
 def main() -> None:
