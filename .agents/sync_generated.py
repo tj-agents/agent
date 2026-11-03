@@ -1414,12 +1414,22 @@ def windows_bootstrap_argument(argument: str) -> ast.expr:
         ctx=ast.Load(),
     )
     parts = argument.split("${PLUGIN_ROOT}")
-    if len(parts) == 1:
+    if len(parts) == 1 and "%" not in argument:
         return ast.Constant(argument)
     values: list[ast.expr] = []
     for index, part in enumerate(parts):
-        if part:
-            values.append(ast.Constant(part))
+        percent_parts = part.split("%")
+        for percent_index, percent_part in enumerate(percent_parts):
+            if percent_part:
+                values.append(ast.Constant(percent_part))
+            if percent_index < len(percent_parts) - 1:
+                values.append(
+                    ast.Call(
+                        func=ast.Name(id="chr", ctx=ast.Load()),
+                        args=[ast.Constant(37)],
+                        keywords=[],
+                    )
+                )
         if index < len(parts) - 1:
             values.append(root)
     return ast.Call(
