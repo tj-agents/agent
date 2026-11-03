@@ -151,18 +151,27 @@ def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -
 
 
 def check(project: Path, host: Host, executable: str | None = None,
-          inventory_options: tuple[str, ...] = ()) -> dict[str, Path] | None:
+          inventory_options: tuple[str, ...] = (), *, admission: bool = True) -> dict[str, Path] | None:
     plugins = host_plugins.PLUGINS[host]
     launch_directory = project.resolve()
     project = project_root(launch_directory)
     required = selected(project)
     if not required:
         return None
+    import managed_admission
+
     plugins.require_inventory_options(inventory_options)
-    binary = executable or shutil.which(host.value)
-    if not binary:
-        raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
-    roots = inventory_roots(launch_directory, host, binary, inventory_options, identities=required)
+    try:
+        binary = executable or shutil.which(host.value)
+        if not binary:
+            raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
+        roots = inventory_roots(launch_directory, host, binary, inventory_options, identities=required)
+    except RequiredPluginsError as error:
+        if admission and any(identity.endswith("@tj-agents") for identity in required):
+            raise managed_admission.AdmissionError(f"Managed readiness could not be established: {error}") from error
+        raise
+    if admission:
+        managed_admission.verify(project, host, binary, roots)
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(

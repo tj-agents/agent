@@ -687,11 +687,15 @@ def packaged_copies(codex_config: dict) -> list[Path]:
 
 def published_agent_tree() -> dict[str, bytes]:
     from tj_agent.plugins import sources
+    import managed_admission
+    import plugin_refresh
 
+    entries, _pair = managed_admission.pinned_sources(marketplace_manifest(MARKETPLACE_NAME))
+    source = entries.get("agent")
+    if source is None:
+        raise plugin_refresh.RefreshError("Selected marketplace has no immutable Agent publication")
     with tempfile.TemporaryDirectory(prefix="tj-agent-runtime-source-") as temporary:
-        return sources.tree({"source": "git-subdir", "url": "https://github.com/tj-agents/agent.git",
-                             "path": "./plugins/agent", "ref": "main"},
-                            Path.cwd(), Path.cwd(), Path(temporary), {})
+        return sources.tree(source, Path.cwd(), Path.cwd(), Path(temporary), {})
 
 
 def self_update(current: Path, codex_config: dict) -> bool:

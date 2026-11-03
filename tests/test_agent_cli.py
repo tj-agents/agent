@@ -1,6 +1,6 @@
 """agent_cli.py: synthetic homes, PATHs and plugin registries only; the real profile is never read."""
 import contextlib
-import importlib.util
+import importlib
 import io
 import json
 import os
@@ -15,10 +15,8 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('agent_cli', ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py')
-CLI = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = CLI
-SPEC.loader.exec_module(CLI)
+sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
+CLI = importlib.import_module('agent_cli')
 
 
 # A model of what Windows Terminal does to `wt --window 0 new-tab ... --suppressApplicationTitle <exe>
