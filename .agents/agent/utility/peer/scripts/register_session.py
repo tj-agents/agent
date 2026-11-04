@@ -319,7 +319,7 @@ def _ps_lookup(pid):
 
     try:
         result = subprocess.run(
-            ["ps", "-o", "ppid=,comm=,lstart=", "-p", str(pid)],
+            ["tj_hook", "--", "ps", "-o", "ppid=,comm=,lstart=", "-p", str(pid)],
             capture_output=True, text=True, timeout=2, check=False,
         )
     except (OSError, subprocess.SubprocessError) as error:

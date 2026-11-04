@@ -23,6 +23,7 @@ import runtime_delivery
 import session_relaunch
 from tj_agent import content
 from tj_agent.plugins import sources
+from tj_cli import process
 
 HOST = Host.CLAUDE
 CATALOG = ".claude-plugin/marketplace.json"
@@ -74,9 +75,9 @@ def git_common_directory(project: Path) -> str | None:
     if not project.is_dir() or not any((directory / ".git").exists() for directory in (project, *project.parents)):
         return None
     try:
-        result = subprocess.run(['git', '-C', str(project), 'rev-parse', '--git-common-dir'],
-                                capture_output=True, text=True, encoding='utf-8', errors='replace',
-                                timeout=GIT_TIMEOUT_SECONDS)
+        result = process.run(['git', '-C', str(project), 'rev-parse', '--git-common-dir'],
+                             capture_output=True, text=True, encoding='utf-8', errors='replace',
+                             timeout=GIT_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError) as error:
         raise required_plugins.RequiredPluginsError(
             f'Cannot resolve the native Claude repository for {project}: {error}') from error
@@ -314,9 +315,8 @@ def repository_projects(projects: list[Path]) -> list[Path]:
         if key in seen or not project.is_dir():
             continue
         seen.add(key)
-        result = subprocess.run(["git", "-C", str(project), "worktree", "list", "--porcelain", "-z"],
-                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
-                                creationflags=plugin_autoupdate.NO_WINDOW)
+        result = process.run(["git", "-C", str(project), "worktree", "list", "--porcelain", "-z"],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
         if result.returncode == 0:
             discovered.update(Path(field.removeprefix("worktree ")) for field in result.stdout.split("\0")
                               if field.startswith("worktree "))

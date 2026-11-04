@@ -71,18 +71,24 @@ def ps_literal(value: str) -> str:
 def ps_command(context, script: str) -> list[str]:
     body = "$ErrorActionPreference='Stop';[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);" + script
     encoded = base64.b64encode(body.encode("utf-16-le")).decode("ascii")
-    return [powershell(context), "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded]
+    return [powershell(context), "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
+
+
+def service_command(context) -> list[str]:
+    launcher = context.which("tj_hook.exe" if context.windows else "tj_hook")
+    if not launcher:
+        raise ServiceError("tj_hook must be installed before registering the background worker")
+    interpreter = Path(sys.executable)
+    if context.windows and interpreter.name.casefold() == "pythonw.exe":
+        interpreter = interpreter.with_name("python.exe")
+        if not interpreter.is_file():
+            raise ServiceError("Console Python is required beneath the hidden tj_hook worker")
+    return [launcher, "--", str(interpreter), *arguments(context)]
 
 
 def windows_action(context) -> tuple[str, str]:
-    adjacent = Path(sys.executable).with_name("pythonw.exe")
-    interpreter = str(adjacent) if adjacent.is_file() else context.which("pythonw.exe")
-    argv = arguments(context)
-    if interpreter:
-        return interpreter, subprocess.list2cmdline(argv)
-    invocation = "& " + " ".join(ps_literal(item) for item in [sys.executable, *argv]) + ";exit $LASTEXITCODE"
-    launcher = ps_command(context, invocation)
-    return launcher[0], subprocess.list2cmdline(launcher[1:])
+    command = service_command(context)
+    return command[0], subprocess.list2cmdline(command[1:])
 
 
 def windows_snapshot(context) -> dict:
@@ -185,7 +191,7 @@ def unit_path(context) -> Path:
 
 
 def unit_contents(context) -> str:
-    argv = " ".join(systemd_escape(value) for value in [sys.executable, *arguments(context)])
+    argv = " ".join(systemd_escape(value) for value in service_command(context))
     return (f"[Unit]\nDescription={marker(context)}\n\n[Service]\nType=simple\nExecStart={argv}\n"
             "Restart=on-failure\nRestartSec=10s\n\n[Install]\nWantedBy=default.target\n")
 
