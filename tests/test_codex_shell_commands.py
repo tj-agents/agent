@@ -12,8 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".codex/runtime"))
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 
-import shell_commands  # noqa: E402
-from codex import client, sessions  # noqa: E402
+from codex import client, frontend_input, sessions, shell_commands  # noqa: E402
 
 COMMAND = "echo tj-shell-continuation-proof"
 
@@ -152,6 +151,31 @@ def test_native_fixture_resumes_once_without_reexecuting_shell(
         {"type": "text", "text": shell_commands.CONTINUATION, "text_elements": []}
     ]
     assert set(request) == {"threadId", "clientUserMessageId", "input"}
+
+
+def test_shell_after_capacity_continuation_keeps_verified_input_attribution(
+    monitor: tuple[shell_commands.ShellMonitor, FakeServer],
+) -> None:
+    instance, server = monitor
+    path = Path(server.metadata["path"])
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows[:2])
+        + json.dumps(native_input("capacity-automatic"))
+        + "\n"
+        + "".join(json.dumps(row) + "\n" for row in rows[2:]),
+        encoding="utf-8",
+    )
+    recording = instance.frontend.stream.path
+    controls = recording.read_text(encoding="utf-8").splitlines()
+    recording.write_text("\n".join(controls[:2]) + "\n", encoding="utf-8")
+    prior = frontend_input.FrontendInput(recording, set())
+    prior.poll()
+    frontend_input.bind_input(prior, instance.ticket, "thread-1", "capacity-automatic")
+    append(recording, json.loads(controls[2]))
+    instance.step(server)
+    assert len(server.sent) == 1
+    assert "capacity-automatic" in instance.own_ids
 
 
 def test_failed_command_still_resumes_from_its_recorded_result(
