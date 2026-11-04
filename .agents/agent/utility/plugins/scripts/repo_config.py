@@ -416,7 +416,7 @@ def plan(
     sources, identities, allow, rules = declarations(lock_path, lock)
     excluded = {identity: False for identity in explicit_exclusions(root)
                 if plugin_selection.split(identity)[1] in sources}
-    identities = dict(sorted({**excluded, **identities}.items()))
+    identities = dict(sorted({**identities, **excluded}.items()))
     expected_rules = codex_rules(rules) if rules else None
     if scope == "local":
         state = local_state(state_path)

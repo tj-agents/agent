@@ -21,7 +21,6 @@ def preserve_empty_process_environment() -> Iterator[None]:
     if sys.platform == "win32" and empty:
         import ctypes
 
-        # Environment mocks can restore Python's map but delete native empty values.
         set_variable = ctypes.WinDLL(
             "kernel32", use_last_error=True
         ).SetEnvironmentVariableW
