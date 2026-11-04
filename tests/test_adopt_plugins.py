@@ -199,6 +199,48 @@ class AlwaysTierTests(unittest.TestCase):
                       (self.root / ".codex/config.toml").read_text(encoding="utf-8"))
         self.assertEqual([], ADOPT.reconcile(self.root, "check"))
 
+    def test_explicit_false_withdraws_an_already_selected_plugin(self):
+        self.write_selection(["engineering@tj-agents", "skill@tj-agents", "template@tj-agents"])
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude/settings.json").write_text(json.dumps({
+            "enabledPlugins": {"template@tj-agents": False}}), encoding="utf-8")
+        ADOPT.reconcile(self.root, "write")
+        self.assertIn("skill@tj-agents", self.selected())
+        self.assertNotIn("template@tj-agents", self.selected())
+        claude = json.loads((self.root / ".claude/settings.json").read_text(encoding="utf-8"))
+        self.assertIs(False, claude["enabledPlugins"]["template@tj-agents"])
+        before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        self.assertEqual([], ADOPT.reconcile(self.root, "write"))
+        self.assertEqual(before, {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()})
+
+    def test_explicit_false_on_a_required_dependency_refuses_without_writing(self):
+        self.write_selection(["engineering@tj-agents", "skill@tj-agents", "template@tj-agents"])
+        (self.root / ".codex").mkdir()
+        (self.root / ".codex/config.toml").write_text('[plugins."skill@tj-agents"]\nenabled = false\n', encoding="utf-8")
+        before = (self.root / ".agents/plugins.json").read_bytes()
+        with self.assertRaisesRegex(LockError, "prerequisite.*skill"):
+            ADOPT.reconcile(self.root, "write")
+        self.assertEqual(before, (self.root / ".agents/plugins.json").read_bytes())
+        self.assertFalse((self.root / ".claude").exists())
+
+    def test_settings_generation_keeps_false_over_a_stale_selection(self):
+        self.write_selection(["engineering@tj-agents", "template@tj-agents"])
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude/settings.json").write_text(json.dumps({
+            "enabledPlugins": {"template@tj-agents": False}}), encoding="utf-8")
+        ADOPT.repo_config.run(self.root / ".agents/plugins.json", "write", root=self.root)
+        claude = json.loads((self.root / ".claude/settings.json").read_text(encoding="utf-8"))
+        self.assertIs(False, claude["enabledPlugins"]["template@tj-agents"])
+
+    def test_an_unreadable_cached_tier_is_skipped(self):
+        broken = ADOPT.HOST.CLAUDE.configuration_root / "plugins/cache/tj-agents/skill/v2"
+        broken.mkdir(parents=True)
+        (broken / "tier.json").write_text("{broken", encoding="utf-8")
+        unreadable = ADOPT.HOST.CLAUDE.configuration_root / "plugins/cache/tj-agents/nvim/v1"
+        unreadable.mkdir(parents=True)
+        (unreadable / "tier.json").write_text("[]", encoding="utf-8")
+        self.assertEqual({"base", "skill", "template"}, ADOPT.always_plugins(ADOPT.load_roster()))
+
     def test_a_new_selection_includes_always_tiers(self):
         ADOPT.run(self.root, ["python"], [], "write")
         self.assertIn("python@tj-agents", self.selected())
