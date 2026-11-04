@@ -18,6 +18,8 @@ import repo_config
 
 LOCK = Path(__file__).resolve().parent / "marketplace_plugins.lock.json"
 STACKS = Path(__file__).resolve().parent / "plugin_stacks.json"
+ADOPTION_GATED = "personal"
+HOST = plugin_selection.runtime_module("host").Host
 
 
 def load_roster(snapshot: dict | None = None) -> dict:
@@ -71,6 +73,23 @@ def expand(requested: set[str], roster: dict) -> list[str]:
     return sorted(selected)
 
 
+def always_plugins(roster: dict) -> set[str]:
+    tiers: dict[str, tuple[float, object]] = {}
+    for host in HOST:
+        cache = host.configuration_root / "plugins" / "cache" / plugin_selection.MARKETPLACE_NAME
+        for path in cache.glob("*/*/tier.json"):
+            name = path.parent.parent.name
+            if name not in roster["plugins"]:
+                continue
+            try:
+                modified, applies = path.stat().st_mtime, lock_io.load_json(path).get("applies")
+            except (OSError, lock_io.LockError):
+                continue
+            if modified >= tiers.get(name, (0.0, None))[0]:
+                tiers[name] = (modified, applies)
+    return {name for name, (_, applies) in tiers.items() if applies == "always" and name != ADOPTION_GATED}
+
+
 def requested_plugins(stacks: list[str], plugins: list[str], roster: dict) -> tuple[set[str], set[str]]:
     unknown = sorted(set(stacks) - set(roster["stacks"]))
     if unknown:
@@ -110,12 +129,13 @@ def removal_identities(plugins: list[str]) -> set[str]:
 
 def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict) -> dict:
     selection = plugin_selection.resolve(root)
+    withdrawn = removals | repo_config.explicit_exclusions(root)
     kept: list[str] = []
     marketplaces = {}
     if selection.is_file():
         document = lock_io.load_json(selection)
         marketplaces, kept = plugin_selection.validate(document)
-        kept = [identity for identity in kept if identity not in removals and (
+        kept = [identity for identity in kept if identity not in withdrawn and (
             plugin_selection.split(identity)[1] != plugin_selection.MARKETPLACE_NAME
             or plugin_selection.split(identity)[0] in roster["plugins"])]
         requested |= {plugin_selection.split(identity)[0] for identity in kept
@@ -123,13 +143,14 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
                       and plugin_selection.split(identity)[0] in roster["plugins"]}
     elif not requested and not foreign and not removals:
         requested = set(plugin_selection.CORE_PLUGINS)
+    requested |= {name for name in always_plugins(roster) if plugin_selection.plugin_id(name) not in withdrawn}
     selected = {plugin_selection.plugin_id(name) for name in expand(requested, roster)} | set(kept) | foreign
-    selected -= removals
+    selected -= withdrawn
     local = {plugin_selection.split(identity)[0] for identity in selected
              if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
              and plugin_selection.split(identity)[0] in roster["plugins"]}
     required = set().union(*(expand({name}, roster) for name in local)) if local else set()
-    blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
+    blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in withdrawn)
     if blocked:
         raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
     if requested:

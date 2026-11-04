@@ -22,6 +22,7 @@ python -B '<skill-directory>/scripts/refresh_plugins.py' --project '<absolute-ch
 On Linux/macOS use `python3`. It updates only installs whose plugin files differ from the published head, on both hosts. If it
 reports `current` but a plugin is still stale, rerun with `--all` (optionally `--host claude|codex`).
 `--verify` also checks native installations against remote main; `--verify-only` changes nothing.
+Refresh first adds missing always-applicable plugins to the repository selection; `--verify-only` reports them as drift.
 
 It fails loudly on a native update that did not persist and a plugin the host lists with errors; report
 those.
