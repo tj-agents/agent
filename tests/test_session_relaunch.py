@@ -130,9 +130,7 @@ class Shared:
     def own_host_and_entry(self):
         return {"host": "claude", "session_id": SESSION, "pid": 4242, "pid_started_at": 1000.5, "title": "Work"}
 
-    def start_detached(self, script, arguments, *, foreground_bootstrap=False):
-        if not foreground_bootstrap:
-            raise AssertionError("foreground recovery must outlive its dispatcher")
+    def start_detached(self, script, arguments):
         self.events.append(("watcher", Path(script).name, arguments))
 
 

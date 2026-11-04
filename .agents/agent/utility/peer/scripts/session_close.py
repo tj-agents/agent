@@ -19,6 +19,26 @@ from pathlib import Path
 import register_session
 
 
+def _process_runtime():
+    here = Path(__file__).resolve().parent
+    if (here / "tj_cli" / "process" / "__init__.py").is_file():
+        return here
+    for root in Path(__file__).resolve().parents:
+        if (root / ".agents" / "plugins" / "payloads.json").is_file():
+            runtime = root / "plugins" / "agent" / ".agents" / "agent" / "runtime"
+        else:
+            runtime = root / ".agents" / "agent" / "runtime"
+        if (runtime / "tj_cli" / "process" / "__init__.py").is_file():
+            return runtime
+    raise RuntimeError("the packaged Agent process runtime is unavailable")
+
+
+_PROCESS_RUNTIME = _process_runtime()
+if str(_PROCESS_RUNTIME) not in sys.path:
+    sys.path.insert(0, str(_PROCESS_RUNTIME))
+from tj_cli import process
+
+
 IDENTITY_TOLERANCE_SECONDS = 2.0
 SUBPROCESS_TIMEOUT_SECONDS = 20
 DEFAULT_TIMEOUTS = {
@@ -506,17 +526,10 @@ def same_session_process(left, right):
     )
 
 
-def _hidden_command(command):
-    native = shutil.which("tj_hook.exe" if os.name == "nt" else "tj_hook")
-    if not native:
-        raise Refusal("tj_hook is required for background process execution")
-    return [str(Path(native).absolute()), "--", *command]
-
-
 def git(cwd, *arguments):
     try:
-        result = subprocess.run(
-            _hidden_command(["git", "-C", str(cwd), *arguments]), text=True, encoding="utf-8",
+        result = process.run(
+            ["git", "-C", str(cwd), *arguments], text=True, encoding="utf-8",
             capture_output=True, check=False, timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -578,8 +591,8 @@ def windows_task_xml(user, command, working_directory):
 
 
 def current_windows_user(kwargs, timeout):
-    completed = subprocess.run(
-        _hidden_command(["whoami.exe", "/user", "/fo", "csv", "/nh"]), **kwargs, check=False, timeout=timeout,
+    completed = process.run(
+        ["whoami.exe", "/user", "/fo", "csv", "/nh"], **kwargs, check=False, timeout=timeout,
     )
     rows = list(csv.reader(completed.stdout.splitlines()))
     user = rows[0][-1].strip() if len(rows) == 1 and rows[0] else ""
@@ -609,13 +622,12 @@ def _write_observer_store_receipt(staging):
     os.replace(temporary, receipt)
 
 
-def detached_command(script, arguments, launcher, foreground_bootstrap=False):
+def detached_command(script, arguments, launcher):
     """Build a scheduler-safe command that restores only the owned context."""
-    interpreter = Path(sys.executable)
-    if foreground_bootstrap and os.name == "nt":
-        interpreter = interpreter.with_name("pythonw.exe")
+    interpreter = Path(sys.executable).with_name("pythonw.exe") if os.name == "nt" else Path(sys.executable)
+    if os.name == "nt":
         if not interpreter.is_file():
-            raise Refusal("pythonw.exe is required for an independent foreground-session bootstrap")
+            raise Refusal("pythonw.exe is required for an independent detached observer")
     command = [str(interpreter), "-I", "-B", str(launcher), "--state-directory", str(state_directory().resolve()),
                "--search-path", os.environ.get("PATH", os.defpath)]
     for option, key in (("--codex-home", "CODEX_HOME"), ("--claude-config-dir", "CLAUDE_CONFIG_DIR")):
@@ -623,12 +635,10 @@ def detached_command(script, arguments, launcher, foreground_bootstrap=False):
         if value:
             command += [option, str(Path(value).resolve())]
     command += ["--", str(Path(script).resolve()), *arguments]
-    if foreground_bootstrap:
-        return command
-    return _hidden_command(command)
+    return command
 
 
-def start_detached(script, arguments, extra=(), stage=True, foreground_bootstrap=False):
+def start_detached(script, arguments, extra=(), stage=True):
     """Run a staged script outside the host's process tree, so it outlives the host closing."""
     here = Path(__file__)
     if stage:
@@ -641,6 +651,7 @@ def start_detached(script, arguments, extra=(), stage=True, foreground_bootstrap
         if store is not None:
             for name in OBSERVER_STORE_FILES[1:]:
                 shutil.copy2(store.with_name(name), staging / name)
+            shutil.copytree(store.parent / "tj_cli", staging / "tj_cli")
             _write_observer_store_receipt(staging)
         command = [sys.executable, str(staging / Path(script).name), *arguments]
     else:
@@ -650,8 +661,7 @@ def start_detached(script, arguments, extra=(), stage=True, foreground_bootstrap
     timeout = bounded_timeout("AGENT_FINISH_SPAWN_TIMEOUT_SECONDS")
     if os.name == "nt":
         launcher = (staging / "detached_launch.py") if stage else here.with_name("detached_launch.py")
-        command = detached_command(script if not stage else staging / Path(script).name, arguments, launcher,
-                                   foreground_bootstrap=foreground_bootstrap)
+        command = detached_command(script if not stage else staging / Path(script).name, arguments, launcher)
         task = "agent-finish-reaper-" + uuid.uuid4().hex
         scheduler_kwargs = {
             "cwd": str(state_directory()), "stdin": subprocess.DEVNULL,
@@ -668,8 +678,8 @@ def start_detached(script, arguments, extra=(), stage=True, foreground_bootstrap
             with stream:
                 stream.write(windows_task_xml(user, command, state_directory()))
             registered = True
-            create = subprocess.run(
-                _hidden_command(["schtasks.exe", "/create", "/tn", task, "/xml", xml_path, "/f"]),
+            create = process.run(
+                ["schtasks.exe", "/create", "/tn", task, "/xml", xml_path, "/f"],
                 **scheduler_kwargs, check=False, timeout=timeout,
             )
             if create.returncode:
@@ -677,7 +687,7 @@ def start_detached(script, arguments, extra=(), stage=True, foreground_bootstrap
                     "could not create a detached cleanup observer ("
                     + scheduler_diagnostic(create) + ")"
                 )
-            run = subprocess.run(_hidden_command(["schtasks.exe", "/run", "/tn", task]), **scheduler_kwargs,
+            run = process.run(["schtasks.exe", "/run", "/tn", task], **scheduler_kwargs,
                                  check=False, timeout=timeout)
             if run.returncode:
                 raise Refusal(
@@ -692,7 +702,7 @@ def start_detached(script, arguments, extra=(), stage=True, foreground_bootstrap
             Path(xml_path).unlink(missing_ok=True)
             if registered:
                 try:
-                    subprocess.run(_hidden_command(["schtasks.exe", "/delete", "/tn", task, "/f"]),
+                    process.run(["schtasks.exe", "/delete", "/tn", task, "/f"],
                                    **scheduler_kwargs, check=False, timeout=timeout)
                 except subprocess.TimeoutExpired:
                     pass

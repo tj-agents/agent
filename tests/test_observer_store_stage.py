@@ -41,7 +41,7 @@ class ObserverStoreStageTests(unittest.TestCase):
 
     def start_stage(self):
         with mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.state)}), \
-                mock.patch.object(session_close.subprocess, 'run', side_effect=self.scheduler), \
+                mock.patch.object(session_close.process, 'run', side_effect=self.scheduler), \
                 mock.patch.object(session_close.subprocess, 'Popen', return_value=SimpleNamespace(pid=1)):
             session_close.start_observer(['--result', 'unused'])
         return next((self.state / 'merge-cleanup' / 'observers').iterdir())
@@ -54,6 +54,8 @@ class ObserverStoreStageTests(unittest.TestCase):
 
         self.assertIsNotNone(store)
         self.assertTrue(hasattr(store.SessionStore, 'delete_session'))
+        checkout = load_register(staging / 'checkout.py', 'receipted_staged_checkout')
+        self.assertEqual(staging, checkout._PROCESS_RUNTIME)
         receipt = (staging / '.tj-agents-observer-store.json').read_text(encoding='utf-8')
         self.assertIn('tj-agents-agent-observer-store', receipt)
 

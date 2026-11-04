@@ -101,8 +101,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(context.run.sid, values["/Task/Triggers/LogonTrigger/UserId"])
         self.assertIn("--watch", values["/Task/Actions/Exec/Arguments"])
         self.assertIn("ü", values["/Task/Actions/Exec/Arguments"])
-        self.assertEqual("/fake/bin/tj_hook.exe", values["/Task/Actions/Exec/Command"])
-        self.assertTrue(values["/Task/Actions/Exec/Arguments"].startswith("-- "))
+        self.assertEqual("pythonw.exe", Path(values["/Task/Actions/Exec/Command"]).name)
         for argv, kwargs in context.run.calls:
             self.assertEqual("utf-8", kwargs["encoding"])
             self.assertNotIn("topic", base64.b64decode(argv[-1]).decode("utf-16-le"))
@@ -155,20 +154,18 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(all("ConvertTo-Json" in base64.b64decode(argv[-1]).decode("utf-16-le")
                             for argv, _ in context.run.calls))
 
-    def test_windows_worker_requires_the_shared_native_launcher(self):
+    def test_windows_worker_requires_adjacent_pythonw(self):
         context = self.context(windows=True)
-        context.which = lambda name: None
-        with self.assertRaisesRegex(SERVICE.ServiceError, "tj_hook must be installed"):
-            SERVICE.windows_action(context)
+        with mock.patch.object(Path, "is_file", return_value=False):
+            with self.assertRaisesRegex(SERVICE.ServiceError, "pythonw.exe is required"):
+                SERVICE.windows_action(context)
 
-    def test_windows_gui_python_is_replaced_beneath_the_shared_native_launcher(self):
+    def test_windows_worker_uses_adjacent_pythonw(self):
         context = self.context(windows=True)
         with mock.patch.object(SERVICE.sys, "executable", "/python/pythonw.exe"), \
                 mock.patch.object(Path, "is_file", return_value=True):
             command = SERVICE.service_command(context)
-        self.assertEqual("/fake/bin/tj_hook.exe", command[0])
-        self.assertEqual("--", command[1])
-        self.assertEqual("python.exe", Path(command[2]).name)
+        self.assertEqual("pythonw.exe", Path(command[0]).name)
 
     def test_windows_rejects_additional_action(self):
         context = self.context(windows=True)

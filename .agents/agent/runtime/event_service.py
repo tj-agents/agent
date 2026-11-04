@@ -75,15 +75,12 @@ def ps_command(context, script: str) -> list[str]:
 
 
 def service_command(context) -> list[str]:
-    launcher = context.which("tj_hook.exe" if context.windows else "tj_hook")
-    if not launcher:
-        raise ServiceError("tj_hook must be installed before registering the background worker")
     interpreter = Path(sys.executable)
-    if context.windows and interpreter.name.casefold() == "pythonw.exe":
-        interpreter = interpreter.with_name("python.exe")
+    if context.windows:
+        interpreter = interpreter.with_name("pythonw.exe")
         if not interpreter.is_file():
-            raise ServiceError("Console Python is required beneath the hidden tj_hook worker")
-    return [launcher, "--", str(interpreter), *arguments(context)]
+            raise ServiceError("pythonw.exe is required for the machine-event scheduled task")
+    return [str(interpreter), *arguments(context)]
 
 
 def windows_action(context) -> tuple[str, str]:

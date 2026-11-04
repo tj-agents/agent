@@ -1,11 +1,10 @@
-"""Git checkout probing for the session store (Python 3.9+)."""
+"""Git checkout probing for the session store (Python 3.12+)."""
 
 from dataclasses import dataclass
 import hashlib
 import importlib.util
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 from typing import Optional
@@ -19,6 +18,24 @@ if _LOADER_KEY not in sys.modules:
     sys.modules[_LOADER_KEY] = _loader
 load_sibling = sys.modules[_LOADER_KEY].load_sibling
 
+
+def _process_runtime():
+    here = Path(__file__).resolve().parent
+    if (here / "tj_cli" / "process" / "__init__.py").is_file():
+        return here
+    for root in Path(__file__).resolve().parents:
+        if (root / ".agents" / "plugins" / "payloads.json").is_file():
+            runtime = root / "plugins" / "agent-store" / ".agents" / "agent-store" / "runtime"
+            if (runtime / "tj_cli" / "process" / "__init__.py").is_file():
+                return runtime
+    raise RuntimeError("the packaged Agent Store process runtime is unavailable")
+
+
+_PROCESS_RUNTIME = _process_runtime()
+if str(_PROCESS_RUNTIME) not in sys.path:
+    sys.path.insert(0, str(_PROCESS_RUNTIME))
+from tj_cli import process
+
 _identity = load_sibling(__file__, "repository_identity")
 
 GIT_TIMEOUT = 3
@@ -29,11 +46,8 @@ _ORIGIN_HEAD_PREFIX = "ref: refs/remotes/origin/"
 
 def _run_git(cwd, args, timeout):
     try:
-        launcher = shutil.which("tj_hook.exe" if os.name == "nt" else "tj_hook")
-        if not launcher:
-            raise FileNotFoundError("tj_hook is required for repository probes")
-        result = subprocess.run(
-            [str(Path(launcher).absolute()), "--", "git", "-C", str(cwd), *args],
+        result = process.run(
+            ["git", "-C", str(cwd), *args],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
     except subprocess.TimeoutExpired:
