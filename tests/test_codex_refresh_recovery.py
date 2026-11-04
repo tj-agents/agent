@@ -38,6 +38,9 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         self.watcher = load("relaunch_watcher")
         self.recovery = recovery
         self.refresh = load("reload_plugins")
+        native = mock.patch.object(self.refresh.native_runtime, "prepare", return_value=())
+        native.start()
+        self.addCleanup(native.stop)
         caller = mock.patch.object(self.refresh, "calling_host", return_value=Host.CODEX)
         caller.start()
         self.addCleanup(caller.stop)
