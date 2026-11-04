@@ -38,17 +38,27 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR ignored, int s
     }
     while (*tail == L' ' || *tail == L'\t') ++tail;
 
-    DWORD hook_length = SearchPathW(NULL, L"tj_hook.exe", NULL, 0, NULL, NULL);
+    DWORD path_length = GetEnvironmentVariableW(L"PATH", NULL, 0);
+    wchar_t *search = path_length ? (wchar_t *)calloc(path_length, sizeof(wchar_t)) : NULL;
+    if (!search || !GetEnvironmentVariableW(L"PATH", search, path_length)) {
+        free(search);
+        free(bash);
+        return fail("hidden-bash: PATH is unavailable\n");
+    }
+    DWORD hook_length = SearchPathW(search, L"tj_hook.exe", NULL, 0, NULL, NULL);
     if (!hook_length) {
+        free(search);
         free(bash);
         return fail("hidden-bash: tj_hook is not installed on PATH\n");
     }
     wchar_t *hook = (wchar_t *)calloc((size_t)hook_length + 1, sizeof(wchar_t));
-    if (!hook || !SearchPathW(NULL, L"tj_hook.exe", NULL, hook_length + 1, hook, NULL)) {
+    if (!hook || !SearchPathW(search, L"tj_hook.exe", NULL, hook_length + 1, hook, NULL)) {
+        free(search);
         free(hook);
         free(bash);
         return fail("hidden-bash: tj_hook path is unavailable\n");
     }
+    free(search);
     size_t command_length = wcslen(hook) + wcslen(bash) + wcslen(tail) + 10;
     wchar_t *command = (wchar_t *)calloc(command_length, sizeof(wchar_t));
     if (!command) {

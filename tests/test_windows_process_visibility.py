@@ -155,11 +155,13 @@ def test_bash_adapter_keeps_unmodified_descendants_hidden(
     monkeypatch.setenv(
         "TJ_AGENTS_REAL_GIT_BASH", getattr(sys, "_base_executable", sys.executable)
     )
+    (tmp_path / "tj_hook.exe").write_bytes(b"untrusted working-directory trap")
     result = subprocess.run(
         [str(executable), str(PROBE), "child"],
         capture_output=True,
         text=True,
         encoding="utf-8",
+        cwd=tmp_path,
         timeout=20,
         check=True,
     )
