@@ -100,17 +100,22 @@ def scenario(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GitScenario:
     return result
 
 
+@pytest.mark.parametrize("local_environment", [False, True])
 def test_real_stash_conflicts_converge_both_hosts_preserving_user_edits(
     scenario: GitScenario,
+    local_environment: bool,
 ) -> None:
     scenario.stash_conflict()
     index = scenario.git("ls-files", "-u")
     assert isinstance(index, str)
     # Edits made after the failed stash application must survive too.
     path = scenario.root / ".codex/config.toml"
-    path.write_text(
-        'model = "custom-model"\n' + path.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    prefix = 'model = "custom-model"\n'
+    if local_environment:
+        prefix += (
+            '[shell_environment_policy.set]\nGH_CONFIG_DIR = "/home/fixture/bot"\n'
+        )
+    path.write_text(prefix + path.read_text(encoding="utf-8"), encoding="utf-8")
     before = scenario.snapshot()
     assert ADOPT.reconcile(scenario.root, "check")
     assert before == scenario.snapshot()
@@ -125,6 +130,11 @@ def test_real_stash_conflicts_converge_both_hosts_preserving_user_edits(
     assert set(selection) == set(claude["enabledPlugins"])
     assert set(selection) == set(codex["plugins"])
     assert codex["model"] == "custom-model"
+    if local_environment:
+        assert (
+            codex["shell_environment_policy"]["set"]["GH_CONFIG_DIR"]
+            == "/home/fixture/bot"
+        )
     assert index == scenario.git("ls-files", "-u")
     assert ADOPT.reconcile(scenario.root, "write") == []
 
