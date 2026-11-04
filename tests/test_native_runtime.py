@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ sys.path.insert(0, str(RUNTIME))
 import native_runtime  # noqa: E402
 
 events = importlib.import_module("machine_events")
+autoupdate = importlib.import_module("plugin_autoupdate")
 install = importlib.import_module("install")
 launch = importlib.import_module("launch_check")
 required = importlib.import_module("required_plugins")
@@ -89,6 +91,95 @@ def test_launch_bootstraps_before_native_plugin_inventory(tmp_path: Path) -> Non
             {},
         )
     assert order == ["native", "plugins"]
+
+
+@pytest.mark.parametrize("host_name", ["claude", "codex"])
+@pytest.mark.parametrize("startup", [False, True])
+@pytest.mark.parametrize("managed", [False, True])
+@pytest.mark.parametrize("failure", ["busy", "runtime", "os"])
+def test_native_preparation_failure_blocks_only_managed_launches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    host_name: str,
+    startup: bool,
+    managed: bool,
+    failure: str,
+) -> None:
+    project = tmp_path / "selected project ü"
+    (project / ".agents").mkdir(parents=True)
+    (project / ".agents/plugins.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "plugins": ["agent@tj-agents" if managed else "other@example"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path / "native"))
+    error = (
+        RuntimeError("native release unavailable")
+        if failure == "runtime"
+        else OSError("native install unavailable")
+    )
+    with (
+        mock.patch.object(required, "launch_context", return_value=(project, ())),
+        mock.patch.object(native_runtime, "missing", return_value=("tj_hook",)),
+        mock.patch.object(
+            autoupdate,
+            "state_directory",
+            return_value=tmp_path / "state",
+        ),
+        mock.patch.object(
+            autoupdate,
+            "acquire_lock",
+            return_value=None if failure == "busy" else mock.Mock(),
+        ),
+        mock.patch.object(
+            native_install, "ensure_native", side_effect=error
+        ) as install,
+        mock.patch.object(reload, "prepare_required") as inventory,
+        mock.patch.object(launch, "recover_install") as recover,
+        mock.patch.object(launch, "check", return_value="current") as check,
+        mock.patch.object(startup_binding.managed_admission, "verify") as verify,
+        mock.patch.object(startup_binding, "run_session", return_value=0) as native,
+        mock.patch.object(startup_binding, "_prelaunch_terminal", return_value=None),
+        mock.patch.object(
+            startup_binding.register_session, "terminal_identity", return_value=None
+        ),
+    ):
+        arguments = [
+            "--host",
+            host_name,
+            "--project",
+            str(tmp_path),
+            "--target",
+            "native",
+        ]
+        if startup:
+            arguments.append("--require-session-start")
+        entrypoint = startup_binding.main if startup else launch.main
+        result = entrypoint(arguments)
+
+    assert result == int(managed)
+    inventory.assert_not_called()
+    recover.assert_not_called()
+    verify.assert_not_called()
+    if failure == "busy":
+        install.assert_not_called()
+    else:
+        install.assert_called_once_with(tmp_path / "native", revision=None)
+    if managed:
+        native.assert_not_called()
+        check.assert_not_called()
+        assert "Managed readiness" in capsys.readouterr().err
+    elif startup:
+        native.assert_called_once()
+        assert "require_session_start" not in native.call_args.kwargs
+    else:
+        check.assert_not_called()
+        assert "launching anyway" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Git configuration validation")
