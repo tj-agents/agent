@@ -4,28 +4,40 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
 
-def console_state() -> dict[str, bool]:
-    if sys.platform != "win32":
-        return {"attached": False, "visible": False}
-    import ctypes
+def console_state() -> dict[str, bool | int]:
+    state: dict[str, bool | int] = {"attached": False, "visible": False, "window": 0}
+    if sys.platform == "win32":
+        import ctypes
 
-    kernel = ctypes.WinDLL("kernel32")
-    user = ctypes.WinDLL("user32")
-    kernel.GetConsoleWindow.restype = ctypes.c_void_p
-    user.IsWindowVisible.argtypes = [ctypes.c_void_p]
-    window = kernel.GetConsoleWindow()
-    return {"attached": bool(window), "visible": bool(user.IsWindowVisible(window))}
+        kernel = ctypes.WinDLL("kernel32")
+        user = ctypes.WinDLL("user32")
+        kernel.GetConsoleWindow.restype = ctypes.c_void_p
+        kernel.SetConsoleTitleW.argtypes = [ctypes.c_wchar_p]
+        user.IsWindowVisible.argtypes = [ctypes.c_void_p]
+        window = kernel.GetConsoleWindow()
+        title = os.environ.get("TJ_AGENT_WINDOW_PROBE")
+        if window and title:
+            kernel.SetConsoleTitleW(title)
+            time.sleep(0.05)
+        state = {
+            "attached": bool(window),
+            "visible": bool(user.IsWindowVisible(window)),
+            "window": int(window or 0),
+        }
+    return state
 
 
 class ProbedError(Exception):
-    def __init__(self, console: dict[str, bool]) -> None:
+    def __init__(self, console: dict[str, bool | int]) -> None:
         self.console = console
 
 
@@ -43,7 +55,9 @@ def main() -> None:
             timeout=10,
             check=True,
         )
-        state["descendant_visible"] = json.loads(descendant.stdout)["visible"]
+        child_state = json.loads(descendant.stdout)
+        state["descendant_visible"] = child_state["visible"]
+        state["descendant_window"] = child_state["window"]
         print(json.dumps(state))
         return
 
@@ -101,6 +115,10 @@ def main() -> None:
                     "child_console": result.console["attached"],
                     "child_visible": result.console["visible"]
                     or result.console["descendant_visible"],
+                    "console_windows": [
+                        result.console["window"],
+                        result.console["descendant_window"],
+                    ],
                 }
             )
         )
