@@ -115,9 +115,7 @@ def test_real_stash_conflicts_converge_both_hosts_preserving_user_edits(
         prefix += (
             '[shell_environment_policy.set]\nGH_CONFIG_DIR = "/home/fixture/bot"\n'
         )
-    path.write_text(
-        prefix + path.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    path.write_text(prefix + path.read_text(encoding="utf-8"), encoding="utf-8")
     before = scenario.snapshot()
     assert ADOPT.reconcile(scenario.root, "check")
     assert before == scenario.snapshot()
