@@ -59,7 +59,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR ignored, int s
         return fail("hidden-bash: tj_hook path is unavailable\n");
     }
     free(search);
-    size_t command_length = wcslen(hook) + wcslen(bash) + wcslen(tail) + 10;
+    const wchar_t *separator = L"\" --preserve-descendants -- \"";
+    size_t command_length = wcslen(hook) + wcslen(bash) + wcslen(tail) + wcslen(separator) + 4;
     wchar_t *command = (wchar_t *)calloc(command_length, sizeof(wchar_t));
     if (!command) {
         free(hook);
@@ -68,7 +69,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR ignored, int s
     }
     wcscat(command, L"\"");
     wcscat(command, hook);
-    wcscat(command, L"\" -- \"");
+    wcscat(command, separator);
     wcscat(command, bash);
     wcscat(command, L"\"");
     if (*tail) {

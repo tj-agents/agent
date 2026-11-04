@@ -42,6 +42,33 @@ class ProbedError(Exception):
 
 
 def main() -> None:
+    if sys.argv[1] == "background-child":
+        report = Path(sys.argv[2])
+        pending = report.with_suffix(".pending")
+        pending.write_text(
+            json.dumps({**console_state(), "pid": os.getpid()}), encoding="utf-8"
+        )
+        pending.replace(report)
+        time.sleep(30)
+        return
+    if sys.argv[1] == "background":
+        report = Path(sys.argv[2])
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "background-child",
+                str(report),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + 10
+        while not report.is_file():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("background child did not become ready")
+            time.sleep(0.01)
+        return
     if sys.argv[1] == "grandchild":
         print(json.dumps(console_state()))
         return

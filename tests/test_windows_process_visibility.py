@@ -13,7 +13,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 import pytest
-from tj_cli import process
+from tj_cli import process, processes
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "tests/fixtures/plugin_console_probe.py"
@@ -193,3 +193,22 @@ def test_bash_adapter_keeps_unmodified_descendants_hidden(
     assert observed["attached"]
     assert not observed["visible"]
     assert not observed["descendant_visible"]
+    report = tmp_path / "background-child.json"
+    subprocess.run(
+        [str(executable), str(PROBE), "background", str(report)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        timeout=20,
+        check=True,
+    )
+    background = json.loads(report.read_text(encoding="utf-8"))
+    identity = processes.process_info(background["pid"])
+    assert identity is not None, "Bash adapter killed its shell's surviving child"
+    try:
+        assert background["attached"]
+        assert not background["visible"]
+    finally:
+        processes.stop(
+            {"pid": identity.pid, "started_at": identity.started_at},
+            before_signal=lambda: None,
+        )
