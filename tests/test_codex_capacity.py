@@ -18,7 +18,7 @@ BUNDLED_RUNTIME = (
 sys.path.insert(0, str(RUNTIME))
 sys.path.insert(0, str(BUNDLED_RUNTIME))
 
-import capacity  # noqa: E402
+from codex import capacity, frontend_input  # noqa: E402
 from codex import client as bundled_client  # noqa: E402
 
 
@@ -221,7 +221,9 @@ def test_recovery_reserves_one_exact_thread_continuation_without_model_overrides
 ) -> None:
     recording = tmp_path / "events.jsonl"
     recording.write_text(
-        json.dumps(
+        json.dumps({"dir": "meta", "kind": "session_start"})
+        + "\n"
+        + json.dumps(
             {
                 "dir": "from_tui",
                 "kind": "op",
@@ -249,7 +251,7 @@ def test_recovery_reserves_one_exact_thread_continuation_without_model_overrides
         },
         clock=lambda: 1.0,
     )
-    identity = capacity.RecordingReader(recording).poll()[2]
+    identity = frontend_input.FrontendInput(recording, set()).snapshot()[2]
     monitor.ticket["_capacity_record_identity"] = identity
     server = FakeServer(tmp_path)
     client = FakeClient(recording)
@@ -271,9 +273,9 @@ def test_recovery_reserves_one_exact_thread_continuation_without_model_overrides
         "turn_id": "manual-turn",
         "cwd": str(tmp_path.resolve()),
     }
-    monitor._recover(server, client, candidate, "manual-input", 1)
+    monitor._recover(server, client, candidate, "manual-input", 2)
     second_observer = capacity.CapacityMonitor(monitor.ticket, clock=lambda: 1.0)
-    second_observer._recover(server, client, candidate, "manual-input", 1)
+    second_observer._recover(server, client, candidate, "manual-input", 2)
     assert len(server.sent) == 1
     method, params = server.sent[0]
     assert method == "turn/start"
@@ -293,7 +295,9 @@ def test_disconnect_after_submission_reconciles_the_same_receipt_without_resend(
 ) -> None:
     recording = tmp_path / "events.jsonl"
     recording.write_text(
-        json.dumps(
+        json.dumps({"dir": "meta", "kind": "session_start"})
+        + "\n"
+        + json.dumps(
             {
                 "dir": "from_tui",
                 "kind": "op",
@@ -314,7 +318,9 @@ def test_disconnect_after_submission_reconciles_the_same_receipt_without_resend(
         "launch_cwd": str(tmp_path.resolve()),
         "token": "binding-token",
         "_capacity_executable": "/profile/codex",
-        "_capacity_record_identity": capacity.RecordingReader(recording).poll()[2],
+        "_capacity_record_identity": frontend_input.FrontendInput(
+            recording, set()
+        ).snapshot()[2],
     }
     client = FakeClient(recording)
     client.binding.write_text(
@@ -338,7 +344,7 @@ def test_disconnect_after_submission_reconciles_the_same_receipt_without_resend(
     }
     for _ in range(2):
         observer = capacity.CapacityMonitor(ticket, clock=lambda: 1.0)
-        observer._recover(server, client, candidate, "manual-input", 1)
+        observer._recover(server, client, candidate, "manual-input", 2)
     assert len(server.sent) == 1
 
 
@@ -348,7 +354,9 @@ def test_repeated_native_system_errors_retry_five_times_then_stop(
 ) -> None:
     recording = tmp_path / "events.jsonl"
     recording.write_text(
-        json.dumps(
+        json.dumps({"dir": "meta", "kind": "session_start"})
+        + "\n"
+        + json.dumps(
             {
                 "dir": "from_tui",
                 "kind": "op",
@@ -367,7 +375,9 @@ def test_repeated_native_system_errors_retry_five_times_then_stop(
         "launch_cwd": str(tmp_path.resolve()),
         "token": "binding-token",
         "_capacity_executable": "/profile/codex",
-        "_capacity_record_identity": capacity.RecordingReader(recording).poll()[2],
+        "_capacity_record_identity": frontend_input.FrontendInput(
+            recording, set()
+        ).snapshot()[2],
     }
     client = FakeClient(recording)
     client.binding.write_text(
@@ -433,11 +443,11 @@ def test_repeated_native_system_errors_retry_five_times_then_stop(
         "cwd": str(tmp_path.resolve()),
     }
     for _ in range(7):
-        monitor._recover(server, client, candidate, "manual-input", 1)
+        monitor._recover(server, client, candidate, "manual-input", 2)
     assert len(server.sent) == 5
     assert len({params["clientUserMessageId"] for _, params in server.sent}) == 5
     server.completed = True
-    monitor._recover(server, client, candidate, "manual-input", 1)
+    monitor._recover(server, client, candidate, "manual-input", 2)
     assert len(server.sent) == 5
 
 
@@ -476,7 +486,13 @@ def test_new_manual_input_during_retry_delay_cancels_send(
         "kind": "op",
         "payload": {"UserTurn": {"client_user_message_id": "manual-input"}},
     }
-    recording.write_text(json.dumps(manual) + "\n", encoding="utf-8")
+    recording.write_text(
+        json.dumps({"dir": "meta", "kind": "session_start"})
+        + "\n"
+        + json.dumps(manual)
+        + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(capacity, "DELAYS", (5,))
     monitor = capacity.CapacityMonitor(
         {
@@ -490,7 +506,7 @@ def test_new_manual_input_during_retry_delay_cancels_send(
         clock=lambda: 1.0,
     )
     monitor.recording.poll()
-    monitor.ticket["_capacity_record_identity"] = monitor.recording.identity
+    monitor.ticket["_capacity_record_identity"] = monitor.recording.stream.identity
 
     def replace_input(_timeout: float) -> bool:
         with recording.open("a", encoding="utf-8") as stream:
@@ -638,7 +654,7 @@ def test_recording_reader_defers_partial_line_then_reads_only_append(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "events.jsonl"
-    reader = capacity.RecordingReader(path)
+    reader = frontend_input.FrontendInput(path, set())
     row = json.dumps(
         {
             "dir": "from_tui",
@@ -647,14 +663,14 @@ def test_recording_reader_defers_partial_line_then_reads_only_append(
         }
     ).encode()
     path.write_bytes(row)
-    assert reader.poll()[0] is None
-    assert reader.pending == row
+    assert reader.snapshot()[0] is None
+    assert reader.stream.offset == 0
     with path.open("ab") as stream:
         stream.write(b"\n")
-    latest, epoch, _identity = reader.poll()
+    latest, epoch, _identity = reader.snapshot()
     assert latest == "manual-input"
     assert epoch == 1
-    assert reader.pending == b""
+    assert reader.stream.settled()
 
 
 def test_stop_terminates_only_its_proxy_then_joins_monitor() -> None:
