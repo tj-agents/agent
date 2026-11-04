@@ -59,6 +59,8 @@ class ClientAttributionTests(unittest.TestCase):
             mock.patch.object(CLIENT, "current_input", return_value={"turn_id": "turn", "client_message_id": "own-input"}),
             mock.patch.object(hook_trust, "AppServer"),
         ]
+        if os.name == "nt":
+            self.patchers.append(mock.patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=False))
         for patcher in self.patchers:
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -101,6 +103,34 @@ class ClientAttributionTests(unittest.TestCase):
         self.assertEqual(prepared, arguments)
         self.assertEqual(environment[CLIENT.RECORD_ENV], "1")
         self.assertEqual(ticket["backend"], self.backend)
+
+    def test_embedded_launch_options_keep_recorder_isolation(self):
+        variants = [["--config", "model=fast"], ["--config=model=fast"], ["-cmodel=fast"],
+                    ["--profile", "selected"], ["--profile=selected"], ["-pselected"],
+                    ["--enable", "feature"], ["--disable=feature"], ["--search"], ["--oss"],
+                    ["--strict-config"], ["--dangerously-bypass-hook-trust"]]
+        for arguments in variants:
+            with self.subTest(arguments=arguments):
+                prepared, _environment, _ticket = CLIENT.prepare(arguments, self.root, os.environ, executable="codex")
+                self.assertIn('shell_environment_policy.set.CODEX_TUI_RECORD_SESSION=""', prepared)
+                self.assertIn('shell_environment_policy.set.CODEX_TUI_SESSION_LOG_PATH=""', prepared)
+
+    def test_literal_prompt_and_option_values_do_not_select_recorder_overrides(self):
+        for arguments in (["--", "--config=model=fast"], ["--model", "model", "resume", "thread"]):
+            with self.subTest(arguments=arguments):
+                prepared, _environment, _ticket = CLIENT.prepare(arguments, self.root, os.environ, executable="codex")
+                self.assertEqual(prepared, arguments)
+
+    def test_executor_selection_keeps_recorder_isolation(self):
+        environment = {**os.environ, "CODEX_EXEC_SERVER_URL": "unix:///executor.sock"}
+        prepared, _environment, _ticket = CLIENT.prepare([], self.root, environment, executable="codex")
+        self.assertIn('shell_environment_policy.set.CODEX_TUI_RECORD_SESSION=""', prepared)
+
+    @unittest.skipUnless(os.name == "nt", "Windows elevated native launch")
+    def test_elevated_windows_keeps_recorder_isolation(self):
+        with mock.patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=True):
+            prepared, _environment, _ticket = CLIENT.prepare([], self.root, os.environ, executable="codex")
+        self.assertIn('shell_environment_policy.set.CODEX_TUI_RECORD_SESSION=""', prepared)
 
     def test_private_frontend_clears_recorder_variables_for_tool_children(self):
         arguments = ["--no-daemon", "resume", "thread"]
