@@ -76,7 +76,8 @@ Agent tree. Cache timestamps cannot select an older runtime. Launch updates incl
 project's Codex selection when locating that native package; publisher lookup failure preserves the
 installed runtime and reports the update failure.
 
-Managed Codex conversations automatically respond after user-issued `!<command>` commands finish.
+Managed Codex conversations connected to the shared daemon automatically respond after user-issued
+`!<command>` commands finish.
 The native shell still executes the command once; the launcher waits for its recorded output and terminal
 completion before starting a response in that same conversation. New input, interrupts and conversation
 switches cancel a pending response. The response keeps the conversation's existing model and permissions;
@@ -85,8 +86,9 @@ command handling.
 
 Attribution requires a normal user message in the managed frontend before its first shell command.
 A shell command entered first in a fresh window, an unmanaged frontend or a `--no-daemon` session has no
-automatic response. If native delivery becomes uncertain, the launcher reports it and preserves the
-receipt rather than submitting the response twice.
+automatic response. Native launch options that select an embedded server, including custom command-line
+configuration and profiles, also prevent the automatic response. If native delivery becomes uncertain,
+the launcher reports it and preserves the receipt rather than submitting the response twice.
 
 ## Skills
 
