@@ -19,24 +19,7 @@ from pathlib import Path
 import register_session
 
 
-def _process_runtime():
-    here = Path(__file__).resolve().parent
-    if (here / "tj_cli" / "process" / "__init__.py").is_file():
-        return here
-    for root in Path(__file__).resolve().parents:
-        if (root / ".agents" / "plugins" / "payloads.json").is_file():
-            runtime = root / "plugins" / "agent" / ".agents" / "agent" / "runtime"
-        else:
-            runtime = root / ".agents" / "agent" / "runtime"
-        if (runtime / "tj_cli" / "process" / "__init__.py").is_file():
-            return runtime
-    raise RuntimeError("the packaged Agent process runtime is unavailable")
-
-
-_PROCESS_RUNTIME = _process_runtime()
-if str(_PROCESS_RUNTIME) not in sys.path:
-    sys.path.insert(0, str(_PROCESS_RUNTIME))
-from tj_cli import process
+process = register_session.shared_process()
 
 
 IDENTITY_TOLERANCE_SECONDS = 2.0
@@ -382,9 +365,9 @@ def qualified_windows_wrapper(entry):
         if register_session.stem(child.name) not in console_names:
             return None
     try:
-        command = subprocess.run(
-            _hidden_command(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-             "(Get-CimInstance -Class Win32_Process -Filter 'ProcessId = %d').CommandLine" % wrapper.pid]),
+        command = process.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+             "(Get-CimInstance -Class Win32_Process -Filter 'ProcessId = %d').CommandLine" % wrapper.pid],
             capture_output=True, text=True, encoding="utf-8", check=False,
             timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )

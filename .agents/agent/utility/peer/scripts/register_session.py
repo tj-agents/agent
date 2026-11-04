@@ -14,6 +14,7 @@ Contract: exit 0 always. Bookkeeping must never stop a session starting.
 import collections
 import functools
 import hashlib
+import importlib
 import importlib.util
 import json
 import ntpath
@@ -23,6 +24,21 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+
+def shared_process():
+    for root in (HERE, *HERE.parents):
+        if root == HERE and (root / "tj_cli" / "process" / "__init__.py").is_file():
+            runtime = root
+        elif (root / ".agents" / "plugins" / "payloads.json").is_file():
+            runtime = root / "plugins" / "agent" / ".agents" / "agent" / "runtime"
+        else:
+            runtime = root / ".agents" / "agent" / "runtime"
+        if (runtime / "tj_cli" / "process" / "__init__.py").is_file():
+            if str(runtime) not in sys.path:
+                sys.path.insert(0, str(runtime))
+            return importlib.import_module("tj_cli.process")
+    raise RuntimeError("the packaged Agent process runtime is unavailable")
 
 
 STATE_DIRECTORY_ENV = "AGENT_STATE_DIRECTORY"
@@ -318,8 +334,8 @@ def _ps_lookup(pid):
     import subprocess
 
     try:
-        result = subprocess.run(
-            ["tj_hook", "--", "ps", "-o", "ppid=,comm=,lstart=", "-p", str(pid)],
+        result = shared_process().run(
+            ["ps", "-o", "ppid=,comm=,lstart=", "-p", str(pid)],
             capture_output=True, text=True, timeout=2, check=False,
         )
     except (OSError, subprocess.SubprocessError) as error:

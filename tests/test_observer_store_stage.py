@@ -26,6 +26,19 @@ def load_register(path, name):
 
 
 class ObserverStoreStageTests(unittest.TestCase):
+    def test_windows_wrapper_query_uses_the_shared_runner(self):
+        host = SimpleNamespace(pid=20, ppid=10, started_at=101.0, name='codex.exe')
+        wrapper = SimpleNamespace(pid=10, ppid=1, started_at=100.0, name='pwsh.exe')
+        result = SimpleNamespace(returncode=0, stdout='pwsh -Command codex.exe', stderr='')
+        with mock.patch.object(session_close, 'os', SimpleNamespace(name='nt')), \
+                mock.patch.object(session_close, 'valid_entry', return_value=True), \
+                mock.patch.object(session_close, 'process_info', return_value=host), \
+                mock.patch.object(session_close.register_session, '_windows_process_table', return_value={10: wrapper, 20: host}), \
+                mock.patch.object(session_close.process, 'run', return_value=result) as run:
+            self.assertEqual({'pid': 10, 'started_at': 100.0},
+                             session_close.qualified_windows_wrapper({'pid': 20, 'pid_started_at': 101.0}))
+        self.assertEqual('powershell.exe', run.call_args.args[0][0])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='observer store ')
         self.addCleanup(self.temporary.cleanup)
