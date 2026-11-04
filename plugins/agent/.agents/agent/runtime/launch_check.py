@@ -21,6 +21,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from host import Host
+import native_runtime
 
 SERVER = "ntfy.sh"
 POLL_TIMEOUT_SECONDS = 3
@@ -293,6 +294,7 @@ def prepare_launch_roots(project, host: Host, executable, arguments):
     effective_project, options = required_plugins.launch_context(project, host, arguments)
     if effective_project is None:
         return None, None
+    native_runtime.prepare()
     try:
         roots = reload_plugins.prepare_required(effective_project, host, executable, options)
     except required_plugins.RequiredPluginsError:
