@@ -139,8 +139,10 @@ def prepare(arguments, project, environment, executable=None):
             'KONSOLE_DBUS_SESSION', 'KONSOLE_DBUS_WINDOW', 'WT_SESSION', 'AGENT_WINDOWS_TERMINAL_TAB_ID',
         ) if key in values},
     }
-    prepared = ['--config', 'shell_environment_policy.set.' + RECORD_ENV + '=""',
-                '--config', 'shell_environment_policy.set.' + RECORD_PATH_ENV + '=""', *arguments]
+    prepared = arguments
+    if backend is None:
+        prepared = ['--config', 'shell_environment_policy.set.' + RECORD_ENV + '=""',
+                    '--config', 'shell_environment_policy.set.' + RECORD_PATH_ENV + '=""', *arguments]
     return prepared, values, ticket
 
 
@@ -409,15 +411,38 @@ def process_arguments(pid):
     import ctypes
     from ctypes import wintypes
 
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-         "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
-         "(Get-CimInstance Win32_Process -Filter 'ProcessId = %d').CommandLine | ConvertTo-Json -Compress" % pid],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10, check=True,
-    )
-    line = json.loads(result.stdout)
-    if not isinstance(line, str):
-        raise RuntimeError("Native client command line is unavailable")
+    class UnicodeString(ctypes.Structure):
+        _fields_ = [("length", wintypes.USHORT), ("maximum_length", wintypes.USHORT),
+                    ("buffer", ctypes.c_void_p)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    native = ctypes.WinDLL("ntdll")
+    native.NtQueryInformationProcess.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p,
+                                                 wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)]
+    native.NtQueryInformationProcess.restype = ctypes.c_long
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        required = wintypes.ULONG()
+        native.NtQueryInformationProcess(handle, 60, None, 0, ctypes.byref(required))
+        if not ctypes.sizeof(UnicodeString) <= required.value <= 131072:
+            raise RuntimeError("Native client command line is unavailable")
+        buffer = ctypes.create_string_buffer(required.value)
+        if native.NtQueryInformationProcess(handle, 60, buffer, len(buffer), ctypes.byref(required)):
+            raise RuntimeError("Native client command line is unavailable")
+        command = UnicodeString.from_buffer(buffer)
+        start = command.buffer or 0
+        if (command.length % 2 or command.length > command.maximum_length
+                or start < ctypes.addressof(buffer) + ctypes.sizeof(UnicodeString)
+                or start + command.length > ctypes.addressof(buffer) + len(buffer)):
+            raise RuntimeError("Native client command line is invalid")
+        line = ctypes.wstring_at(start, command.length // 2)
+    finally:
+        kernel.CloseHandle(handle)
     api = ctypes.WinDLL("shell32", use_last_error=True)
     api.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
     api.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
@@ -428,7 +453,6 @@ def process_arguments(pid):
     try:
         return [values[index] for index in range(count.value)]
     finally:
-        kernel = ctypes.WinDLL("kernel32")
         kernel.LocalFree.argtypes = [ctypes.c_void_p]
         kernel.LocalFree(values)
 

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -93,6 +94,21 @@ class ClientAttributionTests(unittest.TestCase):
         self.assertEqual("own-input", record["client_message_id"])
         self.assertEqual("turn", record["turn_id"])
         CLIENT.release(ticket)
+
+    def test_shared_frontend_does_not_force_native_embedded_mode(self):
+        arguments = ["resume", "thread"]
+        prepared, environment, ticket = CLIENT.prepare(arguments, self.root, os.environ, executable="codex")
+        self.assertEqual(prepared, arguments)
+        self.assertEqual(environment[CLIENT.RECORD_ENV], "1")
+        self.assertEqual(ticket["backend"], self.backend)
+
+    def test_private_frontend_clears_recorder_variables_for_tool_children(self):
+        arguments = ["--no-daemon", "resume", "thread"]
+        prepared, _environment, ticket = CLIENT.prepare(arguments, self.root, os.environ, executable="codex")
+        self.assertIsNone(ticket["backend"])
+        self.assertEqual(prepared[-len(arguments):], arguments)
+        self.assertEqual(prepared[:4], ["--config", 'shell_environment_policy.set.CODEX_TUI_RECORD_SESSION=""',
+                                       "--config", 'shell_environment_policy.set.CODEX_TUI_SESSION_LOG_PATH=""'])
 
     def test_shared_daemon_and_frontend_are_verified_as_distinct_bindings(self):
         self.bind()
@@ -318,6 +334,27 @@ class SessionStoreAttachmentTests(unittest.TestCase):
                 store.update_session(own, lambda session: session.end("closed"))
                 store.update_session(own, lambda session: session.attach_client(30, 3.0, directory))
                 self.assertEqual(20, store.get_session(own).pid)
+
+
+@unittest.skipUnless(os.name == "nt", "Windows command-line verification")
+class NativeProcessArgumentTests(unittest.TestCase):
+    def test_live_process_arguments_preserve_quoting_without_a_shell_lookup(self):
+        arguments = [sys._base_executable, "-c", "import time; time.sleep(30)", "space value", 'quoted "value"', "é漢字"]
+        child = subprocess.Popen(arguments)
+        try:
+            with mock.patch.object(CLIENT.subprocess, "run") as query:
+                self.assertEqual(CLIENT.process_arguments(child.pid), arguments)
+                self.assertEqual(CLIENT.process_arguments(child.pid), arguments)
+            query.assert_not_called()
+        finally:
+            child.terminate()
+            child.wait(timeout=5)
+
+    def test_exited_process_has_no_command_line(self):
+        child = subprocess.Popen([sys._base_executable, "-c", "pass"])
+        child.wait(timeout=5)
+        with self.assertRaises((OSError, RuntimeError)):
+            CLIENT.process_arguments(child.pid)
 
 
 if __name__ == "__main__":
