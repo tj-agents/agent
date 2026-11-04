@@ -78,10 +78,7 @@ class ProcessBoundaries(ast.NodeVisitor):
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "Popen"
         )
-        if (
-            self.raw(node.func)
-            and not independent_posix_worker
-        ):
+        if self.raw(node.func) and not independent_posix_worker:
             self.reject(node, "use tj_cli.process")
         if any(keyword.arg == "creationflags" for keyword in node.keywords):
             self.reject(
