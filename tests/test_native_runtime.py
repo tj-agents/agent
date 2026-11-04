@@ -403,6 +403,39 @@ def test_failed_native_install_prevents_dependent_steps(tmp_path: Path) -> None:
     dependent.assert_not_called()
 
 
+@pytest.mark.parametrize("check_only", [False, True])
+def test_fresh_install_bootstraps_before_identity_checks(
+    tmp_path: Path, check_only: bool
+) -> None:
+    context = install.Context(home=tmp_path, environ={}, windows=os.name == "nt")
+    ready = False
+
+    def prepare() -> tuple[str, ...]:
+        nonlocal ready
+        ready = True
+        return ("tj", "tj_hook")
+
+    def identity(**kwargs: object) -> None:
+        assert ready
+
+    with (
+        mock.patch.object(
+            native_runtime, "missing", side_effect=lambda: () if ready else ("tj_hook",)
+        ),
+        mock.patch.object(native_runtime, "prepare", side_effect=prepare) as bootstrap,
+        mock.patch.object(
+            install.machine_events, "require_tommy", side_effect=identity
+        ) as who,
+    ):
+        steps = install.selected_steps({"native CLI"})
+        assert install.run_steps(
+            steps, context, check_only, io.StringIO(), io.StringIO()
+        ) == int(check_only)
+    assert ready is not check_only
+    assert bootstrap.call_count == int(not check_only)
+    assert who.call_count == int(not check_only)
+
+
 def test_explicit_refresh_bootstraps_before_any_native_admission(
     tmp_path: Path,
 ) -> None:

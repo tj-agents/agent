@@ -757,11 +757,11 @@ class RunStepsTests(Machine):
         cases = (
             ([], [item.name for item in install.STEPS]),
             (["--step", "shell profiles"],
-             ["preconditions", "launch-check runtime", "shell profiles"]),
+             ["native CLI", "preconditions", "launch-check runtime", "shell profiles"]),
             (["--check", "--step", "shell profiles", "--step", "launch-check runtime"],
-             ["preconditions", "launch-check runtime", "shell profiles"]),
+             ["native CLI", "preconditions", "launch-check runtime", "shell profiles"]),
             (["--step", "plugin setup"],
-             ["preconditions", "native CLI", "plugin and merge-policy catch-up", "harness permissions", "plugin setup"]),
+             ["native CLI", "preconditions", "plugin and merge-policy catch-up", "harness permissions", "plugin setup"]),
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
@@ -848,7 +848,7 @@ class RunStepsTests(Machine):
 
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
-            "preconditions", "native CLI", "native permission defaults", "event channel and publishers",
+            "native CLI", "preconditions", "native permission defaults", "event channel and publishers",
             "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
             "Codex profile agents", "plugin and merge-policy catch-up", "harness permissions",
             "plugin setup", "background machine events",
