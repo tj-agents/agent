@@ -373,6 +373,7 @@ def synchronize(projects: list[Path], *, identities: set[str] | None = None, for
             raise plugin_refresh.RefreshError("Claude plugin registry has no plugins object")
         wanted, owners, settings_targets = {}, {}, {}
         projects = repository_projects(projects)
+        required_plugins.reconcile_selections(projects)
         for project in projects:
             project = project.resolve()
             if not project.is_dir():
