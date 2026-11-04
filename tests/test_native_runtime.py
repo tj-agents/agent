@@ -6,6 +6,7 @@ import importlib
 import io
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from unittest import mock
@@ -178,6 +179,47 @@ def test_native_runtime_git_environment_preparation_is_idempotent() -> None:
         assert prepared["GIT_CONFIG_VALUE_0"].casefold() == "true"
     else:
         assert prepared == {}
+
+
+def test_native_git_preparation_preserves_empty_inherited_configuration(
+    tmp_path: Path,
+) -> None:
+    script = tmp_path / "prepare native git.py"
+    script.write_text(
+        "import subprocess\n"
+        "import sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import native_runtime\n"
+        "native_runtime.prepare_git_environment()\n"
+        "native_runtime.prepare_git_environment()\n"
+        "result = subprocess.run(\n"
+        "    ['git', 'config', '--get', 'credential.helper'],\n"
+        "    timeout=10, check=False,\n"
+        ")\n"
+        "raise SystemExit(result.returncode)\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment.update(
+        GIT_CONFIG_COUNT="2",
+        GIT_CONFIG_KEY_0="credential.helper",
+        GIT_CONFIG_VALUE_0="",
+        GIT_CONFIG_KEY_1="core.askPass",
+        GIT_CONFIG_VALUE_1="",
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-B", str(script), str(RUNTIME)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=20,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == ""
 
 
 @pytest.mark.parametrize("host_name", ["claude", "codex"])
