@@ -28,17 +28,6 @@ FOREGROUND = {
 }
 
 
-def native_command(node: ast.AST) -> bool:
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        return node.func.id == "_hidden_command"
-    return (
-        isinstance(node, ast.List)
-        and len(node.elts) > 1
-        and isinstance(node.elts[1], ast.Constant)
-        and node.elts[1].value == "--"
-    )
-
-
 class ProcessBoundaries(ast.NodeVisitor):
     def __init__(self, path: str, tree: ast.Module) -> None:
         self.path = path
@@ -91,10 +80,9 @@ class ProcessBoundaries(ast.NodeVisitor):
         )
         if (
             self.raw(node.func)
-            and not (node.args and native_command(node.args[0]))
             and not independent_posix_worker
         ):
-            self.reject(node, "use tj_cli.process or an explicit tj_hook command")
+            self.reject(node, "use tj_cli.process")
         if any(keyword.arg == "creationflags" for keyword in node.keywords):
             self.reject(
                 node, "window flags belong to the shared process implementation"
@@ -136,6 +124,7 @@ def test_background_launches_use_the_shared_process_boundary() -> None:
     [
         "import subprocess as child\nchild.run(['git'])",
         "from subprocess import Popen as spawn\nspawn(['git'])",
+        "import subprocess\nsubprocess.run(['git', '--', 'status'])",
         "import subprocess\ndef worker(run=subprocess.run): pass",
         "from tj_cli import process\nprocess.run(['git'], creationflags=1)",
     ],
