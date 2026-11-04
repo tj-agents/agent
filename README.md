@@ -50,6 +50,14 @@ unconfigured event channel, a failed plugin update (catch-up) or missing require
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
 
+Managed Codex frontends with the shared app-server can recover automatically from the exact native
+`serverOverloaded` capacity failure. Recovery is bound to the recorded frontend input and its exact
+loaded thread, preserves the selected model and native permissions, and records a durable one-send
+receipt before continuing. It does not run for private `--no-daemon` or unmanaged sessions. Codex's
+`turn/start` API has no conditional “only if this failed turn is still current” parameter, so a very
+small race remains between the final input check and native acceptance; an interrupt or newer input
+observed before submission cancels recovery.
+
 Before checking native installations, launch, refresh and installer plugin setup reconcile an existing
 repository selection and regenerate both hosts' settings through the same scope and ownership checks
 as explicit adoption. The current Marketplace `main` dependency graph adds missing dependencies and

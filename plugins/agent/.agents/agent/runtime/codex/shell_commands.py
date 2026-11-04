@@ -6,19 +6,16 @@ import os
 import queue
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path, PurePath
 from typing import Any
 
-from codex import hook_trust
+from codex import frontend_input, hook_trust
 
-MAX_RECORD_BYTES = 8 * 1024 * 1024
 CONTINUATION = (
     "The user shell command has finished. Read its recorded command, exit status "
     "and output, then respond and continue only existing authorized work. "
@@ -28,145 +25,12 @@ CONTINUATION = (
 
 
 @dataclass(frozen=True)
-class ShellInput:
-    command: str
-    submitted_at: float
-    epoch: int
-
-
-@dataclass(frozen=True)
 class ShellResult:
     turn_id: str
     item_id: str
     command: str
     started_at: float
     result_recorded: bool = False
-
-
-class JsonLines:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.identity: tuple[int, int] | None = None
-        self.offset = 0
-
-    def read(self) -> Iterator[dict[str, Any]]:
-        stat = self.path.stat()
-        identity = (stat.st_dev, stat.st_ino)
-        if self.identity is not None and (
-            identity != self.identity or stat.st_size < self.offset
-        ):
-            raise RuntimeError("Native event stream was replaced or truncated")
-        self.identity = identity
-        with self.path.open("rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if (opened.st_dev, opened.st_ino) != identity:
-                raise RuntimeError("Native event stream changed while opening")
-            stream.seek(self.offset)
-            end = self.offset + 4 * MAX_RECORD_BYTES
-            while stream.tell() < end:
-                line = stream.readline(MAX_RECORD_BYTES + 1)
-                if not line:
-                    break
-                if len(line) > MAX_RECORD_BYTES:
-                    raise RuntimeError("Native event record exceeds its size limit")
-                if not line.endswith(b"\n"):
-                    break
-                row = json.loads(line)
-                if not isinstance(row, dict):
-                    raise RuntimeError("Native event record is invalid")
-                self.offset = stream.tell()
-                yield row
-
-    def settled(self) -> bool:
-        stat = self.path.stat()
-        if (stat.st_dev, stat.st_ino) != self.identity or stat.st_size < self.offset:
-            raise RuntimeError("Native event stream identity changed")
-        return stat.st_size == self.offset
-
-
-class FrontendInput:
-    def __init__(self, path: Path, view_changes: set[str]) -> None:
-        self.stream = JsonLines(path)
-        self.view_changes = view_changes
-        self.latest: str | None = None
-        self.cwd: Path | None = None
-        self.pending: ShellInput | None = None
-        self.epoch = 0
-        self.control_offset = 0
-        self.headers = 0
-
-    def poll(self) -> None:
-        for row in self.stream.read():
-            if row.get("dir") == "meta":
-                if row.get("kind") == "session_start":
-                    self.headers += 1
-                    if self.headers != 1:
-                        raise RuntimeError(
-                            "Native frontend recording has no unique startup header"
-                        )
-                if row.get("kind") in {"session_start", "session_end"}:
-                    self.invalidate()
-            elif row.get("dir") == "to_tui" and (
-                row.get("kind") in {"new_session", "clear_ui"}
-                or row.get("variant") in self.view_changes
-            ):
-                self.invalidate()
-            elif row.get("dir") == "from_tui" and row.get("kind") == "op":
-                payload = row.get("payload")
-                if not isinstance(payload, dict):
-                    self.invalidate()
-                    continue
-                if len(payload) == 1 and set(payload).intersection(
-                    {
-                        "ExecApproval",
-                        "PatchApproval",
-                        "ResolveElicitation",
-                        "ResolveUserVerification",
-                        "UserInputAnswer",
-                        "RequestPermissionsResponse",
-                        "OverrideTurnContext",
-                        "ListSkills",
-                        "SetThreadName",
-                    }
-                ):
-                    continue
-                if len(payload) != 1 or not {
-                    "UserTurn",
-                    "RunUserShellCommand",
-                }.intersection(payload):
-                    self.invalidate()
-                    continue
-                turn = payload.get("UserTurn")
-                if isinstance(turn, dict):
-                    self.invalidate()
-                    identity = turn.get("client_user_message_id")
-                    self.latest = (
-                        identity if isinstance(identity, str) and identity else None
-                    )
-                    directory = turn.get("cwd")
-                    self.cwd = (
-                        Path(directory)
-                        if isinstance(directory, str) and Path(directory).is_absolute()
-                        else None
-                    )
-                shell = payload.get("RunUserShellCommand")
-                if isinstance(shell, dict) and isinstance(shell.get("command"), str):
-                    self.epoch += 1
-                    self.control_offset = self.stream.offset
-                    self.pending = ShellInput(
-                        shell["command"],
-                        datetime.fromisoformat(
-                            row["ts"].replace("Z", "+00:00")
-                        ).timestamp(),
-                        self.epoch,
-                    )
-
-    def invalidate(self) -> None:
-        self.epoch += 1
-        self.control_offset = self.stream.offset
-        self.latest = None
-        self.cwd = None
-        self.pending = None
 
 
 class Rollout:
@@ -186,7 +50,7 @@ class Rollout:
             or not resolved.is_relative_to(sessions)
         ):
             raise RuntimeError("Native rollout is outside its verified profile")
-        self.stream = JsonLines(path)
+        self.stream = frontend_input.JsonLines(path)
         self.thread_id = thread_id
         self.metadata = False
         self.inputs: set[str] = set()
@@ -310,7 +174,9 @@ class Rollout:
                 True,
             )
 
-    def ready(self, pending: ShellInput, latest: str, own_ids: set[str]) -> bool:
+    def ready(
+        self, pending: frontend_input.ShellInput, latest: str, own_ids: set[str]
+    ) -> bool:
         self.poll()
         return bool(
             self.metadata
@@ -330,7 +196,7 @@ class ShellMonitor:
     def __init__(self, ticket: dict[str, Any], client: Any) -> None:
         self.client = client
         self.ticket = ticket
-        self.frontend = FrontendInput(
+        self.frontend = frontend_input.FrontendInput(
             Path(ticket["recording_path"]), client.VIEW_CHANGES
         )
         self.stop_event = threading.Event()
@@ -398,43 +264,9 @@ class ShellMonitor:
             if message is None or isinstance(message, Exception):
                 raise RuntimeError("Native shell observer connection stopped")
 
-    def bind_input(self, latest: str, client_id: str) -> None:
-        path = self.frontend.stream.path.with_name("shell-continuation.json")
-        record = {
-            "client_user_message_id": client_id,
-            "anchor": latest,
-            "recording_identity": self.frontend.stream.identity,
-            "control_offset": self.frontend.control_offset,
-            "binding": {
-                key: self.ticket[key]
-                for key in (
-                    "token",
-                    "pid",
-                    "backend",
-                    "profile",
-                    "created_at",
-                )
-            },
-        }
-        temporary: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=path.parent,
-                prefix=".shell-continuation-",
-                delete=False,
-            ) as stream:
-                temporary = Path(stream.name)
-                json.dump(record, stream)
-                stream.flush()
-                os.fsync(stream.fileno())
-            temporary.replace(path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-
-    def frontend_matches(self, client: Any, latest: str, pending: ShellInput) -> bool:
+    def frontend_matches(
+        self, client: Any, latest: str, pending: frontend_input.ShellInput
+    ) -> bool:
         self.frontend.poll()
         ticket = self.ticket
         if (
@@ -541,6 +373,10 @@ class ShellMonitor:
             self.rollout = matches[0]
 
     def step(self, server: Any) -> None:
+        with frontend_input.control_lock(self.ticket):
+            self._step(server)
+
+    def _step(self, server: Any) -> None:
         client = self.client
         self.frontend.poll()
         latest, pending = self.frontend.latest, self.frontend.pending
@@ -551,6 +387,10 @@ class ShellMonitor:
         if self.rollout is None or latest not in self.rollout.inputs:
             self.bind(server, client, latest)
         rollout = self.rollout
+        if rollout is not None:
+            attributed = frontend_input.observer_input(self.frontend, rollout.thread_id)
+            if attributed is not None and attributed != latest:
+                self.own_ids.add(attributed)
         if rollout is None or not rollout.ready(pending, latest, self.own_ids):
             return
         metadata = server.request(
@@ -606,7 +446,9 @@ class ShellMonitor:
             pending, latest, self.own_ids
         ):
             return
-        self.bind_input(latest, client_id)
+        frontend_input.bind_input(
+            self.frontend, self.ticket, rollout.thread_id, client_id
+        )
         if not self.frontend_matches(client, latest, pending) or not rollout.ready(
             pending, latest, self.own_ids
         ):
@@ -630,44 +472,6 @@ class ShellMonitor:
             )
         finally:
             self.frontend.pending = None
-
-
-def attributed_input(recording: FrontendInput) -> str | None:
-    latest = recording.latest
-    if latest is None:
-        return None
-    path = recording.stream.path
-    try:
-        receipt = json.loads(
-            path.with_name("shell-continuation.json").read_text(encoding="utf-8")
-        )
-        binding = json.loads(path.with_name("client.json").read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return latest
-    if not isinstance(receipt, dict) or not isinstance(binding, dict):
-        raise RuntimeError("Shell continuation input binding is invalid")
-    expected = receipt.get("binding")
-    identity = receipt.get("client_user_message_id")
-    if (
-        isinstance(expected, dict)
-        and all(
-            key in expected and expected[key] == binding.get(key)
-            for key in (
-                "token",
-                "pid",
-                "backend",
-                "profile",
-                "created_at",
-            )
-        )
-        and receipt.get("anchor") == latest
-        and receipt.get("recording_identity") == list(recording.stream.identity or ())
-        and receipt.get("control_offset") == recording.control_offset
-        and isinstance(identity, str)
-        and identity
-    ):
-        return identity
-    return latest
 
 
 def start(ticket: dict[str, Any], client: Any) -> None:

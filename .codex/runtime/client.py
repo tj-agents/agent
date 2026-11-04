@@ -12,7 +12,7 @@ import tempfile
 import time
 import sys
 
-from codex import hook_trust, shell_commands
+from codex import frontend_input, hook_trust
 from host import Host
 
 HOST = Host.CODEX
@@ -194,7 +194,7 @@ def release(ticket):
 
 
 def latest_input(path):
-    recording = shell_commands.FrontendInput(Path(path), VIEW_CHANGES)
+    recording = frontend_input.FrontendInput(Path(path), VIEW_CHANGES)
     while True:
         offset = recording.stream.offset
         recording.poll()
@@ -204,7 +204,7 @@ def latest_input(path):
             raise RuntimeError('Native frontend recording is incomplete or oversized')
     if recording.headers != 1:
         raise RuntimeError('Native frontend recording has no unique startup header')
-    return shell_commands.attributed_input(recording)
+    return frontend_input.attributed_input(recording)
 
 
 def current_input(server, session_id):
