@@ -66,6 +66,11 @@ An unreachable marketplace leaves repository files untouched and reports the fai
 Unconfigured projects are not enrolled. Installer `--check` reports
 selection drift without changing repository files, and a converged rerun writes nothing.
 
+Project reconciliation preserves checkout-local Codex settings when the committed and indexed
+configuration is portable. It checks both Git snapshots and regenerated project declarations for
+machine-specific paths. Untracked and unversioned configuration retains full path validation; the
+repository path scanner still checks the complete files before publication.
+
 Unresolved Git conflicts in the selection and generated native settings are planned through that same
 transaction before native configuration is read. Plugin membership uses a three-way set merge;
 generated host declarations are rebuilt from it, while unrelated settings retain their changes.
