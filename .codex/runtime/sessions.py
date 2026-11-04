@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 import agent_cli
-from codex import client
+from codex import client, shell_commands
 from host import Host
 import required_plugins
 import transcripts
@@ -136,14 +136,27 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
 
 
 def prepare_frontend(arguments, project: Path, environment, executable=None):
-    return client.prepare(arguments, project, environment, executable=executable)
+    prepared, values, ticket = client.prepare(arguments, project, environment, executable=executable)
+    if ticket is not None:
+        ticket["_shell_executable"] = executable
+    return prepared, values, ticket
 
 
 def attach_frontend(ticket, pid: int) -> None:
-    client.attach(ticket, pid)
+    executable = ticket.pop("_shell_executable", None) if ticket is not None else None
+    try:
+        client.attach(ticket, pid)
+    finally:
+        if ticket is not None:
+            ticket["_shell_executable"] = executable
+    if ticket is not None and ticket.get("backend") and executable:
+        ticket["pid"] = pid
+        shell_commands.start(ticket, client)
 
 
 def release_frontend(ticket) -> None:
+    if ticket is not None:
+        shell_commands.stop(ticket)
     client.release(ticket)
 
 
