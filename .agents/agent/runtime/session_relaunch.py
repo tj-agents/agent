@@ -185,7 +185,7 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
     if entry.get("profile"):
         options += ["--history-root", str(Path(entry["profile"]) / host.history_directory)]
     try:
-        shared.start_detached(HERE / "relaunch_watcher.py", options, foreground_bootstrap=True)
+        shared.start_detached(HERE / "relaunch_watcher.py", options)
         armed = arm_client_close(project, entry, shared, host)
         write_json(record, {**read_json(record), "close": armed, "at": time.time()})
     except Exception as error:
