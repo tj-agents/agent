@@ -61,7 +61,11 @@ class Machine(unittest.TestCase):
 
     def setUp(self):
         isolate_git_config()
-        for name, value in (("missing", ()), ("prepare", ())):
+        for name, value in (
+            ("missing", ()),
+            ("prepare", ()),
+            ("prepare_git_environment", ()),
+        ):
             native = mock.patch.object(install.native_runtime, name, return_value=value)
             native.start()
             self.addCleanup(native.stop)

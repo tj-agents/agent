@@ -24,6 +24,16 @@ launch = importlib.import_module("launch_check")
 required = importlib.import_module("required_plugins")
 reload = importlib.import_module("reload_plugins")
 host = importlib.import_module("host")
+startup_binding = importlib.import_module("startup_binding")
+
+
+@pytest.fixture(autouse=True)
+def isolate_process_git_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in list(os.environ):
+        if name == "GIT_CONFIG_COUNT" or name.startswith(
+            ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+        ):
+            monkeypatch.delenv(name, raising=False)
 
 
 def test_missing_pair_repairs_without_a_source_checkout_and_is_then_local(
@@ -77,6 +87,187 @@ def test_launch_bootstraps_before_native_plugin_inventory(tmp_path: Path) -> Non
             {},
         )
     assert order == ["native", "plugins"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Git configuration validation")
+def test_native_runtime_reports_invalid_git_configuration_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "invalid")
+    with (
+        pytest.raises(
+            RuntimeError,
+            match="invalid process Git configuration: invalid GIT_CONFIG_COUNT",
+        ),
+    ):
+        native_runtime.prepare_git_environment()
+
+
+def test_native_runtime_prepares_git_before_install_and_preserves_path_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in list(os.environ):
+        if name == "GIT_CONFIG_COUNT" or name.startswith(
+            ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+        ):
+            monkeypatch.delenv(name, raising=False)
+    directory = tmp_path / "native bin"
+    monkeypatch.setenv("TJ_BIN_DIR", str(directory))
+    monkeypatch.setenv("PATH", os.pathsep.join(("original-one", "original-two")))
+    events: list[str] = []
+
+    def prepare_git() -> None:
+        events.append("git")
+        os.environ["GIT_CONFIG_COUNT"] = "1"
+        os.environ["GIT_CONFIG_KEY_0"] = "core.longpaths"
+        os.environ["GIT_CONFIG_VALUE_0"] = "true"
+
+    def missing() -> tuple[str, ...]:
+        events.append("inventory")
+        return ("tj_hook",)
+
+    def ensure(destination: Path, *, revision: str | None) -> tuple[str, ...]:
+        assert os.environ["GIT_CONFIG_COUNT"] == "1"
+        assert os.environ["GIT_CONFIG_KEY_0"].casefold() == "core.longpaths"
+        assert os.environ["GIT_CONFIG_VALUE_0"].casefold() == "true"
+        events.append("installer")
+        return ("tj_hook",)
+
+    with (
+        mock.patch.object(
+            native_runtime, "prepare_git_environment", side_effect=prepare_git
+        ),
+        mock.patch.object(native_runtime, "missing", side_effect=missing),
+        mock.patch.object(native_install, "ensure_native", side_effect=ensure),
+    ):
+        native_runtime.prepare()
+        prepared = dict(os.environ)
+
+    assert events[:3] == ["git", "inventory", "installer"]
+    assert events.count("git") == 2
+    assert os.environ["GIT_CONFIG_COUNT"] == prepared["GIT_CONFIG_COUNT"] == "1"
+    assert os.environ["TJ_BIN_DIR"] == str(directory)
+    assert os.environ["PATH"].split(os.pathsep) == [
+        str(directory),
+        "original-one",
+        "original-two",
+    ]
+
+
+def test_native_runtime_git_environment_preparation_is_idempotent() -> None:
+    native_runtime.prepare_git_environment()
+    prepared = {
+        name: value
+        for name, value in os.environ.items()
+        if name == "GIT_CONFIG_COUNT"
+        or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+    }
+
+    native_runtime.prepare_git_environment()
+
+    repeated = {
+        name: value
+        for name, value in os.environ.items()
+        if name == "GIT_CONFIG_COUNT"
+        or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))
+    }
+    assert repeated == prepared
+    if os.name == "nt":
+        assert prepared["GIT_CONFIG_COUNT"] == "1"
+        assert prepared["GIT_CONFIG_KEY_0"].casefold() == "core.longpaths"
+        assert prepared["GIT_CONFIG_VALUE_0"].casefold() == "true"
+    else:
+        assert prepared == {}
+
+
+@pytest.mark.parametrize("host_name", ["claude", "codex"])
+def test_startup_prepares_git_before_skipped_plugin_admission(
+    tmp_path: Path, host_name: str
+) -> None:
+    events: list[str] = []
+
+    def prepare_roots(*_arguments: object, **_keywords: object) -> tuple[None, None]:
+        events.append("admission")
+        return None, None
+
+    def run_session(*_arguments: object, **_keywords: object) -> int:
+        events.append("native frontend")
+        return 0
+
+    with (
+        mock.patch.object(
+            startup_binding.native_runtime,
+            "prepare_git_environment",
+            side_effect=lambda: events.append("git"),
+        ),
+        mock.patch.object(
+            startup_binding.launch_check,
+            "prepare_launch_roots",
+            side_effect=prepare_roots,
+        ),
+        mock.patch.object(
+            startup_binding.launch_check, "check", return_value="skipped"
+        ),
+        mock.patch.object(startup_binding, "run_session", side_effect=run_session),
+        mock.patch.object(startup_binding, "_prelaunch_terminal", return_value=None),
+        mock.patch.object(
+            startup_binding.register_session, "terminal_identity", return_value=None
+        ),
+    ):
+        result = startup_binding.main(
+            [
+                "--host",
+                host_name,
+                "--project",
+                str(tmp_path),
+                "--target",
+                "native",
+                "--",
+                "--help",
+            ]
+        )
+
+    assert result == 0
+    assert events == ["git", "admission", "native frontend"]
+
+
+def test_installer_snapshots_prepared_git_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[dict[str, str]] = []
+    events: list[str] = []
+
+    def prepare_git() -> None:
+        events.append("git")
+        os.environ["GIT_CONFIG_COUNT"] = "1"
+        os.environ["GIT_CONFIG_KEY_0"] = "core.longpaths"
+        os.environ["GIT_CONFIG_VALUE_0"] = "true"
+
+    def context() -> object:
+        events.append("snapshot")
+        environment = dict(os.environ)
+        captured.append(environment)
+        return mock.Mock(environ=environment)
+
+    for name in ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"):
+        monkeypatch.delenv(name, raising=False)
+    with (
+        mock.patch.object(
+            install.native_runtime, "prepare_git_environment", side_effect=prepare_git
+        ),
+        mock.patch.object(install, "machine_context", side_effect=context),
+        mock.patch.object(install.native_runtime, "expose"),
+        mock.patch.object(
+            install.native_runtime, "search_path", side_effect=lambda path: path
+        ),
+        mock.patch.object(install, "run_steps", return_value=0),
+    ):
+        assert install.main(["--check", "--step", "native CLI"]) == 0
+
+    assert events == ["git", "snapshot"]
+    assert captured[0]["GIT_CONFIG_COUNT"] == "1"
+    assert captured[0]["GIT_CONFIG_KEY_0"] == "core.longpaths"
+    assert captured[0]["GIT_CONFIG_VALUE_0"] == "true"
 
 
 def test_relative_override_stays_bound_when_the_host_changes_directory(
