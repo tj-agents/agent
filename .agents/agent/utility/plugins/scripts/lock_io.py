@@ -8,6 +8,8 @@ import shutil
 import subprocess
 from typing import Any
 
+import config_conflicts
+
 
 class LockError(RuntimeError):
     """A user-visible validation or generation failure."""
@@ -15,8 +17,8 @@ class LockError(RuntimeError):
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        value = json.loads(config_conflicts.read_text(path))
+    except (OSError, UnicodeError, ValueError, subprocess.SubprocessError) as error:
         raise LockError(f"Cannot read JSON at {path}: {error}") from error
     if not isinstance(value, dict):
         raise LockError(f"Expected a JSON object at {path}")

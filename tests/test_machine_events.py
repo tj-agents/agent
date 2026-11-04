@@ -33,6 +33,9 @@ class HintTests(unittest.TestCase):
 
 class ReconcileTests(unittest.TestCase):
     def setUp(self):
+        native = mock.patch.object(events.native_runtime, "prepare", return_value=())
+        native.start()
+        self.addCleanup(native.stop)
         self.refresh = mock.Mock(return_value=0)
         self.policy = mock.Mock()
         self.reconciler = events.Reconciler(refresh=self.refresh, policy=self.policy)
@@ -239,7 +242,7 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
 
     def test_subscriber_step_requires_the_channel_and_installed_runtime(self):
-        self.assertEqual(["preconditions", "event channel and publishers", "launch-check runtime", "background machine events"],
+        self.assertEqual(["preconditions", "native CLI", "event channel and publishers", "launch-check runtime", "background machine events"],
                          [step.name for step in install.selected_steps({"background machine events"})])
 
 
