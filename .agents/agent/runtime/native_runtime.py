@@ -6,6 +6,7 @@ import os
 
 import plugin_autoupdate
 from tj_cli import native_install
+from tj_cli.git_environment import native_plugin_environment
 from tj_cli.paths import prepend
 
 
@@ -19,8 +20,19 @@ def search_path(value: str) -> str:
     )
 
 
+def prepare_git_environment() -> None:
+    """Enable native Git long paths in this process before Git operations."""
+    try:
+        os.environ.update(
+            native_plugin_environment(os.environ, windows=os.name == "nt")
+        )
+    except ValueError as error:
+        raise RuntimeError(f"invalid process Git configuration: {error}") from error
+
+
 def expose() -> None:
     """Prepare the current process environment without installing any files."""
+    prepare_git_environment()
     if os.environ.get("TJ_BIN_DIR"):
         os.environ["TJ_BIN_DIR"] = str(native_install.default_bin_dir())
     os.environ["PATH"] = search_path(os.environ.get("PATH", os.defpath))
@@ -28,6 +40,7 @@ def expose() -> None:
 
 def prepare(*, revision: str | None = None) -> tuple[str, ...]:
     """Repair missing binaries or apply an exact producer revision, then expose them."""
+    prepare_git_environment()
     changed: tuple[str, ...] = ()
     if revision is not None or missing():
         directory = plugin_autoupdate.state_directory()
