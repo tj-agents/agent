@@ -634,7 +634,7 @@ def start_detached(script, arguments, extra=(), stage=True):
         if store is not None:
             for name in OBSERVER_STORE_FILES[1:]:
                 shutil.copy2(store.with_name(name), staging / name)
-            shutil.copytree(store.parent / "tj_cli", staging / "tj_cli")
+            shutil.copytree(register_session.process_runtime() / "tj_cli", staging / "tj_cli")
             _write_observer_store_receipt(staging)
         command = [sys.executable, str(staging / Path(script).name), *arguments]
     else:
