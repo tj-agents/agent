@@ -12,10 +12,23 @@ def _runtime() -> Path:
     for root in Path(__file__).resolve().parents:
         if (root / ".agents" / "plugins" / "payloads.json").is_file():
             runtime = root / "plugins" / "agent" / ".agents" / "agent" / "runtime"
-        else:
+        elif any(
+            (root / marker).exists()
+            for marker in (
+                ".git",
+                ".codex-plugin/plugin.json",
+                ".claude-plugin/plugin.json",
+                "source.json",
+            )
+        ):
             runtime = root / ".agents" / "agent" / "runtime"
+        else:
+            continue
         if (runtime / "tj_cli" / "process" / "__init__.py").is_file():
             return runtime
+        raise RuntimeError(
+            f"The shipped Agent process runtime is unavailable at {runtime}"
+        )
     raise RuntimeError("The shipped Agent process runtime was not found")
 
 
