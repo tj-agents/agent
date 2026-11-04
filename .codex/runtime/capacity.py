@@ -195,85 +195,10 @@ def contains_client_id(server: Any, thread_id: str, client_id: str) -> bool:
     return False
 
 
-class RecordingReader:
-    """Read only newly appended frontend events and retain partial trailing lines."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.offset = 0
-        self.pending = b""
-        self.identity: tuple[int, int] | None = None
-        self.latest: str | None = None
-        self.epoch = 0
-        self.view_changes: set[str] = set()
-
-    def set_view_changes(self, events: set[str]) -> None:
-        self.view_changes = events
-
-    def poll(self) -> tuple[str | None, int, tuple[int, int]]:
-        stat = self.path.stat()
-        identity = (stat.st_dev, stat.st_ino)
-        if self.identity is not None and (
-            identity != self.identity or stat.st_size < self.offset
-        ):
-            raise RuntimeError("Codex frontend recording was replaced or truncated")
-        self.identity = identity
-        if stat.st_size - self.offset > 8 * 1024 * 1024:
-            amount = 8 * 1024 * 1024
-        else:
-            amount = stat.st_size - self.offset
-        with self.path.open("rb") as stream:
-            opened = os.fstat(stream.fileno())
-            if (opened.st_dev, opened.st_ino) != identity:
-                raise RuntimeError("Codex frontend recording changed while opening")
-            stream.seek(self.offset)
-            chunk = stream.read(amount)
-        self.offset += len(chunk)
-        combined = self.pending + chunk
-        if len(combined) > 8 * 1024 * 1024 and b"\n" not in combined:
-            raise RuntimeError("Codex frontend recording contains an oversized event")
-        lines = combined.split(b"\n")
-        if combined.endswith(b"\n"):
-            lines.pop()
-            self.pending = b""
-        else:
-            self.pending = lines.pop()
-        if len(self.pending) > 8 * 1024 * 1024:
-            raise RuntimeError("Codex frontend recording contains an oversized event")
-        for line in lines:
-            if len(line) > 8 * 1024 * 1024:
-                raise RuntimeError(
-                    "Codex frontend recording contains an oversized event"
-                )
-            row = json.loads(line)
-            if not isinstance(row, dict):
-                raise RuntimeError("Codex frontend recording is invalid")
-            if (
-                row.get("dir") == "meta"
-                and row.get("kind") in ("session_end", "session_start")
-            ) or (
-                row.get("dir") == "to_tui" and row.get("variant") in self.view_changes
-            ):
-                self.latest = None
-                self.epoch += 1
-            elif row.get("dir") == "from_tui" and row.get("kind") == "op":
-                payload = row.get("payload")
-                if isinstance(payload, dict):
-                    if "Interrupt" in payload:
-                        self.latest = None
-                        self.epoch += 1
-                    turn = payload.get("UserTurn")
-                    if isinstance(turn, dict):
-                        value = turn.get("client_user_message_id")
-                        self.latest = (
-                            value if isinstance(value, str) and value else None
-                        )
-                        self.epoch += 1
-        return self.latest, self.epoch, identity
-
-
 class CapacityMonitor:
     def __init__(self, ticket: dict[str, Any], clock: Any = time.monotonic):
+        from codex import frontend_input
+
         self.ticket = ticket
         self.clock = clock
         self.stop_event = threading.Event()
@@ -281,8 +206,8 @@ class CapacityMonitor:
             target=self.run, name="codex-capacity-recovery", daemon=True
         )
         self.process: subprocess.Popen[str] | None = None
-        self.recording = RecordingReader(
-            Path(ticket.get("recording_path") or os.devnull)
+        self.recording = frontend_input.FrontendInput(
+            Path(ticket.get("recording_path") or os.devnull), set()
         )
         self.started_at = float(ticket["created_at"])
         self.attempts: dict[str, int] = {}
@@ -327,7 +252,7 @@ class CapacityMonitor:
     def _run(self) -> None:
         from codex import client, hook_trust
 
-        self.recording.set_view_changes(client.VIEW_CHANGES)
+        self.recording.view_changes = client.VIEW_CHANGES
         ticket = self.ticket
         if not ticket.get("backend") or not ticket.get("_capacity_executable"):
             return
@@ -344,9 +269,9 @@ class CapacityMonitor:
         with server_context as server:
             while not self.stop_event.wait(2):
                 try:
-                    latest, epoch, identity = self.recording.poll()
+                    latest, epoch, identity = self.recording.snapshot()
                 except FileNotFoundError:
-                    if self.recording.identity is None:
+                    if self.recording.stream.identity is None:
                         continue
                     raise
                 expected = ticket.get("_capacity_record_identity")
@@ -404,7 +329,10 @@ class CapacityMonitor:
     def _bound_candidate_for(
         self, server: Any, latest: str, epoch: int
     ) -> dict[str, Any] | None:
-        key = (latest, epoch)
+        from codex import frontend_input
+
+        active = frontend_input.attributed_input(self.recording) or latest
+        key = (active, epoch)
         if key != self.binding_key:
             self.binding_key = key
             self.bound_candidate = None
@@ -412,8 +340,18 @@ class CapacityMonitor:
             matches = [
                 value
                 for value in self._candidates()
-                if self._candidate_matches(server, value, latest)
+                if not frontend_input.shell_pending(self.recording, value["thread_id"])
+                and self._candidate_matches(server, value, active)
             ]
+            if not matches and active != latest:
+                matches = [
+                    value
+                    for value in self._candidates()
+                    if not frontend_input.shell_pending(
+                        self.recording, value["thread_id"]
+                    )
+                    and self._candidate_matches(server, value, latest)
+                ]
             if len(matches) == 1:
                 self.bound_candidate = matches[0]
         return self.bound_candidate
@@ -479,7 +417,28 @@ class CapacityMonitor:
         latest: str,
         epoch: int,
     ) -> None:
+        from codex import frontend_input
+
+        with frontend_input.control_lock(self.ticket):
+            self._recover_locked(server, client, candidate, latest, epoch)
+
+    def _recover_locked(
+        self,
+        server: Any,
+        client: Any,
+        candidate: dict[str, Any],
+        latest: str,
+        epoch: int,
+    ) -> None:
+        from codex import frontend_input
+
         thread_id = candidate["thread_id"]
+        self.recording.poll()
+        if frontend_input.shell_pending(self.recording, thread_id):
+            return
+        active = frontend_input.observer_input(self.recording, thread_id) or latest
+        if active != latest:
+            self.auto_ids.add(active)
         turns = server.request(
             "thread/turns/list",
             {
@@ -508,14 +467,16 @@ class CapacityMonitor:
         while self.clock() < deadline:
             if self.stop_event.wait(min(0.25, max(0, deadline - self.clock()))):
                 return
-            current, current_epoch, _identity = self.recording.poll()
+            current, current_epoch, _identity = self.recording.snapshot()
             if current != latest or current_epoch != epoch:
                 return
         if not self._backend_matches(client) or not self._frontend_matches(
             client, latest, epoch
         ):
             return
-        if not self._candidate_matches(server, candidate, latest):
+        if not self._candidate_matches(server, candidate, active) and (
+            active == latest or not self._candidate_matches(server, candidate, latest)
+        ):
             return
         current_turns = server.request(
             "thread/turns/list",
@@ -590,6 +551,11 @@ class CapacityMonitor:
             client, latest, epoch
         ):
             return
+        frontend_input.bind_input(self.recording, self.ticket, thread_id, client_id)
+        if not self._backend_matches(client) or not self._frontend_record_matches(
+            client, latest, epoch
+        ):
+            return
         try:
             server.request(
                 "turn/start",
@@ -620,9 +586,16 @@ class CapacityMonitor:
                 )
 
     def _frontend_record_matches(self, client: Any, latest: str, epoch: int) -> bool:
-        current, current_epoch, identity = self.recording.poll()
+        current, current_epoch, identity = self.recording.snapshot()
         expected = self.ticket.get("_capacity_record_identity")
-        if current != latest or current_epoch != epoch or identity != expected:
+        if (
+            current != latest
+            or current_epoch != epoch
+            or identity != expected
+            or self.recording.headers != 1
+            or not self.recording.stream.settled()
+            or self.stop_event.is_set()
+        ):
             return False
         try:
             context = client.process_context(self.ticket["pid"])
@@ -716,9 +689,10 @@ def start(ticket: dict[str, Any]) -> None:
 
 
 def stop(ticket: dict[str, Any]) -> None:
-    monitor = ticket.pop("_capacity_monitor", None)
+    monitor = ticket.get("_capacity_monitor")
     if isinstance(monitor, CapacityMonitor):
         monitor.stop()
+        ticket.pop("_capacity_monitor", None)
 
 
 def main() -> int:
