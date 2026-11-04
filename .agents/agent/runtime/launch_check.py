@@ -303,7 +303,12 @@ def prepare_launch_roots(project, host: Host, executable, arguments):
     effective_project, options = required_plugins.launch_context(project, host, arguments)
     if effective_project is None:
         return None, None
-    native_runtime.prepare()
+    try:
+        native_runtime.prepare()
+    except (RuntimeError, OSError) as error:
+        if any(identity.endswith("@tj-agents") for identity in required_plugins.selected(required_plugins.project_root(effective_project))):
+            raise managed_admission.AdmissionError(f"Managed readiness could not be established: {error}") from error
+        raise
     try:
         roots = reload_plugins.prepare_required(effective_project, host, executable, options, admission=True)
     except required_plugins.RequiredPluginsError as error:
