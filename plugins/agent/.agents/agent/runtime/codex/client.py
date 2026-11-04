@@ -12,7 +12,7 @@ import tempfile
 import time
 import sys
 
-from codex import hook_trust
+from codex import frontend_input, hook_trust
 from host import Host
 
 HOST = Host.CODEX
@@ -66,6 +66,27 @@ def is_session(arguments):
     options = arguments[:arguments.index("--")] if "--" in arguments else arguments
     return (not any(value in {"--help", "-h", "--version", "-V"} for value in options)
             and command_name(arguments) not in OTHER_COMMANDS)
+
+
+def recorder_policy_required(arguments, environment):
+    if environment.get("CODEX_EXEC_SERVER_URL"):
+        return True
+    if os.name == "nt":
+        import ctypes
+        if ctypes.windll.shell32.IsUserAnAdmin():
+            return True
+    options = {"-c", "--config", "-p", "--profile", "--enable", "--disable", "--search",
+               "--oss", "--strict-config", "--dangerously-bypass-hook-trust"}
+    index = 0
+    while index < len(arguments):
+        value = arguments[index]
+        if value == "--":
+            break
+        option, separator, _setting = value.partition("=")
+        if option in options or value.startswith(("-c", "-p")):
+            return True
+        index += 2 if option in VALUE_OPTIONS and not separator else 1
+    return False
 
 
 def profile_directory(environ=None):
@@ -139,8 +160,10 @@ def prepare(arguments, project, environment, executable=None):
             'KONSOLE_DBUS_SESSION', 'KONSOLE_DBUS_WINDOW', 'WT_SESSION', 'AGENT_WINDOWS_TERMINAL_TAB_ID',
         ) if key in values},
     }
-    prepared = ['--config', 'shell_environment_policy.set.' + RECORD_ENV + '=""',
-                '--config', 'shell_environment_policy.set.' + RECORD_PATH_ENV + '=""', *arguments]
+    prepared = arguments
+    if backend is None or recorder_policy_required(arguments, values):
+        prepared = ['--config', 'shell_environment_policy.set.' + RECORD_ENV + '=""',
+                    '--config', 'shell_environment_policy.set.' + RECORD_PATH_ENV + '=""', *arguments]
     return prepared, values, ticket
 
 
@@ -163,6 +186,7 @@ def release(ticket):
     if ticket.get('_attached'):
         path.unlink(missing_ok=True)
         path.with_name('events.jsonl').unlink(missing_ok=True)
+        path.with_name('shell-continuation.json').unlink(missing_ok=True)
     try:
         path.parent.rmdir()
     except OSError:
@@ -170,35 +194,17 @@ def release(ticket):
 
 
 def latest_input(path):
-    latest = None
-    headers = 0
-    with Path(path).open('r', encoding='utf-8') as stream:
-        while True:
-            line = stream.readline(8 * 1024 * 1024 + 1)
-            if not line:
-                break
-            if len(line) > 8 * 1024 * 1024 or not line.endswith('\n'):
-                raise RuntimeError('Native frontend recording is incomplete or oversized')
-            row = json.loads(line)
-            if not isinstance(row, dict):
-                raise RuntimeError('Native frontend recording is invalid')
-            if row.get('dir') == 'meta' and row.get('kind') == 'session_start':
-                headers += 1
-                latest = None
-            elif row.get('dir') == 'meta' and row.get('kind') == 'session_end':
-                latest = None
-            elif row.get('dir') == 'to_tui' and (row.get('kind') in ('new_session', 'clear_ui')
-                    or row.get('variant') in VIEW_CHANGES):
-                latest = None
-            elif row.get('dir') == 'from_tui' and row.get('kind') == 'op':
-                payload = row.get('payload')
-                turn = payload.get('UserTurn') if isinstance(payload, dict) else None
-                if isinstance(turn, dict):
-                    identity = turn.get('client_user_message_id')
-                    latest = identity if isinstance(identity, str) and identity else None
-    if headers != 1:
+    recording = frontend_input.FrontendInput(Path(path), VIEW_CHANGES)
+    while True:
+        offset = recording.stream.offset
+        recording.poll()
+        if recording.stream.settled():
+            break
+        if recording.stream.offset == offset:
+            raise RuntimeError('Native frontend recording is incomplete or oversized')
+    if recording.headers != 1:
         raise RuntimeError('Native frontend recording has no unique startup header')
-    return latest
+    return frontend_input.attributed_input(recording)
 
 
 def current_input(server, session_id):
@@ -426,15 +432,38 @@ def process_arguments(pid):
     import ctypes
     from ctypes import wintypes
 
-    result = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-         "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
-         "(Get-CimInstance Win32_Process -Filter 'ProcessId = %d').CommandLine | ConvertTo-Json -Compress" % pid],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10, check=True,
-    )
-    line = json.loads(result.stdout)
-    if not isinstance(line, str):
-        raise RuntimeError("Native client command line is unavailable")
+    class UnicodeString(ctypes.Structure):
+        _fields_ = [("length", wintypes.USHORT), ("maximum_length", wintypes.USHORT),
+                    ("buffer", ctypes.c_void_p)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    native = ctypes.WinDLL("ntdll")
+    native.NtQueryInformationProcess.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p,
+                                                 wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)]
+    native.NtQueryInformationProcess.restype = ctypes.c_long
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        required = wintypes.ULONG()
+        native.NtQueryInformationProcess(handle, 60, None, 0, ctypes.byref(required))
+        if not ctypes.sizeof(UnicodeString) <= required.value <= 131072:
+            raise RuntimeError("Native client command line is unavailable")
+        buffer = ctypes.create_string_buffer(required.value)
+        if native.NtQueryInformationProcess(handle, 60, buffer, len(buffer), ctypes.byref(required)):
+            raise RuntimeError("Native client command line is unavailable")
+        command = UnicodeString.from_buffer(buffer)
+        start = command.buffer or 0
+        if (command.length % 2 or command.length > command.maximum_length
+                or start < ctypes.addressof(buffer) + ctypes.sizeof(UnicodeString)
+                or start + command.length > ctypes.addressof(buffer) + len(buffer)):
+            raise RuntimeError("Native client command line is invalid")
+        line = ctypes.wstring_at(start, command.length // 2)
+    finally:
+        kernel.CloseHandle(handle)
     api = ctypes.WinDLL("shell32", use_last_error=True)
     api.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
     api.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
@@ -445,7 +474,6 @@ def process_arguments(pid):
     try:
         return [values[index] for index in range(count.value)]
     finally:
-        kernel = ctypes.WinDLL("kernel32")
         kernel.LocalFree.argtypes = [ctypes.c_void_p]
         kernel.LocalFree(values)
 
