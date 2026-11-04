@@ -23,9 +23,10 @@ def search_path(value: str) -> str:
 def prepare_git_environment() -> None:
     """Enable native Git long paths in this process before Git operations."""
     try:
-        os.environ.update(
-            native_plugin_environment(os.environ, windows=os.name == "nt")
-        )
+        prepared = native_plugin_environment(os.environ, windows=os.name == "nt")
+        for name, value in prepared.items():
+            if os.environ.get(name) != value:
+                os.environ[name] = value
     except ValueError as error:
         raise RuntimeError(f"invalid process Git configuration: {error}") from error
 
