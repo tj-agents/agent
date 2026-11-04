@@ -516,11 +516,14 @@ def test_rejected_prompt_cancels_before_admission_without_completing(
         hook["args"][2:] if host == Host.CLAUDE else shlex.split(hook["command"])[3:]
     )
     scripts = []
-    for name, module in (
+    handlers = [
         ("close_lifecycle.py", "integration_lifecycle"),
         ("managed_admission.py", "integration_admission"),
         ("session_hook.py", "integration_store"),
-    ):
+    ]
+    if host == Host.CODEX:
+        handlers.append(("capacity.py", "integration_capacity"))
+    for name, module in handlers:
         script = tmp_path / name
         script.write_text(
             f"import {module} as handler\nraise SystemExit(handler.main())\n",
@@ -543,6 +546,8 @@ def test_rejected_prompt_cancels_before_admission_without_completing(
     spec.loader.exec_module(dispatcher)
     store = mock.Mock()
     store.main.return_value = 0
+    capacity = mock.Mock()
+    capacity.main.return_value = 0
     output = io.StringIO()
     raw = io.TextIOWrapper(
         io.BytesIO(
@@ -572,6 +577,7 @@ def test_rejected_prompt_cancels_before_admission_without_completing(
                 "integration_lifecycle": LIFECYCLE,
                 "integration_admission": admission,
                 "integration_store": store,
+                "integration_capacity": capacity,
             },
         ),
         mock.patch.object(admission, "gate", side_effect=reject),
@@ -593,6 +599,10 @@ def test_rejected_prompt_cancels_before_admission_without_completing(
     prepare_release.assert_not_called()
     assess.assert_not_called()
     store.main.assert_called_once_with()
+    if host == Host.CODEX:
+        capacity.main.assert_called_once_with()
+    else:
+        capacity.main.assert_not_called()
 
 
 @pytest.mark.parametrize("failure", ["crash", "overrun"])

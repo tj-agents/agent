@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from host import Host  # noqa: E402
+from tj_agent import recovery as agent_recovery  # noqa: E402
 
 WORK_ITEM_RE = re.compile(r"^(?P<feature>[a-z0-9]+(?:-[a-z0-9]+)*)/(?P<item>[a-z0-9]+(?:-[a-z0-9]+)*)$")
 WORK_ITEM_STATUSES = ("proposed", "active", "blocked", "paused", "delivery-gated", "done")
@@ -24,7 +25,6 @@ HEAD_CHECK_TIMEOUT = 5
 _BOUNDED_ROLE_RE = re.compile(r"^bounded: (?P<scope>.+)$")
 
 _SESSION_STORE = None
-_AGENT_RECOVERY = None
 _REGISTER_SESSION = None
 _SESSION_CLOSE = None
 
@@ -51,20 +51,6 @@ def _session_store():
         _SESSION_STORE = module
         return module
     raise RuntimeError(f"The shared session_store.py helper was not found relative to {HERE}.")
-
-
-def _agent_recovery():
-    global _AGENT_RECOVERY
-    if _AGENT_RECOVERY is not None:
-        return _AGENT_RECOVERY
-    candidate = HERE / "agent_recovery.py"
-    if candidate.is_file():
-        spec = importlib.util.spec_from_file_location("work_item_sessions_agent_recovery", candidate)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _AGENT_RECOVERY = module
-        return module
-    raise RuntimeError(f"The shared agent_recovery.py helper was not found relative to {HERE}.")
 
 
 def _peer_cli_script(name):
@@ -221,14 +207,14 @@ def _current_session_id(host):
 
 def _require_session_id(host):
     session_id = _current_session_id(host)
-    if not session_id or not _agent_recovery().SESSION_ID.fullmatch(session_id):
+    if not session_id or not agent_recovery.SESSION_ID.fullmatch(session_id):
         raise ValueError(f"missing or invalid session id in {host.session_variable}")
     return session_id
 
 
 def _registered_current_session(store, host, cwd):
     session_id = _current_session_id(host)
-    if session_id and _agent_recovery().SESSION_ID.fullmatch(session_id):
+    if session_id and agent_recovery.SESSION_ID.fullmatch(session_id):
         handle = _session_store().session_handle(host.value, session_id)
         session = store.get_session(handle)
         if session is not None and session.has_client_identity:
@@ -240,7 +226,7 @@ def _registered_current_session(store, host, cwd):
     if entry.get("host") != host.value:
         raise ValueError(f"the verified current native session is {entry.get('host')!r}, not {host.value!r}")
     registered_id = entry.get("session_id")
-    if not isinstance(registered_id, str) or not _agent_recovery().SESSION_ID.fullmatch(registered_id):
+    if not isinstance(registered_id, str) or not agent_recovery.SESSION_ID.fullmatch(registered_id):
         raise ValueError("the verified native session has no valid session id")
     if session_id and session_id != registered_id:
         raise ValueError("the native session id does not match the verified registry attachment")
@@ -289,7 +275,7 @@ def _read_time_status(session, machine):
     if (session.machine or "").casefold() != machine.casefold():
         return "foreign"
     if not session.ended:
-        liveness = _agent_recovery().liveness({"host": session.host, "session": session.session_id})
+        liveness = agent_recovery.liveness({"host": session.host, "session": session.session_id})
         if liveness == "live":
             return "live"
         if liveness == "unknown":
@@ -320,7 +306,7 @@ def _finished_elsewhere(session, machine):
         return True
     if (session.machine or "").casefold() != machine.casefold():
         return False
-    record = _agent_recovery()._registry(session.session_id) or {}
+    record = agent_recovery._registry(session.session_id) or {}
     started = record.get("pid_started_at")
     if (record.get("host") in (None, session.host) and isinstance(record.get("pid"), int)
             and isinstance(started, (int, float)) and not isinstance(started, bool) and math.isfinite(started)):
@@ -334,7 +320,7 @@ def _resume_roots(session):
 
 
 def _unverified_launch(error):
-    return _AGENT_RECOVERY is not None and _AGENT_RECOVERY.unverified_launch(error)
+    return agent_recovery.unverified_launch(error)
 
 
 def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=None, title=None, plan_path=None,
@@ -463,7 +449,7 @@ def cmd_resume(work_item=None, handle=None, execution_key=None, provider=None, s
     status = _read_time_status(selected, machine)
     if status != "closed":
         raise ValueError(f"{selected.handle}: {status}; reconcile before resuming")
-    recovery = _agent_recovery()
+    recovery = agent_recovery
     roots = _resume_roots(selected)
     if prompt_path:
         return recovery.open_session(
@@ -500,7 +486,7 @@ def cmd_interrupted(resume_handles=None, cwd=None):
         label = item_names.get(session.work_item, "(unclaimed)")
         grouped.setdefault(label, []).append({
             "handle": session.handle, "title": session.title, "cwd": session.cwd, "branch": session.branch,
-            "last_activity": _agent_recovery().iso_timestamp(session.last_activity_at),
+            "last_activity": agent_recovery.iso_timestamp(session.last_activity_at),
             "turn_state": session.turn_state, "status": statuses[session.handle],
         })
     result = {"interrupted": grouped}
@@ -512,7 +498,7 @@ def cmd_interrupted(resume_handles=None, cwd=None):
             status = statuses[handle]
             if status != "closed":
                 raise ValueError(f"{handle}: {status}; resume only a session confirmed closed on this machine")
-        recovery = _agent_recovery()
+        recovery = agent_recovery
         resumed = []
         for handle in resume_handles:
             session = by_handle[handle]

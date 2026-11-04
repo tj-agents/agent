@@ -35,7 +35,7 @@ running ones on other machines and the caller's stay until their own closeout.
 ## Read-time status
 
 Computed, never trusted from storage, in order: `foreign` when the recorded machine differs; for a
-not-ended row, `live`/`unknown` from `agent_recovery.liveness`; an ended row reports `finished`/
+not-ended row, `live`/`unknown` from `tj_agent.recovery.liveness`; an ended row reports `finished`/
 `handed_off` directly; otherwise (ended `closed`, or not-ended and dead), worktree staleness
 (`stale`/`unknown` when the worktree is missing, its branch differs, or its recorded HEAD is not an
 ancestor of the worktree's current HEAD), else `closed`. Only `closed` authorizes a resume.
@@ -74,7 +74,7 @@ python -B '<skill-directory>/scripts/work_item_sessions.py' register --provider 
 - `resume [<feature>/<item>|--execution-key execution:<uuid>|--provider <provider> --scope <scope> --native-id <id>]
   [--handle <handle>]`: without `--handle`, resumes the single owner that is not
   ended or ended `closed`; refuses foreign, stale, live, unknown, finished or handed-off sessions, then
-  calls `agent_recovery.open_session`.
+  calls `tj_agent.recovery.open_session`.
 - `interrupted [--resume <handle>...]`: lists not-ended sessions on this machine whose recorded pid is dead,
   newest activity first, grouped by work item (`(unclaimed)` when none). Each entry gives handle, title, cwd,
   branch, `last_activity` as UTC ISO 8601 ending in `Z`, last turn state and computed status. Inside a

@@ -97,6 +97,9 @@ class RefreshRunTests(unittest.TestCase):
 
 class RefreshCliTests(unittest.TestCase):
     def setUp(self):
+        native = mock.patch.object(REFRESH.native_runtime, "prepare", return_value=())
+        native.start()
+        self.addCleanup(native.stop)
         caller = mock.patch.object(REFRESH, "calling_host", return_value=Host.CODEX)
         caller.start()
         self.addCleanup(caller.stop)
