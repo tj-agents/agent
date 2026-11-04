@@ -136,6 +136,10 @@ def unmanaged_codex(text: str) -> str:
 
 def codex_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool]) -> str:
     existing = config_conflicts.read_text(path, unmanaged=unmanaged_codex) if path.is_file() else ""
+    return codex_document(existing, sources, identities)
+
+
+def codex_document(existing: str, sources: dict[str, dict], identities: dict[str, bool]) -> str:
     prefix = unmanaged_codex(existing)
     return (prefix + "\n\n" if prefix else "") + codex_block(sources, identities)
 
@@ -416,10 +420,16 @@ def plan(
         mode = host_permissions.permissions(root)
         targets[claude] = host_permissions.claude_settings(targets[claude], mode, project=True)
         targets[codex] = host_permissions.codex_settings(targets[codex], mode)
+        if scope == "project":
+            validation_targets = dict(targets)
+            portable = machine_paths.portable_tracked_text(root, ".codex/config.toml")
+            if portable is not None:
+                validation_targets[codex] = host_permissions.codex_settings(
+                    codex_document(portable, sources, identities), mode
+                )
+            reject_machine_paths(root, validation_targets)
     except ValueError as error:
         raise lock_io.LockError(str(error)) from error
-    if scope == "project":
-        reject_machine_paths(root, targets)
     for path in targets:
         text_at(path)
     return targets
