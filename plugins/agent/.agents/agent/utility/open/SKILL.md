@@ -13,14 +13,14 @@ route: infer
 
 # Open a CLI session
 
-The caller names the session, never the host. `agent_recovery.py reopen` searches Claude and Codex history,
+The caller names the session, never the host. `recover.py reopen` searches Claude and Codex history,
 picks the one session, then either focuses its live tab or reopens it with the native launcher. Do not
 select a host-specific skill for a user request that names a session.
 
 Run with `python` on Windows or `python3` on Linux/macOS:
 
 ```sh
-python -B '<package-root>/.agents/agent/runtime/agent_recovery.py' reopen --target '<session-id | topic | directory>'
+python -B '<package-root>/.agents/agent/runtime/recover.py' reopen --target '<session-id | topic | directory>'
 ```
 
 - `--target` is an exact native session id, a case-insensitive topic matched against ids, tab titles and
