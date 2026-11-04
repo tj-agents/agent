@@ -864,8 +864,8 @@ def apply_native_cli(context: Context) -> list[str]:
 
 
 STEPS = (
+    Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("preconditions", check_preconditions, nothing, required=True),
-    Step("native CLI", check_native_cli, apply_native_cli),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("event channel and publishers", check_channel, apply_channel),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
@@ -888,7 +888,7 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
     failed_steps = set()
     for step in steps:
         if "native CLI" in failed_steps:
-            print(f"n/a    {step.name}: native CLI prerequisite failed", file=out)
+            print(f"n/a    {step.name}: native CLI prerequisite unavailable", file=out)
             continue
         if step.name == "background machine events" and failed_steps & {
                 "event channel and publishers", "launch-check runtime", "plugin and merge-policy catch-up",
@@ -909,6 +909,8 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
                 continue
             if check_only:
                 drift = True
+                if step.name == "native CLI":
+                    failed_steps.add(step.name)
                 for item in pending:
                     print(f"drift  {step.name}: {item}", file=out)
                 continue
@@ -933,10 +935,6 @@ def selected_steps(names: set[str]) -> tuple[Step, ...]:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
         selected.update({"plugin and merge-policy catch-up", "harness permissions"})
-    if selected & {"plugin setup", "plugin and merge-policy catch-up", "background machine events",
-                   "hidden Git Bash for Claude", "Codex profile agents", "event channel and publishers",
-                   "native permission defaults", "harness permissions"}:
-        selected.add("native CLI")
     return tuple(step for step in STEPS if not selected or step.required or step.name in selected)
 
 
