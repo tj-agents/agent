@@ -46,7 +46,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
             marketplace = command[command.index("--marketplace") + 1]
             return subprocess.CompletedProcess(command, 0, json.dumps({"installed": [entries[marketplace]]}), "")
 
-        with mock.patch.object(REQUIRED.subprocess, "run", side_effect=response) as run:
+        with mock.patch.object(REQUIRED.process, "run", side_effect=response) as run:
             result = REQUIRED.check(self.project, Host.CODEX, "native-codex")
         self.assertEqual({first, second}, set(result))
         self.assertEqual([
@@ -62,7 +62,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
         def run(_command, **options):
             return native_run([sys.executable, str(script)], **options)
 
-        with mock.patch.object(REQUIRED.subprocess, "run", side_effect=run):
+        with mock.patch.object(REQUIRED.process, "run", side_effect=run):
             self.assertEqual([], REQUIRED.inventory("native-claude", PLUGINS[Host.CLAUDE], self.project, ()))
 
     def test_multiple_marketplaces_share_one_inventory_deadline(self):
@@ -76,7 +76,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
 
     def test_explicit_native_inventory_remains_unfiltered_for_cli_capability(self):
         entry = self.entry("cli@tj-agents")
-        with mock.patch.object(REQUIRED.subprocess, "run", return_value=subprocess.CompletedProcess(
+        with mock.patch.object(REQUIRED.process, "run", return_value=subprocess.CompletedProcess(
                 [], 0, json.dumps({"installed": [entry]}), "")) as run:
             roots = REQUIRED.inventory_roots(self.project, Host.CODEX, "native-codex")
         self.assertIn("cli@tj-agents", roots)
@@ -91,7 +91,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
             self.assertEqual("tj-agents", command[command.index("--marketplace") + 1])
             return subprocess.CompletedProcess(command, 0, json.dumps({"installed": [entry]}), "")
 
-        with mock.patch.object(REQUIRED.subprocess, "run", side_effect=query):
+        with mock.patch.object(REQUIRED.process, "run", side_effect=query):
             roots = REQUIRED.inventory_roots(self.project, Host.CODEX, "native-codex",
                                              identities=["agent@tj-agents"])
         self.assertEqual({"agent@tj-agents"}, roots.keys())

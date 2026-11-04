@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from typing import Optional
@@ -28,8 +29,11 @@ _ORIGIN_HEAD_PREFIX = "ref: refs/remotes/origin/"
 
 def _run_git(cwd, args, timeout):
     try:
+        launcher = shutil.which("tj_hook.exe" if os.name == "nt" else "tj_hook")
+        if not launcher:
+            raise FileNotFoundError("tj_hook is required for repository probes")
         result = subprocess.run(
-            ["git", "-C", str(cwd), *args],
+            [str(Path(launcher).absolute()), "--", "git", "-C", str(cwd), *args],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
         )
     except subprocess.TimeoutExpired:

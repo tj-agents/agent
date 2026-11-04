@@ -16,6 +16,7 @@ import time
 from host import Host
 import host_plugins
 import host_sessions
+from tj_cli import process
 
 HERE = Path(__file__).resolve().parent
 PROMPT = "Plugins were refreshed and this conversation resumed in a fresh process. Continue the requested work."
@@ -64,7 +65,7 @@ def windows_split(command_line: str) -> list[str]:
 
 def host_arguments(pid: int) -> list[str]:
     if os.name == "nt":
-        result = subprocess.run(
+        result = process.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
              f"(Get-CimInstance -Class Win32_Process -Filter 'ProcessId = {int(pid)}').CommandLine"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=False)
@@ -74,7 +75,7 @@ def host_arguments(pid: int) -> list[str]:
     proc = Path(f"/proc/{int(pid)}/cmdline")
     if proc.is_file():
         return [value.decode("utf-8", "replace") for value in proc.read_bytes().split(b"\0")[1:] if value]
-    result = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(int(pid))],
+    result = process.run(["ps", "-ww", "-o", "command=", "-p", str(int(pid))],
                             capture_output=True, text=True, timeout=30, check=False)
     if result.returncode or not result.stdout.strip():
         raise OSError("the host command line could not be read")
@@ -184,7 +185,7 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
     if entry.get("profile"):
         options += ["--history-root", str(Path(entry["profile"]) / host.history_directory)]
     try:
-        shared.start_detached(HERE / "relaunch_watcher.py", options)
+        shared.start_detached(HERE / "relaunch_watcher.py", options, foreground_bootstrap=True)
         armed = arm_client_close(project, entry, shared, host)
         write_json(record, {**read_json(record), "close": armed, "at": time.time()})
     except Exception as error:

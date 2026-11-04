@@ -169,7 +169,7 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual("github.com", saved["GH_HOST"])
         self.assertFalse(any(key.startswith("GIT_CONFIG_") or key in {"TJ_AGENT", "GH_TOKEN", "GITHUB_TOKEN"} for key in saved))
         self.assertEqual(["reconcile", "--repo", "tj-agents/core"], run.call_args.args[0][-3:])
-        self.assertEqual(events.plugins.NO_WINDOW, run.call_args.kwargs["creationflags"])
+        self.assertNotIn("creationflags", run.call_args.kwargs)
 
     def test_listener_lock_has_no_age_expiry_and_releases_with_handle(self):
         with tempfile.TemporaryDirectory() as directory:

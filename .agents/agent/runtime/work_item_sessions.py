@@ -17,6 +17,7 @@ sys.path.insert(0, str(HERE))
 
 from host import Host  # noqa: E402
 from tj_agent import recovery as agent_recovery  # noqa: E402
+from tj_cli import process  # noqa: E402
 
 WORK_ITEM_RE = re.compile(r"^(?P<feature>[a-z0-9]+(?:-[a-z0-9]+)*)/(?P<item>[a-z0-9]+(?:-[a-z0-9]+)*)$")
 WORK_ITEM_STATUSES = ("proposed", "active", "blocked", "paused", "delivery-gated", "done")
@@ -242,7 +243,7 @@ def _path_key(value):
 
 def _head_is_ancestor(worktree, head):
     try:
-        result = subprocess.run(
+        result = process.run(
             ["git", "-C", str(worktree), "merge-base", "--is-ancestor", head, "HEAD"],
             capture_output=True, timeout=HEAD_CHECK_TIMEOUT,
         )

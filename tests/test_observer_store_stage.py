@@ -33,6 +33,8 @@ class ObserverStoreStageTests(unittest.TestCase):
 
     @staticmethod
     def scheduler(arguments, **_kwargs):
+        if len(arguments) > 2 and arguments[1] == '--':
+            arguments = arguments[2:]
         if arguments[0] == 'whoami.exe':
             return SimpleNamespace(returncode=0, stdout='"EXAMPLE\\user","S-1-5-21-123-456-789-1001"\r\n', stderr='')
         return SimpleNamespace(returncode=0, stdout='', stderr='')
@@ -79,6 +81,7 @@ class ObserverStoreStageTests(unittest.TestCase):
             'Path(sys.argv[1]).write_text(json.dumps({key: os.environ.get(key) for key in '
             '("AGENT_STATE_DIRECTORY", "CODEX_HOME", "CLAUDE_CONFIG_DIR")}))\n', encoding='utf-8')
         result = subprocess.run([sys.executable, '-I', '-B', str(launcher), '--state-directory', str(state),
+                                 '--search-path', os.environ.get('PATH', os.defpath),
                                  '--codex-home', str(codex), '--claude-config-dir', str(claude), '--',
                                  str(probe), str(output)], capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(0, result.returncode, result.stderr)
@@ -87,7 +90,8 @@ class ObserverStoreStageTests(unittest.TestCase):
 
     def test_scheduler_command_passes_only_owned_detached_context(self):
         with mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.state), 'CODEX_HOME': str(self.state / 'codex'),
-                                          'CLAUDE_CONFIG_DIR': str(self.state / 'claude'), 'UNRELATED': 'secret'}, clear=True):
+                                          'CLAUDE_CONFIG_DIR': str(self.state / 'claude'), 'UNRELATED': 'secret'}, clear=True), \
+                mock.patch.object(session_close.shutil, 'which', return_value=sys.executable):
             command = session_close.detached_command(self.state / 'watcher.py', ['--request', 'exact'], SCRIPTS / 'detached_launch.py')
         self.assertIn('--state-directory', command)
         self.assertIn('--codex-home', command)

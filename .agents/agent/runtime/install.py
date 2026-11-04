@@ -39,6 +39,7 @@ import required_plugins
 import runtime_delivery
 import native_runtime
 from tj_agent import content
+from tj_cli import process
 
 COMMAND_TIMEOUT_SECONDS = 60
 INSTALLER_TIMEOUT_SECONDS = 600
@@ -69,7 +70,7 @@ class Context:
     home: Path
     environ: dict
     windows: bool
-    run: Callable = subprocess.run
+    run: Callable = process.run
     which: Callable = shutil.which
     documents: Path | None = None
     user_environment: object = None
@@ -413,7 +414,7 @@ def build_hidden_bash(context: Context, real: str) -> None:
         if compiled.returncode or not build.is_file():
             raise InstallError(f"Failed to build {build}: {compiled.stderr.strip()}")
         probe = context.run([str(build), *HIDDEN_BASH_PROBE], capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", timeout=10, check=False, creationflags=plugin_autoupdate.NO_WINDOW,
+                            errors="replace", timeout=10, check=False,
                             env={**context.environ, "TJ_AGENTS_REAL_GIT_BASH": real})
         if probe.returncode != 73 or probe.stdout != "HIDDEN_BASH_OK":
             raise InstallError("The hidden Bash proxy did not preserve Bash output and exit status")
@@ -438,7 +439,7 @@ def apply_hidden_bash(context: Context) -> list[str]:
 
 def run_installer(context: Context, command: list[str]) -> subprocess.CompletedProcess:
     return context.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=INSTALLER_TIMEOUT_SECONDS, check=False, creationflags=plugin_autoupdate.NO_WINDOW)
+                       timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
 
 
 def output_lines(result: subprocess.CompletedProcess) -> list[str]:
@@ -932,7 +933,9 @@ def selected_steps(names: set[str]) -> tuple[Step, ...]:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
         selected.update({"plugin and merge-policy catch-up", "harness permissions"})
-    if selected & {"plugin setup", "plugin and merge-policy catch-up", "background machine events"}:
+    if selected & {"plugin setup", "plugin and merge-policy catch-up", "background machine events",
+                   "hidden Git Bash for Claude", "Codex profile agents", "event channel and publishers",
+                   "native permission defaults", "harness permissions"}:
         selected.add("native CLI")
     return tuple(step for step in STEPS if not selected or step.required or step.name in selected)
 
