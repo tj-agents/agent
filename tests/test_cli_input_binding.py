@@ -37,6 +37,10 @@ class InputBindingTests(unittest.TestCase):
         self.contexts = {}
         self.infos = {}
         self.commands = {}
+        if os.name == "nt":
+            elevation = mock.patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=False)
+            elevation.start()
+            self.addCleanup(elevation.stop)
         for patch in (
             mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.root), 'CODEX_HOME': str(self.profile)}),
             mock.patch.object(client.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stderr='')),

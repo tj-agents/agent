@@ -68,6 +68,27 @@ def is_session(arguments):
             and command_name(arguments) not in OTHER_COMMANDS)
 
 
+def recorder_policy_required(arguments, environment):
+    if environment.get("CODEX_EXEC_SERVER_URL"):
+        return True
+    if os.name == "nt":
+        import ctypes
+        if ctypes.windll.shell32.IsUserAnAdmin():
+            return True
+    options = {"-c", "--config", "-p", "--profile", "--enable", "--disable", "--search",
+               "--oss", "--strict-config", "--dangerously-bypass-hook-trust"}
+    index = 0
+    while index < len(arguments):
+        value = arguments[index]
+        if value == "--":
+            break
+        option, separator, _setting = value.partition("=")
+        if option in options or value.startswith(("-c", "-p")):
+            return True
+        index += 2 if option in VALUE_OPTIONS and not separator else 1
+    return False
+
+
 def profile_directory(environ=None):
     values = os.environ if environ is None else environ
     if os.name == 'nt':
@@ -140,7 +161,7 @@ def prepare(arguments, project, environment, executable=None):
         ) if key in values},
     }
     prepared = arguments
-    if backend is None:
+    if backend is None or recorder_policy_required(arguments, values):
         prepared = ['--config', 'shell_environment_policy.set.' + RECORD_ENV + '=""',
                     '--config', 'shell_environment_policy.set.' + RECORD_PATH_ENV + '=""', *arguments]
     return prepared, values, ticket
