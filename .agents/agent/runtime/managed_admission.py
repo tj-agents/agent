@@ -126,8 +126,10 @@ def configuration_paths(project: Path, host: Host) -> list[Path]:
 
 
 def managed_scope(project: Path, required: tuple[str, ...] | None = None) -> bool:
-    required = required if required is not None else required_plugins.selected(
-        required_plugins.project_root(project)
+    required = (
+        required
+        if required is not None
+        else required_plugins.selected(required_plugins.project_root(project))
     )
     return any(identity.endswith("@tj-agents") for identity in required)
 
@@ -612,7 +614,7 @@ def maintenance_command(project: Path, host: Host) -> str:
         "--host",
         host.value,
         "--project",
-        str(required_plugins.project_root(project)),
+        str(project.resolve()),
         "--verify",
     ]
     return (
