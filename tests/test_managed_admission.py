@@ -366,9 +366,9 @@ def test_verification_uses_the_effective_native_directory_and_fresh_inventory(
             native_project=native_project,
         )
     assert document is not None
-    assert document["project"] == str(case.project)
-    assert document["native_project"] == str(native_project)
-    assert observed == [native_project]
+    assert document["project"] == str(case.project.resolve())
+    assert document["native_project"] == str(native_project.resolve())
+    assert observed == [native_project.resolve()]
 
 
 def test_native_directories_keep_independent_admission_and_session_receipts(
