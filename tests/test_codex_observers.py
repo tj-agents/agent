@@ -128,12 +128,33 @@ def test_frontend_prepare_attach_sets_real_pid_before_starting_both_observers(
 
     monkeypatch.setattr(client, "prepare", prepare)
     monkeypatch.setattr(client, "attach", attach)
+    monkeypatch.setattr(client, "observer_binding", lambda value: value)
     monkeypatch.setattr(shell_commands, "start", start_shell)
     monkeypatch.setattr(capacity, "start", start_capacity)
     _, _, prepared = sessions.prepare_frontend([], tmp_path, {}, executable="codex")
     sessions.attach_frontend(prepared, 123)
     assert observed == [("shell", 123), ("capacity", 123)]
     assert ticket["_shell_executable"] == ticket["_capacity_executable"] == "codex"
+
+
+def test_unsupported_backend_never_starts_observers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ticket: dict[str, Any] = {"token": "a" * 64, "backend": {"unknown": True}}
+    started: list[str] = []
+
+    monkeypatch.setattr(client, "attach", lambda _ticket, _pid: None)
+    monkeypatch.setattr(
+        client,
+        "observer_binding",
+        lambda _ticket: (_ for _ in ()).throw(RuntimeError("unsupported")),
+    )
+    monkeypatch.setattr(shell_commands, "start", lambda *_args: started.append("shell"))
+    monkeypatch.setattr(capacity, "start", lambda *_args: started.append("capacity"))
+
+    sessions.attach_frontend(ticket, 123)
+
+    assert not started
 
 
 def test_failed_capacity_shutdown_preserves_monitor_and_binding(

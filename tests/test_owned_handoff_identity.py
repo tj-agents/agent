@@ -126,6 +126,7 @@ def launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OwnedLaunch:
         "profile": str(profile),
         "launch_cwd": str(directory),
         "recording_path": str(recording),
+        "created_at": 1.0,
         "executable": executable,
         "recipient": {
             "thread_id": "thread",
@@ -174,6 +175,13 @@ def launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> OwnedLaunch:
         "verify_owned",
         partial(client.verify_owned, table=table, peer_state=fixture.peer_state),
     )
+    monkeypatch.setattr(
+        client,
+        "verify_owned_processes",
+        partial(
+            client.verify_owned_processes, table=table, peer_state=fixture.peer_state
+        ),
+    )
     fixture.save()
     return fixture
 
@@ -182,6 +190,42 @@ def test_owned_binding_verifies_exact_processes_endpoint_and_recording(
     launch: OwnedLaunch,
 ) -> None:
     assert launch.verify() == FRONTEND_MESSAGE
+
+
+def test_observer_uses_the_owned_endpoint_before_initial_input(
+    launch: OwnedLaunch, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    Path(launch.record["recording_path"]).write_text("", encoding="utf-8")
+    selected: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        launch.client,
+        "server_for",
+        lambda record, _timeout: selected.append(record) or launch.server,
+    )
+    monkeypatch.setattr(
+        launch.client.hook_trust,
+        "AppServer",
+        lambda *_args, **_kwargs: pytest.fail("observer opened a default proxy"),
+    )
+    assert launch.client.observer_server(launch.record, "unused") is launch.server
+    assert selected == [launch.record]
+
+
+def test_observer_rejects_a_changed_durable_binding_before_any_proxy(
+    launch: OwnedLaunch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = launch.client.binding_path(launch.record["token"])
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    stored["created_at"] = 2.0
+    path.write_text(json.dumps(stored), encoding="utf-8")
+    monkeypatch.setattr(
+        launch.client,
+        "server_for",
+        lambda *_args, **_kwargs: pytest.fail("observer opened a changed binding"),
+    )
+    with pytest.raises(RuntimeError, match="binding changed"):
+        launch.client.observer_server(launch.record, "unused")
 
 
 def test_supervisor_interpreter_redirector_preserves_exact_wrapper_lineage(
