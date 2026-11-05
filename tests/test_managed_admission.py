@@ -4,6 +4,7 @@ import io
 import json
 import os
 import queue
+import shlex
 import shutil
 import subprocess
 import sys
@@ -547,10 +548,47 @@ def test_host_denial_shapes_and_timeout_are_fail_closed(case: AdmissionFixture) 
         assert admission.main() == 0
         result = json.loads(output.getvalue())["hookSpecificOutput"]
         assert result["permissionDecision"] == "deny"
-        assert result["permissionDecisionReason"].endswith(
-            "Run from a terminal: "
-            + admission.maintenance_command(native_project, Host.CODEX)
+        recovery_arguments = [
+            sys.executable,
+            "-B",
+            str(Path(admission.__file__).resolve().with_name("reload_plugins.py")),
+            "--host",
+            Host.CODEX.value,
+            "--project",
+            str(native_project.resolve()),
+            "--verify",
+        ]
+        recovery_command = (
+            subprocess.list2cmdline(recovery_arguments)
+            if os.name == "nt"
+            else shlex.join(recovery_arguments)
         )
+        assert result["permissionDecisionReason"].endswith(
+            "Run from a terminal: " + recovery_command
+        )
+
+
+def test_nested_native_context_has_an_admitted_session_receipt(
+    case: AdmissionFixture,
+) -> None:
+    native_project = case.project / "nested native context"
+    native_project.mkdir()
+    document = case.verify(native_project=native_project)
+    for root in case.roots.values():
+        admission.gate(
+            native_project, Host.CODEX, "nested-session", "SessionStart", root
+        )
+    admission.gate(
+        native_project,
+        Host.CODEX,
+        "nested-session",
+        "PreToolUse",
+        case.roots["agent@tj-agents"],
+    )
+    assert (
+        admission.cached(case.project, Host.CODEX, native_project=native_project)
+        == document
+    )
 
 
 def test_setup_check_contract_reaches_the_shared_admission_checker(

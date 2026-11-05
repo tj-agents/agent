@@ -60,7 +60,10 @@ def test_handoff_title_override_preserves_required_plugin_verification(
     assert project == inventory.project.resolve()
     assert roots.keys() == {"agent@tj-agents"}
     admission.assert_called_once_with(
-        project, required_plugins.Host.CODEX, "native-codex", roots
+        project,
+        required_plugins.Host.CODEX,
+        "native-codex",
+        native_project=inventory.project,
     )
     assert run.call_args.args[0] == [
         "native-codex",
