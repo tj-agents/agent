@@ -31,7 +31,7 @@ else:
         ) -> subprocess.CompletedProcess[str]:
             output = (
                 '"EXAMPLE\\user","S-1-5-21-123-456-789-1001"\n'
-                if arguments[0] == "whoami.exe"
+                if Path(arguments[0]).name == "whoami.exe"
                 else ""
             )
             return subprocess.CompletedProcess(arguments, 0, output, "")

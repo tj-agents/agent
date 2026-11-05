@@ -41,13 +41,16 @@ def test_handoff_title_override_preserves_required_plugin_verification(
         "--config",
         "tui.terminal_title=[]",
     )
-    with mock.patch.object(
-        required_plugins.REQUIRED.process,
-        "run",
-        return_value=subprocess.CompletedProcess(
-            [], 0, json.dumps({"installed": [entry]}), ""
-        ),
-    ) as run:
+    with (
+        mock.patch("managed_admission.verify") as admission,
+        mock.patch.object(
+            required_plugins.REQUIRED.process,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps({"installed": [entry]}), ""
+            ),
+        ) as run,
+    ):
         project, roots = required_plugins.REQUIRED.check_launch_roots(
             inventory.project,
             required_plugins.Host.CODEX,
@@ -56,6 +59,9 @@ def test_handoff_title_override_preserves_required_plugin_verification(
         )
     assert project == inventory.project.resolve()
     assert roots.keys() == {"agent@tj-agents"}
+    admission.assert_called_once_with(
+        project, required_plugins.Host.CODEX, "native-codex", roots
+    )
     assert run.call_args.args[0] == [
         "native-codex",
         *options,

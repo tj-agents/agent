@@ -13,7 +13,7 @@ PACKAGE = ROOT / "plugins" / "agent"
 SESSION = "22176c14-5e45-4d73-a2fb-c906e0147dea"
 CLOSE_STATE = ("close-lifecycle", "client-close", "session-close")
 LIFECYCLE_SCRIPTS = {"close_lifecycle.py", "hook_dispatch.py", "loader.py",
-                     "register_session.py", "session_hook.py", "snapshot.py"}
+                     "register_session.py", "session_hook.py", "snapshot.py", "managed_admission.py"}
 
 
 def manifest(host):
@@ -109,7 +109,7 @@ class NeverAutoCloseTests(unittest.TestCase):
     def test_shipped_hooks_run_only_the_session_lifecycle_scripts(self):
         for host in ("claude", "codex"):
             with self.subTest(host=host):
-                scripts = {path.rsplit("/", 1)[-1] for path in re.findall(r"[A-Za-z0-9_./-]+\.py", json.dumps(manifest(host)))}
+                scripts = {path.rsplit("/", 1)[-1] for path in re.findall(r"[A-Za-z0-9_./-]+\.py(?![A-Za-z0-9_])", json.dumps(manifest(host)))}
                 self.assertTrue(scripts)
                 allowed = LIFECYCLE_SCRIPTS | ({"capacity.py"} if host == "codex" else set())
                 self.assertLessEqual(scripts, allowed)

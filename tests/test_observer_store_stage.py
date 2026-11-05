@@ -46,9 +46,7 @@ class ObserverStoreStageTests(unittest.TestCase):
 
     @staticmethod
     def scheduler(arguments, **_kwargs):
-        if len(arguments) > 2 and arguments[1] == '--':
-            arguments = arguments[2:]
-        if arguments[0] == 'whoami.exe':
+        if Path(arguments[0]).name == 'whoami.exe':
             return SimpleNamespace(returncode=0, stdout='"EXAMPLE\\user","S-1-5-21-123-456-789-1001"\r\n', stderr='')
         return SimpleNamespace(returncode=0, stdout='', stderr='')
 
@@ -112,7 +110,6 @@ class ObserverStoreStageTests(unittest.TestCase):
         self.assertIn('--codex-home', command)
         self.assertIn('--claude-config-dir', command)
         self.assertNotIn('UNRELATED', ' '.join(command))
-
 
 if __name__ == '__main__':
     unittest.main()
