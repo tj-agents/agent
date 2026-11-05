@@ -110,7 +110,6 @@ def main():
         result(target, status, error="verified host (or Windows wrapper) did not exit")
         return 0
     session_close.delete_own_session(args.session_id)
-    session_close.remove_matching_obligations(args.worktree, args.session_id)
     result(target, "session-closed", checkout_retained=True, session_exited=True)
     return 0
 
