@@ -26,6 +26,7 @@ from host import Host
 from host_plugins import PLUGINS, Plugins
 import launch_check
 import managed_admission
+import native_runtime
 import plugin_refresh
 from plugin_refresh import RefreshError
 import required_plugins
@@ -156,6 +157,12 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--maintenance-budget requires --defer-adoption")
         if arguments.maintenance_budget <= 0:
             parser.error("--maintenance-budget must be greater than zero")
+    if not arguments.verify_only:
+        try:
+            native_runtime.prepare()
+        except (RuntimeError, OSError) as error:
+            print(json.dumps({"native_cli_error": str(error)}))
+            return 1
     project = arguments.project.resolve()
     hosts = (arguments.host,) if arguments.host else tuple(Host)
     allowed = not arguments.no_relaunch

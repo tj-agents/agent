@@ -389,21 +389,28 @@ def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str
     return ([] if errors else [reference[key] for key in sorted(reference)]), errors
 
 
-def invoke(target: Target, arguments: list[str], timeout: int, inherit: bool = False) -> subprocess.CompletedProcess:
+def invoke(target: Target, arguments: list[str], timeout: int, project: Path,
+           inherit: bool = False) -> subprocess.CompletedProcess:
     command = [sys.executable, "-B", str(target.script), "setup", *arguments]
-    return plugin_refresh.execute(command, Path.cwd(), timeout=timeout, inherit=inherit)
+    return plugin_refresh.execute(command, project, timeout=timeout, inherit=inherit)
 
 
 def reconcile_selection(project: Path, *, check_only: bool = False) -> list[str]:
-    project = project_root(project)
-    if not (project / ".agents/plugins.json").is_file():
+    return reconcile_selections([project], check_only=check_only)
+
+
+def reconcile_selections(projects: Sequence[Path], *, check_only: bool = False) -> list[str]:
+    projects = sorted({project_root(project) for project in projects
+                       if (project_root(project) / ".agents/plugins.json").is_file()})
+    if not projects:
         return []
     script = Path(__file__).resolve().parents[1] / "utility/plugins/scripts/adopt_plugins.py"
+    additional = [argument for project in projects[1:] for argument in ("--also-root", str(project))]
     try:
         result = plugin_refresh.execute(
-            [sys.executable, "-B", str(script), "--root", str(project), "--converge-existing",
-             "--mode", "check" if check_only else "write"],
-            project,
+            [sys.executable, "-B", str(script), "--root", str(projects[0]), "--converge-existing",
+             "--mode", "check" if check_only else "write", *additional],
+            projects[0],
             timeout=60,
         )
     except plugin_refresh.MaintenanceUnsettledError:
@@ -421,6 +428,7 @@ def reconcile_selection(project: Path, *, check_only: bool = False) -> list[str]
 
 
 def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None]) -> list[str]:
+    project = project_root(project)
     try:
         drift = reconcile_selection(project, check_only=True)
     except RequiredPluginsError as error:
@@ -430,7 +438,7 @@ def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host,
     targets_found, errors = collect(project, hosts, executables)
     for target in targets_found:
         try:
-            result = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS)
+            result = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if result.returncode:
                 errors.append(f"{target.identity}: setup --check failed: {bounded(result)}")
         except plugin_refresh.MaintenanceUnsettledError:
@@ -441,17 +449,18 @@ def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host,
 
 
 def converge_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None], onboard: bool = False) -> list[str]:
+    project = project_root(project)
     targets_found, errors = collect(project, hosts, executables, repair=True)
     for target in targets_found:
         try:
-            checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS)
+            checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if checked.returncode:
                 applied = invoke(target, ["--onboard"] if onboard else [],
-                                 ONBOARD_TIMEOUT_SECONDS if onboard else CHECK_TIMEOUT_SECONDS, inherit=onboard)
+                                 ONBOARD_TIMEOUT_SECONDS if onboard else CHECK_TIMEOUT_SECONDS, project, inherit=onboard)
                 if applied.returncode:
                     errors.append(f"{target.identity}: setup failed: {bounded(applied)}")
                     continue
-                checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS)
+                checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if checked.returncode:
                 errors.append(f"{target.identity}: setup did not converge: {bounded(checked)}")
         except plugin_refresh.MaintenanceUnsettledError:

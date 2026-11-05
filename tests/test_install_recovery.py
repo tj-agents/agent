@@ -38,6 +38,9 @@ TOPIC = {"topic": "a" * 48}
 
 class InstallRecoveryTests(unittest.TestCase):
     def setUp(self):
+        native = mock.patch.object(CHECK.native_runtime, "prepare", return_value=())
+        native.start()
+        self.addCleanup(native.stop)
         temporary = tempfile.TemporaryDirectory(prefix="install recovery spaces é ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()

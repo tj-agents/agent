@@ -427,11 +427,18 @@ def test_each_host_dispatches_refresh_after_prompt_bookkeeping_and_before_stop_c
     prompt_scripts = [value for value in prompt_values if value.endswith(".py")]
     stop_scripts = [value for value in stop_values if value.endswith(".py")]
     root_name = "PLUGIN_ROOT" if host is Host.CODEX else "CLAUDE_PLUGIN_ROOT"
-    assert prompt_scripts[-3:] == [
+    expected_prompt = [
         f"${{{root_name}}}/.agents/agent-store/runtime/session_hook.py",
         f"${{{root_name}}}/.agents/agent/runtime/close_lifecycle.py",
-        f"${{{root_name}}}/.agents/agent/runtime/automatic_refresh.py",
     ]
+    if host is Host.CODEX:
+        expected_prompt.append(
+            f"${{{root_name}}}/.agents/agent/runtime/codex/capacity.py"
+        )
+    expected_prompt.append(
+        f"${{{root_name}}}/.agents/agent/runtime/automatic_refresh.py"
+    )
+    assert prompt_scripts[-len(expected_prompt) :] == expected_prompt
     assert stop_scripts[-3:] == [
         f"${{{root_name}}}/.agents/agent/runtime/automatic_refresh.py",
         f"${{{root_name}}}/.agents/agent-store/runtime/session_hook.py",

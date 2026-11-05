@@ -50,6 +50,14 @@ unconfigured event channel, a failed plugin update (catch-up) or missing require
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
 
+Managed Codex frontends with the shared app-server can recover automatically from the exact native
+`serverOverloaded` capacity failure. Recovery is bound to the recorded frontend input and its exact
+loaded thread, preserves the selected model and native permissions, and records a durable one-send
+receipt before continuing. It does not run for private `--no-daemon` or unmanaged sessions. Codex's
+`turn/start` API has no conditional “only if this failed turn is still current” parameter, so a very
+small race remains between the final input check and native acceptance; an interrupt or newer input
+observed before submission cancels recovery.
+
 Before checking native installations, launch, refresh and installer plugin setup reconcile an existing
 repository selection and regenerate both hosts' settings through the same scope and ownership checks
 as explicit adoption. The current Marketplace `main` dependency graph adds missing dependencies and
@@ -57,6 +65,19 @@ removes retired TJ Agents packages, including retirements after the bundled offl
 An unreachable marketplace leaves repository files untouched and reports the failure.
 Unconfigured projects are not enrolled. Installer `--check` reports
 selection drift without changing repository files, and a converged rerun writes nothing.
+
+Project reconciliation preserves checkout-local Codex settings when the committed and indexed
+configuration is portable. It checks both Git snapshots and regenerated project declarations for
+machine-specific paths. Untracked and unversioned configuration retains full path validation; the
+repository path scanner still checks the complete files before publication.
+
+Unresolved Git conflicts in the selection and generated native settings are planned through that same
+transaction before native configuration is read. Plugin membership uses a three-way set merge;
+generated host declarations are rebuilt from it, while unrelated settings retain their changes.
+Recovery requires Git's complete unmerged index and refuses conflicting user settings or committed
+conflict markers. Check mode writes nothing, and recovery leaves the index and stash intact for the
+repository's normal Git resolution workflow. The regression suite creates real stash conflicts on
+Windows and Linux, including paths with spaces and Unicode.
 
 The subscriber runs as a hidden current-user scheduled task on Windows or a systemd user service on
 Linux. Watcher lock contention exits as a failure so the supervisor retries after the previous watcher
@@ -84,6 +105,20 @@ Agent tree. Cache timestamps cannot select an older runtime. Launch updates incl
 project's Codex selection when locating that native package; publisher lookup failure preserves the
 installed runtime and reports the update failure.
 
+Managed Codex conversations connected to the shared daemon automatically respond after user-issued
+`!<command>` commands finish.
+The native shell still executes the command once; the launcher waits for its recorded output and terminal
+completion before starting a response in that same conversation. New input, interrupts and conversation
+switches cancel a pending response. The response keeps the conversation's existing model and permissions;
+approvals remain with the native terminal. The observer exits with its frontend. Claude keeps its native
+command handling.
+
+Attribution requires a normal user message in the managed frontend before its first shell command.
+A shell command entered first in a fresh window, an unmanaged frontend or a `--no-daemon` session has no
+automatic response. Native launch options that select an embedded server, including custom command-line
+configuration and profiles, also prevent the automatic response. If native delivery becomes uncertain,
+the launcher reports it and preserves the receipt rather than submitting the response twice.
+
 ## Skills
 
 - `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
@@ -105,6 +140,13 @@ on Windows and `python3` on Linux. CLI owns shared PATH operations in `tj_cli.pa
 distribution ships inside Agent's generated runtime and managed installation. Launching does not require
 a CLI source checkout or a separate package install. The development environment and CI use uv to resolve
 that same dependency and run both the migrated runtime suite and packaging checks.
+
+The installer, managed launches and machine-event refresh make the native `tj`/`tj_hook` pair available
+before native plugin operations. Missing binaries are downloaded through CLI's verified release installer,
+without a source checkout or Cargo. The installation directory is prepended to the current process PATH,
+including the environment inherited by the launched host. Routine launches with an existing pair do not
+query releases. CLI update events install their exact published revision before acknowledging the event;
+an unpublished release or an in-use Windows executable leaves the event pending for retry.
 
 The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).
 
