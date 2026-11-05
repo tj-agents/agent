@@ -204,12 +204,14 @@ class HookTrustTests(unittest.TestCase):
             self.updates(self.hook)
 
     @patch.object(TRUST, "run")
-    def test_rejects_unexpected_installed_executable_file(self, runner):
+    def test_ignores_generated_installed_bytecode(self, runner):
         runner.side_effect = self.git_result
         (self.cache / "hooks/__pycache__").mkdir()
         (self.cache / "hooks/__pycache__/context.cpython-313.pyc").write_bytes(b"\x00")
-        with self.assertRaisesRegex(RuntimeError, "differs from its Git source"):
-            self.updates(self.hook)
+        self.assertEqual(
+            {self.hook["key"]: {"trusted_hash": self.hook["currentHash"]}},
+            self.updates(self.hook),
+        )
 
     @patch.object(TRUST, "run")
     def test_rejects_source_origin_mismatch(self, runner):

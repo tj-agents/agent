@@ -47,7 +47,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, json.dumps({"installed": [entries[marketplace]]}), "")
 
         with mock.patch.object(REQUIRED.process, "run", side_effect=response) as run:
-            result = REQUIRED.check(self.project, Host.CODEX, "native-codex")
+            result = REQUIRED.check(self.project, Host.CODEX, "native-codex", admission=False)
         self.assertEqual({first, second}, set(result))
         self.assertEqual([
             ["native-codex", "plugin", "list", "--marketplace", "other-publisher", "--json"],

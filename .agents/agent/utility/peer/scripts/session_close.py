@@ -573,9 +573,20 @@ def windows_task_xml(user, command, working_directory):
     return ET.tostring(task, encoding="utf-16", xml_declaration=True)
 
 
+def windows_system_command(name: str) -> str:
+    root = os.environ.get("SystemRoot")
+    if not root:
+        raise Refusal("the Windows system directory is unavailable")
+    command = Path(root) / "System32" / name
+    if not command.is_absolute() or not command.is_file():
+        raise Refusal(f"the Windows system command is unavailable: {name}")
+    return str(command)
+
+
 def current_windows_user(kwargs, timeout):
     completed = process.run(
-        ["whoami.exe", "/user", "/fo", "csv", "/nh"], **kwargs, check=False, timeout=timeout,
+        [windows_system_command("whoami.exe"), "/user", "/fo", "csv", "/nh"],
+        **kwargs, check=False, timeout=timeout,
     )
     rows = list(csv.reader(completed.stdout.splitlines()))
     user = rows[0][-1].strip() if len(rows) == 1 and rows[0] else ""
@@ -643,6 +654,7 @@ def start_detached(script, arguments, extra=(), stage=True):
               "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     timeout = bounded_timeout("AGENT_FINISH_SPAWN_TIMEOUT_SECONDS")
     if os.name == "nt":
+        scheduler = windows_system_command("schtasks.exe")
         launcher = (staging / "detached_launch.py") if stage else here.with_name("detached_launch.py")
         command = detached_command(script if not stage else staging / Path(script).name, arguments, launcher)
         task = "agent-finish-reaper-" + uuid.uuid4().hex
@@ -662,7 +674,7 @@ def start_detached(script, arguments, extra=(), stage=True):
                 stream.write(windows_task_xml(user, command, state_directory()))
             registered = True
             create = process.run(
-                ["schtasks.exe", "/create", "/tn", task, "/xml", xml_path, "/f"],
+                [scheduler, "/create", "/tn", task, "/xml", xml_path, "/f"],
                 **scheduler_kwargs, check=False, timeout=timeout,
             )
             if create.returncode:
@@ -670,12 +682,12 @@ def start_detached(script, arguments, extra=(), stage=True):
                     "could not create a detached cleanup observer ("
                     + scheduler_diagnostic(create) + ")"
                 )
-            run = process.run(["schtasks.exe", "/run", "/tn", task], **scheduler_kwargs,
-                                 check=False, timeout=timeout)
-            if run.returncode:
+            started = process.run([scheduler, "/run", "/tn", task], **scheduler_kwargs,
+                                  check=False, timeout=timeout)
+            if started.returncode:
                 raise Refusal(
                     "could not start a detached cleanup observer ("
-                    + scheduler_diagnostic(run) + ")"
+                    + scheduler_diagnostic(started) + ")"
                 )
         except subprocess.TimeoutExpired as error:
             raise Refusal("timed out starting detached cleanup observer") from error
@@ -685,8 +697,8 @@ def start_detached(script, arguments, extra=(), stage=True):
             Path(xml_path).unlink(missing_ok=True)
             if registered:
                 try:
-                    process.run(["schtasks.exe", "/delete", "/tn", task, "/f"],
-                                   **scheduler_kwargs, check=False, timeout=timeout)
+                    process.run([scheduler, "/delete", "/tn", task, "/f"],
+                        **scheduler_kwargs, check=False, timeout=timeout)
                 except subprocess.TimeoutExpired:
                     pass
         return None
@@ -801,14 +813,3 @@ def record_close_refusal(entry, script, arguments, error):
 
 def results_path():
     return state_directory() / "merge-cleanup" / "results" / (uuid.uuid4().hex + ".json")
-
-
-def remove_matching_obligations(worktree, session_id):
-    directory = state_directory() / "merge-cleanup" / "obligations"
-    for path in directory.glob("*.json") if directory.is_dir() else ():
-        obligation = read_json(path)
-        if not obligation:
-            continue
-        if (obligation.get("session_id") == session_id and obligation.get("worktree")
-                and path_key(worktree) == path_key(obligation["worktree"])):
-            path.unlink(missing_ok=True)

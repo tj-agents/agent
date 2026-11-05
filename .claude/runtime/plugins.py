@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import contextlib
 from datetime import datetime, timezone
 import functools
@@ -731,7 +732,17 @@ def update_registered(repositories: set[str] | None = None) -> list[str]:
     return changed
 
 
-def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False) -> str | None:
+def configuration_paths(project: Path) -> list[Path]:
+    home = HOST.configuration_root
+    paths = [home / "settings.json", home / "plugins/installed_plugins.json",
+             home / "plugins/known_marketplaces.json"]
+    for root in (project, *project.parents):
+        paths.extend([root / ".claude/settings.json", root / ".claude/settings.local.json"])
+    return paths
+
+
+def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False,
+                 required_roots: Mapping[str, Path] | None = None) -> str | None:
     return None
 
 

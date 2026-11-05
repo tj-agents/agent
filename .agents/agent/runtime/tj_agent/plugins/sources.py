@@ -21,7 +21,7 @@ def tree(source: object, location: Path, project: Path, temporary: Path,
             plugin_refresh.run(["git", "init", str(checkout)], project)
             plugin_refresh.run(["git", "-C", str(checkout), "fetch", "--depth=1",
                                 f"https://github.com/{publisher}.git", ref], project)
-            plugin_refresh.run(["git", "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"], project)
+            plugin_refresh.run(["git", "--no-replace-objects", "-C", str(checkout), "checkout", "--detach", "FETCH_HEAD"], project)
             publishers[key] = checkout
         location = publishers[key]
         source = source.get("path")
