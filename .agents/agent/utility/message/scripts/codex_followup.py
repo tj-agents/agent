@@ -337,9 +337,13 @@ def main(argv=None):
             expected['routing'] = {'reason': args.reason,
                                    **({'execution_key': args.execution_key} if args.execution_key
                                       else {'corrects': str(args.corrects.resolve())})}
-            if not exists and args.launch_receipt is not None:
-                expected['launch_binding'] = client_runtime().launch_binding(
-                    args.launch_receipt, str(args.thread), args.cwd, args.codex_home)
+            if not exists:
+                client = client_runtime()
+                binding = client.recipient_binding(str(args.thread), args.cwd, args.codex_home)
+                if args.launch_receipt is not None and binding != client.launch_binding(
+                        args.launch_receipt, str(args.thread), args.cwd, args.codex_home):
+                    raise FollowupError('Launch receipt does not match the verified managed recipient binding')
+                expected['launch_binding'] = binding
             receipt = json.loads(args.receipt.read_text(encoding='utf-8')) if exists else expected
             validate_receipt(receipt, expected)
             if exists:
