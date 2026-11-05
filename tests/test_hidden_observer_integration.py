@@ -4,9 +4,11 @@ import os
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -46,10 +48,75 @@ def cleanup_fixture_processes(state: Path) -> None:
         identity = json.loads(path.read_text(encoding="utf-8"))
 
         def authorize_stop(identity: dict[str, Any] = identity) -> None:
-            assert processes.matches(identity)
+            processes.require_live(identity)
 
         if processes.matches(identity):
-            processes.stop(identity, before_signal=authorize_stop)
+            try:
+                processes.stop(identity, before_signal=authorize_stop)
+            except processes.Refusal:
+                if processes.matches(identity):
+                    raise
+
+
+@pytest.mark.parametrize(
+    "name", ["child-started.json", "started.json", "frontend.json"]
+)
+@pytest.mark.parametrize("phase", ["handle", "authorization"])
+def test_fixture_cleanup_accepts_exact_process_exit_during_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, phase: str
+) -> None:
+    from tj_cli import processes
+
+    identity = {"pid": 123, "started_at": 456.0}
+    (tmp_path / name).write_text(json.dumps(identity), encoding="utf-8")
+    refusal = processes.Refusal("exact fixture process exited")
+    matches = Mock(side_effect=[True, False])
+    require_live = Mock(side_effect=refusal)
+
+    def stop(_identity: object, *, before_signal: Callable[[], None]) -> None:
+        if phase == "authorization":
+            before_signal()
+        raise refusal
+
+    stop_process = Mock(side_effect=stop)
+    monkeypatch.setattr(processes, "matches", matches)
+    monkeypatch.setattr(processes, "require_live", require_live)
+    monkeypatch.setattr(processes, "stop", stop_process)
+
+    cleanup_fixture_processes(tmp_path)
+
+    assert matches.call_args_list == [call(identity), call(identity)]
+    stop_process.assert_called_once()
+    assert stop_process.call_args.args == (identity,)
+    if phase == "authorization":
+        require_live.assert_called_once_with(identity)
+    else:
+        require_live.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "name", ["child-started.json", "started.json", "frontend.json"]
+)
+def test_fixture_cleanup_preserves_refusal_for_matching_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    from tj_cli import processes
+
+    identity = {"pid": 123, "started_at": 456.0}
+    (tmp_path / name).write_text(json.dumps(identity), encoding="utf-8")
+    refusal = processes.Refusal("cannot acquire exact frontend process handle")
+    matches = Mock(return_value=True)
+    stop = Mock(side_effect=refusal)
+    monkeypatch.setattr(processes, "matches", matches)
+    monkeypatch.setattr(processes, "stop", stop)
+
+    with pytest.raises(processes.Refusal) as caught:
+        cleanup_fixture_processes(tmp_path)
+
+    assert caught.value is refusal
+    assert matches.call_args_list == [call(identity), call(identity)]
+    stop.assert_called_once()
+    assert stop.call_args.args == (identity,)
 
 
 @pytest.mark.skipif(
