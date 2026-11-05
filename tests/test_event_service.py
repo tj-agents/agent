@@ -73,6 +73,13 @@ class ServiceTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="events ü % $ space ")
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
+        interpreter = self.home / "python" / "python.exe"
+        interpreter.parent.mkdir()
+        interpreter.touch()
+        interpreter.with_name("pythonw.exe").touch()
+        executable = mock.patch.object(SERVICE.sys, "executable", str(interpreter))
+        executable.start()
+        self.addCleanup(executable.stop)
 
     def context(self, windows=False):
         context = SimpleNamespace(home=self.home, environ={}, windows=windows, state_directory=self.home / "state % $ ü",

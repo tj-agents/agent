@@ -68,7 +68,7 @@ class ObserverStoreStageTests(unittest.TestCase):
         self.assertIsNotNone(store)
         self.assertTrue(hasattr(store.SessionStore, 'delete_session'))
         checkout = load_register(staging / 'checkout.py', 'receipted_staged_checkout')
-        self.assertEqual(staging, checkout._PROCESS_RUNTIME)
+        self.assertEqual(staging.resolve(), checkout._PROCESS_RUNTIME)
         receipt = (staging / '.tj-agents-observer-store.json').read_text(encoding='utf-8')
         self.assertIn('tj-agents-agent-observer-store', receipt)
 

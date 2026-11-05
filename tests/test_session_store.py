@@ -359,13 +359,13 @@ class RepoIdentityTests(unittest.TestCase):
     def test_rev_parse_probe_fast_path_uses_one_git_call(self):
         repo = _init_repo(self.root / "fast-path-repo")
         calls = []
-        original_run = CHECKOUT.subprocess.run
+        original_run = CHECKOUT.process.run
 
         def counting_run(*args, **kwargs):
             calls.append(args)
             return original_run(*args, **kwargs)
 
-        with mock.patch.object(CHECKOUT.subprocess, "run", side_effect=counting_run):
+        with mock.patch.object(CHECKOUT.process, "run", side_effect=counting_run):
             head, branch, common_dir, toplevel = CHECKOUT._rev_parse_probe(repo, CHECKOUT.GIT_TIMEOUT)
         self.assertEqual(1, len(calls))
         self.assertIsNotNone(head)
@@ -379,13 +379,13 @@ class RepoIdentityTests(unittest.TestCase):
         _run_git(directory, "config", "user.email", "test@example.com")
         _run_git(directory, "config", "user.name", "Test User")
         calls = []
-        original_run = CHECKOUT.subprocess.run
+        original_run = CHECKOUT.process.run
 
         def counting_run(*args, **kwargs):
             calls.append(args)
             return original_run(*args, **kwargs)
 
-        with mock.patch.object(CHECKOUT.subprocess, "run", side_effect=counting_run):
+        with mock.patch.object(CHECKOUT.process, "run", side_effect=counting_run):
             head, branch, common_dir, toplevel = CHECKOUT._rev_parse_probe(directory, CHECKOUT.GIT_TIMEOUT)
         self.assertLessEqual(len(calls), 3)
         self.assertIsNone(head)
@@ -395,13 +395,13 @@ class RepoIdentityTests(unittest.TestCase):
         directory = self.root / "not-a-repo-probe"
         directory.mkdir()
         calls = []
-        original_run = CHECKOUT.subprocess.run
+        original_run = CHECKOUT.process.run
 
         def counting_run(*args, **kwargs):
             calls.append(args[0])
             return original_run(*args, **kwargs)
 
-        with mock.patch.object(CHECKOUT.subprocess, "run", side_effect=counting_run):
+        with mock.patch.object(CHECKOUT.process, "run", side_effect=counting_run):
             head, branch, common_dir, toplevel = CHECKOUT._rev_parse_probe(directory, CHECKOUT.GIT_TIMEOUT)
         self.assertIsNone(head)
         self.assertIsNone(common_dir)
@@ -415,7 +415,7 @@ class RepoIdentityTests(unittest.TestCase):
             calls.append(args[0])
             raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get("timeout", 0))
 
-        with mock.patch.object(CHECKOUT.subprocess, "run", side_effect=timeout_run):
+        with mock.patch.object(CHECKOUT.process, "run", side_effect=timeout_run):
             head, branch, common_dir, toplevel = CHECKOUT._rev_parse_probe(repo, CHECKOUT.GIT_TIMEOUT)
         self.assertEqual(1, len(calls))
         self.assertIsNone(head)
@@ -742,7 +742,7 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertEqual("owner", row.role)
 
     def test_git_decodes_with_utf8_and_replaces_errors(self):
-        with mock.patch.object(CHECKOUT.subprocess, "run") as run:
+        with mock.patch.object(CHECKOUT.process, "run") as run:
             run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok\n")
             CHECKOUT.git(self.repo, "status")
         _, kwargs = run.call_args
@@ -752,13 +752,13 @@ class HookLifecycleTests(unittest.TestCase):
     def test_session_start_and_stop_each_issue_at_most_two_git_subprocesses(self):
         payload = {"session_id": "budget-id", "cwd": str(self.repo)}
         calls = []
-        original_run = subprocess.run
+        original_run = CHECKOUT.process.run
 
         def counting_run(*args, **kwargs):
             calls.append(args)
             return original_run(*args, **kwargs)
 
-        with mock.patch.object(subprocess, "run", side_effect=counting_run):
+        with mock.patch.object(CHECKOUT.process, "run", side_effect=counting_run):
             calls.clear()
             self.assertEqual(0, self._invoke("session-start", "claude", payload))
             self.assertLessEqual(len(calls), 2)

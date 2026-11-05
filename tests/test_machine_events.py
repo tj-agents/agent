@@ -242,7 +242,7 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
 
     def test_subscriber_step_requires_the_channel_and_installed_runtime(self):
-        self.assertEqual(["preconditions", "native CLI", "event channel and publishers", "launch-check runtime", "background machine events"],
+        self.assertEqual(["native CLI", "preconditions", "event channel and publishers", "launch-check runtime", "background machine events"],
                          [step.name for step in install.selected_steps({"background machine events"})])
 
 
