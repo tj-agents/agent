@@ -101,7 +101,7 @@ def execute(command: list[str], project: Path, *, timeout: float = TIMEOUT,
     if deadline is not None:
         return _run_bounded(command, project, deadline, timeout, inherit)
     if inherit:
-        return subprocess.run(command, timeout=timeout, check=False)
+        return subprocess.run(command, cwd=project, timeout=timeout, check=False)
     options = {
         "cwd": project,
         "capture_output": True,

@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 import agent_cli
-from codex import client
+from codex import capacity, client, frontend_input, shell_commands
 from host import Host
 import required_plugins
 import transcripts
@@ -137,15 +137,42 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
 
 
 def prepare_frontend(arguments, project: Path, environment, executable=None):
-    return client.prepare(arguments, project, environment, executable=executable)
+    prepared, values, ticket = client.prepare(arguments, project, environment, executable=executable)
+    if ticket is not None:
+        ticket["_shell_executable"] = executable
+        ticket["_capacity_executable"] = executable
+        ticket["_capacity_launch_args"] = []
+    return prepared, values, ticket
 
 
 def attach_frontend(ticket, pid: int) -> None:
-    client.attach(ticket, pid)
+    hidden = {}
+    if ticket is not None:
+        for key in ("_shell_executable", "_capacity_executable", "_capacity_launch_args"):
+            hidden[key] = ticket.pop(key, None)
+    try:
+        client.attach(ticket, pid)
+    finally:
+        if ticket is not None:
+            ticket.update(hidden)
+    if ticket is not None and ticket.get("backend") and hidden.get("_shell_executable"):
+        ticket["pid"] = pid
+        shell_commands.start(ticket, client)
+        capacity.start(ticket)
+    elif ticket is not None:
+        print("Codex capacity recovery requires a managed shared app-server; this session will not auto-retry.",
+              file=sys.stderr)
 
 
 def release_frontend(ticket) -> None:
+    if ticket is not None:
+        try:
+            capacity.stop(ticket)
+        finally:
+            shell_commands.stop(ticket)
+        frontend_input.release_control(ticket)
     client.release(ticket)
+
 
 
 def debug_arguments(arguments: list[str], directory: Path) -> tuple[list[str], str | None]:

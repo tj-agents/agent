@@ -112,7 +112,7 @@ def caller_host() -> Host | None:
 
 
 def recovery_script(project: Path, installed: dict) -> Path:
-    return HERE / "agent_recovery.py"
+    return HERE / "recover.py"
 
 
 def arm_client_close(project: Path, entry: dict, shared, host: Host, expected_input: dict | None = None) -> dict:

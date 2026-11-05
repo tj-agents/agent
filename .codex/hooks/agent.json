@@ -38,8 +38,8 @@
           {
             "type": "command",
             "timeout": 300,
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 290 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/automatic_refresh.py\" --host codex",
-            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 290 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/automatic_refresh.py\" --host codex"
+            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 290 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/codex/capacity.py\" candidate --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/automatic_refresh.py\" --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 290 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/codex/capacity.py\" candidate --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/automatic_refresh.py\" --host codex"
           }
         ]
       }

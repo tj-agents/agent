@@ -26,6 +26,12 @@ automatic_refresh = importlib.import_module("automatic_refresh")
 Host = importlib.import_module("host").Host
 
 
+@pytest.fixture(autouse=True)
+def isolate_native_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
+    native_runtime = importlib.import_module("native_runtime")
+    monkeypatch.setattr(native_runtime, "prepare", lambda: ())
+
+
 def load_reload_plugins() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "reload_plugins_maintenance", RUNTIME / "reload_plugins.py"
@@ -306,7 +312,7 @@ def test_maintenance_budget_settles_a_plugin_setup_writer_tree() -> None:
             plugin_refresh.maintenance_budget(3),
             pytest.raises(plugin_refresh.MaintenanceUnsettledError),
         ):
-            required_plugins.invoke(target, [], 90)
+            required_plugins.invoke(target, [], 90, root)
         time.sleep(4.2)
         assert ready.is_file()
         assert not writer.exists()

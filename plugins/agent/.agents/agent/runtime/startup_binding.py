@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import launch_check
 import managed_admission
 import launch_status
+import native_runtime
 from host import Host
 from host_sessions import SESSIONS
 import required_plugins
@@ -280,6 +281,7 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    native_runtime.prepare_git_environment()
     if sys.version_info < (3, 12):
         print("launch requires Python 3.12 or newer", file=sys.stderr)
         return 2

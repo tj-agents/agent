@@ -1,4 +1,3 @@
-import importlib.util
 import contextlib
 import io
 import json
@@ -13,9 +12,9 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("agent_recovery", ROOT / "plugins/agent/.agents/agent/runtime/agent_recovery.py")
-RECOVERY = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(RECOVERY)
+RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
+sys.path.insert(0, str(RUNTIME))
+from tj_agent import recovery as RECOVERY  # noqa: E402
 from codex import sessions as CODEX_SESSIONS  # noqa: E402
 from host import Host  # noqa: E402
 AWAIT_PICKUP = RECOVERY.await_pickup
@@ -239,9 +238,9 @@ class RecoveryTests(unittest.TestCase):
         receipt = RECOVERY._claim(Host.CODEX, "race_id", "profile")
         created = json.loads(receipt.read_text(encoding="utf-8"))["created_at"]
         registry.write_text(json.dumps({"pid": 999999, "pid_started_at": 2, "host": "codex", "started_at": created + 1}), encoding="utf-8")
-        code = "import importlib.util,sys; p=sys.argv[1]; s=importlib.util.spec_from_file_location('r',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m);\ntry: m._claim(m.Host.CODEX,'race_id','profile'); print('ok')\nexcept ValueError: print('blocked')"
+        code = "import sys; sys.path.insert(0, sys.argv[1]); from tj_agent import recovery as m\ntry: m._claim(m.Host.CODEX,'race_id','profile'); print('ok')\nexcept ValueError: print('blocked')"
         env = dict(os.environ)
-        commands = [[sys.executable, "-c", code, str(ROOT / "plugins/agent/.agents/agent/runtime/agent_recovery.py")] for _ in range(2)]
+        commands = [[sys.executable, "-c", code, str(RUNTIME)] for _ in range(2)]
         results = [subprocess.Popen(command, stdout=subprocess.PIPE, text=True, env=env) for command in commands]
         output = [process.communicate(timeout=20)[0].strip() for process in results]
         self.assertEqual(sorted(output), ["blocked", "ok"])
