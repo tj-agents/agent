@@ -14,6 +14,7 @@ sys.path.insert(0, str(RUNTIME))
 from host import Host  # noqa: E402
 from host_plugins import PLUGINS  # noqa: E402
 import required_plugins as REQUIRED  # noqa: E402
+import managed_admission  # noqa: E402
 
 
 class RequiredPluginInventoryTests(unittest.TestCase):
@@ -113,6 +114,20 @@ class RequiredPluginInventoryTests(unittest.TestCase):
                 "--settings", "override.json", "--setting-sources", "project,local",
                 "--plugin-dir", "plugins", "--plugin-url", "https://example.test/plugin",
             ),
+        )
+
+    def test_admission_revalidates_from_the_effective_native_directory(self):
+        self.select("agent@tj-agents")
+        nested = self.project / "nested native configuration"
+        nested.mkdir()
+        roots = {"agent@tj-agents": self.root / "agent"}
+        with (
+            mock.patch.object(REQUIRED, "inventory_roots", return_value=roots),
+            mock.patch.object(managed_admission, "verify") as verify,
+        ):
+            self.assertEqual(roots, REQUIRED.check(nested, Host.CODEX, "native-codex"))
+        verify.assert_called_once_with(
+            self.project, Host.CODEX, "native-codex", native_project=nested
         )
 
 
