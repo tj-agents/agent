@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any
 
-from codex import frontend_input, hook_trust
+from codex import frontend_input
 
 CONTINUATION = (
     "The user shell command has finished. Read its recorded command, exit status "
@@ -229,15 +229,12 @@ class ShellMonitor:
 
     def run(self) -> None:
         try:
-            connection = hook_trust.AppServer(
-                self.ticket["_shell_executable"],
-                Path(self.ticket["launch_cwd"]),
-                environment={"CODEX_HOME": self.ticket["profile"]},
-                existing=True,
-                timeout=5,
+            connection = self.client.observer_server(
+                self.ticket, self.ticket["_shell_executable"], timeout=5
             )
             self.process = connection.process
             with connection as server:
+                self.client.observer_binding(self.ticket)
                 while not self.stop_event.wait(1):
                     self.discard_notifications(server)
                     try:
@@ -277,10 +274,9 @@ class ShellMonitor:
             or self.frontend.pending != pending
         ):
             return False
-        backend = client.daemon_identity(
-            {"CODEX_HOME": ticket["profile"]}, expected_pid=ticket["backend"]["pid"]
-        )
-        if backend != ticket["backend"]:
+        try:
+            client.observer_binding(ticket)
+        except (OSError, RuntimeError, ValueError, TypeError):
             return False
         binding = json.loads(
             client.binding_path(ticket["token"]).read_text(encoding="utf-8")

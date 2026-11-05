@@ -189,13 +189,16 @@ def attach_frontend(ticket, pid: int) -> None:
     finally:
         if ticket is not None:
             ticket.update(hidden)
-    if ticket is not None and ticket.get("backend") and hidden.get("_shell_executable"):
+    if ticket is not None:
         ticket["pid"] = pid
-        shell_commands.start(ticket, client)
-        capacity.start(ticket)
-    elif ticket is not None:
-        print("Codex capacity recovery requires a managed shared app-server; this session will not auto-retry.",
-              file=sys.stderr)
+    if ticket is not None and ticket.get("backend") and hidden.get("_shell_executable"):
+        try:
+            client.observer_binding(ticket)
+        except (OSError, RuntimeError, ValueError, TypeError) as error:
+            print(f"Codex observers are unavailable for this managed backend: {error}", file=sys.stderr)
+        else:
+            shell_commands.start(ticket, client)
+            capacity.start(ticket)
 
 
 def release_frontend(ticket) -> None:

@@ -234,6 +234,53 @@ def server_for(record, timeout=15):
                                socket_path=record['backend']['socket_path'], timeout=timeout)
 
 
+def _shared_binding(record):
+    backend = record.get('backend')
+    return (record.get('schema_version') == 1 and record.get('host') == HOST.value
+            and isinstance(backend, dict) and set(backend) == {'pid', 'process_start_time'}
+            and isinstance(backend['pid'], int) and not isinstance(backend['pid'], bool)
+            and isinstance(backend['process_start_time'], str))
+
+
+def _owned_binding(record):
+    return (record.get('schema_version') == 2 and record.get('host') == HOST.value
+            and (record.get('backend') or {}).get('kind') == 'handoff')
+
+
+def observer_binding(ticket):
+    token = ticket.get('token') if isinstance(ticket, dict) else None
+    if not isinstance(token, str) or not TOKEN.fullmatch(token):
+        raise RuntimeError('Managed Codex observer has no valid launch token')
+    try:
+        record = json.loads(binding_path(token).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise RuntimeError('Managed Codex observer binding is unavailable') from error
+    if not isinstance(record, dict):
+        raise RuntimeError('Managed Codex observer binding is invalid')
+    fields = ('schema_version', 'token', 'host', 'pid', 'created_at', 'profile', 'launch_cwd',
+              'recording_path', 'backend')
+    if _owned_binding(record):
+        fields += ('executable', 'frontend', 'wrapper', 'supervisor')
+    elif not _shared_binding(record):
+        raise RuntimeError('Managed Codex observer backend is unsupported')
+    if any(record.get(key) != ticket.get(key) for key in fields):
+        raise RuntimeError('Managed Codex observer binding changed')
+    if _owned_binding(record):
+        verify_owned_processes(record)
+    elif daemon_identity({HOST.home_variable: record['profile']}, expected_pid=record['backend']['pid']) != record['backend']:
+        raise RuntimeError('Managed Codex shared backend changed')
+    return record
+
+
+def observer_server(ticket, executable, launch_args=(), timeout=15):
+    record = observer_binding(ticket)
+    if _owned_binding(record):
+        return server_for(record, timeout)
+    return hook_trust.AppServer(executable, Path(record['launch_cwd']), launch_args=launch_args,
+                                environment={HOST.home_variable: record['profile']}, timeout=timeout,
+                                existing=True)
+
+
 def verify_endpoint(backend: Mapping[str, object]) -> None:
     endpoint = backend.get("socket_path")
     if not isinstance(endpoint, str) or not Path(endpoint).is_absolute():
@@ -292,7 +339,7 @@ def native_contains(server, session_id, identity):
     raise RuntimeError('Native frontend attribution exceeds the history scan limit')
 
 
-def verify_owned(record, *, table=None, peer_state=None):
+def verify_owned_processes(record, *, table=None, peer_state=None):
     from tj_cli import processes
 
     if table is None:
@@ -346,6 +393,11 @@ def verify_owned(record, *, table=None, peer_state=None):
             other_path = peer_recording_path(other, peer_state)
             if other_path is not None and comparable_path(Path(other_path)) == comparable_path(event_path):
                 raise RuntimeError('Multiple native processes share a handoff frontend recording')
+
+
+def verify_owned(record, *, table=None, peer_state=None):
+    verify_owned_processes(record, table=table, peer_state=peer_state)
+    event_path = binding_path(record['token']).with_name('events.jsonl')
     try:
         anchor = latest_input(event_path)
     except FileNotFoundError as error:
