@@ -690,6 +690,7 @@ def test_managed_inventory_failure_blocks_before_native_launch(
     binding = importlib.import_module("startup_binding")
     result = subprocess.CompletedProcess(["fixture"], 0, "invalid", "")
     with (
+        patch.object(launch.native_runtime, "prepare", return_value=()),
         patch.object(required_plugins, "reconcile_selection"),
         patch.object(required_plugins, "inventory", NATIVE_INVENTORY),
         patch.object(
@@ -699,7 +700,7 @@ def test_managed_inventory_failure_blocks_before_native_launch(
             if failure == "timeout"
             else None,
             return_value=result,
-        ),
+        ) as inventory,
         patch.object(binding, "run_session") as native,
         patch.object(admission, "verify") as verify,
         contextlib.redirect_stderr(io.StringIO()) as output,
@@ -718,6 +719,14 @@ def test_managed_inventory_failure_blocks_before_native_launch(
             )
             == 1
         )
+        inventory.assert_called_once()
+        assert inventory.call_args.args[0] == [
+            "fixture",
+            "plugin",
+            "list",
+            *(["--marketplace", "tj-agents"] if host is Host.CODEX else []),
+            "--json",
+        ]
         native.assert_not_called()
         verify.assert_not_called()
         assert "Managed readiness" in output.getvalue()
