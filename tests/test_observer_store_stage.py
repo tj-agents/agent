@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest import mock
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,13 +34,15 @@ class ObserverStoreStageTests(unittest.TestCase):
 
     @staticmethod
     def scheduler(arguments, **_kwargs):
-        if arguments[0] == 'whoami.exe':
+        if Path(arguments[0]).name == 'whoami.exe':
             return SimpleNamespace(returncode=0, stdout='"EXAMPLE\\user","S-1-5-21-123-456-789-1001"\r\n', stderr='')
         return SimpleNamespace(returncode=0, stdout='', stderr='')
 
     def start_stage(self):
         with mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.state)}), \
-                mock.patch.object(session_close.subprocess, 'run', side_effect=self.scheduler), \
+                mock.patch('tj_cli.process.run', side_effect=self.scheduler), \
+                mock.patch.object(session_close, 'windows_observer_command',
+                                  side_effect=lambda command: ['C:/tj/tj_hook.exe', '--', *command]), \
                 mock.patch.object(session_close.subprocess, 'Popen', return_value=SimpleNamespace(pid=1)):
             session_close.start_observer(['--result', 'unused'])
         return next((self.state / 'merge-cleanup' / 'observers').iterdir())
@@ -93,6 +96,7 @@ class ObserverStoreStageTests(unittest.TestCase):
         self.assertIn('--codex-home', command)
         self.assertIn('--claude-config-dir', command)
         self.assertNotIn('UNRELATED', ' '.join(command))
+
 
 
 if __name__ == '__main__':
