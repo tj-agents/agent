@@ -93,12 +93,19 @@ def path_key(value):
 
 def client_runtime():
     for root in Path(__file__).resolve().parents:
-        runtime = root / '.agents' / 'agent' / 'runtime'
-        if (runtime / 'codex/client.py').is_file():
-            if str(runtime) not in sys.path:
-                sys.path.insert(0, str(runtime))
+        markers = (root / '.git', root / '.codex-plugin' / 'plugin.json', root / '.claude-plugin' / 'plugin.json')
+        if any(marker.exists() for marker in markers):
+            path = root / '.agents' / 'agent' / 'runtime' / 'codex' / 'client.py'
+            if not path.is_file():
+                break
+            runtime = str(path.parents[1])
+            if runtime not in sys.path:
+                sys.path.insert(0, runtime)
             from codex import client
 
+            origin = getattr(client, '__file__', None)
+            if not isinstance(origin, str) or Path(origin).resolve() != path.resolve():
+                raise FollowupError('The packaged managed Codex client did not load from its nearest root')
             return client
     raise FollowupError('The packaged managed Codex client is unavailable')
 
