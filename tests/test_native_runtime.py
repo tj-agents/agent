@@ -56,13 +56,75 @@ def test_missing_pair_repairs_without_a_source_checkout_and_is_then_local(
             binary.chmod(0o755)
         return names
 
-    with mock.patch.object(
-        native_install, "ensure_native", side_effect=install_pair
-    ) as ensure:
+    with (
+        mock.patch.object(
+            native_install, "ensure_native", side_effect=install_pair
+        ) as ensure,
+        mock.patch.object(
+            native_install,
+            "_run",
+            return_value=subprocess.CompletedProcess([], 0, "tj_hook 0.2.0\n", ""),
+        ),
+    ):
         assert native_runtime.prepare() == names
         assert native_runtime.prepare() == ()
     ensure.assert_called_once_with(directory, revision=None)
     assert os.environ["PATH"].split(os.pathsep)[0] == str(directory)
+
+
+def test_existing_outdated_pair_is_upgraded_before_exposure_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "native bin"
+    directory.mkdir()
+    names = ("tj.exe", "tj_hook.exe") if os.name == "nt" else ("tj", "tj_hook")
+    for name in names:
+        (directory / name).write_bytes(b"old pair")
+    monkeypatch.setenv("TJ_BIN_DIR", str(directory))
+    monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
+    ready = False
+
+    def upgrade(destination: Path, *, revision: str | None) -> tuple[str, ...]:
+        nonlocal ready
+        assert destination == directory
+        assert all((directory / name).read_bytes() == b"old pair" for name in names)
+        ready = True
+        return names
+
+    with (
+        mock.patch.object(
+            native_install,
+            "pending_native",
+            side_effect=lambda _: () if ready else names,
+        ),
+        mock.patch.object(
+            native_install, "ensure_native", side_effect=upgrade
+        ) as ensure,
+        mock.patch.object(native_runtime, "expose") as expose,
+    ):
+        assert native_runtime.prepare() == names
+        assert native_runtime.prepare() == ()
+    ensure.assert_called_once_with(directory, revision=None)
+    assert expose.call_count == 2
+
+
+def test_old_release_noop_cannot_admit_incompatible_native_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "native bin"
+    monkeypatch.setenv("TJ_BIN_DIR", str(directory))
+    monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
+    with (
+        mock.patch.object(native_install, "pending_native", return_value=("tj_hook",)),
+        mock.patch.object(native_install, "ensure_native", return_value=()) as ensure,
+        mock.patch.object(native_runtime, "expose") as expose,
+        pytest.raises(
+            RuntimeError, match=r"not compatible.*compatible published CLI release"
+        ),
+    ):
+        native_runtime.prepare()
+    ensure.assert_called_once_with(directory, revision=None)
+    expose.assert_not_called()
 
 
 def test_launch_bootstraps_before_native_plugin_inventory(tmp_path: Path) -> None:
@@ -123,22 +185,26 @@ def test_native_runtime_prepares_git_before_install_and_preserves_path_order(
         os.environ["GIT_CONFIG_KEY_0"] = "core.longpaths"
         os.environ["GIT_CONFIG_VALUE_0"] = "true"
 
-    def missing() -> tuple[str, ...]:
+    ready = False
+
+    def pending() -> tuple[str, ...]:
         events.append("inventory")
-        return ("tj_hook",)
+        return () if ready else ("tj_hook",)
 
     def ensure(destination: Path, *, revision: str | None) -> tuple[str, ...]:
+        nonlocal ready
         assert os.environ["GIT_CONFIG_COUNT"] == "1"
         assert os.environ["GIT_CONFIG_KEY_0"].casefold() == "core.longpaths"
         assert os.environ["GIT_CONFIG_VALUE_0"].casefold() == "true"
         events.append("installer")
+        ready = True
         return ("tj_hook",)
 
     with (
         mock.patch.object(
             native_runtime, "prepare_git_environment", side_effect=prepare_git
         ),
-        mock.patch.object(native_runtime, "missing", side_effect=missing),
+        mock.patch.object(native_runtime, "pending", side_effect=pending),
         mock.patch.object(native_install, "ensure_native", side_effect=ensure),
     ):
         native_runtime.prepare()
@@ -325,14 +391,20 @@ def test_relative_override_stays_bound_when_the_host_changes_directory(
         binary = directory / name
         binary.write_bytes(b"fixture")
         binary.chmod(0o755)
-    with mock.patch.object(native_install, "ensure_native") as ensure:
+    with (
+        mock.patch.object(native_install, "ensure_native") as ensure,
+        mock.patch.object(
+            native_install, "pending_native", return_value=()
+        ) as readiness,
+    ):
         assert native_runtime.prepare() == ()
+        assert native_runtime.pending() == ()
     ensure.assert_not_called()
+    readiness.assert_called_with(directory)
     host_directory = tmp_path / "host"
     host_directory.mkdir()
     monkeypatch.chdir(host_directory)
     assert native_install.default_bin_dir() == directory
-    assert native_runtime.missing() == ()
     assert Path(shutil.which(names[1]) or "").resolve() == directory / names[1]
 
 
@@ -376,7 +448,7 @@ def test_installer_check_reports_missing_pair_without_installing(
 ) -> None:
     context = install.Context(home=tmp_path, environ={}, windows=os.name == "nt")
     with (
-        mock.patch.object(native_runtime, "missing", return_value=("tj_hook",)),
+        mock.patch.object(native_runtime, "pending", return_value=("tj_hook",)),
         mock.patch.object(native_runtime, "prepare") as prepare,
     ):
         assert "tj_hook" in install.check_native_cli(context)[0]
@@ -389,7 +461,7 @@ def test_failed_native_install_prevents_dependent_steps(tmp_path: Path) -> None:
     dependent = mock.Mock(return_value=[])
     plugin = install.Step("plugin setup", dependent, dependent)
     with (
-        mock.patch.object(native_runtime, "missing", return_value=("tj_hook",)),
+        mock.patch.object(native_runtime, "pending", return_value=("tj_hook",)),
         mock.patch.object(
             native_runtime, "prepare", side_effect=RuntimeError("release unavailable")
         ),
@@ -420,7 +492,7 @@ def test_fresh_install_bootstraps_before_identity_checks(
 
     with (
         mock.patch.object(
-            native_runtime, "missing", side_effect=lambda: () if ready else ("tj_hook",)
+            native_runtime, "pending", side_effect=lambda: () if ready else ("tj_hook",)
         ),
         mock.patch.object(native_runtime, "prepare", side_effect=prepare) as bootstrap,
         mock.patch.object(
@@ -463,7 +535,7 @@ def test_installer_check_converges_when_parent_shell_path_omits_native_directory
     with (
         mock.patch.object(install, "machine_context", side_effect=context),
         mock.patch.object(events, "require_tommy"),
-        mock.patch.object(native_runtime, "missing", return_value=()),
+        mock.patch.object(native_runtime, "pending", return_value=()),
         mock.patch.object(native_runtime, "prepare") as prepare,
     ):
         assert install.main(["--check", "--step", "native CLI"]) == 0
