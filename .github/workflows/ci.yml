@@ -7,9 +7,9 @@ on:
 
 jobs:
   verify:
-    uses: tj-agents/template/.github/workflows/plugin-ci.yml@a84fc2b3ff3ed7090eda8ca9b1c67d34869b5447 # candidate for template#61
+    uses: tj-agents/template/.github/workflows/plugin-ci.yml@4d3a6a59bfe6556655faf079fe11f3fe1fe55b5a
     with:
-      template_ref: a84fc2b3ff3ed7090eda8ca9b1c67d34869b5447
+      template_ref: 4d3a6a59bfe6556655faf079fe11f3fe1fe55b5a
     secrets:
       read_token: ${{ secrets.TJ_AGENTS_READ_TOKEN }}
       UPDATE_APP_PRIVATE_KEY: ${{ secrets.UPDATE_APP_PRIVATE_KEY }}
