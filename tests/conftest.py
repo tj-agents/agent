@@ -1,8 +1,20 @@
 import os
 import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture
+def loader_package_roots(tmp_path: Path) -> tuple[Path, Path]:
+    outer = tmp_path / "outer"
+    (outer / ".git").mkdir(parents=True)
+    inner = outer / "plugins/agent"
+    marker = inner / ".codex-plugin/plugin.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}", encoding="utf-8")
+    return outer, inner
 
 
 @pytest.fixture(autouse=True)
