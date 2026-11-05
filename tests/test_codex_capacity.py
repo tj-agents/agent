@@ -116,7 +116,12 @@ class FakeClient:
             dict[str, Any], json.loads(self.binding.read_text(encoding="utf-8"))
         )
         for key in (
-            "token", "pid", "backend", "profile", "recording_path", "created_at"
+            "token",
+            "pid",
+            "backend",
+            "profile",
+            "recording_path",
+            "created_at",
         ):
             if record.get(key) != ticket.get(key):
                 raise RuntimeError("binding changed")

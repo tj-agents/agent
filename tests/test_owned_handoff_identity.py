@@ -193,7 +193,8 @@ def test_owned_binding_verifies_exact_processes_endpoint_and_recording(
 
 
 def test_observer_uses_the_owned_endpoint_before_initial_input(
-    launch: OwnedLaunch, monkeypatch: pytest.MonkeyPatch,
+    launch: OwnedLaunch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     Path(launch.record["recording_path"]).write_text("", encoding="utf-8")
     selected: list[dict[str, Any]] = []
@@ -496,7 +497,7 @@ def test_explicit_external_backend_never_starts_or_claims_a_managed_daemon(
     )
     assert ticket["schema_version"] == 1
     assert ticket["backend"] is None
-    assert prepared[-len(arguments):] == arguments
+    assert prepared[-len(arguments) :] == arguments
     launch.client.release(ticket)
 
 
@@ -524,7 +525,9 @@ def test_owned_backend_selection_excludes_administrative_and_external_commands(
     ],
 )
 def test_closed_codex_recovery_selects_a_managed_backend_only_for_local_mode(
-    requested: bool | None, arguments: list[str], expected: bool,
+    requested: bool | None,
+    arguments: list[str],
+    expected: bool,
 ) -> None:
     sessions = __import__("codex.sessions", fromlist=["recovery_owns_backend"])
     assert (
@@ -535,8 +538,11 @@ def test_closed_codex_recovery_selects_a_managed_backend_only_for_local_mode(
 
 @pytest.mark.parametrize(
     ("item", "arguments"),
-    [({"status": "unknown"}, []), ({"status": "closed"}, ["--no-daemon"]),
-     ({"status": "closed"}, ["--remote=unix:///external"])],
+    [
+        ({"status": "unknown"}, []),
+        ({"status": "closed"}, ["--no-daemon"]),
+        ({"status": "closed"}, ["--remote=unix:///external"]),
+    ],
 )
 def test_required_managed_recovery_rejects_nonlocal_or_unclosed_targets(
     item: dict[str, Any],
