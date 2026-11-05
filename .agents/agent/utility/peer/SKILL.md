@@ -13,7 +13,7 @@ route: infer
 
 # Peer CLI sessions
 
-The runtime is Python 3.9+ on Windows and Linux. Use `python3` on Linux/macOS and `python` on Windows.
+The runtime is Python 3.12+ on Windows and Linux. Use `python3` on Linux/macOS and `python` on Windows.
 
 A launched session keeps its launch title ("Postgres sweep: Search") as both its stored title and its tab;
 the host is told not to retitle it. A session started by hand records no title and its host owns its tab.
@@ -25,7 +25,7 @@ addresses peers by tab title.
 the two things they do not do: resolving the title the user sees, and ending a session.
 
 ```sh
-# Linux/macOS: install Python 3.9+ as python3 before using this utility.
+# Linux/macOS: install Python 3.12+ as python3 before using this utility.
 python3 -B <skill-directory>/scripts/peer_cli.py list --host codex
 python3 -B <skill-directory>/scripts/peer_cli.py inspect 'Postgres sweep: Search'
 python3 -B <skill-directory>/scripts/peer_cli.py list --all
@@ -41,7 +41,7 @@ python -B <skill-directory>\scripts\peer_cli.py list
 python -B <skill-directory>\scripts\peer_cli.py close "Postgres sweep: Search"
 ```
 
-If that interpreter is not available, install Python 3.9+ and ensure `python` (Windows) or `python3`
+If that interpreter is not available, install Python 3.12+ and ensure `python` (Windows) or `python3`
 (Linux/macOS) is on PATH.
 
 `list` emits JSON and defaults to what the caller plausibly cares about: sessions under the current repository and under

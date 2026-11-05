@@ -820,7 +820,7 @@ def plugin_setup_executables(context: Context) -> dict[Host, str | None]:
 
 
 def check_plugin_setup(context: Context) -> list[str]:
-    if native_runtime.missing():
+    if native_runtime.pending():
         return check_native_cli(context)
     return required_plugins.check_setup(plugin_setup_project(context), tuple(Host), plugin_setup_executables(context))
 
@@ -851,9 +851,9 @@ def apply_background(context: Context) -> list[str]:
 
 
 def check_native_cli(context: Context) -> list[str]:
-    absent = native_runtime.missing()
-    if absent:
-        return ["install native CLI binaries: " + ", ".join(absent)]
+    pending = native_runtime.pending()
+    if pending:
+        return ["install or update native CLI binaries: " + ", ".join(pending)]
     return []
 
 
