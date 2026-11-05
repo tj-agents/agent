@@ -197,10 +197,15 @@ def test_observer_uses_the_owned_endpoint_before_initial_input(
 ) -> None:
     Path(launch.record["recording_path"]).write_text("", encoding="utf-8")
     selected: list[dict[str, Any]] = []
+
+    def server_for(record: dict[str, Any], _timeout: int) -> NativeServer:
+        selected.append(record)
+        return launch.server
+
     monkeypatch.setattr(
         launch.client,
         "server_for",
-        lambda record, _timeout: selected.append(record) or launch.server,
+        server_for,
     )
     monkeypatch.setattr(
         launch.client.hook_trust,
@@ -460,7 +465,9 @@ def test_recipient_binding_refuses_ambiguous_or_stale_durable_records(
     assert not launch.server.calls
 
 
-def test_recipient_binding_ignores_malformed_unrelated_records(launch: OwnedLaunch) -> None:
+def test_recipient_binding_ignores_malformed_unrelated_records(
+    launch: OwnedLaunch,
+) -> None:
     malformed = launch.client.binding_path("c" * 64)
     malformed.parent.mkdir(parents=True)
     malformed.write_text("{", encoding="utf-8")
@@ -482,7 +489,10 @@ def test_explicit_external_backend_never_starts_or_claims_a_managed_daemon(
 
     monkeypatch.setattr(launch.client.subprocess, "run", unexpected)
     prepared, _environment, ticket = launch.client.prepare(
-        arguments, launch.server.directory, {"CODEX_HOME": launch.record["profile"]}, executable="native"
+        arguments,
+        launch.server.directory,
+        {"CODEX_HOME": launch.record["profile"]},
+        executable="native",
     )
     assert ticket["schema_version"] == 1
     assert ticket["backend"] is None
@@ -495,7 +505,12 @@ def test_owned_backend_selection_excludes_administrative_and_external_commands(
 ) -> None:
     sessions = __import__("codex.sessions", fromlist=["requires_verified_handoff"])
     assert sessions.requires_verified_handoff(True, ["prompt"])
-    for arguments in (["queue"], ["--help"], ["--no-daemon", "prompt"], ["--remote", "unix:///external", "prompt"]):
+    for arguments in (
+        ["queue"],
+        ["--help"],
+        ["--no-daemon", "prompt"],
+        ["--remote", "unix:///external", "prompt"],
+    ):
         assert not sessions.requires_verified_handoff(True, arguments)
 
 
@@ -512,7 +527,10 @@ def test_closed_codex_recovery_selects_a_managed_backend_only_for_local_mode(
     requested: bool | None, arguments: list[str], expected: bool,
 ) -> None:
     sessions = __import__("codex.sessions", fromlist=["recovery_owns_backend"])
-    assert sessions.recovery_owns_backend({"status": "closed"}, requested, arguments) is expected
+    assert (
+        sessions.recovery_owns_backend({"status": "closed"}, requested, arguments)
+        is expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -520,7 +538,10 @@ def test_closed_codex_recovery_selects_a_managed_backend_only_for_local_mode(
     [({"status": "unknown"}, []), ({"status": "closed"}, ["--no-daemon"]),
      ({"status": "closed"}, ["--remote=unix:///external"])],
 )
-def test_required_managed_recovery_rejects_nonlocal_or_unclosed_targets(item: dict, arguments: list[str]) -> None:
+def test_required_managed_recovery_rejects_nonlocal_or_unclosed_targets(
+    item: dict[str, Any],
+    arguments: list[str],
+) -> None:
     sessions = __import__("codex.sessions", fromlist=["recovery_owns_backend"])
     with pytest.raises(ValueError, match="required managed Codex recovery"):
         sessions.recovery_owns_backend(item, True, arguments)

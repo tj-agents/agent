@@ -31,7 +31,7 @@ files = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".age
 mypy_path = [".agents/agent/runtime", ".codex/runtime", "plugins/agent/.agents/agent/runtime", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["host", "host_sessions", "plugin_autoupdate", "close_fixtures", "repo_config", "test_codex_followup", "test_required_plugins", "codex.*", "host_plugins", "plugin_refresh", "required_plugins", "tj_agent", "tj_agent.*"]
+module = ["agent_cli", "host", "host_sessions", "plugin_autoupdate", "close_fixtures", "repo_config", "test_codex_followup", "test_native_completion", "test_required_plugins", "test_startup_binding", "codex.*", "host_plugins", "plugin_refresh", "required_plugins", "tj_agent", "tj_agent.*"]
 follow_imports = "skip"
 
 [[tool.mypy.overrides]]
