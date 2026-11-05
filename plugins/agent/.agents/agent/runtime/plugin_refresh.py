@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -65,16 +66,28 @@ def path_key(path: object) -> str:
     return os.path.normcase(str(resolved(path)))
 
 
+def generated_cache(path: Path) -> bool:
+    if not path.is_file() or path.parent.name != "__pycache__" or path.suffix != ".pyc":
+        return False
+    try:
+        importlib.util.source_from_cache(str(path))
+    except ValueError:
+        return False
+    return True
+
+
 def package_tree(root: Path) -> dict[str, bytes]:
+    if root.is_symlink() or getattr(root, "is_junction", lambda: False)():
+        raise RefreshError(f"Unexpected plugin link: {root}")
     if not root.is_dir():
         raise RefreshError(f"Missing plugin directory: {root}")
     result = {}
     for path in root.rglob("*"):
         parts = path.relative_to(root).parts
-        if parts[0] == IN_USE:
-            continue
-        if path.is_symlink():
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
             raise RefreshError(f"Unexpected plugin symlink: {path}")
+        if parts[0] == IN_USE or generated_cache(path):
+            continue
         if path.is_file() and ".git" not in parts:
             result[path.relative_to(root).as_posix()] = path.read_bytes()
     return result

@@ -73,7 +73,7 @@ def resume_command(session_id: str) -> str:
     return f'claude --resume {session_id}'
 
 
-def requires_verified_handoff(require_session_start: bool) -> bool:
+def requires_verified_handoff(require_session_start: bool, arguments=()) -> bool:
     return False
 
 
@@ -84,6 +84,10 @@ def handoff_executable(target: str, project: Path, environment: Mapping[str, str
 def validate_open(owned_backend: bool) -> None:
     if owned_backend:
         raise ValueError('Claude recovery does not use a Codex backend')
+
+
+def recovery_owns_backend(item: dict, requested: bool | None, native_arguments=()) -> bool:
+    return False
 
 
 def recovery_receipt(status_path: Path, item: dict, owned_backend: bool) -> dict:

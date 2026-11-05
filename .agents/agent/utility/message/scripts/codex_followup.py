@@ -286,11 +286,10 @@ def validate_receipt(receipt, expected=None):
         if not isinstance(receipt.get(key), str) or not receipt[key]:
             raise FollowupError(f'Invalid receipt field: {key}')
     frozen = receipt['launch_binding']
-    if frozen is not None:
-        if (not isinstance(frozen, dict) or frozen['recipient']['thread_id'] != receipt['thread_id']
-                or path_key(frozen['recipient']['cwd']) != receipt['cwd']
-                or path_key(frozen['profile']) != receipt['codex_home']):
-            raise FollowupError('Frozen launch binding does not match this recipient')
+    if (not isinstance(frozen, dict) or frozen['recipient']['thread_id'] != receipt['thread_id']
+            or path_key(frozen['recipient']['cwd']) != receipt['cwd']
+            or path_key(frozen['profile']) != receipt['codex_home']):
+        raise FollowupError('Frozen launch binding does not match this recipient')
     if expected and any(receipt[key] != expected[key] for key in (
         'thread_id', 'cwd', 'codex_home', 'message_sha256',
     )):
@@ -324,6 +323,7 @@ def main(argv=None):
             raise FollowupError('--timeout must be greater than zero and at most 60 seconds')
         deadline = time.monotonic() + args.timeout
         exists = args.receipt.exists()
+        reserved = exists
         if args.command == 'send':
             message = args.message_file.read_text(encoding='utf-8-sig')
             if not message.strip():
@@ -346,9 +346,7 @@ def main(argv=None):
                 expected['launch_binding'] = binding
             receipt = json.loads(args.receipt.read_text(encoding='utf-8')) if exists else expected
             validate_receipt(receipt, expected)
-            if exists:
-                reserved = True
-            elif args.execution_key:
+            if not exists and args.execution_key:
                 if not args.reason.strip():
                     raise FollowupError('State the concrete reason this recipient needs the message')
                 responsibility(receipt)

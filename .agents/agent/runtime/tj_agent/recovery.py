@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import argparse
 import hashlib
 import importlib.util
@@ -15,11 +14,10 @@ import secrets
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
+from host import Host
+from host_sessions import SESSIONS
 
-from host import Host  # noqa: E402
-from host_sessions import SESSIONS  # noqa: E402
+HERE = Path(__file__).resolve().parents[1]
 
 SESSION_ID = re.compile(r"(?!-)[A-Za-z0-9_-]+\Z")
 TOKEN = re.compile(r"[a-z0-9]+")
@@ -676,10 +674,11 @@ def await_pickup(host, session_id, status_path, since, history_path=None, timeou
 
 def open_session(host, session_id, prompt="Continue the requested work.", title=None, roots=None, confirm_closed=False,
                  prompt_path=None, model=None, dangerously_skip_permissions=False, cli=None, native_arguments=(),
-                 expected_cwd=None, owned_backend=False):
+                 expected_cwd=None, owned_backend=None):
     adapter = SESSIONS[host]
-    adapter.validate_open(owned_backend)
     item = find(host, session_id, roots)
+    owned_backend = adapter.recovery_owns_backend(item, owned_backend, native_arguments)
+    adapter.validate_open(owned_backend)
     if expected_cwd is not None and Path(item["cwd"]).resolve() != Path(expected_cwd).resolve():
         raise ValueError("The exact session does not match the expected refresh checkout.")
     if item["status"] == "live":
@@ -826,7 +825,7 @@ def main(argv=None):
     parser.add_argument("--select", action="append", default=[])
     parser.add_argument("--confirm-closed", action="store_true")
     parser.add_argument("--native-argument", action="append", default=[])
-    parser.add_argument("--owned-backend", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--owned-backend", action="store_true", default=None, help=argparse.SUPPRESS)
     for host in Host:
         parser.add_argument(f"--{host}-history-root", dest=f"{host}_history_root")
     args = parser.parse_args(argv)
@@ -908,6 +907,3 @@ def main(argv=None):
             return cli.report_launch_failure(exc)
         raise
 
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -570,9 +570,22 @@ def windows_task_xml(user, command, working_directory):
     return ET.tostring(task, encoding="utf-16", xml_declaration=True)
 
 
+def windows_system_command(name: str) -> str:
+    root = os.environ.get("SystemRoot")
+    if not root:
+        raise Refusal("the Windows system directory is unavailable")
+    command = Path(root) / "System32" / name
+    if not command.is_absolute() or not command.is_file():
+        raise Refusal(f"the Windows system command is unavailable: {name}")
+    return str(command)
+
+
 def current_windows_user(kwargs, timeout):
-    completed = subprocess.run(
-        ["whoami.exe", "/user", "/fo", "csv", "/nh"], **kwargs, check=False, timeout=timeout,
+    from tj_cli.process import run
+
+    completed = run(
+        [windows_system_command("whoami.exe"), "/user", "/fo", "csv", "/nh"],
+        **kwargs, check=False, timeout=timeout,
     )
     rows = list(csv.reader(completed.stdout.splitlines()))
     user = rows[0][-1].strip() if len(rows) == 1 and rows[0] else ""
@@ -612,6 +625,14 @@ def detached_command(script, arguments, launcher):
     return [*command, "--", str(Path(script).resolve()), *arguments]
 
 
+def windows_observer_command(command: list[str]) -> list[str]:
+    for directory in os.get_exec_path():
+        launcher = Path(directory).absolute() / "tj_hook.exe"
+        if shutil.which(launcher) is not None:
+            return [str(launcher), "--", *command]
+    raise Refusal("tj_hook.exe is not installed on PATH; repair the CLI installation before starting an observer")
+
+
 def start_detached(script, arguments, extra=(), stage=True):
     """Run a staged script outside the host's process tree, so it outlives the host closing."""
     here = Path(__file__)
@@ -633,8 +654,13 @@ def start_detached(script, arguments, extra=(), stage=True):
               "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     timeout = bounded_timeout("AGENT_FINISH_SPAWN_TIMEOUT_SECONDS")
     if os.name == "nt":
+        from tj_cli.process import run
+
+        scheduler = windows_system_command("schtasks.exe")
         launcher = (staging / "detached_launch.py") if stage else here.with_name("detached_launch.py")
-        command = detached_command(script if not stage else staging / Path(script).name, arguments, launcher)
+        command = windows_observer_command(
+            detached_command(script if not stage else staging / Path(script).name, arguments, launcher),
+        )
         task = "agent-finish-reaper-" + uuid.uuid4().hex
         scheduler_kwargs = {
             "cwd": str(state_directory()), "stdin": subprocess.DEVNULL,
@@ -651,8 +677,8 @@ def start_detached(script, arguments, extra=(), stage=True):
             with stream:
                 stream.write(windows_task_xml(user, command, state_directory()))
             registered = True
-            create = subprocess.run(
-                ["schtasks.exe", "/create", "/tn", task, "/xml", xml_path, "/f"],
+            create = run(
+                [scheduler, "/create", "/tn", task, "/xml", xml_path, "/f"],
                 **scheduler_kwargs, check=False, timeout=timeout,
             )
             if create.returncode:
@@ -660,12 +686,12 @@ def start_detached(script, arguments, extra=(), stage=True):
                     "could not create a detached cleanup observer ("
                     + scheduler_diagnostic(create) + ")"
                 )
-            run = subprocess.run(["schtasks.exe", "/run", "/tn", task], **scheduler_kwargs,
-                                 check=False, timeout=timeout)
-            if run.returncode:
+            started = run([scheduler, "/run", "/tn", task], **scheduler_kwargs,
+                          check=False, timeout=timeout)
+            if started.returncode:
                 raise Refusal(
                     "could not start a detached cleanup observer ("
-                    + scheduler_diagnostic(run) + ")"
+                    + scheduler_diagnostic(started) + ")"
                 )
         except subprocess.TimeoutExpired as error:
             raise Refusal("timed out starting detached cleanup observer") from error
@@ -675,8 +701,8 @@ def start_detached(script, arguments, extra=(), stage=True):
             Path(xml_path).unlink(missing_ok=True)
             if registered:
                 try:
-                    subprocess.run(["schtasks.exe", "/delete", "/tn", task, "/f"],
-                                   **scheduler_kwargs, check=False, timeout=timeout)
+                    run([scheduler, "/delete", "/tn", task, "/f"],
+                        **scheduler_kwargs, check=False, timeout=timeout)
                 except subprocess.TimeoutExpired:
                     pass
         return None
@@ -791,14 +817,3 @@ def record_close_refusal(entry, script, arguments, error):
 
 def results_path():
     return state_directory() / "merge-cleanup" / "results" / (uuid.uuid4().hex + ".json")
-
-
-def remove_matching_obligations(worktree, session_id):
-    directory = state_directory() / "merge-cleanup" / "obligations"
-    for path in directory.glob("*.json") if directory.is_dir() else ():
-        obligation = read_json(path)
-        if not obligation:
-            continue
-        if (obligation.get("session_id") == session_id and obligation.get("worktree")
-                and path_key(worktree) == path_key(obligation["worktree"])):
-            path.unlink(missing_ok=True)

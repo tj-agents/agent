@@ -10,7 +10,8 @@ import subprocess
 import sys
 
 import agent_cli
-from codex import client, handoff_runtime
+from codex import capacity, client, frontend_input, shell_commands
+from codex import handoff_runtime
 from host import Host
 import required_plugins
 import transcripts
@@ -103,8 +104,10 @@ def resume_command(session_id: str) -> str:
     return f'codex resume {session_id}'
 
 
-def requires_verified_handoff(require_session_start: bool) -> bool:
-    return require_session_start
+def requires_verified_handoff(require_session_start: bool, arguments=()) -> bool:
+    return (require_session_start and client.is_session(arguments)
+            and '--no-daemon' not in arguments
+            and not any(value.split('=')[0] == '--remote' for value in arguments))
 
 
 def handoff_executable(target: str, project: Path, environment: Mapping[str, str], *, allow_managed: bool = True) -> str:
@@ -113,6 +116,14 @@ def handoff_executable(target: str, project: Path, environment: Mapping[str, str
 
 def validate_open(owned_backend: bool) -> None:
     return None
+
+
+def recovery_owns_backend(item: dict, requested: bool | None, native_arguments=()) -> bool:
+    external = ('--no-daemon' in native_arguments
+                or any(value.split('=')[0] == '--remote' for value in native_arguments))
+    if requested and (external or item.get('status') != 'closed'):
+        raise ValueError('A required managed Codex recovery needs one verified closed local session')
+    return requested is not False and not external and item.get('status') == 'closed'
 
 
 def recovery_receipt(status_path: Path, item: dict, owned_backend: bool) -> dict:
@@ -158,14 +169,42 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
 
 
 def prepare_frontend(arguments, project: Path, environment, executable=None, *, handoff=False, hook_roots=None):
-    return client.prepare(arguments, project, environment, executable=executable, handoff=handoff, hook_roots=hook_roots)
+    prepared, values, ticket = client.prepare(
+        arguments, project, environment, executable=executable, handoff=handoff, hook_roots=hook_roots,
+    )
+    if ticket is not None:
+        ticket["_shell_executable"] = executable
+        ticket["_capacity_executable"] = executable
+        ticket["_capacity_launch_args"] = []
+    return prepared, values, ticket
 
 
 def attach_frontend(ticket, pid: int) -> None:
-    client.attach(ticket, pid)
+    hidden = {}
+    if ticket is not None:
+        for key in ("_shell_executable", "_capacity_executable", "_capacity_launch_args"):
+            hidden[key] = ticket.pop(key, None)
+    try:
+        client.attach(ticket, pid)
+    finally:
+        if ticket is not None:
+            ticket.update(hidden)
+    if ticket is not None and ticket.get("backend") and hidden.get("_shell_executable"):
+        ticket["pid"] = pid
+        shell_commands.start(ticket, client)
+        capacity.start(ticket)
+    elif ticket is not None:
+        print("Codex capacity recovery requires a managed shared app-server; this session will not auto-retry.",
+              file=sys.stderr)
 
 
 def release_frontend(ticket) -> None:
+    if ticket is not None:
+        try:
+            capacity.stop(ticket)
+        finally:
+            shell_commands.stop(ticket)
+        frontend_input.release_control(ticket)
     client.release(ticket)
 
 
@@ -209,7 +248,6 @@ def handoff_recipient(ticket, register_session, terminal):
                 or client.comparable_path(Path(session.profile).resolve()) != client.comparable_path(Path(record['profile']).resolve())):
             raise RuntimeError('Agent Store did not retain the exact verified handoff client')
     return {'token': record['token'], 'recipient': recipient, 'profile': record['profile']}
-
 
 def debug_arguments(arguments: list[str], directory: Path) -> tuple[list[str], str | None]:
     return arguments, None

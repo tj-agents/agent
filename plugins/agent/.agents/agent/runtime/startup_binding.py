@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import atexit
 import argparse
 import hashlib
 import importlib.util
@@ -17,12 +18,19 @@ import tempfile
 import time
 from typing import Callable, Mapping, Sequence
 
+if __name__ == "__main__":
+    _source_cache = tempfile.TemporaryDirectory(prefix="tj-source-cache-")
+    atexit.register(_source_cache.cleanup)
+    sys.pycache_prefix = _source_cache.name
+    sys.dont_write_bytecode = True
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import launch_check
+import managed_admission
 import launch_status
+import native_runtime
 from host import Host
-from host_plugins import PLUGINS
 from host_sessions import SESSIONS
 import required_plugins
 from terminal_command import command_for_target, without_binding_state
@@ -194,7 +202,7 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
     phase = on_phase or (lambda _name: None)
     running = on_running or (lambda child_pid=None, **_details: None)
     adapter = SESSIONS[host]
-    owned_handoff = adapter.requires_verified_handoff(require_session_start)
+    owned_handoff = adapter.requires_verified_handoff(require_session_start, arguments)
     environment = without_binding_state(os.environ)
     if extra_environment:
         environment.update(without_binding_state(extra_environment))
@@ -220,6 +228,8 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                 else:
                     roots = hook_roots
                 environment[REQUIRED_HOOKS_ENV] = json.dumps(startup_participants(host, roots))
+            except managed_admission.AdmissionError:
+                raise
             except (required_plugins.RequiredPluginsError, RuntimeError, OSError, ValueError) as error:
                 if owned_handoff:
                     raise StartupBindingError(f"{host} handoff required hooks could not be verified: {error}") from error
@@ -295,6 +305,7 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    native_runtime.prepare_git_environment()
     if sys.version_info < (3, 12):
         print("launch requires Python 3.12 or newer", file=sys.stderr)
         return 2
@@ -349,7 +360,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(message, file=sys.stderr)
         print(f"launch: starting {parsed.host} without verified plugins.", file=sys.stderr)
 
-    if adapter.requires_verified_handoff(parsed.require_session_start):
+    if adapter.requires_verified_handoff(parsed.require_session_start, arguments):
         phase("resolving-handoff-runtime")
         try:
             parsed.target = adapter.handoff_executable(parsed.target, parsed.project, without_binding_state(os.environ))
@@ -363,6 +374,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         effective_project, hook_roots = launch_check.prepare_launch_roots(
             parsed.project.resolve(), parsed.host, parsed.target, arguments,
         )
+    except managed_admission.AdmissionError as error:
+        message = f"launch: managed admission refused: {error}"
+        print(message, file=sys.stderr)
+        report("failed", error=message)
+        return 1
     except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
         degrade(f"launch: {error}")
         effective_project, hook_roots = None, None
@@ -381,7 +397,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if effective_project is not None and not degraded:
         phase("verifying-required-hooks")
         try:
-            PLUGINS[parsed.host].ensure_hooks(effective_project, parsed.target)
+            managed_admission.ensure_hooks(effective_project, parsed.host, parsed.target)
+        except managed_admission.AdmissionError as error:
+            message = f"launch: managed admission refused: {error}"
+            print(message, file=sys.stderr)
+            report("failed", error=message)
+            return 1
         except Exception as error:
             degrade(f"launch: required hook readiness failed: {error}")
 
@@ -390,11 +411,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             _fresh_project, hook_roots = launch_check.prepare_launch_roots(
                 parsed.project.resolve(), parsed.host, parsed.target, arguments,
             )
+        except managed_admission.AdmissionError as error:
+            message = f"launch: managed admission refused: {error}"
+            print(message, file=sys.stderr)
+            report("failed", error=message)
+            return 1
         except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
             degrade(f"launch: {error}")
-    if adapter.requires_verified_handoff(parsed.require_session_start) and degraded:
+    if adapter.requires_verified_handoff(parsed.require_session_start, arguments) and degraded:
         report("failed", error=f"{parsed.host} handoff requires verified plugins before starting its owned backend")
         return 1
+    if effective_project is not None:
+        try:
+            managed_admission.verify(effective_project, parsed.host, parsed.target, hook_roots)
+        except managed_admission.AdmissionError as error:
+            message = f"launch: managed admission refused: {error}"
+            print(message, file=sys.stderr)
+            report("failed", error=message)
+            return 1
     require_session_start = parsed.require_session_start and not degraded
 
     try:
@@ -406,7 +440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         if parsed.status_file is not None:
             options["on_phase"] = phase
-        returncode = run_session(parsed.host, parsed.target, parsed.project, arguments, **options,
+        returncode = run_session(parsed.host, parsed.target, effective_project or parsed.project.resolve(), arguments, **options,
                                  on_unconfirmed=lambda child_pid: report("unconfirmed", child_pid=child_pid),
                                  on_running=lambda child_pid=None, **details: report(
                                      "running", running_at=time.time(), child_pid=child_pid, **details))

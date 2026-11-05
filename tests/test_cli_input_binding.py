@@ -37,6 +37,10 @@ class InputBindingTests(unittest.TestCase):
         self.contexts = {}
         self.infos = {}
         self.commands = {}
+        if os.name == "nt":
+            elevation = mock.patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=False)
+            elevation.start()
+            self.addCleanup(elevation.stop)
         for patch in (
             mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.root), 'CODEX_HOME': str(self.profile)}),
             mock.patch.object(client.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stderr='')),
@@ -86,8 +90,7 @@ class InputBindingTests(unittest.TestCase):
         self.assertNotIn(client.RECORD_PATH_ENV, daemon_environment)
         self.assertEqual('1', environment[client.RECORD_ENV])
         self.assertNotEqual('parent-path', environment[client.RECORD_PATH_ENV])
-        self.assertEqual(['resume', 'thread'], arguments[4:])
-        self.assertIn('shell_environment_policy.set.' + client.RECORD_ENV + '=""', arguments)
+        self.assertEqual(['resume', 'thread'], arguments)
         info, record = self.resolve()
         self.assertEqual(123, info.pid)
         self.assertEqual('own-input', record['client_message_id'])
