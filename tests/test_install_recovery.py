@@ -38,6 +38,9 @@ TOPIC = {"topic": "a" * 48}
 
 class InstallRecoveryTests(unittest.TestCase):
     def setUp(self):
+        native = mock.patch.object(CHECK.native_runtime, "prepare", return_value=())
+        native.start()
+        self.addCleanup(native.stop)
         temporary = tempfile.TemporaryDirectory(prefix="install recovery spaces é ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
@@ -148,7 +151,7 @@ class InstallRecoveryTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "plugin install template@tj-agents: native install failed") as raised:
             CHECK.prepare_launch_roots(self.project, Host.CLAUDE, "native", [])
         self.assertIn("Automatic plugin setup recovery failed: machine setup is stale", str(raised.exception))
-        prepare.assert_called_once_with(self.project, Host.CLAUDE, "native", ())
+        prepare.assert_called_once_with(self.project, Host.CLAUDE, "native", (), admission=True)
         recover.assert_called_once_with(self.project, "plugin setup")
 
     def test_failed_plugin_setup_recovery_reports_the_original_os_error(self):
@@ -158,7 +161,7 @@ class InstallRecoveryTests(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "native socket closed") as raised:
             CHECK.prepare_launch_roots(self.project, Host.CLAUDE, "native", [])
         self.assertIn("Automatic plugin setup recovery failed: machine setup is stale", str(raised.exception))
-        prepare.assert_called_once_with(self.project, Host.CLAUDE, "native", ())
+        prepare.assert_called_once_with(self.project, Host.CLAUDE, "native", (), admission=True)
         recover.assert_called_once_with(self.project, "plugin setup")
 
     def test_invalid_launch_input_never_runs_install_recovery(self):

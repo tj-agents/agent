@@ -10,6 +10,7 @@ every other event a crashed, failing or overrunning gate is reported on stderr a
 
 from __future__ import annotations
 
+import atexit
 import io
 import hashlib
 import json
@@ -17,9 +18,16 @@ import os
 from pathlib import Path
 import runpy
 import sys
+import tempfile
 import threading
 import traceback
 
+
+if __name__ == "__main__":
+    _source_cache = tempfile.TemporaryDirectory(prefix="tj-source-cache-")
+    atexit.register(_source_cache.cleanup)
+    sys.pycache_prefix = _source_cache.name
+    sys.dont_write_bytecode = True
 
 HOOKS = Path(__file__).resolve().parent
 DECISIONS = ("deny", "defer", "ask", "allow")

@@ -364,6 +364,124 @@ def test_frozen_binding_rejects_a_later_recipient_change(launch: OwnedLaunch) ->
         launch.client.frozen_binding(frozen)
 
 
+def test_recipient_binding_discovers_the_one_verified_durable_record(
+    launch: OwnedLaunch,
+) -> None:
+    binding = launch.client.recipient_binding(
+        launch.record["recipient"]["thread_id"],
+        launch.record["recipient"]["cwd"],
+        launch.record["profile"],
+    )
+    assert binding == launch.client.freeze_binding(launch.record)
+
+
+@pytest.mark.parametrize("field", ["thread_id", "cwd", "profile"])
+def test_recipient_binding_refuses_a_target_without_one_exact_record(
+    launch: OwnedLaunch, field: str
+) -> None:
+    values = {
+        "thread_id": launch.record["recipient"]["thread_id"],
+        "cwd": launch.record["recipient"]["cwd"],
+        "profile": launch.record["profile"],
+    }
+    values[field] += "-other"
+    with pytest.raises(RuntimeError, match="exactly one"):
+        launch.client.recipient_binding(**values)
+    assert not launch.server.calls
+
+
+def test_recipient_binding_refuses_ambiguous_or_stale_durable_records(
+    launch: OwnedLaunch,
+) -> None:
+    duplicate = {**launch.record, "token": "b" * 64}
+    duplicate_path = launch.client.binding_path(duplicate["token"])
+    duplicate_path.parent.mkdir(parents=True)
+    duplicate_path.write_text(json.dumps(duplicate), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="exactly one"):
+        launch.client.recipient_binding(
+            launch.record["recipient"]["thread_id"],
+            launch.record["recipient"]["cwd"],
+            launch.record["profile"],
+        )
+    duplicate_path.unlink()
+    stale = duplicate_path.parent.parent / "stale" / "client.json"
+    stale.parent.mkdir()
+    stale.write_text(json.dumps(duplicate), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="exactly one"):
+        launch.client.recipient_binding(
+            launch.record["recipient"]["thread_id"],
+            launch.record["recipient"]["cwd"],
+            launch.record["profile"],
+        )
+    assert not launch.server.calls
+
+
+def test_recipient_binding_ignores_malformed_unrelated_records(launch: OwnedLaunch) -> None:
+    malformed = launch.client.binding_path("c" * 64)
+    malformed.parent.mkdir(parents=True)
+    malformed.write_text("{", encoding="utf-8")
+    assert launch.client.recipient_binding(
+        launch.record["recipient"]["thread_id"],
+        launch.record["recipient"]["cwd"],
+        launch.record["profile"],
+    ) == launch.client.freeze_binding(launch.record)
+
+
+@pytest.mark.parametrize(
+    "arguments", [["--no-daemon", "prompt"], ["--remote", "unix:///external", "prompt"]]
+)
+def test_explicit_external_backend_never_starts_or_claims_a_managed_daemon(
+    launch: OwnedLaunch, monkeypatch: pytest.MonkeyPatch, arguments: list[str]
+) -> None:
+    def unexpected(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("explicit external backend started a managed daemon")
+
+    monkeypatch.setattr(launch.client.subprocess, "run", unexpected)
+    prepared, _environment, ticket = launch.client.prepare(
+        arguments, launch.server.directory, {"CODEX_HOME": launch.record["profile"]}, executable="native"
+    )
+    assert ticket["schema_version"] == 1
+    assert ticket["backend"] is None
+    assert prepared[-len(arguments):] == arguments
+    launch.client.release(ticket)
+
+
+def test_owned_backend_selection_excludes_administrative_and_external_commands(
+    launch: OwnedLaunch,
+) -> None:
+    sessions = __import__("codex.sessions", fromlist=["requires_verified_handoff"])
+    assert sessions.requires_verified_handoff(True, ["prompt"])
+    for arguments in (["queue"], ["--help"], ["--no-daemon", "prompt"], ["--remote", "unix:///external", "prompt"]):
+        assert not sessions.requires_verified_handoff(True, arguments)
+
+
+@pytest.mark.parametrize(
+    ("requested", "arguments", "expected"),
+    [
+        (None, [], True),
+        (None, ["--no-daemon"], False),
+        (None, ["--remote", "unix:///external"], False),
+        (False, [], False),
+    ],
+)
+def test_closed_codex_recovery_selects_a_managed_backend_only_for_local_mode(
+    requested: bool | None, arguments: list[str], expected: bool,
+) -> None:
+    sessions = __import__("codex.sessions", fromlist=["recovery_owns_backend"])
+    assert sessions.recovery_owns_backend({"status": "closed"}, requested, arguments) is expected
+
+
+@pytest.mark.parametrize(
+    ("item", "arguments"),
+    [({"status": "unknown"}, []), ({"status": "closed"}, ["--no-daemon"]),
+     ({"status": "closed"}, ["--remote=unix:///external"])],
+)
+def test_required_managed_recovery_rejects_nonlocal_or_unclosed_targets(item: dict, arguments: list[str]) -> None:
+    sessions = __import__("codex.sessions", fromlist=["recovery_owns_backend"])
+    with pytest.raises(ValueError, match="required managed Codex recovery"):
+        sessions.recovery_owns_backend(item, True, arguments)
+
+
 @pytest.mark.parametrize(
     "problem", [None, "missing", "disabled", "untrusted", "loaded"]
 )

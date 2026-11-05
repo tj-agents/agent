@@ -33,6 +33,13 @@
         ]
       },
       {
+        "path": ".agents/agent/runtime/managed_admission.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
         "path": ".agents/agent/utility/peer/scripts/register_session.py",
         "hosts": [
           "claude",
@@ -40,6 +47,9 @@
         ]
       }
     ],
+    "setup": {
+      "script": ".agents/agent/runtime/managed_admission.py"
+    },
     "permissions": {
       "claude_allow": [],
       "codex_prefix_rules": []

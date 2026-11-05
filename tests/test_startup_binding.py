@@ -25,6 +25,9 @@ def load(name, path):
 class StartupBindingTests(unittest.TestCase):
     def setUp(self):
         self.binding = load('startup_binding_tests', ROOT / 'plugins/agent/.agents/agent/runtime/startup_binding.py')
+        git_environment = mock.patch.object(self.binding.native_runtime, 'prepare_git_environment')
+        git_environment.start()
+        self.addCleanup(git_environment.stop)
 
     def test_windows_terminal_uses_application_title(self):
         cli = load('agent_cli_windows_tests', ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py')
@@ -200,6 +203,30 @@ class StartupBindingTests(unittest.TestCase):
 
         self.assertEqual(0, result)
         self.assertEqual([(Path(directory.name).resolve(), (Host.CLAUDE,))], calls)
+
+    def test_codex_directory_option_selects_the_backend_project_before_startup(self):
+        directory = tempfile.TemporaryDirectory(prefix='startup codex project ')
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        selected = root / 'selected'
+        selected.mkdir()
+        started = []
+
+        def run_session(*arguments, **_kwargs):
+            started.append(arguments)
+            return 0
+
+        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(selected, {})), \
+                mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='current'), \
+                mock.patch.object(self.binding.managed_admission, 'verify'), \
+                mock.patch.object(self.binding, 'run_session', side_effect=run_session):
+            result = self.binding.main([
+                '--host', 'codex', '--project', str(root), '--target', 'native-codex', '--require-session-start',
+                '--', '--no-daemon', '-C', 'selected', 'resume', 'exact_id',
+            ])
+
+        self.assertEqual(0, result)
+        self.assertTrue(started[0][2].samefile(selected))
 
     def test_failed_plugin_setup_still_starts_the_host_without_the_session_start_handshake(self):
         directory = tempfile.TemporaryDirectory(prefix='startup degraded ')

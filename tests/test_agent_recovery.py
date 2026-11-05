@@ -1,4 +1,3 @@
-import importlib.util
 import contextlib
 import io
 import json
@@ -13,9 +12,9 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("agent_recovery", ROOT / "plugins/agent/.agents/agent/runtime/agent_recovery.py")
-RECOVERY = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(RECOVERY)
+RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
+sys.path.insert(0, str(RUNTIME))
+from tj_agent import recovery as RECOVERY  # noqa: E402
 from codex import sessions as CODEX_SESSIONS  # noqa: E402
 from host import Host  # noqa: E402
 AWAIT_PICKUP = RECOVERY.await_pickup
@@ -225,6 +224,7 @@ class RecoveryTests(unittest.TestCase):
         with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
                 mock.patch.object(RECOVERY, "_wrapper_identity", return_value=wrapper), \
                 mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
+                mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
                 mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
                 mock.patch.object(cli, "launch_tab"):
             RECOVERY.open_session(Host.CODEX, "exact_id", roots=roots, cli=cli)
@@ -239,9 +239,9 @@ class RecoveryTests(unittest.TestCase):
         receipt = RECOVERY._claim(Host.CODEX, "race_id", "profile")
         created = json.loads(receipt.read_text(encoding="utf-8"))["created_at"]
         registry.write_text(json.dumps({"pid": 999999, "pid_started_at": 2, "host": "codex", "started_at": created + 1}), encoding="utf-8")
-        code = "import importlib.util,sys; p=sys.argv[1]; s=importlib.util.spec_from_file_location('r',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m);\ntry: m._claim(m.Host.CODEX,'race_id','profile'); print('ok')\nexcept ValueError: print('blocked')"
+        code = "import sys; sys.path.insert(0, sys.argv[1]); from tj_agent import recovery as m\ntry: m._claim(m.Host.CODEX,'race_id','profile'); print('ok')\nexcept ValueError: print('blocked')"
         env = dict(os.environ)
-        commands = [[sys.executable, "-c", code, str(ROOT / "plugins/agent/.agents/agent/runtime/agent_recovery.py")] for _ in range(2)]
+        commands = [[sys.executable, "-c", code, str(RUNTIME)] for _ in range(2)]
         results = [subprocess.Popen(command, stdout=subprocess.PIPE, text=True, env=env) for command in commands]
         output = [process.communicate(timeout=20)[0].strip() for process in results]
         self.assertEqual(sorted(output), ["blocked", "ok"])
@@ -664,6 +664,7 @@ Observed blocker: no send was attempted."""
         cli = RECOVERY._load("agent_cli")
         with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
              mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
+             mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
              mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
              mock.patch.object(cli, "launch_tab") as launch:
             RECOVERY.reopen("exact_id", hosts=(Host.CODEX,), roots={Host.CODEX: self.root / "sessions"},
@@ -676,6 +677,7 @@ Observed blocker: no send was attempted."""
         focus = mock.Mock()
         with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
              mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
+             mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
              mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
              mock.patch.object(cli, "launch_tab") as launch:
             result = RECOVERY.reopen("exact_id", hosts=(Host.CODEX,), roots={Host.CODEX: self.root / "sessions"},
@@ -689,7 +691,7 @@ Observed blocker: no send was attempted."""
         self.assertEqual(["--host", "codex", "--project", str(self.cwd), "--target", "native-codex"], arguments[3:9])
         self.assertEqual("--status-file", arguments[9])
         self.assertEqual("codex-", Path(arguments[10]).name[:6])
-        self.assertEqual(["--", "--config", "tui.terminal_title=[]", "resume", "exact_id", "Continue the requested work."],
+        self.assertEqual(["--require-session-start", "--", "--config", "tui.terminal_title=[]", "resume", "exact_id", "Continue the requested work."],
                          arguments[11:])
         focus.assert_not_called()
 
