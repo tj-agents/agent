@@ -13,6 +13,9 @@ route: infer
 
 # Open a CLI session
 
+Owns selecting one existing native session and focusing its live tab or reopening its verified closed
+context in the recorded host and directory.
+
 The caller names the session, never the host. `recover.py reopen` searches Claude and Codex history,
 picks the one session, then either focuses its live tab or reopens it with the native launcher. Do not
 select a host-specific skill for a user request that names a session.
@@ -35,6 +38,12 @@ python -B '<package-root>/.agents/agent/runtime/recover.py' reopen --target '<se
 - `--claude-history-root` and `--codex-history-root` select an alternate profile.
 
 The JSON result carries `action`: `focused` for a verified-live session and `opened` for a reopened one.
+
+Eligible closed local Codex recovery uses the owned local endpoint by default and retains the new
+`client_binding` in its launch status receipt. Follow [verified messaging](../message/SKILL.md) when an
+already authorized follow-up is needed. Reopening alone does not deliver an earlier message or prove
+recipient acknowledgment. Explicit embedded or remote native options retain their selected mode; a
+recovery requiring an owned endpoint refuses an incompatible mode or unclosed session before launch.
 
 ## Live sessions are focused, never duplicated
 

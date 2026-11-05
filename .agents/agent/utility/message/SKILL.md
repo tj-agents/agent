@@ -18,22 +18,29 @@ Use this only when the user authorized messaging the other session. Keep ownersh
 For a child agent in the current conversation, use the host's native collaboration message tool instead.
 This utility addresses an independent, already running Codex session; it does not perform a handoff.
 
-Requires Python 3.12+, a native Codex executable with `app-server proxy` and the experimental direct-input
-and paginated-history APIs, and a verified existing endpoint in the selected Codex profile. A new Codex
-handoff uses its owned endpoint; other existing direct-input sessions use their shared app-server daemon.
+Requires Python 3.12+, native Codex 0.166.0 or newer with `app-server proxy`, the experimental direct-input
+and paginated-history APIs, and a verified managed client binding in the selected Codex profile. Managed
+local starts, handoffs and eligible closed local recoveries use their owned endpoint. Required SessionStart
+acknowledgments establish startup readiness; messaging also requires verified native input and recipient
+binding. A blank initial prompt can leave that binding pending until actual native input is attributed.
 The helper never starts a daemon, launches/resumes a session, edits Codex databases, changes configuration,
-or injects terminal keystrokes. A standalone embedded TUI may have no reachable messaging endpoint.
-Owned handoffs require native Codex 0.166.0 or newer for paginated input verification. Missing or older
-capabilities fail explicitly. Fixture validation does not prove that a particular live session is reachable.
+or injects terminal keystrokes. Existing live embedded sessions have no supported automated attachment.
+Ordinary explicit remote launches preserve their requested endpoint without a managed message binding.
+Missing capabilities or binding evidence cause refusal before submission. Fixture validation does not
+prove that a particular live session is reachable.
 
 1. Bind the exact thread UUID, expected working directory and Codex profile from the prior launch result
-   or user-authorized session inspection. For a new owned handoff, use the `client_binding` in its
-   verified `running` status receipt and pass its path as `--launch-receipt`.
-   Supply `--thread`, `--cwd` and `--codex-home` explicitly even with the launch receipt. Missing or
-   mismatched identity refuses delivery; never substitute a shared daemon for the owned endpoint.
-   Resolve the recipient's execution key and concrete reason for delivery. Never guess the newest
-   conversation, a PID, or a window title. The helper admits ordinary sends only to one unended Agent
-   Store owner or bounded responsibility for that execution.
+   or user-authorized session inspection. When a verified `running` status receipt exists, use its
+   `client_binding` and pass its path as `--launch-receipt`. Ordinary managed shell starts have no launch
+   status receipt: the helper resolves exactly one durable `cli-clients/*/client.json` binding matching
+   the exact thread, normalized cwd and profile. Missing, stale or multiple candidates refuse before
+   connection; the helper never selects the newest record or the current default daemon.
+   Supply `--thread`, `--cwd` and `--codex-home` explicitly with either binding source. Before submission,
+   the helper revalidates local endpoint, executable, process and native input identities, then confirms
+   the exact loaded recipient and history through that frozen endpoint. Conflicting identity refuses.
+   Resolve the recipient's execution key and concrete reason for delivery. Never guess a conversation,
+   PID or window title. The helper admits ordinary sends only to one unended Agent Store owner or bounded
+   responsibility for that execution. Contradictory Store responsibility remains a refusal.
 2. Write the exact authorized message to a UTF-8 file. Choose a new receipt path outside version control
    and reuse it for this message. Do not put private message/history data into repository fixtures.
 3. Invoke the shipped helper with properly quoted shell arguments. `--codex` accepts a native executable
@@ -44,7 +51,8 @@ capabilities fail explicitly. Fixture validation does not prove that a particula
 python -B "<skill-directory>/scripts/codex_followup.py" --codex "<codex-executable>" --timeout 20 send --thread <exact-uuid> --cwd "<expected-directory>" --codex-home "<selected-profile>" --launch-receipt "<handoff-status-path>" --message-file "<message-file>" --receipt "<receipt-file>" --execution-key "<verified-execution-key>" --reason "<decision or action this information supports>"
 ```
 
-Omit `--launch-receipt` only for an existing direct-input recipient using the verified shared-daemon route.
+Omit `--launch-receipt` when the exact managed recipient is resolved from its durable client binding.
+An omitted receipt never authorizes a default-daemon route.
 
 For a correction to an earlier mistaken delivery, use `--corrects <original-receipt>` instead of
 `--execution-key`. The original delivery must be observable in the same recipient history; a correction
@@ -56,12 +64,12 @@ thread. It preserves the recipient's model, permissions, working directory and c
 requests an approval or another client action, the helper closes without answering it; the recipient UI
 remains responsible.
 Before submission it exclusively creates a version 2 receipt containing a client message ID and message
-hash. For an owned handoff it also freezes the endpoint, process identities and native frontend input
+hash, and freezes the recipient, profile, endpoint, executable, process identities and native frontend input
 anchor. It then checks recipient history for that client ID. Receipt files are private runtime evidence.
 
-Reusing a receipt only checks status; it never submits again. For an owned handoff, reuse and status
-checks verify the frozen binding and connect only to that endpoint; missing or changed identity refuses
-the check. A disconnect or timeout after reserving a receipt is uncertain delivery, not permission to
+Reusing a receipt only checks status; it never submits again. Reuse and status checks verify the frozen
+binding and connect only to that endpoint; missing or changed identity refuses the check. A disconnect
+or timeout after reserving a receipt is uncertain delivery, not permission to
 retry with a fresh receipt. Check with:
 
 ```text
