@@ -15,6 +15,7 @@ SPEC = importlib.util.spec_from_file_location("agent_launch_check_tests", RUNTIM
 CHECK = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECK)
 from host import Host  # noqa: E402
+import managed_admission  # noqa: E402
 
 
 class LaunchCheckExpiryTests(unittest.TestCase):
@@ -59,6 +60,16 @@ class LaunchCheckExpiryTests(unittest.TestCase):
         self.assertEqual("old", saved["since"])
         self.assertEqual({"applied": "old"}, saved["hosts"]["claude"])
         self.assertEqual({"applied": None}, saved["hosts"]["codex"])
+
+    def test_environment_selected_host_has_the_managed_admission_dependencies(self):
+        with (
+            mock.patch.dict(os.environ, {CHECK.HOST_VARIABLE: Host.CODEX.value}, clear=False),
+            mock.patch.object(CHECK, "check", return_value="current"),
+            mock.patch.object(CHECK, "require_update_check"),
+            mock.patch.object(managed_admission, "ensure_hooks"),
+            mock.patch.object(managed_admission, "verify"),
+        ):
+            self.assertEqual(0, CHECK.main(["--project", str(self.state), "--target", "fixture"]))
 
 
 if __name__ == "__main__":

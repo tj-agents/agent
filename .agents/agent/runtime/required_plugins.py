@@ -172,7 +172,7 @@ def check(project: Path, host: Host, executable: str | None = None,
             raise managed_admission.AdmissionError(f"Managed readiness could not be established: {error}") from error
         raise
     if admission:
-        managed_admission.verify(project, host, binary, roots)
+        managed_admission.verify(project, host, binary, native_project=launch_directory)
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(
