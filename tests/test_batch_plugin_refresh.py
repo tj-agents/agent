@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import pytest
+
 from git_isolation import isolate_git_config
 
 
@@ -329,30 +331,6 @@ class CodexStaleBytesTests(unittest.TestCase):
                 self.assertEqual([IDENTITY], CODEX.reconcile(root, executable="codex"))
                 update.assert_called_once()
 
-    def test_explicit_refresh_resolves_a_new_head_before_verifying_native_bytes(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            installed = root / "local"
-            installed.mkdir()
-            (installed / "skill.txt").write_bytes(b"new published")
-            source = {"source": "git-subdir", "url": "https://github.com/tj-agents/python.git",
-                      "ref": "main", "path": "plugins/python"}
-            key = "tj-agents/python@main"
-            def heads(*args, **kwargs):
-                plugin_autoupdate.record_contents(heads={key: "b" * 40})
-                return {key: "b" * 40}
-            with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(root / "state")}), \
-                    mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
-                    mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": source}]}), \
-                    mock.patch.object(plugin_autoupdate, "refresh_contents", side_effect=heads), \
-                    mock.patch.object(required_plugins, "inventory_roots", return_value={IDENTITY: installed}), \
-                    mock.patch.object(sources, "tree", return_value={"skill.txt": b"new published"}) as fetch, \
-                    mock.patch.object(CODEX, "install_missing") as update:
-                plugin_autoupdate.record_contents(heads={key: "a" * 40})
-                CODEX.refresh_plugins("codex", root, {"tj-agents": "tj-agents/marketplace"}, [IDENTITY])
-                self.assertEqual("b" * 40, fetch.call_args.args[0]["sha"])
-                update.assert_called_once()
-
     def test_failed_native_update_cannot_receive_a_current_byte_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -368,6 +346,44 @@ class CodexStaleBytesTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "bytes differ from marketplace after update"):
                     CODEX.reconcile(root, executable="codex")
                 self.assertFalse((root / "state/codex-plugin-bytes.json").exists())
+
+
+@pytest.mark.parametrize("installed_bytes", [b"new published", b"old", None])
+def test_codex_explicit_refresh_installs_only_changed_or_missing_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed_bytes: bytes | None,
+) -> None:
+    installed = tmp_path / "local"
+    installed.mkdir()
+    skill = installed / "skill.txt"
+    if installed_bytes is not None:
+        skill.write_bytes(installed_bytes)
+    source = {"source": "git-subdir", "url": "https://github.com/tj-agents/python.git",
+              "ref": "main", "path": "plugins/python"}
+    key = "tj-agents/python@main"
+    def heads(*args, **kwargs):
+        plugin_autoupdate.record_contents(heads={key: "b" * 40})
+        return {key: "b" * 40}
+    def inventory(*args, **kwargs):
+        return {IDENTITY: installed} if skill.is_file() else {}
+    def repair(*args):
+        skill.write_bytes(b"new published")
+    monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
+    with mock.patch.object(CODEX, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, [IDENTITY])), \
+            mock.patch.object(plugin_autoupdate, "marketplace_manifest", return_value={"plugins": [{"name": "python", "source": source}]}), \
+            mock.patch.object(plugin_autoupdate, "refresh_contents", side_effect=heads), \
+            mock.patch.object(required_plugins, "inventory_roots", side_effect=inventory), \
+            mock.patch.object(sources, "tree", return_value={"skill.txt": b"new published"}) as fetch, \
+            mock.patch.object(CODEX, "install_missing", side_effect=repair) as update:
+        plugin_autoupdate.record_contents(heads={key: "a" * 40})
+        result = CODEX.refresh_plugins("codex", tmp_path, {"tj-agents": "tj-agents/marketplace"}, [IDENTITY])
+        assert fetch.call_args.args[0]["sha"] == "b" * 40
+        assert skill.read_bytes() == b"new published"
+        if installed_bytes == b"new published":
+            assert result == []
+            update.assert_not_called()
+        else:
+            assert result == [IDENTITY]
+            update.assert_called_once_with("codex", tmp_path, [IDENTITY])
 
 
 if __name__ == "__main__":
