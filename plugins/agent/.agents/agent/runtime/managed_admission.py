@@ -13,7 +13,8 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,31 @@ def receipt_path(project: Path, host: Host, session: str = "") -> Path:
         (str(project.resolve()) + "\0" + host.value + "\0" + session).encode()
     ).hexdigest()
     return Path(plugin_autoupdate.state_directory()) / "admission" / (key + ".json")
+
+
+def refresh_path(project: Path, host: Host, session: str) -> Path:
+    return receipt_path(
+        required_plugins.project_root(project), host, "refresh@" + session
+    )
+
+
+def mark_refresh_blocked(project: Path, host: Host, session: str) -> None:
+    plugin_autoupdate.write_json(
+        refresh_path(project, host, session).with_suffix(".blocked.json"),
+        {"blocked": True},
+    )
+
+
+@contextmanager
+def publication_lock(project: Path, host: Host) -> Iterator[None]:
+    path = receipt_path(project, host).with_suffix(".publication.lock")
+    lock = plugin_autoupdate.acquire_lock(path)
+    if lock is None:
+        raise AdmissionError("Managed admission publication is already running")
+    try:
+        yield
+    finally:
+        lock.close()
 
 
 def signatures(paths: list[Path]) -> dict[str, list[int]]:
@@ -208,6 +234,8 @@ def ensure_hooks(project: Path, host: Host, executable: str | None = None) -> No
         reason = host_plugins.PLUGINS[host].ensure_hooks(project, executable)
         if managed and reason:
             raise AdmissionError("Required hook adoption is pending: " + reason)
+    except plugin_refresh.MaintenanceUnsettledError:
+        raise
     except (RuntimeError, OSError) as error:
         if managed:
             raise AdmissionError(
@@ -333,9 +361,7 @@ def verify(
             catalog_path,
         ]
         catalog_proof = signatures(catalog_watch)
-        native = required_plugins.inventory(
-            binary, plugins, project, (), "tj-agents" if host is Host.CODEX else None
-        )
+        native = required_plugins.inventory(binary, plugins, project, (), None)
         observed: dict[str, int] = {}
         for entry in plugins.installations(project, native):
             if not isinstance(entry, dict) or entry.get("enabled") is not True:
@@ -348,7 +374,8 @@ def verify(
             ):
                 observed[located[0]] = observed.get(located[0], 0) + 1
         roots = required_plugins.enabled_roots(plugins, project, native)
-        missing = relevant - roots.keys()
+        selected = required_closure | set(required)
+        missing = selected - roots.keys()
         if missing:
             raise AdmissionError(
                 "Selected publication is only partially installed: "
@@ -364,6 +391,7 @@ def verify(
         configuration_watch = configuration_paths(project, host)
         configuration_proof = signatures(configuration_watch)
         installed: dict[str, dict[str, str]] = {}
+        freshness: dict[str, str] = {}
         guards: list[str] = []
         package_proof: dict[str, list[int]] = {}
         with tempfile.TemporaryDirectory(prefix="tj-admission-") as temporary:
@@ -408,6 +436,7 @@ def verify(
                     "root": str(root),
                     "digest": content.digest(expected),
                 }
+                freshness[identity] = installed[identity]["digest"]
                 if name in {"agent", "base", "workflow", "engineering", "docs"}:
                     if not guard_ready(root, host):
                         raise AdmissionError(
@@ -415,10 +444,17 @@ def verify(
                             + identity
                         )
                     guards.append(identity)
+        for identity in sorted(selected - installed.keys()):
+            root = roots[identity]
+            before = signatures([root])
+            freshness[identity] = content.digest(plugin_refresh.package_tree(root))
+            if signatures([root]) != before:
+                raise AdmissionError("Package changed during admission: " + identity)
+            package_proof.update(before)
         watch = [
             *catalog_watch,
             *configuration_watch,
-            *(Path(value["root"]) for value in installed.values()),
+            *(roots[identity] for identity in sorted(selected)),
         ]
         proof = {**catalog_proof, **configuration_proof, **package_proof}
         if signatures(watch) != proof:
@@ -430,14 +466,20 @@ def verify(
             "marketplace": {"root": str(marketplace), "revision": revision},
             "producers": pair,
             "packages": installed,
+            "freshness": freshness,
             "guards": guards,
             "checked": time.time(),
             "watch": [str(path) for path in watch],
         }
         document["signatures"] = proof
-        plugin_autoupdate.write_json(receipt_path(project, host), document)
+        with publication_lock(project, host):
+            if signatures(watch) != proof:
+                raise AdmissionError("Publication changed before admission commit")
+            plugin_autoupdate.write_json(receipt_path(project, host), document)
         return document
     except AdmissionError:
+        raise
+    except plugin_refresh.MaintenanceUnsettledError:
         raise
     except (
         OSError,
@@ -461,6 +503,7 @@ def cached(project: Path, host: Host) -> dict[str, Any]:
         document.get("version") != 1
         or document.get("project") != str(project)
         or document.get("host") != host.value
+        or not isinstance(document.get("freshness"), dict)
         or not 0 <= time.time() - document["checked"] < MAX_AGE
         or signatures([Path(path) for path in document["watch"]])
         != document.get("signatures")
@@ -547,6 +590,13 @@ def denial(event: str, message: str) -> dict[str, Any]:
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": message,
+            }
+        }
+    if event == "UserPromptSubmit":
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": event,
+                "additionalContext": message,
             }
         }
     return {"decision": "block", "reason": message}
@@ -637,9 +687,13 @@ def main() -> int:
             if args.host is not None:
                 location = payload.get("cwd")
                 project = Path(location) if isinstance(location, str) else args.project
-                message += " Run from a terminal: " + maintenance_command(
-                    project, args.host
-                )
+                if event == "PreToolUse":
+                    mark_refresh_blocked(project, args.host, session)
+                message += " Automatic refresh will retry at the next safe hook."
+                if event == "SessionStart":
+                    message += " Run from a terminal: " + maintenance_command(
+                        project, args.host
+                    )
             print(json.dumps(denial(event, message)))
             return 0 if event in {"UserPromptSubmit", "PreToolUse"} else 2
         print(str(error), file=sys.stderr)

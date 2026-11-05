@@ -124,7 +124,6 @@ def install_missing(executable: str, project: Path, missing) -> None:
 
 
 def refresh_plugins(executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]:
-    install_missing(executable, project, plugins)
     return reconcile(project, executable=executable, refresh=True)
 
 

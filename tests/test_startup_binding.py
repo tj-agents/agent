@@ -44,6 +44,52 @@ class StartupBindingTests(unittest.TestCase):
         self.assertIn('--useApplicationTitle', arguments)
         self.assertNotIn('--suppressApplicationTitle', arguments)
 
+    def test_recovery_requires_startup_acknowledgment_for_both_hosts(self):
+        for host in Host:
+            with self.subTest(host=host):
+                cli = mock.Mock()
+                cli.CODEX_KEEP_TAB_TITLE = ()
+                cli.resolve_codex_executable.return_value = ('native-codex', {})
+                item = {'id': 'exact-session', 'profile': str(Path.home() / host.home_directory)}
+                with mock.patch.object(SESSIONS[Host.CODEX], 'verify_resume'):
+                    SESSIONS[host].open_tab(cli, item, Path.cwd(), 'Recovered', 'Continue.', Path('status.json'))
+                call = (cli.bound_terminal_arguments.call_args if host is Host.CODEX
+                        else cli.open_claude_tab.call_args)
+                self.assertIs(call.kwargs.get('require_session_start'), True)
+
+    def test_required_hook_inventory_failure_does_not_spawn(self):
+        with mock.patch.object(self.binding.required_plugins, 'check_launch_roots',
+                               side_effect=RuntimeError('fixture inventory unavailable')), \
+                mock.patch.object(self.binding.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(self.binding.StartupBindingError, 'fixture inventory unavailable'):
+                self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), (), require_session_start=True)
+        spawn.assert_not_called()
+
+    def test_unselected_project_does_not_wait_for_missing_managed_hooks(self):
+        process = mock.Mock(pid=72)
+        process.wait.return_value = 0
+        with mock.patch.object(self.binding.required_plugins, 'check_launch_roots', return_value=(None, None)), \
+                mock.patch.object(self.binding.subprocess, 'Popen', return_value=process), \
+                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', return_value=([], {}, None)), \
+                mock.patch.object(self.binding, '_acknowledged') as acknowledged:
+            result = self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), (), require_session_start=True)
+        self.assertEqual(0, result)
+        acknowledged.assert_not_called()
+
+    def test_native_output_without_hook_ack_does_not_report_running(self):
+        with tempfile.TemporaryDirectory(prefix='startup no ack ') as temporary:
+            root = Path(temporary)
+            script = root / 'native.py'
+            history = root / 'history.jsonl'
+            script.write_text("from pathlib import Path\nPath('history.jsonl').write_text('native output')\n",
+                              encoding='utf-8')
+            running = mock.Mock()
+            result = self.binding.run_session(Host.CLAUDE, sys.executable, root, (str(script),),
+                                              hook_roots={}, require_session_start=True, on_running=running)
+            self.assertEqual(0, result)
+            self.assertTrue(history.is_file())
+            running.assert_not_called()
+
     def test_startup_receipts_cover_each_selected_dispatcher(self):
         temporary = tempfile.TemporaryDirectory(prefix='startup manifests ')
         self.addCleanup(temporary.cleanup)
@@ -203,7 +249,7 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertEqual([(Path(directory.name).resolve(), (Host.CLAUDE,))], calls)
 
-    def test_failed_plugin_setup_still_starts_the_host_without_the_session_start_handshake(self):
+    def test_required_plugin_setup_failure_does_not_start_an_unverified_host(self):
         directory = tempfile.TemporaryDirectory(prefix='startup degraded ')
         self.addCleanup(directory.cleanup)
         calls = []
@@ -217,9 +263,8 @@ class StartupBindingTests(unittest.TestCase):
             result = self.binding.main(['--host', 'claude', '--project', directory.name, '--target', 'native-claude',
                                         '--require-session-start'])
 
-        self.assertEqual(0, result)
-        self.assertEqual(1, len(calls))
-        self.assertNotIn('require_session_start', calls[0])
+        self.assertEqual(1, result)
+        self.assertEqual([], calls)
 
     def test_claude_override_roster_is_passed_from_preflight_to_startup(self):
         directory = tempfile.TemporaryDirectory(prefix='startup claude override ')

@@ -88,6 +88,14 @@ updates retry without acknowledging the event. After a long disconnection, an au
 restores convergence. Managed launches install the subscriber on existing machines after the runtime
 updates; unavailable supervision leaves foreground update checks working and retries setup later.
 
+Managed conversations check their admitted plugin contents at prompt and tool boundaries using local
+file signatures. A stale receipt triggers automatic maintenance after prompt bookkeeping or at the end
+of a turn. Identical selected contents renew admission without restarting; changed contents arm a
+guarded restart into the same conversation, profile and working directory. Ordinary tool use pauses
+until adoption is verified. Maintenance failures remain pending with a private diagnostic log and
+retry on a new input; duplicate hook events do not repeatedly refresh. Required startup hooks must
+acknowledge a resumed process before recovery reports verified adoption.
+
 Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`.
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
 managed directory rather than modifying the repository or an installed plugin cache.

@@ -688,7 +688,7 @@ Observed blocker: no send was attempted."""
         self.assertEqual(["--host", "codex", "--project", str(self.cwd), "--target", "native-codex"], arguments[3:9])
         self.assertEqual("--status-file", arguments[9])
         self.assertEqual("codex-", Path(arguments[10]).name[:6])
-        self.assertEqual(["--", "--config", "tui.terminal_title=[]", "resume", "exact_id", "Continue the requested work."],
+        self.assertEqual(["--require-session-start", "--", "--config", "tui.terminal_title=[]", "resume", "exact_id", "Continue the requested work."],
                          arguments[11:])
         focus.assert_not_called()
 

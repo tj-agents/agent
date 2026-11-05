@@ -196,7 +196,8 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
                 mock.patch.object(self.relaunch, "arm_client_close", return_value=close) as arm:
             result = self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CLAUDE, arguments=lambda _: ["--model", "chosen"])
         self.assertEqual("armed", result["relaunch"])
-        self.assertEqual(Host.CLAUDE, arm.call_args.args[-1])
+        self.assertEqual(Host.CLAUDE, arm.call_args.args[-2])
+        self.assertIsNone(arm.call_args.args[-1])
         self.assertEqual(close, self.relaunch.read_json(self.relaunch.record_path("thread"))["close"])
 
     def test_codex_relaunch_uses_native_checkout_not_the_launch_directory(self):

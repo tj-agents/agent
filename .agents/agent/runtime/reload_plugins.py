@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import atexit
 import argparse
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import re
@@ -115,6 +116,8 @@ def verify_packages(plugins: Plugins, executable: str, project: Path, marketplac
                 continue
             try:
                 expected = sources.tree(catalog_sources.get(plugin), Path(location), project, temporary, publishers)
+            except plugin_refresh.MaintenanceUnsettledError:
+                raise
             except RefreshError as error:
                 problems.append(f"{identity}: {error}")
                 continue
@@ -137,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", type=Host, choices=list(Host))
     parser.add_argument("--project", type=Path, default=Path.cwd())
     parser.add_argument("--no-relaunch", action="store_true", help="Never relaunch the calling CLI session")
+    parser.add_argument("--defer-adoption", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--maintenance-budget", type=float, help=argparse.SUPPRESS)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--all", action="store_true", help="Refresh every selected plugin, not only published changes")
     modes.add_argument("--verify", action="store_true", help="Refresh, then inspect native installations and remote main revisions")
@@ -145,6 +150,13 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.verify_only and arguments.onboard:
         parser.error("--verify-only cannot be used with --onboard")
+    if arguments.defer_adoption and not (arguments.verify and arguments.host and arguments.no_relaunch):
+        parser.error("--defer-adoption requires --verify, --host and --no-relaunch")
+    if arguments.maintenance_budget is not None:
+        if not arguments.defer_adoption:
+            parser.error("--maintenance-budget requires --defer-adoption")
+        if arguments.maintenance_budget <= 0:
+            parser.error("--maintenance-budget must be greater than zero")
     if not arguments.verify_only:
         try:
             native_runtime.prepare()
@@ -212,46 +224,58 @@ def main(argv: list[str] | None = None) -> int:
             return int(result in {"failed", "offline", "busy"} or failed or bool(setup_errors))
     reports = []
     reasons = {}
-    for host in hosts:
-        plugins = PLUGINS[host]
-        try:
-            if not arguments.verify_only:
-                prepare_required(project, host, updated=updated)
-            executable = plugins.resolve_executable()
-            marketplaces, identities = selection(plugins, executable, project)
-            changed = [] if arguments.verify_only else refresh(plugins, executable, project, marketplaces, identities)
-            updated.update(changed)
-            report = (verify(plugins, executable, project, marketplaces, identities)
-                      if arguments.verify or arguments.verify_only else {"host": host.value, "plugins": identities, "problems": []})
-            if not arguments.verify_only and not report["problems"]:
-                reasons[host] = plugins.ensure_hooks(project, executable, running_session=host is caller)
-        except (RefreshError, agent_cli.LaunchError, OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
-            report = {"host": host.value, "problems": [str(error)]}
-        reports.append(report)
-    setup_errors = (converge_plugin_setup() if not any(report["problems"] for report in reports)
-                    else ["skipped because plugin refresh or verification failed"])
-    if setup_errors:
-        reports.append({"host": "plugin setup", "plugins": [], "problems": setup_errors})
-    if not arguments.verify_only:
+    budget = (plugin_refresh.maintenance_budget(arguments.maintenance_budget)
+              if arguments.maintenance_budget else nullcontext())
+    with budget:
         for host in hosts:
-            if any(report["problems"] for report in reports):
-                break
-            if host is not caller:
-                continue
+            plugins = PLUGINS[host]
             try:
-                adopted = PLUGINS[host].adopt(project, updated, reasons.get(host), allowed)
-            except (OSError, ValueError, RuntimeError) as error:
-                reports.append({"host": f"{host} relaunch", "plugins": [], "problems": [str(error)]})
-                continue
-            if adopted:
-                problems = ["relaunch failed: " + adopted["error"]] if adopted.get("relaunch") == "failed" else []
-                reports.append({"host": f"{host} relaunch", "plugins": [], **adopted, "problems": problems})
+                if not arguments.verify_only:
+                    prepare_required(project, host, updated=updated)
+                executable = plugins.resolve_executable()
+                marketplaces, identities = selection(plugins, executable, project)
+                changed = [] if arguments.verify_only else refresh(plugins, executable, project, marketplaces, identities)
+                updated.update(changed)
+                report = (verify(plugins, executable, project, marketplaces, identities)
+                          if arguments.verify or arguments.verify_only else {"host": host.value, "plugins": identities, "problems": []})
+                if not arguments.verify_only and not report["problems"]:
+                    reasons[host] = plugins.ensure_hooks(project, executable, running_session=host is caller)
+            except plugin_refresh.MaintenanceUnsettledError as error:
+                report = {"host": host.value, "problems": [str(error)], "writer_unsettled": True}
+            except (RefreshError, agent_cli.LaunchError, OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+                report = {"host": host.value, "problems": [str(error)]}
+            reports.append(report)
+        try:
+            setup_errors = (converge_plugin_setup() if not any(report["problems"] for report in reports)
+                            else ["skipped because plugin refresh or verification failed"])
+        except plugin_refresh.MaintenanceUnsettledError as error:
+            reports.append({"host": "plugin setup", "plugins": [], "problems": [str(error)], "writer_unsettled": True})
+            setup_errors = []
+        if setup_errors:
+            reports.append({"host": "plugin setup", "plugins": [], "problems": setup_errors})
+        if not arguments.verify_only and not arguments.defer_adoption:
+            for host in hosts:
+                if any(report["problems"] for report in reports):
+                    break
+                if host is not caller:
+                    continue
+                try:
+                    adopted = PLUGINS[host].adopt(project, updated, reasons.get(host), allowed)
+                except (OSError, ValueError, RuntimeError) as error:
+                    reports.append({"host": f"{host} relaunch", "plugins": [], "problems": [str(error)]})
+                    continue
+                if adopted:
+                    problems = ["relaunch failed: " + adopted["error"]] if adopted.get("relaunch") == "failed" else []
+                    reports.append({"host": f"{host} relaunch", "plugins": [], **adopted, "problems": problems})
     reports = admission_errors + reports
-    print(json.dumps(reports, indent=2))
+    print(json.dumps({"reports": reports, "adoption": "deferred"} if arguments.defer_adoption else reports, indent=2))
     for report in reports:
         for problem in report["problems"]:
             print(f"plugins: {report['host']}: {problem}", file=sys.stderr)
-    print(ADOPTION, file=sys.stderr)
+    if not arguments.defer_adoption:
+        print(ADOPTION, file=sys.stderr)
+    if any(report.get("writer_unsettled") for report in reports):
+        return 3
     return int(any(report["problems"] for report in reports))
 
 

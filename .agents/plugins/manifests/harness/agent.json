@@ -1,6 +1,65 @@
 {
   "schema_version": 1,
   "plugin": "tj-agents/agent",
-  "source_roots": [".agents/agent"],
-  "requires": {"marketplaces": [{"id": "tj-agents", "repository": "tj-agents/marketplace"}], "plugins": ["tj-agents/agent", "tj-agents/base", "tj-agents/agent-store", "tj-agents/cli"], "hooks": [{"path": ".agents/agent-store/runtime/session_hook.py", "hosts": ["claude", "codex"]}, {"path": ".agents/agent/runtime/close_lifecycle.py", "hosts": ["claude", "codex"]}, {"path": ".agents/agent/runtime/managed_admission.py", "hosts": ["claude", "codex"]}, {"path": ".agents/agent/utility/peer/scripts/register_session.py", "hosts": ["claude", "codex"]}], "setup": {"script": ".agents/agent/runtime/managed_admission.py"}, "permissions": {"claude_allow": [], "codex_prefix_rules": []}}
+  "source_roots": [
+    ".agents/agent"
+  ],
+  "requires": {
+    "marketplaces": [
+      {
+        "id": "tj-agents",
+        "repository": "tj-agents/marketplace"
+      }
+    ],
+    "plugins": [
+      "tj-agents/agent",
+      "tj-agents/base",
+      "tj-agents/agent-store",
+      "tj-agents/cli"
+    ],
+    "hooks": [
+      {
+        "path": ".agents/agent-store/runtime/session_hook.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/runtime/close_lifecycle.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/runtime/managed_admission.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/utility/peer/scripts/register_session.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/runtime/automatic_refresh.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      }
+    ],
+    "setup": {
+      "script": ".agents/agent/runtime/managed_admission.py"
+    },
+    "permissions": {
+      "claude_allow": [],
+      "codex_prefix_rules": []
+    }
+  }
 }

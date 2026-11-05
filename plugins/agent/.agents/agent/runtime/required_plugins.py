@@ -16,6 +16,7 @@ import time
 
 from host import Host
 import host_plugins
+import plugin_refresh
 
 
 IDENTITY = re.compile(r"[a-z][a-z0-9-]*@[a-z][a-z0-9-]*\Z")
@@ -213,13 +214,15 @@ def inventory(binary: str, plugins: host_plugins.Plugins, launch_directory: Path
     try:
         if os.name == "nt" and Path(binary).suffix.casefold() == ".ps1":
             command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", *command]
-        result = subprocess.run(
-            command, cwd=launch_directory, capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
+        result = plugin_refresh.execute(
+            command,
+            launch_directory,
             timeout=INVENTORY_TIMEOUT_SECONDS if timeout is None else timeout,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
-    except (OSError, subprocess.SubprocessError) as error:
+    except plugin_refresh.MaintenanceUnsettledError:
+        raise
+    except (OSError, subprocess.SubprocessError, plugin_refresh.RefreshError) as error:
         scope = f" for marketplace {marketplace}" if marketplace is not None else ""
         raise RequiredPluginsError(f"Required {plugins.HOST} plugin inventory{scope} could not run: {error}") from error
     if result.returncode:
@@ -368,6 +371,8 @@ def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str
     for host in hosts:
         try:
             discovered[host] = {target.identity: target for target in targets(project, host, executables.get(host), repair=repair)}
+        except plugin_refresh.MaintenanceUnsettledError:
+            raise
         except (RequiredPluginsError, PluginSetupError, RuntimeError, OSError) as error:
             errors.append(f"{host}: {error}")
     if not errors and discovered:
@@ -387,10 +392,7 @@ def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str
 def invoke(target: Target, arguments: list[str], timeout: int, project: Path,
            inherit: bool = False) -> subprocess.CompletedProcess:
     command = [sys.executable, "-B", str(target.script), "setup", *arguments]
-    if inherit:
-        return subprocess.run(command, cwd=project, timeout=timeout, check=False)
-    return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          cwd=project, timeout=timeout, check=False)
+    return plugin_refresh.execute(command, project, timeout=timeout, inherit=inherit)
 
 
 def reconcile_selection(project: Path, *, check_only: bool = False) -> list[str]:
@@ -405,12 +407,15 @@ def reconcile_selections(projects: Sequence[Path], *, check_only: bool = False) 
     script = Path(__file__).resolve().parents[1] / "utility/plugins/scripts/adopt_plugins.py"
     additional = [argument for project in projects[1:] for argument in ("--also-root", str(project))]
     try:
-        result = subprocess.run(
+        result = plugin_refresh.execute(
             [sys.executable, "-B", str(script), "--root", str(projects[0]), "--converge-existing",
              "--mode", "check" if check_only else "write", *additional],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False,
+            projects[0],
+            timeout=60,
         )
-    except (OSError, subprocess.SubprocessError) as error:
+    except plugin_refresh.MaintenanceUnsettledError:
+        raise
+    except (OSError, subprocess.SubprocessError, plugin_refresh.RefreshError) as error:
         raise RequiredPluginsError(f"Repository plugin selection could not converge: {error}") from error
     detail = (result.stderr or result.stdout).strip()
     if result.returncode:
@@ -436,7 +441,9 @@ def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host,
             result = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if result.returncode:
                 errors.append(f"{target.identity}: setup --check failed: {bounded(result)}")
-        except (OSError, subprocess.SubprocessError) as error:
+        except plugin_refresh.MaintenanceUnsettledError:
+            raise
+        except (OSError, subprocess.SubprocessError, plugin_refresh.RefreshError) as error:
             errors.append(f"{target.identity}: setup --check could not run: {error}")
     return errors
 
@@ -456,6 +463,8 @@ def converge_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Ho
                 checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if checked.returncode:
                 errors.append(f"{target.identity}: setup did not converge: {bounded(checked)}")
-        except (OSError, subprocess.SubprocessError) as error:
+        except plugin_refresh.MaintenanceUnsettledError:
+            raise
+        except (OSError, subprocess.SubprocessError, plugin_refresh.RefreshError) as error:
             errors.append(f"{target.identity}: setup could not run: {error}")
     return errors

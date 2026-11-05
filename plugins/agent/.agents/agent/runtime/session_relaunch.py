@@ -115,11 +115,12 @@ def recovery_script(project: Path, installed: dict) -> Path:
     return HERE / "recover.py"
 
 
-def arm_client_close(project: Path, entry: dict, shared, host: Host) -> dict:
+def arm_client_close(project: Path, entry: dict, shared, host: Host, expected_input: dict | None = None) -> dict:
     import close_lifecycle
 
     outcome = close_lifecycle.assess(host, entry["session_id"], Path(entry["profile"]),
-                                     "restart", "resume this session after plugin refresh", shared)
+                                     "restart", "resume this session after plugin refresh", shared,
+                                     expected_input=expected_input)
     if outcome["status"] != "armed":
         raise RuntimeError(outcome["reason"])
     return {key: outcome[key] for key in ("request", "request_sha256", "result", "completion", "cancel", "completion_token")}
@@ -158,12 +159,15 @@ def cancel_close(close: dict, reason: str) -> None:
         pass
 
 
-def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, *, host: Host) -> dict:
+def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=host_arguments, *, host: Host,
+             expected_session: str | None = None, expected_input: dict | None = None) -> dict:
     sessions = host_sessions.SESSIONS[host]
     shared = shared or load(utility_script("peer", "session_close.py"), "session_close")
     entry = shared.own_host_and_entry()
     if entry.get("host") != host.value:
         raise RuntimeError("the calling session is not the expected registered CLI")
+    if expected_session is not None and entry.get("session_id") != expected_session:
+        raise RuntimeError("the calling session differs from the automatic refresh hook")
     sessions.validate_relaunch(entry, project)
     session_id = entry["session_id"]
     native = sessions.native_arguments(arguments(entry["pid"]))
@@ -185,7 +189,7 @@ def relaunch(project: Path, installed: dict, shared=None, close=None, arguments=
         options += ["--history-root", str(Path(entry["profile"]) / host.history_directory)]
     try:
         shared.start_detached(HERE / "relaunch_watcher.py", options)
-        armed = arm_client_close(project, entry, shared, host)
+        armed = arm_client_close(project, entry, shared, host, expected_input)
         write_json(record, {**read_json(record), "close": armed, "at": time.time()})
     except Exception as error:
         if armed is not None:

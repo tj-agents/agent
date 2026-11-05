@@ -97,7 +97,7 @@ def test_launch_bootstraps_before_native_plugin_inventory(tmp_path: Path) -> Non
 @pytest.mark.parametrize("startup", [False, True])
 @pytest.mark.parametrize("managed", [False, True])
 @pytest.mark.parametrize("failure", ["busy", "runtime", "os"])
-def test_native_preparation_failure_blocks_only_managed_launches(
+def test_native_preparation_failure_blocks_managed_or_required_startup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -162,7 +162,7 @@ def test_native_preparation_failure_blocks_only_managed_launches(
         entrypoint = startup_binding.main if startup else launch.main
         result = entrypoint(arguments)
 
-    assert result == int(managed)
+    assert result == int(managed or startup)
     inventory.assert_not_called()
     recover.assert_not_called()
     verify.assert_not_called()
@@ -175,8 +175,8 @@ def test_native_preparation_failure_blocks_only_managed_launches(
         check.assert_not_called()
         assert "Managed readiness" in capsys.readouterr().err
     elif startup:
-        native.assert_called_once()
-        assert "require_session_start" not in native.call_args.kwargs
+        native.assert_not_called()
+        assert "required startup verification failed" in capsys.readouterr().err
     else:
         check.assert_not_called()
         assert "launching anyway" in capsys.readouterr().err

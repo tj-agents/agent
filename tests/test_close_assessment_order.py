@@ -1,10 +1,12 @@
+import hashlib
 from collections.abc import Iterator
 from contextlib import ExitStack
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
 import pytest
-from close_fixtures import LIFECYCLE, CloseFixture, Host, session_close
+from close_fixtures import LIFECYCLE, WATCHER, CloseFixture, Host, session_close
 
 
 @pytest.fixture
@@ -13,6 +15,15 @@ def session() -> Iterator[Any]:
         fixture: Any = CloseFixture()
         fixture.addCleanup = stack.callback
         fixture.setup_close()
+        yield fixture
+
+
+@pytest.fixture
+def claude_session() -> Iterator[Any]:
+    with ExitStack() as stack:
+        fixture: Any = CloseFixture()
+        fixture.addCleanup = stack.callback
+        fixture.setup_close("claude")
         yield fixture
 
 
@@ -72,3 +83,50 @@ def test_new_input_records_assessment_while_cancelled_request_remains(
     assert session.outcome()["status"] == "cancelled"
     assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
     session.primitive_stop.assert_not_called()
+
+
+def test_stale_expected_input_cannot_arm_or_record_a_restart(session: Any) -> None:
+    expected = LIFECYCLE.current_input(Host.CODEX, "one")
+    LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "one", "turn_id": "turn-two"})
+    with (
+        mock.patch.object(LIFECYCLE, "_arm") as arm,
+        mock.patch.object(LIFECYCLE, "record_assessment") as record,
+        pytest.raises(ValueError, match="native input changed"),
+    ):
+        LIFECYCLE.assess(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "restart",
+            "resume after automatic plugin refresh",
+            session_close,
+            expected_input=expected,
+        )
+    arm.assert_not_called()
+    record.assert_not_called()
+
+
+def test_claude_restart_arms_before_session_stop_is_recorded(
+    claude_session: Any,
+) -> None:
+    assessment = LIFECYCLE.assess(
+        Host.CLAUDE,
+        "one",
+        claude_session.profile,
+        "restart",
+        "resume after automatic plugin refresh",
+        session_close,
+    )
+    assert assessment["status"] == "armed"
+    claude_session.request_path = Path(assessment["request"])
+    claude_session.digest = hashlib.sha256(
+        claude_session.request_path.read_bytes()
+    ).hexdigest()
+    claude_session.request = WATCHER.load_request(
+        claude_session.request_path,
+        claude_session.digest,
+    )
+    claude_session.stop()
+    assert claude_session.wait() == 0
+    assert claude_session.outcome()["status"] == "closed"
+    claude_session.primitive_stop.assert_called_once()

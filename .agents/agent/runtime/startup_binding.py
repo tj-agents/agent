@@ -227,8 +227,8 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
             except managed_admission.AdmissionError:
                 raise
             except (required_plugins.RequiredPluginsError, RuntimeError, OSError, ValueError) as error:
-                print(f"launch: {host} hook check skipped: {error}", file=sys.stderr)
-                require_session_start = False
+                raise StartupBindingError(f"required {host} startup hooks could not be verified: {error}") from error
+            require_session_start = roots is not None
         phase("starting-native")
         command = command_for_target(target, list(arguments))
         try:
@@ -333,7 +333,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         nonlocal degraded
         degraded = True
         print(message, file=sys.stderr)
-        print(f"launch: starting {parsed.host} without verified plugins.", file=sys.stderr)
+        if not parsed.require_session_start:
+            print(f"launch: starting {parsed.host} without verified plugins.", file=sys.stderr)
 
     phase("checking-plugins")
     try:
@@ -384,6 +385,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
             degrade(f"launch: {error}")
+    if parsed.require_session_start and degraded:
+        message = f"launch: {parsed.host} required startup verification failed; native session was not started"
+        print(message, file=sys.stderr)
+        report("failed", error=message)
+        return 1
     if effective_project is not None:
         try:
             managed_admission.verify(effective_project, parsed.host, parsed.target, hook_roots)
@@ -392,7 +398,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(message, file=sys.stderr)
             report("failed", error=message)
             return 1
-    require_session_start = parsed.require_session_start and not degraded
+    require_session_start = parsed.require_session_start
 
     try:
         terminal = _prelaunch_terminal()

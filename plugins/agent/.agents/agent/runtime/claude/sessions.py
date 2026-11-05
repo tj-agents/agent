@@ -90,7 +90,8 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
     if model:
         arguments += ["--model", model]
     arguments.append(instruction)
-    cli.open_claude_tab(directory, label, arguments, status_file=status_path, **profile_environment)
+    cli.open_claude_tab(directory, label, arguments, status_file=status_path,
+                        require_session_start=True, **profile_environment)
 
 
 def prepare_frontend(arguments, project: Path, environment, executable=None):

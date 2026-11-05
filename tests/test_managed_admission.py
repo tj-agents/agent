@@ -22,6 +22,7 @@ import plugin_refresh
 import pytest
 import required_plugins
 from host import Host
+from tj_agent import content
 from tj_agent.plugins import sources
 
 codex_plugins = importlib.import_module("codex.plugins")
@@ -269,6 +270,24 @@ def test_partial_install_cannot_create_receipt_and_retry_succeeds(
     assert case.verify() is not None
 
 
+def test_maintenance_unsettled_survives_admission_boundaries(
+    case: AdmissionFixture,
+) -> None:
+    error = plugin_refresh.MaintenanceUnsettledError("writer unsettled")
+    with (
+        patch.object(plugin_refresh, "run", side_effect=error),
+        pytest.raises(plugin_refresh.MaintenanceUnsettledError),
+    ):
+        case.verify()
+    with (
+        patch.object(
+            host_plugins.PLUGINS[Host.CODEX], "ensure_hooks", side_effect=error
+        ),
+        pytest.raises(plugin_refresh.MaintenanceUnsettledError),
+    ):
+        admission.ensure_hooks(case.project, Host.CODEX, "fixture")
+
+
 def test_session_start_does_not_wait_on_other_guards_but_ordinary_work_does(
     case: AdmissionFixture,
 ) -> None:
@@ -443,7 +462,9 @@ def test_refresh_maintenance_bypasses_admission_and_startup_failure_is_specific(
 
 
 def test_host_denial_shapes_and_timeout_are_fail_closed(case: AdmissionFixture) -> None:
-    assert admission.denial("UserPromptSubmit", "pending")["decision"] == "block"
+    prompt = admission.denial("UserPromptSubmit", "pending")
+    assert prompt["hookSpecificOutput"]["additionalContext"] == "pending"
+    assert "decision" not in prompt
     denied = admission.denial("PreToolUse", "pending")
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "continue" not in denied
@@ -466,8 +487,6 @@ def test_host_denial_shapes_and_timeout_are_fail_closed(case: AdmissionFixture) 
             json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"]
             == "deny"
         )
-        assert "reload_plugins.py" in output.getvalue()
-        assert "--verify" in output.getvalue()
 
 
 def test_setup_check_contract_reaches_the_shared_admission_checker(
@@ -622,6 +641,17 @@ def test_package_mutation_during_verification_cannot_publish_receipt(
 def test_unrelated_selected_stack_follows_frozen_relevant_dependency_closure(
     case: AdmissionFixture,
 ) -> None:
+    cpp = case.root / "cpp"
+    shutil.copytree(case.roots["base@tj-agents"], cpp)
+    harness = admission.read(cpp / "harness.json")
+    harness["plugin"] = "tj-agents/cpp"
+    (cpp / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
+    for host in Host:
+        manifest = cpp / host.manifest_directory / "plugin.json"
+        document = admission.read(manifest)
+        document["name"] = "cpp"
+        manifest.write_text(json.dumps(document), encoding="utf-8")
+    case.roots["cpp@tj-agents"] = cpp
     case.catalog["plugins"].append(
         {
             "name": "cpp",
@@ -640,7 +670,14 @@ def test_unrelated_selected_stack_follows_frozen_relevant_dependency_closure(
         json.dumps({"schema_version": 1, "plugins": ["cpp@tj-agents"]}),
         encoding="utf-8",
     )
-    assert set(case.verify()["guards"]) == {"agent@tj-agents", "base@tj-agents"}
+    document = case.verify()
+    assert set(document["guards"]) == {"agent@tj-agents", "base@tj-agents"}
+    assert document["freshness"]["cpp@tj-agents"] == content.digest(
+        plugin_refresh.package_tree(cpp)
+    )
+    (cpp / "value.txt").write_text("changed", encoding="utf-8")
+    with pytest.raises(admission.AdmissionError, match="identity changed"):
+        admission.cached(case.project, Host.CODEX)
 
 
 @pytest.mark.parametrize("host", list(Host))
