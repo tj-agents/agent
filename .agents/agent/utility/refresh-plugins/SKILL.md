@@ -12,6 +12,9 @@ route: infer
 
 # Refresh plugins
 
+Owns updating this session's selected plugin installs and verifying their adoption in the same native
+conversation.
+
 Every `claude`, `codex`, handoff and open launch already applies plugin updates published since the last
 check. This runs the same refresh for a running session, including installation and native readback of newly declared plugins. Run it on your own judgement; never ask first. On Windows:
 
@@ -38,6 +41,8 @@ The host entry point names how this session adopts the result.
 Keep the same conversation through recovery. If a verified Claude or Codex session needs a fresh client,
 Agent arms its exact attributable frontend close and resumes that same session with its original profile,
 directory and safe native options. The watcher requires the immutable close request digest and its matching
-closed result before resuming. Checkpoint before the turn ends; the resumed client must verify required hook
-execution before ordinary work. `--no-relaunch` reports incomplete adoption and never arms a close. Trust
+closed result before resuming. For an owned Codex client, the old frontend and backend must exit before
+the replacement endpoint is created; retain the replacement's new `client_binding` for
+[verified messaging](../message/SKILL.md). Checkpoint before the turn ends; the resumed client must verify
+required hook execution before ordinary work. `--no-relaunch` reports incomplete adoption and never arms a close. Trust
 failures remain failures; refresh never bypasses trust or creates another conversation.

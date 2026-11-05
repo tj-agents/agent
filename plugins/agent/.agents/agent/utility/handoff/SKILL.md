@@ -29,10 +29,12 @@ stored title and the visible tab match, and resume reuses it. Choose a short, de
 
 Use `--host claude` or `--host codex`, then `--`. Every option after the separator is passed unchanged to that host's launcher:
 Claude requires a lane, frontier tier, or explicit non-Haiku model; Codex may use its configured default.
-The selected launcher verifies native SessionStart before reporting success. For Codex, the wrapper
-creates an owned native app-server endpoint and requires every required hook's acknowledgment plus an
-exact binding from the frontend's native input to its recipient thread. Missing or conflicting identity
-prevents startup confirmation.
+The selected launcher verifies native SessionStart before reporting success. Codex handoffs use the same
+owned local app-server endpoint as managed local starts. Backend selection is separate from startup
+readiness: handoffs additionally require every required hook's acknowledgment and an exact binding from
+the frontend's native input to its recipient thread. Missing or conflicting identity prevents startup
+confirmation. A handoff requiring verified messaging refuses explicit embedded `--no-daemon` and external
+`--remote` before launch.
 
 Keep the reported `status_path`. A verified Codex `running` receipt exposes `client_binding` with its
 launch `token`, `recipient` (`thread_id`, `cwd`, `frontend_message_id`) and `profile`. For an authorized
