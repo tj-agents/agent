@@ -17,7 +17,7 @@ from unittest import mock
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / ".agents/agent/runtime"
+RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(RUNTIME))
 
 plugin_refresh = importlib.import_module("plugin_refresh")
