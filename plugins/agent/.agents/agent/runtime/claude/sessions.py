@@ -87,6 +87,8 @@ def validate_open(owned_backend: bool) -> None:
 
 
 def recovery_owns_backend(item: dict, requested: bool | None, native_arguments=()) -> bool:
+    if requested:
+        raise ValueError('Claude recovery does not use a Codex backend')
     return False
 
 

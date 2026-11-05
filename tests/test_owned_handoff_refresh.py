@@ -231,7 +231,7 @@ def recovery(
     refresh: Refresh, new_launch: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> Any:
     module = load_source(
-        "owned_refresh_recovery", ROOT / ".agents/agent/runtime/agent_recovery.py"
+        "owned_refresh_recovery", ROOT / ".agents/agent/runtime/tj_agent/recovery.py"
     )
     item = {
         "id": "thread",
@@ -432,17 +432,17 @@ def test_recovery_retains_ambiguous_receipt_and_refuses_duplicate_after_invalid_
     refresh.sessions.open_tab.assert_called_once()
 
 
-def test_claude_rejects_owned_backend_before_recovery_lookup(
+def test_claude_rejects_owned_backend_after_exact_recovery_lookup(
     recovery: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = load_source("owned_refresh_claude", ROOT / ".claude/runtime/sessions.py")
     monkeypatch.setitem(recovery.SESSIONS, recovery.Host.CLAUDE, adapter)
-    find = mock.Mock()
+    find = mock.Mock(return_value={})
     monkeypatch.setattr(recovery, "find", find)
     with pytest.raises(ValueError, match="Claude recovery"):
         recovery.open_session(recovery.Host.CLAUDE, "thread", owned_backend=True)
-    find.assert_not_called()
+    find.assert_called_once_with(recovery.Host.CLAUDE, "thread", None)
 
 
 @pytest.mark.parametrize("pid", [102, 103], ids=["supervisor", "backend"])

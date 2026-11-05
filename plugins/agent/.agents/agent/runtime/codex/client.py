@@ -455,6 +455,22 @@ def launch_binding(receipt_path, thread_id, cwd, profile):
     return freeze_binding(record)
 
 
+def owned_backend_exited(record):
+    try:
+        path = binding_path(record['token']).with_name('backend.json')
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+    if not isinstance(receipt, dict):
+        return False
+    return (receipt.get('state') == 'exited'
+            and receipt.get('token') == record['token']
+            and receipt.get('wrapper') == record.get('wrapper')
+            and receipt.get('supervisor') == record.get('supervisor')
+            and receipt.get('backend') == record.get('backend')
+            and not Path(record['backend']['socket_path']).exists())
+
+
 def recipient_binding(thread_id, cwd, profile):
     expected_cwd = comparable_path(Path(cwd).resolve())
     expected_profile = comparable_path(Path(profile).resolve())
@@ -475,6 +491,12 @@ def recipient_binding(thread_id, cwd, profile):
                 or comparable_path(Path(recipient.get('cwd', '')).resolve()) != expected_cwd
                 or comparable_path(Path(record.get('profile', '')).resolve()) != expected_profile):
             continue
+        try:
+            verify_owned_processes(record)
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
+            if owned_backend_exited(record):
+                continue
+            raise RuntimeError('Managed Codex binding process identity is not eligible') from error
         matches.append((path, record))
     if len(matches) != 1:
         raise RuntimeError('Expected exactly one verified managed Codex binding for this recipient')

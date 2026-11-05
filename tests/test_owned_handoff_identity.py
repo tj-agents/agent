@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace, TracebackType
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import pytest
 from tj_cli import processes
@@ -440,23 +440,133 @@ def test_recipient_binding_refuses_a_target_without_one_exact_record(
     assert not launch.server.calls
 
 
-def test_recipient_binding_refuses_ambiguous_or_stale_durable_records(
-    launch: OwnedLaunch,
+def test_recipient_binding_refuses_two_live_durable_records(
+    launch: OwnedLaunch, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     duplicate = {**launch.record, "token": "b" * 64}
     duplicate_path = launch.client.binding_path(duplicate["token"])
     duplicate_path.parent.mkdir(parents=True)
     duplicate_path.write_text(json.dumps(duplicate), encoding="utf-8")
+    monkeypatch.setattr(launch.client, "verify_owned_processes", lambda _record: None)
     with pytest.raises(RuntimeError, match="exactly one"):
         launch.client.recipient_binding(
             launch.record["recipient"]["thread_id"],
             launch.record["recipient"]["cwd"],
             launch.record["profile"],
         )
-    duplicate_path.unlink()
-    stale = duplicate_path.parent.parent / "stale" / "client.json"
-    stale.parent.mkdir()
-    stale.write_text(json.dumps(duplicate), encoding="utf-8")
+    assert not launch.server.calls
+
+
+def test_recipient_binding_rejects_a_live_identity_mismatch(
+    launch: OwnedLaunch,
+) -> None:
+    mismatched = {**launch.record, "token": "b" * 64}
+    path = launch.client.binding_path(mismatched["token"])
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(mismatched), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="identity is not eligible"):
+        launch.client.recipient_binding(
+            launch.record["recipient"]["thread_id"],
+            launch.record["recipient"]["cwd"],
+            launch.record["profile"],
+        )
+    assert not launch.server.calls
+
+
+def test_recipient_binding_rejects_a_reused_owned_process_id(
+    launch: OwnedLaunch,
+) -> None:
+    reused = json.loads(json.dumps(launch.record))
+    reused["frontend"]["started_at"] += 1
+    launch.client.binding_path(reused["token"]).write_text(
+        json.dumps(reused), encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="identity is not eligible"):
+        launch.client.recipient_binding(
+            launch.record["recipient"]["thread_id"],
+            launch.record["recipient"]["cwd"],
+            launch.record["profile"],
+        )
+    assert not launch.server.calls
+
+
+def test_recipient_binding_refuses_unobservable_owned_processes(
+    launch: OwnedLaunch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(processes, "process_info", lambda _pid: None)
+    with pytest.raises(RuntimeError, match="identity is not eligible"):
+        launch.client.recipient_binding(
+            launch.record["recipient"]["thread_id"],
+            launch.record["recipient"]["cwd"],
+            launch.record["profile"],
+        )
+    assert not launch.server.calls
+
+
+def write_exited_binding(launch: OwnedLaunch, token: str) -> dict[str, Any]:
+    stale = cast(dict[str, Any], json.loads(json.dumps(launch.record)))
+    stale["token"] = token
+    path = launch.client.binding_path(token)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stale["recording_path"] = str(path.with_name("events.jsonl"))
+    stale["backend"]["socket_path"] = str(path.parent / "socket")
+    for index, role in enumerate(("wrapper", "supervisor", "backend", "frontend"), 201):
+        stale[role]["pid"] = index
+        stale[role]["started_at"] = float(index)
+    stale["pid"] = stale["frontend"]["pid"]
+    path.write_text(json.dumps(stale), encoding="utf-8")
+    path.with_name("backend.json").write_text(
+        json.dumps(
+            {
+                "state": "exited",
+                "token": stale["token"],
+                "wrapper": stale["wrapper"],
+                "supervisor": stale["supervisor"],
+                "backend": stale["backend"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return stale
+
+
+def test_recipient_binding_ignores_an_exited_record_after_recovery(
+    launch: OwnedLaunch,
+) -> None:
+    write_exited_binding(launch, "b" * 64)
+    assert launch.client.recipient_binding(
+        launch.record["recipient"]["thread_id"],
+        launch.record["recipient"]["cwd"],
+        launch.record["profile"],
+    ) == launch.client.freeze_binding(launch.record)
+    assert not launch.server.calls
+
+
+def test_recipient_binding_rejects_a_process_loss_without_an_exit_receipt(
+    launch: OwnedLaunch,
+) -> None:
+    stale = json.loads(json.dumps(launch.record))
+    for index, role in enumerate(("wrapper", "supervisor", "backend", "frontend"), 201):
+        stale[role]["pid"] = index
+        stale[role]["started_at"] = float(index)
+    stale["pid"] = stale["frontend"]["pid"]
+    launch.client.binding_path(stale["token"]).write_text(
+        json.dumps(stale), encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="identity is not eligible"):
+        launch.client.recipient_binding(
+            launch.record["recipient"]["thread_id"],
+            launch.record["recipient"]["cwd"],
+            launch.record["profile"],
+        )
+    assert not launch.server.calls
+
+
+def test_recipient_binding_refuses_an_exited_record_without_a_recovery(
+    launch: OwnedLaunch,
+) -> None:
+    write_exited_binding(launch, launch.record["token"])
     with pytest.raises(RuntimeError, match="exactly one"):
         launch.client.recipient_binding(
             launch.record["recipient"]["thread_id"],
