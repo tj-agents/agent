@@ -106,7 +106,7 @@ def windows_snapshot(context) -> dict:
         raise ServiceError("scheduled-task query returned invalid state") from error
 
 
-def task_xml(context, sid: str) -> str:
+def task_xml(context, sid: str, *, enabled: bool = True) -> str:
     ET.register_namespace("", NAMESPACE)
     root = ET.Element(f"{{{NAMESPACE}}}Task", {"version": "1.4"})
 
@@ -124,7 +124,7 @@ def task_xml(context, sid: str) -> str:
     principal.set("id", "CurrentUser")
     settings = section(root, "Settings", {"MultipleInstancesPolicy": "IgnoreNew", "DisallowStartIfOnBatteries": "false",
                                          "StopIfGoingOnBatteries": "false", "StartWhenAvailable": "true",
-                                         "Enabled": "true", "Hidden": "true", "ExecutionTimeLimit": "PT0S"})
+                                         "Enabled": str(enabled).lower(), "Hidden": "true", "ExecutionTimeLimit": "PT0S"})
     section(settings, "RestartOnFailure", {"Interval": "PT1M", "Count": "999"})
     executable, argv = windows_action(context)
     actions = ET.SubElement(root, "Actions", {"Context": "CurrentUser"})
@@ -159,7 +159,10 @@ def windows_drift(context, snapshot) -> list[str]:
     actual, counts = xml_values(snapshot["xml"])
     if actual.get("/Task/RegistrationInfo/Description") != marker(context):
         raise ServiceError(f"refusing to replace unowned scheduled task {identity(context)}")
-    expected, expected_counts = xml_values(task_xml(context, snapshot["sid"]))
+    enabled = actual.get("/Task/Settings/Enabled", "true") not in ("false", "0")
+    expected, expected_counts = xml_values(task_xml(context, snapshot["sid"], enabled=enabled))
+    if not enabled:
+        actual["/Task/Settings/Enabled"] = "false"
     defaults = {"/Task/Triggers/LogonTrigger/Enabled": "true",
                 "/Task/Principals/Principal/RunLevel": "LeastPrivilege",
                 "/Task/Settings/Enabled": "true"}
@@ -171,7 +174,7 @@ def windows_drift(context, snapshot) -> list[str]:
     drift = []
     if counts != expected_counts or any(actual.get(key) != value for key, value in expected.items()):
         drift.append("machine-event scheduled task command or settings differ")
-    if snapshot.get("state") != "Running":
+    if enabled and snapshot.get("state") != "Running":
         drift.append("machine-event scheduled task is not running")
     return drift
 
@@ -233,9 +236,10 @@ def linux_drift(context, snapshot) -> list[str]:
         drift.append("machine-event user service definition differs")
     if snapshot.get("LoadState") != "loaded" or snapshot.get("NeedDaemonReload") == "yes":
         drift.append("machine-event user service needs daemon-reload")
-    if snapshot.get("UnitFileState") != "enabled":
+    paused = body is not None and snapshot.get("UnitFileState") == "disabled"
+    if not paused and snapshot.get("UnitFileState") != "enabled":
         drift.append("machine-event user service is not enabled")
-    if snapshot.get("ActiveState") != "active":
+    if not paused and snapshot.get("ActiveState") != "active":
         drift.append("machine-event user service is not running")
     return drift
 
@@ -258,11 +262,16 @@ def apply(context) -> list[str]:
         name = ps_literal(identity(context))
         xml = ps_literal(task_xml(context, snapshot["sid"]))
         owner = ps_literal(marker(context))
+        values = xml_values(snapshot["xml"])[0] if snapshot.get("xml") else {}
+        enabled = "$false" if values.get("/Task/Settings/Enabled") in ("false", "0") else "$true"
         body = (f"$existing=Get-ScheduledTask -TaskPath '\\' -TaskName {name} -ErrorAction SilentlyContinue;"
                 f"if($existing -and $existing.Description -ne {owner}){{throw 'Refusing to replace unowned task'}};"
-                f"if($existing){{Stop-ScheduledTask -TaskPath '\\' -TaskName {name}}};"
-                f"Register-ScheduledTask -TaskPath '\\' -TaskName {name} -Xml {xml} -Force|Out-Null;"
-                f"Start-ScheduledTask -TaskPath '\\' -TaskName {name}")
+                f"$enabled={enabled};if($existing)" + "{$enabled=$enabled -and $existing.Settings.Enabled;"
+                f"Stop-ScheduledTask -TaskPath '\\' -TaskName {name}" + "};"
+                f"$definition=[xml]{xml};"
+                "$definition.Task.Settings.Enabled=([string]$enabled).ToLowerInvariant();"
+                f"Register-ScheduledTask -TaskPath '\\' -TaskName {name} -Xml $definition.OuterXml -Force|Out-Null;"
+                f"if($enabled){{Start-ScheduledTask -TaskPath '\\' -TaskName {name}}}")
         command(context, ps_command(context, body))
     else:
         snapshot = linux_snapshot(context)
@@ -284,8 +293,11 @@ def apply(context) -> list[str]:
         os.replace(temporary, path)
         ctl = systemctl(context)
         command(context, [ctl, "--user", "daemon-reload"])
-        command(context, [ctl, "--user", "enable", path.name])
-        command(context, [ctl, "--user", "restart", path.name])
+        paused = original is not None and (snapshot.get("UnitFileState") == "disabled" or
+                                          linux_snapshot(context).get("UnitFileState") == "disabled")
+        if not paused:
+            command(context, [ctl, "--user", "enable", path.name])
+            command(context, [ctl, "--user", "restart", path.name])
     remaining = check(context)
     for _ in range(10):
         if not remaining or any("not running" not in item for item in remaining):
