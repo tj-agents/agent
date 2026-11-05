@@ -2,19 +2,43 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
-from pathlib import Path
+import os
 import re
+import sys
 import time
+from pathlib import Path
+
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import session_close
+
+_LIFECYCLE = None
+
+
+def lifecycle():
+    global _LIFECYCLE
+    if _LIFECYCLE is not None:
+        return _LIFECYCLE
+    path = Path(__file__).resolve().parents[3] / "runtime" / "close_lifecycle.py"
+    if str(path.parent) not in sys.path:
+        sys.path.insert(0, str(path.parent))
+    spec = importlib.util.spec_from_file_location("terminal_release_lifecycle", path)
+    if spec is None or spec.loader is None:
+        raise session_close.Refusal("the packaged terminal release runtime is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _LIFECYCLE = module
+    return _LIFECYCLE
 
 
 def canonical_path(request):
     session = request.get("session_id")
     if not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session):
         raise session_close.Refusal("invalid close session identity")
-    return session_close.state_directory() / "close-lifecycle" / (session + ".json")
+    return session_close.state_directory() / "terminal-release" / (session + ".json")
 
 
 def load_request(path, digest):
@@ -22,36 +46,48 @@ def load_request(path, digest):
     if hashlib.sha256(raw).hexdigest() != digest:
         raise session_close.Refusal("the frozen close request changed")
     request = json.loads(raw)
-    if (not isinstance(request, dict) or request.get("mode") != "close"
+    if (not isinstance(request, dict) or request.get("version") != 1
+            or request.get("status") != "armed"
             or not isinstance(request.get("entry"), dict)
             or not isinstance(request.get("completion_token"), str)
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request["completion_token"])):
         raise session_close.Refusal("invalid close request")
-    expected = session_close.state_directory() / "close-lifecycle/requests" / (request["completion_token"] + ".json")
+    expected = session_close.state_directory() / "terminal-release/requests" / (request["completion_token"] + ".json")
     if path.resolve() != expected.resolve():
         raise session_close.Refusal("close request is outside canonical state")
     return request
 
 
-def require_current(request, path, digest):
+def require_current(request, path, digest, *, verify_receipt=False):
     if load_request(path, digest) != request or session_close.read_json(canonical_path(request)) != request:
         raise session_close.Cancelled("close request generation changed")
     if Path(request["cancel"]).exists():
         raise session_close.Cancelled("close request was cancelled")
-    import close_lifecycle
-    from host import Host
-
     try:
-        close_lifecycle.require_input(Host(request["host"]), request["session_id"], request)
-    except ValueError as error:
+        lifecycle().require_release(request, verify_receipt=verify_receipt)
+    except (OSError, ValueError, RuntimeError) as error:
         raise session_close.Cancelled(str(error)) from error
-    assessment = session_close.read_json(close_lifecycle.state_root() / "assessments" / canonical_path(request).name)
-    if (not isinstance(assessment, dict) or assessment.get("status") != "armed"
-            or assessment.get("decision") not in ("complete", "restart")
-            or assessment.get("assessment_generation") != request.get("assessment_generation")
-            or assessment.get("input_generation") != request.get("input_generation")
-            or assessment.get("completion_token") != request["completion_token"]):
-        raise session_close.Cancelled("the close assessment changed")
+
+
+def acknowledge(request, path, digest):
+    require_current(request, path, digest, verify_receipt=True)
+    identity = session_close.process_info(os.getpid())
+    if identity is None:
+        raise session_close.Refusal("terminal release watcher identity is unavailable")
+    acknowledgement = Path(request["acknowledgement"])
+    acknowledgement.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with acknowledgement.open("x", encoding="utf-8") as stream:
+            json.dump({"request_sha256": digest, "pid": identity.pid,
+                       "started_at": identity.started_at}, stream, sort_keys=True)
+            stream.write("\n")
+    except FileExistsError:
+        existing = session_close.read_json(acknowledgement)
+        if existing != {"request_sha256": digest, "pid": identity.pid,
+                        "started_at": identity.started_at}:
+            raise session_close.Cancelled(
+                "terminal release acknowledgement changed"
+            ) from None
 
 
 def complete(request):
@@ -60,16 +96,13 @@ def complete(request):
 
 
 def final_local_guard(request, path, digest, activity):
-    require_current(request, path, digest)
+    require_current(request, path, digest, verify_receipt=True)
     entry = request["entry"]
     current = session_close.read_json(request["registry"])
-    fields = (*session_close.CLIENT_BINDING_FIELDS, "frontend", "provenance", "terminal")
-    if (not isinstance(current, dict) or not session_close.nonempty_string(current.get("cwd"))
-            or not Path(current["cwd"]).is_absolute()
-            or session_close.path_key(current["cwd"]) != session_close.path_key(entry["cwd"])
-            or any(current.get(key) != entry.get(key) for key in fields)):
+    if not session_close.registration_matches(current, entry):
         raise session_close.Cancelled("session registration changed before close")
     session_close.host_sessions(request["host"]).close_guard(request, activity, complete(request), session_close.SHARED)
+    require_current(request, path, digest)
 
 
 def _record_end(entry):
@@ -95,6 +128,7 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
     deadline = clock() + timeout
     marker = since = None
     try:
+        acknowledge(request, path, digest)
         sessions = session_close.host_sessions(request["host"])
         monitor = sessions.close_monitor(request, session_close.SHARED)
         while clock() < deadline:
@@ -108,7 +142,7 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
                 elif settled != marker:
                     raise session_close.Cancelled("a later turn replaced the completed turn")
                 if clock() - since >= idle:
-                    def guard():
+                    def guard(marker=marker):
                         final_local_guard(request, path, digest, marker)
 
                     reason = closed_after_stop(request["entry"], guard)
@@ -120,12 +154,13 @@ def wait(request, path, digest, timeout=600.0, idle=3.0, clock=time.monotonic, s
     except session_close.Cancelled as error:
         status, reason = "cancelled", str(error)
     except (OSError, ValueError, RuntimeError) as error:
-        status, reason = "refused", str(error)
+        status = "cancelled" if request.get("intent") == "refresh-restart" else "refused"
+        reason = str(error)
+    if request.get("intent") == "refresh-restart" and status != "closed":
+        session_close.write_json(request["cancel"], {"cancelled": True, "reason": reason})
     session_close.write_json(request["result"], {"status": status, "reason": reason,
                               "session_id": request["session_id"], "at": time.time()})
-    state = canonical_path(request)
-    if session_close.read_json(state) == request:
-        state.unlink(missing_ok=True)
+    lifecycle().retire_release(request)
     return 0 if status in ("closed", "cancelled") else 2
 
 

@@ -45,32 +45,21 @@
             "command": "python",
             "args": [
               "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py",
-              "hook",
-              "--host",
-              "claude"
-            ]
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 15,
-            "command": "python",
-            "args": [
-              "-B",
               "${CLAUDE_PLUGIN_ROOT}/hooks/hook_dispatch.py",
               "--deadline",
               "12",
               "--hook",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
               "prompt",
               "--host",
               "claude",
               "--hook",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/managed_admission.py",
+              "hook",
+              "--host",
+              "claude",
+              "--hook",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py",
               "prompt",
               "--host",
               "claude"

@@ -1,212 +1,302 @@
-import importlib.util
 import contextlib
+import hashlib
 import io
 import json
 import os
-from pathlib import Path
-import tempfile
+import subprocess
+import sys
 import unittest
+from pathlib import Path
+
+from close_fixtures import LIFECYCLE, CloseFixture, Host, session_close
 
 
-ROOT = Path(__file__).resolve().parents[1]
-PATH = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime" / "close_lifecycle.py"
-spec = importlib.util.spec_from_file_location("close_lifecycle", PATH)
-LIFECYCLE = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(LIFECYCLE)
-from host import Host  # noqa: E402
-from host_sessions import SESSIONS  # noqa: E402
-
-
-class CloseLifecycleTests(unittest.TestCase):
+class CloseLifecycleTests(CloseFixture, unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.state = Path(temporary.name)
-        self.previous = os.environ.get("AGENT_STATE_DIRECTORY")
-        os.environ["AGENT_STATE_DIRECTORY"] = str(self.state)
-        self.addCleanup(self.restore_environment)
+        self.setup_close()
 
-    def restore_environment(self):
-        if self.previous is None:
-            os.environ.pop("AGENT_STATE_DIRECTORY", None)
-        else:
-            os.environ["AGENT_STATE_DIRECTORY"] = self.previous
+    def prepare(self, intent="task-completion", receipt=True, reason=None):
+        return LIFECYCLE.prepare(
+            Host(self.host),
+            "one",
+            self.profile,
+            intent,
+            session_close,
+            self.receipt() if receipt else None,
+            dismissal_reason=reason,
+        )
 
-    def arm(self, turn="first"):
-        completion = self.state / "completion.json"
-        cancel = self.state / "cancel.json"
-        LIFECYCLE._write(LIFECYCLE._state_path("session"), {
-            "host": "codex", "session_id": "session", "turn_id": turn,
-            "completion": str(completion), "cancel": str(cancel), "completion_token": "token",
-        })
-        return completion, cancel
-
-    def arm_claude(self, transcript, token):
-        completion = self.state / "claude-completion.json"
-        cancel = self.state / "claude-cancel.json"
-        LIFECYCLE._write(LIFECYCLE._state_path("session"), {
-            "host": "claude", "session_id": "session", "turn_id": None,
-            "completion": str(completion), "cancel": str(cancel), "completion_token": "token",
-            "transcript": str(transcript), "claude_user_uuid": token,
-        })
-        return completion, cancel
-
-    def append(self, path, record):
-        with path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(record) + "\n")
-
-    def stop_output(self, data, host=Host.CODEX):
+    def test_unarmed_stop_is_silent_and_never_assesses_or_spawns(self):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            self.assertEqual(0, LIFECYCLE.run("stop", host, data))
-        return json.loads(output.getvalue()) if output.getvalue() else None
+            self.assertEqual(
+                0,
+                LIFECYCLE.run(
+                    "stop", Host(self.host), {"session_id": "one", "turn_id": "turn-one"}
+                ),
+            )
+        self.assertEqual("", output.getvalue())
+        self.assertFalse(LIFECYCLE._state_path("one").exists())
+        self.spawn.assert_not_called()
 
-    def test_omitted_close_selection_requests_assessment_without_arming(self):
-        result = self.stop_output({"session_id": "session", "turn_id": "merged-template53"})
-        self.assertEqual("block", result["decision"])
-        self.assertIn("agent:close", result["reason"])
-        self.assertIn("unfinished", result["reason"])
-        self.assertFalse(LIFECYCLE._state_path("session").exists())
-        self.assertTrue(LIFECYCLE._input_path("session").is_file())
+    def test_prompt_cancels_an_armed_release_before_recording_the_new_input(self):
+        self.arm()
+        request = self.request
+        self.assertEqual(
+            0,
+            LIFECYCLE.run(
+                "prompt", Host(self.host), {"session_id": "one", "turn_id": "later"}
+            ),
+        )
+        self.assertEqual(
+            {"cancelled": True, "reason": "new prompt"},
+            json.loads(Path(request["cancel"]).read_text(encoding="utf-8")),
+        )
+        state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+        self.assertEqual("cancelled", state["status"])
+        self.assertEqual("later", LIFECYCLE._read(LIFECYCLE._input_path("one"))["turn_id"])
 
-    def test_current_assessment_permits_keep_open_without_a_close_request(self):
-        LIFECYCLE.remember_input(Host.CODEX, "session", "question", {})
-        LIFECYCLE.record_assessment({**LIFECYCLE.current_input(Host.CODEX, "session"),
-                                    "decision": "keep-open", "status": "kept-open"})
-        self.assertIsNone(self.stop_output({"session_id": "session", "turn_id": "question"}))
-        self.assertFalse(LIFECYCLE._state_path("session").exists())
+    def test_matching_stop_only_publishes_completion_for_the_armed_request(self):
+        self.arm()
+        self.assertEqual(
+            0,
+            LIFECYCLE.run(
+                "stop", Host(self.host), {"session_id": "one", "turn_id": "turn-one"}
+            ),
+        )
+        self.assertEqual(
+            {"token": "token"},
+            json.loads(Path(self.request["completion"]).read_text(encoding="utf-8")),
+        )
 
-    def test_prior_input_assessment_does_not_cover_a_later_input(self):
-        LIFECYCLE.remember_input(Host.CODEX, "session", "earlier", {})
-        LIFECYCLE.record_assessment({**LIFECYCLE.current_input(Host.CODEX, "session"),
-                                    "decision": "keep-open", "status": "kept-open"})
-        self.assertEqual("block", self.stop_output({"session_id": "session", "turn_id": "later"})["decision"])
+    def test_stale_stop_cannot_complete_the_armed_release(self):
+        self.arm()
+        self.assertEqual(
+            0,
+            LIFECYCLE.run(
+                "stop", Host(self.host), {"session_id": "one", "turn_id": "later"}
+            ),
+        )
+        self.assertFalse(Path(self.request["completion"]).exists())
 
-    def test_reentrant_stop_does_not_loop_when_assessment_is_unavailable(self):
-        self.assertIsNone(self.stop_output({"session_id": "session", "turn_id": "turn", "stop_hook_active": True}))
-        self.assertTrue(LIFECYCLE._input_path("session").is_file())
+    def test_keep_open_policy_survives_new_input_until_revoked(self):
+        self.assertEqual(
+            {"status": "keep-open", "session_id": "one"},
+            LIFECYCLE.policy(Host(self.host), "one", self.profile, "keep-open", "user asked to continue"),
+        )
+        with self.assertRaisesRegex(ValueError, "keep-open"):
+            self.prepare()
+        self.assertEqual(
+            {"status": "revoked", "session_id": "one"},
+            LIFECYCLE.policy(Host(self.host), "one", self.profile, "revoke", "user revoked the policy"),
+        )
+        self.assertEqual("prepared", self.prepare()["status"])
 
-    def test_stop_without_native_input_does_not_infer_completion(self):
-        self.assertIsNone(self.stop_output({"session_id": "session", "cwd": "merged-worktree"}))
+    def test_task_completion_requires_an_accepted_audited_receipt(self):
+        receipt = self.receipt("candidate")
+        with self.assertRaisesRegex(ValueError, "not accepted"):
+            LIFECYCLE.prepare(
+                Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+            )
 
-    def test_disarmed_state_does_not_hide_an_omitted_assessment(self):
-        LIFECYCLE._write(LIFECYCLE._state_path("session"), {"host": "codex", "session_id": "session"})
-        self.assertEqual("block", self.stop_output({"session_id": "session", "turn_id": "turn"})["decision"])
+    def test_task_completion_refuses_an_unnecessary_audit(self):
+        receipt = self.receipt()
+        accepted = json.loads(receipt.read_text(encoding="utf-8"))
+        accepted["audit"]["state"] = "unnecessary"
+        receipt.write_text(json.dumps(accepted), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "audit is incomplete"):
+            LIFECYCLE.prepare(
+                Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+            )
 
-    def test_claude_assessment_covers_only_the_exact_transcript_user(self):
-        transcript = self.state / "session.jsonl"
-        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "question"}})
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        data = {"session_id": "session", "transcript_path": str(transcript)}
-        self.assertEqual("block", self.stop_output(data, Host.CLAUDE)["decision"])
-        LIFECYCLE.record_assessment({**LIFECYCLE.current_input(Host.CLAUDE, "session"),
-                                    "decision": "keep-open", "status": "kept-open"})
-        self.assertIsNone(self.stop_output(data, Host.CLAUDE))
-        self.assertFalse(LIFECYCLE._state_path("session").exists())
-        self.append(transcript, {"type": "user", "uuid": "two", "message": {"content": "continue"}})
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.assertEqual("block", self.stop_output(data, Host.CLAUDE)["decision"])
+    def test_task_completion_refuses_a_receipt_with_a_changed_generation(self):
+        receipt = self.receipt()
+        accepted = json.loads(receipt.read_text(encoding="utf-8"))
+        accepted["acceptance_generation"] = "changed"
+        receipt.write_text(json.dumps(accepted), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "candidate binding changed"):
+            LIFECYCLE.prepare(
+                Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+            )
 
-    def test_new_input_cancels_matching_armed_turn(self):
-        _completion, cancel = self.arm()
-        self.assertEqual(0, LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "session", "turn_id": "next-turn"}))
-        self.assertEqual({"cancelled": True, "reason": "new prompt"}, json.loads(cancel.read_text(encoding="utf-8")))
-        self.assertTrue(LIFECYCLE._state_path("session").exists())
+    def test_task_completion_refuses_receipt_with_deterministic_blockers(self):
+        receipt = self.receipt()
+        accepted = json.loads(receipt.read_text(encoding="utf-8"))
+        accepted["deterministic"] = {"blockers": ["missing cleanup proof"]}
+        receipt.write_text(json.dumps(accepted), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "deterministic blockers"):
+            LIFECYCLE.prepare(
+                Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+            )
 
-    def test_canceled_request_does_not_cover_a_new_input_assessment(self):
-        completion, cancel = self.arm("old")
-        self.assertEqual(0, LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "session", "turn_id": "new"}))
-        self.assertTrue(cancel.exists())
-        self.assertEqual("block", self.stop_output({"session_id": "session", "turn_id": "new"})["decision"])
-        self.assertFalse(completion.exists())
-        self.assertEqual("old", json.loads(LIFECYCLE._state_path("session").read_text())["turn_id"])
+    def test_completed_inventory_entries_do_not_block_task_completion(self):
+        receipt = self.receipt()
+        accepted = json.loads(receipt.read_text(encoding="utf-8"))
+        accepted["aggregate"] = {
+            "known": True,
+            "owned": [{"complete": True}],
+            "responsibilities": [{"resolved": True}],
+            "children": [],
+            "waits": [],
+        }
+        receipt.write_text(json.dumps(accepted), encoding="utf-8")
+        self.assertEqual(
+            "prepared",
+            LIFECYCLE.prepare(
+                Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+            )["status"],
+        )
 
-    def test_stale_stop_cannot_close_a_later_turn(self):
-        completion, _cancel = self.arm("later")
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CODEX, {"session_id": "session", "turn_id": "earlier"}))
-        self.assertFalse(completion.exists())
-        self.assertTrue(LIFECYCLE._state_path("session").exists())
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CODEX, {"session_id": "session", "turn_id": "later"}))
-        self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
-        self.assertTrue(LIFECYCLE._state_path("session").exists())
-        self.assertEqual(0, LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "session", "turn_id": "next"}))
-        self.assertTrue(LIFECYCLE._state_path("session").exists())
+    def test_recheck_refuses_a_changed_frozen_source(self):
+        prepared = self.prepare()
+        self.target.write_text("changed\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "source changed"):
+            LIFECYCLE.recheck(
+                Host(self.host), "one", self.profile, prepared["release_generation"], session_close
+            )
 
-    def test_claude_stop_requires_terminal_assistant_after_bound_user(self):
-        transcript = self.state / "session.jsonl"
-        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "close"}})
-        completion, _cancel = self.arm_claude(transcript, "one")
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "tool_use"}})
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
-        self.assertFalse(completion.exists())
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
-        self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
+    def test_recheck_refuses_a_changed_audit_result(self):
+        prepared = self.prepare()
+        (self.root / "audit-result.json").write_text("{\"findings\": [\"changed\"]}\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "audit result changed"):
+            LIFECYCLE.recheck(
+                Host(self.host), "one", self.profile, prepared["release_generation"], session_close
+            )
 
-    def test_claude_late_stop_cannot_complete_second_user_before_final_answer(self):
-        transcript = self.state / "session.jsonl"
-        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "first"}})
-        _completion, cancel = self.arm_claude(transcript, "one")
-        self.assertEqual(0, LIFECYCLE.run("prompt", Host.CLAUDE, {"session_id": "session"}))
-        self.assertTrue(cancel.exists())
-        self.append(transcript, {"type": "user", "uuid": "two", "message": {"content": "second"}})
-        completion, _cancel = self.arm_claude(transcript, "two")
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
-        self.assertFalse(completion.exists())
+    def test_retired_goal_uses_the_authorized_checkpoint_without_a_new_audit(self):
+        receipt, _checkpoint = self.retired_goal_receipt()
+        first = LIFECYCLE.prepare(
+            Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+        )
+        self.assertEqual(
+            "rechecked",
+            LIFECYCLE.recheck(
+                Host(self.host), "one", self.profile, first["release_generation"], session_close
+            )["status"],
+        )
+        second = LIFECYCLE.prepare(
+            Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+        )
+        self.assertEqual("prepared", second["status"])
+        self.spawn.assert_not_called()
 
-    def test_claude_streams_past_large_tool_result_to_bind_and_finish_user_turn(self):
-        transcript = self.state / "session.jsonl"
-        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "close"}})
-        self.append(transcript, {"type": "user", "uuid": "tool", "message": {"content": [
-            {"type": "tool_result", "content": "x" * (256 * 1024 + 1)}]}})
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        completion, _cancel = self.arm_claude(transcript, "one")
-        self.assertEqual("one", SESSIONS[Host.CLAUDE].user_turn(transcript))
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
-        self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
+    def test_retired_goal_refuses_a_changed_checkpoint(self):
+        receipt, checkpoint = self.retired_goal_receipt()
+        checkpoint.write_text("changed\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "checkpoint source changed"):
+            LIFECYCLE.prepare(
+                Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+            )
 
-    def test_claude_later_user_replaces_bound_turn(self):
-        transcript = self.state / "session.jsonl"
-        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "first"}})
-        completion, _cancel = self.arm_claude(transcript, "one")
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.append(transcript, {"type": "user", "uuid": "two", "message": {"content": "second"}})
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
-        self.assertFalse(completion.exists())
+    def test_pending_cleanup_with_a_live_exact_worker_allows_arm(self):
+        prepared = LIFECYCLE.prepare(
+            Host(self.host),
+            "one",
+            self.profile,
+            "task-completion",
+            session_close,
+            self.pending_cleanup_receipt(),
+        )
+        outcome = LIFECYCLE.arm(
+            Host(self.host), "one", self.profile, prepared["release_generation"], session_close
+        )
+        self.assertEqual("armed", outcome["status"])
 
-    def test_claude_latest_user_without_uuid_does_not_reuse_old_turn(self):
-        transcript = self.state / "session.jsonl"
-        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "first"}})
-        completion, _cancel = self.arm_claude(transcript, "one")
-        self.append(transcript, {"type": "user", "message": {"content": "second"}})
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        with self.assertRaisesRegex(ValueError, "no bounded"):
-            SESSIONS[Host.CLAUDE].user_turn(transcript)
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
-        self.assertFalse(completion.exists())
+    def test_pending_cleanup_without_a_live_exact_worker_refuses_arm(self):
+        receipt = self.pending_cleanup_receipt(worker=False)
+        prepared = LIFECYCLE.prepare(
+            Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+        )
+        with self.assertRaisesRegex(ValueError, "worker"):
+            LIFECYCLE.arm(
+                Host(self.host), "one", self.profile, prepared["release_generation"], session_close
+            )
+        self.assertEqual("accepted", json.loads(receipt.read_text(encoding="utf-8"))["state"])
 
-    def test_claude_ignores_metadata_and_sidechain_turns(self):
-        transcript = self.state / "session.jsonl"
-        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "close"}})
-        completion, _cancel = self.arm_claude(transcript, "one")
-        self.append(transcript, {"type": "user", "uuid": "meta", "isMeta": True, "message": {"content": "meta"}})
-        self.append(transcript, {"type": "user", "uuid": "compact", "isCompactSummary": True, "message": {"content": "summary"}})
-        self.append(transcript, {"type": "user", "uuid": "tool", "message": {"content": [{"type": "tool_result"}]}})
-        self.append(transcript, {"type": "user", "uuid": "sidechain", "isSidechain": True, "message": {"content": "sidechain"}})
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.append(transcript, {"type": "assistant", "isSidechain": True, "message": {"stop_reason": "tool_use"}})
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
-        self.assertEqual({"token": "token"}, json.loads(completion.read_text(encoding="utf-8")))
+    def test_pending_cleanup_with_a_mismatched_worker_refuses_arm(self):
+        receipt = self.pending_cleanup_receipt(mismatch="owner")
+        prepared = LIFECYCLE.prepare(
+            Host(self.host), "one", self.profile, "task-completion", session_close, receipt
+        )
+        with self.assertRaisesRegex(ValueError, "worker receipt changed"):
+            LIFECYCLE.arm(
+                Host(self.host), "one", self.profile, prepared["release_generation"], session_close
+            )
 
-    def test_claude_non_terminal_assistant_after_end_turn_refuses_completion(self):
-        transcript = self.state / "session.jsonl"
-        self.append(transcript, {"type": "user", "uuid": "one", "message": {"content": "close"}})
-        completion, _cancel = self.arm_claude(transcript, "one")
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "end_turn"}})
-        self.append(transcript, {"type": "assistant", "message": {"stop_reason": "tool_use"}})
-        self.assertEqual(0, LIFECYCLE.run("stop", Host.CLAUDE, {"session_id": "session", "transcript_path": str(transcript)}))
-        self.assertFalse(completion.exists())
+    def test_user_dismissal_keeps_its_explicit_authority_in_the_request(self):
+        receipt = self.receipt("candidate")
+        checkpoint = json.loads(receipt.read_text(encoding="utf-8"))
+        checkpoint["aggregate"] = {"known": False}
+        checkpoint.pop("audit")
+        receipt.write_text(json.dumps(checkpoint), encoding="utf-8")
+        outcome = LIFECYCLE.dismiss(
+            Host(self.host),
+            "one",
+            self.profile,
+            receipt,
+            "user explicitly dismissed unfinished work",
+            session_close,
+        )
+        request = json.loads(Path(outcome["request"]).read_text(encoding="utf-8"))
+        self.assertEqual("user-dismissal", request["intent"])
+        self.assertEqual("user explicitly dismissed unfinished work", request["dismissal_reason"])
+
+    def test_refresh_restart_does_not_require_an_acceptance_receipt(self):
+        prepared = self.prepare("refresh-restart", receipt=False)
+        self.assertIsNone(prepared["acceptance_sha256"])
+        outcome = LIFECYCLE.arm(
+            Host(self.host), "one", self.profile, prepared["release_generation"], session_close
+        )
+        request = json.loads(Path(outcome["request"]).read_text(encoding="utf-8"))
+        self.assertEqual("refresh-restart", request["intent"])
+        self.assertIsNone(request["receipt"])
+
+    def test_cli_loads_its_packaged_peer_runtime_in_an_isolated_process(self):
+        script = Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/runtime/close_lifecycle.py"
+        environment = {**os.environ, "AGENT_STATE_DIRECTORY": str(self.root), "CODEX_HOME": str(self.profile)}
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(script), "policy", "--host", "codex",
+             "--session-id", "one", "--profile", str(self.profile), "--action", "keep-open",
+             "--reason", "isolated runtime import"],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+            env=environment,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("keep-open", json.loads(result.stdout)["status"])
+
+    def test_watcher_loads_its_packaged_lifecycle_in_an_isolated_process(self):
+        directory = self.root / "terminal-release"
+        input_state = {"host": "codex", "session_id": "one", "turn_id": "turn-one",
+                       "profile": str(self.profile.resolve()), "transcript_path": None,
+                       "input_generation": "input-one"}
+        LIFECYCLE._write(directory / "inputs/one.json", input_state)
+        request_path = directory / "requests/token.json"
+        request = {"version": 1, "status": "armed", "host": "codex", "session_id": "one",
+                   "intent": "refresh-restart", "receipt": None, "completion_token": "token",
+                   "completion": str(directory / "requests/token.complete.json"),
+                   "cancel": str(directory / "requests/token.cancel.json"),
+                   "result": str(directory / "requests/token.result.json"),
+                   "acknowledgement": str(directory / "requests/token.ack.json"),
+                   "entry": {}, "registry": str(self.root / "cli-sessions/one.json"),
+                   "native": {**input_state, "input_generation": "replaced"}, "armed_at": 0.0}
+        raw = json.dumps(request, sort_keys=True).encode("utf-8") + b"\n"
+        request_path.parent.mkdir(parents=True)
+        request_path.write_bytes(raw)
+        LIFECYCLE._write(directory / "one.json", request)
+        script = Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/utility/peer/scripts/client_close_watcher.py"
+        environment = {**os.environ, "AGENT_STATE_DIRECTORY": str(self.root), "CODEX_HOME": str(self.profile)}
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(script), "--request", str(request_path),
+             "--request-sha256", hashlib.sha256(raw).hexdigest()],
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+            env=environment,
+            timeout=10,
+        )
+        self.assertNotIn("ModuleNotFoundError", result.stderr)
 
 
 if __name__ == "__main__":

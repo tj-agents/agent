@@ -48,7 +48,6 @@ RUNTIME_EXPORTS = (
     ".agents/agent/resources",
     ".agents/agent/utility/plugins/scripts",
     ".agents/agent/utility/peer/scripts",
-    ".agents/agent/utility/close/scripts",
     ".agents/agent-store/runtime",
 )
 PROFILE_START = "# >>> tj-agents >>>"

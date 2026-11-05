@@ -1,74 +1,653 @@
+import importlib.util
+import io
+import json
+import shlex
+import sys
 from collections.abc import Iterator
 from contextlib import ExitStack
-from typing import Any
+from itertools import count
+from pathlib import Path
+from typing import Any, cast
 from unittest import mock
 
+import managed_admission as admission
 import pytest
-from close_fixtures import LIFECYCLE, CloseFixture, Host, session_close
+from close_fixtures import LIFECYCLE, WATCHER, CloseFixture, Host, session_close
 
 
 @pytest.fixture
-def session() -> Iterator[Any]:
+def session(request: pytest.FixtureRequest) -> Iterator[Any]:
     with ExitStack() as stack:
         fixture: Any = CloseFixture()
         fixture.addCleanup = stack.callback
-        fixture.setup_close()
+        fixture.setup_close(getattr(request, "param", "codex"))
+        tokens = count()
+        stack.enter_context(
+            mock.patch.object(
+                LIFECYCLE.secrets,
+                "token_urlsafe",
+                side_effect=lambda _size: f"token-{next(tokens)}",
+            )
+        )
         yield fixture
 
 
-def test_later_keep_open_during_attribution_prevents_publication(session: Any) -> None:
+def prepare(session: Any) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        LIFECYCLE.prepare(
+            Host(session.host),
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            session.receipt(),
+        ),
+    )
+
+
+def test_keep_open_policy_during_attribution_prevents_preparation(session: Any) -> None:
     adapter = session_close.host_sessions("codex")
     original = adapter.arm_close
 
     def keep_open(*args: Any) -> Any:
-        assert session.assess("keep-open", "preserve this session") == 0
+        LIFECYCLE.policy(
+            Host.CODEX, "one", session.profile, "keep-open", "preserve this session"
+        )
         return original(*args)
 
-    with mock.patch.object(adapter, "arm_close", side_effect=keep_open):
-        assert session.assess("complete") == 2
+    with (
+        mock.patch.object(adapter, "arm_close", side_effect=keep_open),
+        pytest.raises(ValueError, match="keep-open"),
+    ):
+        prepare(session)
 
-    assessment = LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json")
-    assert assessment["status"] == "kept-open"
-    assert assessment["reason"] == "preserve this session"
-    assert not (session.root / "close-lifecycle/one.json").exists()
+    assert not LIFECYCLE._state_path("one").exists()
     session.spawn.assert_not_called()
 
 
-def test_later_keep_open_survives_an_earlier_attribution_failure(session: Any) -> None:
-    adapter = session_close.host_sessions("codex")
-
-    def keep_open_then_fail(*args: Any) -> Any:
-        assert session.assess("keep-open", "preserve this session") == 0
-        raise RuntimeError("attribution failed")
-
-    with mock.patch.object(adapter, "arm_close", side_effect=keep_open_then_fail):
-        assert session.assess("complete") == 2
-
-    assessment = LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json")
-    assert assessment["status"] == "kept-open"
-    session.spawn.assert_not_called()
-
-
-def test_repeated_complete_preserves_the_armed_assessment(session: Any) -> None:
-    session.arm()
-    original = LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json")
-    assert session.assess("complete") == 2
-    assert LIFECYCLE._read(LIFECYCLE.state_root() / "assessments/one.json") == original
-    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-one", {})
-    session.stop()
-    assert session.wait() == 0
-    assert session.outcome()["status"] == "closed"
-    session.primitive_stop.assert_called_once()
-
-
-def test_new_input_records_assessment_while_cancelled_request_remains(
-    session: Any,
-) -> None:
-    session.arm()
+def test_new_input_cancels_a_prepared_generation_before_an_arm(session: Any) -> None:
+    prepared = prepare(session)
     LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "one", "turn_id": "turn-two"})
-    assert session.assess("complete") == 2
-    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
-    assert session.wait() == 0
+    with pytest.raises(ValueError, match="not prepared"):
+        LIFECYCLE.arm(
+            Host.CODEX,
+            "one",
+            session.profile,
+            prepared["release_generation"],
+            session_close,
+        )
+    session.spawn.assert_not_called()
+
+
+def test_only_the_current_release_generation_can_arm(session: Any) -> None:
+    with mock.patch.object(
+        LIFECYCLE.secrets, "token_urlsafe", side_effect=("first", "second")
+    ):
+        first = prepare(session)
+        second = prepare(session)
+    with pytest.raises(ValueError, match="generation changed"):
+        LIFECYCLE.recheck(
+            Host.CODEX,
+            "one",
+            session.profile,
+            first["release_generation"],
+            session_close,
+        )
+    outcome = LIFECYCLE.arm(
+        Host.CODEX,
+        "one",
+        session.profile,
+        second["release_generation"],
+        session_close,
+    )
+    assert outcome["status"] == "armed"
+    assert session.spawn.call_count == 1
+
+
+def prompt(session: Any) -> None:
+    LIFECYCLE.run("prompt", Host.CODEX, {"session_id": "one", "turn_id": "turn-two"})
+
+
+def keep_open(session: Any) -> None:
+    LIFECYCLE.policy(
+        Host.CODEX, "one", session.profile, "keep-open", "preserve this session"
+    )
+
+
+def arm(session: Any, prepared: dict[str, Any]) -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        LIFECYCLE.arm(
+            Host(session.host),
+            "one",
+            session.profile,
+            prepared["release_generation"],
+            session_close,
+        ),
+    )
+
+
+def arm_watcher(session: Any) -> dict[str, Any]:
+    armed = arm(session, prepare(session))
+    session.request_path = Path(armed["request"])
+    session.digest = armed["request_sha256"]
+    session.request = WATCHER.load_request(session.request_path, session.digest)
+    return armed
+
+
+def test_persistent_policy_alone_prevents_release(session: Any) -> None:
+    arm_watcher(session)
+    session.stop()
+    session.write(
+        LIFECYCLE._policy_path("one"),
+        {
+            "host": "codex",
+            "session_id": "one",
+            "profile": str(session.profile.resolve()),
+            "reason": "preserve this session",
+            "at": 0.0,
+        },
+    )
+    with mock.patch.object(session_close, "stop_cli_client") as stop:
+        assert session.wait() == 0
+    stop.assert_not_called()
     assert session.outcome()["status"] == "cancelled"
-    assert LIFECYCLE.assessed(Host.CODEX, "one", "turn-two", {})
-    session.primitive_stop.assert_not_called()
+    assert "keep-open" in session.outcome()["reason"]
+
+
+def test_keep_open_during_final_native_guard_prevents_signal(session: Any) -> None:
+    arm_watcher(session)
+    session.stop()
+    adapter = session_close.host_sessions("codex")
+    original = adapter.close_guard
+
+    def changed(*args: Any) -> Any:
+        LIFECYCLE.policy(Host.CODEX, "one", session.profile, "keep-open", "continue")
+        return original(*args)
+
+    with mock.patch.object(adapter, "close_guard", side_effect=changed):
+        assert session.wait() == 0
+    assert session.outcome()["status"] == "cancelled"
+    assert session.row().ended_at is None
+
+
+def test_retiring_an_old_watcher_preserves_the_current_generation(session: Any) -> None:
+    arm_watcher(session)
+    old = session.request
+    with mock.patch.object(
+        LIFECYCLE.secrets, "token_urlsafe", return_value="successor"
+    ):
+        prepared = prepare(session)
+    assert session.wait() == 0
+    state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+    assert state["status"] == "prepared"
+    assert state["release_generation"] == prepared["release_generation"]
+    assert Path(old["cancel"]).exists()
+
+
+def test_retired_plan_and_ledger_keep_the_same_audit(session: Any) -> None:
+    receipt, _checkpoint = session.retired_goal_receipt(companion=True)
+    prepared = LIFECYCLE.prepare(
+        Host.CODEX, "one", session.profile, "task-completion", session_close, receipt
+    )
+    rechecked = LIFECYCLE.recheck(
+        Host.CODEX,
+        "one",
+        session.profile,
+        prepared["release_generation"],
+        session_close,
+    )
+    assert rechecked["status"] == "rechecked"
+    session.spawn.assert_not_called()
+
+
+@pytest.mark.parametrize("artifact_name", ["aggregate.json", "evidence.txt"])
+def test_retired_pair_still_requires_live_unretired_evidence(
+    session: Any, artifact_name: str
+) -> None:
+    receipt, _checkpoint = session.retired_goal_receipt(companion=True)
+    artifact = session.root / artifact_name
+    content = artifact.read_bytes()
+    artifact.unlink()
+    with pytest.raises(ValueError, match="source is unavailable"):
+        LIFECYCLE.prepare(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            receipt,
+        )
+    artifact.write_bytes(content)
+
+
+def test_retired_pair_refuses_changed_plan_or_snapshot(session: Any) -> None:
+    receipt, _checkpoint = session.retired_goal_receipt(companion=True)
+    plan = session.root / "PLAN.md"
+    plan.write_text("changed", encoding="utf-8")
+    with pytest.raises(ValueError, match="source changed"):
+        LIFECYCLE.prepare(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            receipt,
+        )
+    plan.unlink()
+    (session.root / "checkpoint-PLAN.md").write_text("changed", encoding="utf-8")
+    with pytest.raises(ValueError, match="checkpoint source changed"):
+        LIFECYCLE.prepare(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            receipt,
+        )
+
+
+def test_aggregate_cannot_be_marked_retired(session: Any) -> None:
+    receipt, _checkpoint = session.retired_goal_receipt(companion=True)
+    value = json.loads(receipt.read_text(encoding="utf-8"))
+    value["checkpoint"]["retired_sources"].append(value["sources"][1]["path"])
+    session.write(receipt, value)
+    with pytest.raises(ValueError, match="invalid retired sources"):
+        LIFECYCLE.prepare(
+            Host.CODEX,
+            "one",
+            session.profile,
+            "task-completion",
+            session_close,
+            receipt,
+        )
+
+
+@pytest.mark.parametrize("change", [prompt, keep_open])
+def test_recheck_cannot_restore_a_cancelled_generation(
+    session: Any, change: Any
+) -> None:
+    prepared = prepare(session)
+    original = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+    validate = LIFECYCLE._validate_frozen_receipt
+
+    def changed(*args: Any) -> None:
+        change(session)
+        validate(*args)
+
+    with (
+        mock.patch.object(LIFECYCLE, "_validate_frozen_receipt", side_effect=changed),
+        pytest.raises(ValueError),
+    ):
+        LIFECYCLE.recheck(
+            Host.CODEX,
+            "one",
+            session.profile,
+            prepared["release_generation"],
+            session_close,
+        )
+
+    state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+    assert state["status"] == "cancelled"
+    assert state["native"] == original["native"]
+    assert state["receipt"] == original["receipt"]
+    assert LIFECYCLE.Path(state["cancel"]).exists()
+    session.spawn.assert_not_called()
+
+
+@pytest.mark.parametrize("change", [prompt, keep_open])
+def test_arm_token_generation_cannot_restore_cancellation(
+    session: Any, change: Any
+) -> None:
+    prepared = prepare(session)
+
+    def changed(_size: int) -> str:
+        with mock.patch.object(
+            LIFECYCLE.secrets, "token_urlsafe", return_value="new-input"
+        ):
+            change(session)
+        return "stale-arm"
+
+    with (
+        mock.patch.object(LIFECYCLE.secrets, "token_urlsafe", side_effect=changed),
+        pytest.raises(ValueError),
+    ):
+        arm(session, prepared)
+
+    assert LIFECYCLE._read(LIFECYCLE._state_path("one"))["status"] == "cancelled"
+    session.spawn.assert_not_called()
+
+
+@pytest.mark.parametrize("change", [prompt, keep_open])
+def test_cancellation_during_acknowledgement_is_observed(
+    session: Any, change: Any
+) -> None:
+    prepared = prepare(session)
+
+    def changed(script: Any, arguments: Any) -> int:
+        change(session)
+        return int(session.acknowledge_watcher(script, arguments))
+
+    session.spawn.side_effect = changed
+    with pytest.raises(ValueError):
+        arm(session, prepared)
+
+    state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+    assert state["status"] == "cancelled"
+    assert LIFECYCLE.Path(state["cancel"]).exists()
+    assert session.spawn.call_count == 1
+
+
+@pytest.mark.parametrize("change", [prompt, keep_open])
+def test_prepare_keeps_its_input_binding_during_receipt_validation(
+    session: Any, change: Any
+) -> None:
+    validate = LIFECYCLE._validate_receipt
+
+    def changed(*args: Any, **kwargs: Any) -> Any:
+        change(session)
+        return validate(*args, **kwargs)
+
+    with (
+        mock.patch.object(LIFECYCLE, "_validate_receipt", side_effect=changed),
+        pytest.raises(ValueError),
+    ):
+        prepare(session)
+
+    assert not LIFECYCLE._state_path("one").exists()
+    session.spawn.assert_not_called()
+
+
+def test_explicit_cancel_during_initial_prepare_is_not_lost(session: Any) -> None:
+    validate = LIFECYCLE._validate_receipt
+
+    def changed(*args: Any, **kwargs: Any) -> Any:
+        LIFECYCLE.cancel(Host.CODEX, "one", "cancel during assessment")
+        return validate(*args, **kwargs)
+
+    with (
+        mock.patch.object(LIFECYCLE, "_validate_receipt", side_effect=changed),
+        pytest.raises(ValueError, match="generation changed"),
+    ):
+        prepare(session)
+
+    assert not LIFECYCLE._state_path("one").exists()
+
+
+@pytest.mark.parametrize("operation", ["prepare", "recheck", "arm"])
+def test_superseding_prepare_wins_over_stale_publication(
+    session: Any, operation: str
+) -> None:
+    prepared = prepare(session) if operation != "prepare" else None
+    successor: dict[str, Any] = {}
+    hook = "_validate_receipt" if operation == "prepare" else "_validate_frozen_receipt"
+    validate = getattr(LIFECYCLE, hook)
+
+    def changed(*args: Any, **kwargs: Any) -> Any:
+        with mock.patch.object(LIFECYCLE, hook, side_effect=validate):
+            successor.update(
+                LIFECYCLE.prepare(
+                    Host.CODEX,
+                    "one",
+                    session.profile,
+                    "task-completion",
+                    session_close,
+                    session.root / "terminal-acceptance.json",
+                )
+            )
+        return validate(*args, **kwargs)
+
+    with (
+        mock.patch.object(LIFECYCLE, hook, side_effect=changed),
+        pytest.raises(ValueError, match="generation changed"),
+    ):
+        if operation == "prepare":
+            prepare(session)
+        elif operation == "recheck":
+            assert prepared is not None
+            LIFECYCLE.recheck(
+                Host.CODEX,
+                "one",
+                session.profile,
+                prepared["release_generation"],
+                session_close,
+            )
+        else:
+            assert prepared is not None
+            arm(session, prepared)
+
+    state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+    assert state["status"] == "prepared"
+    assert state["release_generation"] == successor["release_generation"]
+    session.spawn.assert_not_called()
+
+
+def test_failed_stale_watcher_does_not_cancel_its_successor(session: Any) -> None:
+    prepared = prepare(session)
+    successor: dict[str, Any] = {}
+
+    def changed(_script: Any, _arguments: Any) -> int:
+        successor.update(prepare(session))
+        raise RuntimeError("old watcher launch failed")
+
+    session.spawn.side_effect = changed
+    with pytest.raises(RuntimeError, match="old watcher"):
+        arm(session, prepared)
+
+    state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+    assert state["status"] == "prepared"
+    assert state["release_generation"] == successor["release_generation"]
+    session.spawn.side_effect = session.acknowledge_watcher
+    assert arm(session, successor)["status"] == "armed"
+
+
+def test_nested_arm_can_launch_only_one_watcher(session: Any) -> None:
+    prepared = prepare(session)
+    tokens = LIFECYCLE.secrets.token_urlsafe
+    successor: dict[str, Any] = {}
+
+    def changed(size: int) -> str:
+        with mock.patch.object(LIFECYCLE.secrets, "token_urlsafe", side_effect=tokens):
+            successor.update(arm(session, prepared))
+        return "stale-arm"
+
+    with (
+        mock.patch.object(LIFECYCLE.secrets, "token_urlsafe", side_effect=changed),
+        pytest.raises(ValueError, match="generation changed"),
+    ):
+        arm(session, prepared)
+
+    assert successor["status"] == "armed"
+    assert session.spawn.call_count == 1
+
+
+def test_session_lock_has_a_bounded_wait(session: Any) -> None:
+    with (
+        LIFECYCLE._session_lock("one"),
+        mock.patch.object(LIFECYCLE, "STATE_LOCK_TIMEOUT_SECONDS", 0.02),
+        pytest.raises(RuntimeError, match="state lock"),
+    ):
+        LIFECYCLE.cancel(Host.CODEX, "one", "contended")
+
+
+@pytest.mark.parametrize("change", [prompt, keep_open])
+def test_cancellation_inside_acknowledgement_validation_is_observed(
+    session: Any, change: Any
+) -> None:
+    prepared = prepare(session)
+    acknowledged = LIFECYCLE._acknowledged
+
+    def changed(*args: Any) -> bool:
+        result = bool(acknowledged(*args))
+        assert result
+        change(session)
+        return result
+
+    with (
+        mock.patch.object(LIFECYCLE, "_acknowledged", side_effect=changed),
+        pytest.raises(ValueError),
+    ):
+        arm(session, prepared)
+
+    state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+    assert state["status"] == "cancelled"
+    assert LIFECYCLE.Path(state["cancel"]).exists()
+    assert session.spawn.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "session,host",
+    [("claude", Host.CLAUDE), ("codex", Host.CODEX)],
+    indirect=["session"],
+)
+def test_rejected_prompt_cancels_before_admission_without_completing(
+    session: Any, tmp_path: Path, host: Host
+) -> None:
+    prepared = prepare(session)
+    armed = arm(session, prepared)
+    root = Path(__file__).resolve().parents[1]
+    hooks = json.loads(
+        (root / f".{host.value}/hooks/agent.json").read_text(encoding="utf-8")
+    )["hooks"]["UserPromptSubmit"]
+    assert len(hooks) == 1
+    hook = hooks[0]["hooks"][0]
+    arguments = (
+        hook["args"][2:] if host == Host.CLAUDE else shlex.split(hook["command"])[3:]
+    )
+    scripts = []
+    handlers = [
+        ("close_lifecycle.py", "integration_lifecycle"),
+        ("managed_admission.py", "integration_admission"),
+        ("session_hook.py", "integration_store"),
+    ]
+    if host == Host.CODEX:
+        handlers.append(("capacity.py", "integration_capacity"))
+    for name, module in handlers:
+        script = tmp_path / name
+        script.write_text(
+            f"import {module} as handler\nraise SystemExit(handler.main())\n",
+            encoding="utf-8",
+        )
+        scripts.append(script)
+        arguments = [
+            str(script) if value.endswith("/" + name) else value for value in arguments
+        ]
+    assert [
+        Path(arguments[index + 1]).name
+        for index, value in enumerate(arguments)
+        if value == "--hook"
+    ] == [script.name for script in scripts]
+    spec = importlib.util.spec_from_file_location(
+        "integration_dispatch", root / ".agents/hooks/hook_dispatch.py"
+    )
+    assert spec is not None and spec.loader is not None
+    dispatcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dispatcher)
+    store = mock.Mock()
+    store.main.return_value = 0
+    capacity = mock.Mock()
+    capacity.main.return_value = 0
+    output = io.StringIO()
+    raw = io.TextIOWrapper(
+        io.BytesIO(
+            json.dumps(
+                {
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "one",
+                    "turn_id": "turn-two",
+                    "cwd": str(session.root),
+                }
+            ).encode()
+        ),
+        encoding="utf-8",
+    )
+
+    observed: list[str] = []
+
+    def reject(*args: Any) -> None:
+        state = LIFECYCLE._read(LIFECYCLE._state_path("one"))
+        observed.append(state["status"])
+        raise admission.AdmissionError("fixture admission rejected")
+
+    with (
+        mock.patch.dict(
+            sys.modules,
+            {
+                "integration_lifecycle": LIFECYCLE,
+                "integration_admission": admission,
+                "integration_store": store,
+                "integration_capacity": capacity,
+            },
+        ),
+        mock.patch.object(admission, "gate", side_effect=reject),
+        mock.patch.object(
+            admission, "package_root", return_value=root / "plugins/agent"
+        ),
+        mock.patch.object(LIFECYCLE, "prepare") as prepare_release,
+        mock.patch.object(LIFECYCLE, "_validate_frozen_receipt") as assess,
+        mock.patch.object(sys, "stdin", raw),
+        mock.patch.object(sys, "stdout", output),
+    ):
+        assert dispatcher.main(["hook_dispatch.py", *arguments]) == 0
+    result = json.loads(output.getvalue())
+    assert result["decision"] == "block"
+    assert "fixture admission rejected" in result["reason"]
+    assert observed == ["cancelled"]
+    assert Path(armed["cancel"]).exists()
+    assert not Path(armed["completion"]).exists()
+    prepare_release.assert_not_called()
+    assess.assert_not_called()
+    store.main.assert_called_once_with()
+    if host == Host.CODEX:
+        capacity.main.assert_called_once_with()
+    else:
+        capacity.main.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["crash", "overrun"])
+def test_prompt_dispatch_keeps_required_admission_failures_blocking(
+    failure: str,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "failed_admission_dispatch", root / ".agents/hooks/hook_dispatch.py"
+    )
+    assert spec is not None and spec.loader is not None
+    dispatcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dispatcher)
+    if failure == "crash":
+        output, diagnostic = dispatcher.merge(
+            "UserPromptSubmit", [("managed_admission.py", 1, "", "fixture crash")]
+        )
+        assert output["decision"] == "block"
+        assert "fixture crash" in diagnostic
+        optional, _ = dispatcher.merge(
+            "UserPromptSubmit", [("optional.py", 1, "", "fixture crash")]
+        )
+        assert optional == {}
+        return
+    raw = io.TextIOWrapper(
+        io.BytesIO(b'{"hook_event_name":"UserPromptSubmit"}'), encoding="utf-8"
+    )
+    stdout = io.StringIO()
+    with (
+        mock.patch.object(dispatcher.threading, "Thread"),
+        mock.patch.object(dispatcher.os, "_exit") as exit_process,
+        mock.patch.object(sys, "stdin", raw),
+        mock.patch.object(sys, "stdout", stdout),
+    ):
+        assert (
+            dispatcher.main(
+                [
+                    "hook_dispatch.py",
+                    "--deadline",
+                    "0",
+                    "--hook",
+                    "managed_admission.py",
+                ]
+            )
+            == 0
+        )
+    assert json.loads(stdout.getvalue())["decision"] == "block"
+    exit_process.assert_called_once_with(0)
