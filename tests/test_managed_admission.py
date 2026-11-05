@@ -528,11 +528,13 @@ def test_host_denial_shapes_and_timeout_are_fail_closed(case: AdmissionFixture) 
     denied = admission.denial("PreToolUse", "pending")
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "continue" not in denied
+    native_project = case.project / "nested native context"
+    native_project.mkdir()
     payload = json.dumps(
         {
             "hook_event_name": "PreToolUse",
             "session_id": "session",
-            "cwd": str(case.project),
+            "cwd": str(native_project),
         }
     )
     with (
@@ -543,12 +545,12 @@ def test_host_denial_shapes_and_timeout_are_fail_closed(case: AdmissionFixture) 
         contextlib.redirect_stdout(io.StringIO()) as output,
     ):
         assert admission.main() == 0
-        assert (
-            json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"]
-            == "deny"
+        result = json.loads(output.getvalue())["hookSpecificOutput"]
+        assert result["permissionDecision"] == "deny"
+        assert result["permissionDecisionReason"].endswith(
+            "Run from a terminal: "
+            + admission.maintenance_command(native_project, Host.CODEX)
         )
-        assert "reload_plugins.py" in output.getvalue()
-        assert "--verify" in output.getvalue()
 
 
 def test_setup_check_contract_reaches_the_shared_admission_checker(
