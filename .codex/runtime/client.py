@@ -378,6 +378,35 @@ def launch_binding(receipt_path, thread_id, cwd, profile):
     return freeze_binding(record)
 
 
+def recipient_binding(thread_id, cwd, profile):
+    expected_cwd = comparable_path(Path(cwd).resolve())
+    expected_profile = comparable_path(Path(profile).resolve())
+    state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
+    matches = []
+    for path in (state / 'cli-clients').glob('*/client.json'):
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        recipient = record.get('recipient')
+        if (record.get('schema_version') != 2 or record.get('host') != HOST.value
+                or (record.get('backend') or {}).get('kind') != 'handoff'
+                or not isinstance(recipient, dict)
+                or recipient.get('thread_id') != thread_id
+                or comparable_path(Path(recipient.get('cwd', '')).resolve()) != expected_cwd
+                or comparable_path(Path(record.get('profile', '')).resolve()) != expected_profile):
+            continue
+        matches.append((path, record))
+    if len(matches) != 1:
+        raise RuntimeError('Expected exactly one verified managed Codex binding for this recipient')
+    path, record = matches[0]
+    if path != binding_path(record.get('token')):
+        raise RuntimeError('Managed Codex binding is outside its launch token')
+    return freeze_binding(record)
+
+
 def freeze_binding(record):
     frozen = {key: record[key] for key in ('token', 'host', 'profile', 'launch_cwd', 'recording_path',
                                          'frontend', 'wrapper', 'supervisor', 'backend', 'recipient', 'executable')}

@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +22,18 @@ FOLLOWUP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FOLLOWUP)
 THREAD = '00000000-0000-4000-8000-000000000001'
 CLIENT = '00000000-0000-4000-8000-000000000002'
+
+
+def managed_binding(root):
+    return {
+        'token': 'a' * 64,
+        'profile': FOLLOWUP.path_key(root),
+        'recipient': {
+            'thread_id': THREAD,
+            'cwd': FOLLOWUP.path_key(root),
+            'frontend_message_id': 'frontend-input',
+        },
+    }
 
 
 class Session:
@@ -87,6 +99,13 @@ class FollowupTests(unittest.TestCase):
         admission = patch.object(FOLLOWUP, 'admit_route')
         admission.start()
         self.addCleanup(admission.stop)
+        self.binding = managed_binding(self.root)
+        self.client = MagicMock()
+        self.client.recipient_binding.return_value = self.binding
+        self.client.frozen_binding.return_value = self.binding
+        client_runtime = patch.object(FOLLOWUP, 'client_runtime', return_value=self.client)
+        client_runtime.start()
+        self.addCleanup(client_runtime.stop)
 
     def submit(self, proxy):
         return FOLLOWUP.send(proxy, self.receipt, self.receipt_path, 'exact message')
@@ -231,6 +250,13 @@ class FollowupTests(unittest.TestCase):
         with patch.object(FOLLOWUP, 'responsibility', side_effect=FOLLOWUP.FollowupError('unknown execution')), \
                 patch.object(FOLLOWUP, 'Proxy') as proxy, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(2, FOLLOWUP.main(arguments))
+        proxy.assert_not_called()
+        self.assertFalse(self.receipt_path.exists())
+
+    def test_missing_managed_binding_refuses_before_proxy_connection(self):
+        self.client.recipient_binding.side_effect = RuntimeError('no exact binding')
+        with patch.object(FOLLOWUP, 'Proxy') as proxy, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(2, FOLLOWUP.main(self.arguments()))
         proxy.assert_not_called()
         self.assertFalse(self.receipt_path.exists())
 
