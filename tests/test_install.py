@@ -62,7 +62,7 @@ class Machine(unittest.TestCase):
     def setUp(self):
         isolate_git_config()
         for name, value in (
-            ("missing", ()),
+            ("pending", ()),
             ("prepare", ()),
             ("prepare_git_environment", ()),
         ):
