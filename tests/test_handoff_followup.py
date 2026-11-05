@@ -63,7 +63,7 @@ def test_handoff_title_override_preserves_required_plugin_verification(
         project,
         required_plugins.Host.CODEX,
         "native-codex",
-        native_project=inventory.project,
+        native_project=inventory.project.resolve(),
     )
     assert run.call_args.args[0] == [
         "native-codex",
