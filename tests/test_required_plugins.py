@@ -127,7 +127,10 @@ class RequiredPluginInventoryTests(unittest.TestCase):
         ):
             self.assertEqual(roots, REQUIRED.check(nested, Host.CODEX, "native-codex"))
         verify.assert_called_once_with(
-            self.project, Host.CODEX, "native-codex", native_project=nested
+            self.project.resolve(),
+            Host.CODEX,
+            "native-codex",
+            native_project=nested.resolve(),
         )
 
 
