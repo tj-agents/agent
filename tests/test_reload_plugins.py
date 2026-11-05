@@ -88,7 +88,7 @@ class RefreshRunTests(unittest.TestCase):
     def test_native_failure_includes_the_command_identity(self):
         command = ["claude", "plugin", "install", "template@tj-agents"]
         failed = subprocess.CompletedProcess(command, 1, stdout="", stderr="native install failed")
-        with mock.patch.object(plugin_refresh.subprocess, "run", return_value=failed), \
+        with mock.patch.object(plugin_refresh.process, "run", return_value=failed), \
                 mock.patch("sys.stderr"), \
                 self.assertRaisesRegex(REFRESH.RefreshError,
                                        "plugin install template@tj-agents: native install failed"):

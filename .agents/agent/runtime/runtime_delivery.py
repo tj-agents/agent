@@ -92,9 +92,11 @@ def closure(root: Path, exports: list[str]) -> dict[str, bytes]:
         target = _safe(root, export, allow_missing=False)
         paths = target.rglob("*") if target.is_dir() else (target,)
         for path in sorted(paths):
+            if "__pycache__" in path.parts or path.suffix == ".pyc":
+                continue
             if is_reparse(path):
                 raise DeliveryError(f"runtime source contains a link: {path}")
-            if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+            if not path.is_file():
                 continue
             name = path.relative_to(root).as_posix()
             alias = _key(name)
