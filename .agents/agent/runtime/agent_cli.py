@@ -3,6 +3,8 @@
 Terminal launch, environment application, lane lookup and startup receipt mechanics shared by both hosts.
 """
 
+from __future__ import annotations
+
 import importlib.util
 import json
 import os
@@ -14,20 +16,37 @@ import subprocess
 import sys
 import tempfile
 import time
-from types import ModuleType
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from host import Host
+from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout
 from package_root import find_package_root
 
-_HOST_LAUNCHES: dict[Host, ModuleType] = {}
+if TYPE_CHECKING:
+    from claude.launch import Adapter as ClaudeLaunch
+    from codex.launch import Adapter as CodexLaunch
+
+_HOST_LAUNCHES: dict[Host, Launch] = {}
 IS_WINDOWS = os.name == 'nt'
 
 
-def host_launch(host: Host | str) -> ModuleType:
+@overload
+def host_launch(host: Literal['codex', Host.CODEX]) -> CodexLaunch: ...
+
+
+@overload
+def host_launch(host: Literal['claude', Host.CLAUDE]) -> ClaudeLaunch: ...
+
+
+@overload
+def host_launch(host: Host | str) -> Launch: ...
+
+
+def host_launch(host: Host | str) -> Launch:
     kind = Host(host)
     if kind not in _HOST_LAUNCHES:
         root = find_package_root(HERE)
@@ -38,7 +57,7 @@ def host_launch(host: Host | str) -> ModuleType:
         spec = importlib.util.spec_from_file_location(f'agent_{kind.value}_launch', path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        _HOST_LAUNCHES[kind] = module
+        _HOST_LAUNCHES[kind] = cast(Launch, module)
     return _HOST_LAUNCHES[kind]
 
 
