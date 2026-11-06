@@ -23,9 +23,9 @@ class Adapter(Launch, Protocol):
 
 
 IS_WINDOWS = os.name == "nt"
-KEEP_TAB_TITLE = ("--config", "tui.terminal_title=[]")
-SESSION_ENVIRONMENT = ()
-RELAUNCH_ENVIRONMENT = (
+KEEP_TAB_TITLE: tuple[str, ...] = ("--config", "tui.terminal_title=[]")
+SESSION_ENVIRONMENT: tuple[str, ...] = ()
+RELAUNCH_ENVIRONMENT: tuple[str, ...] = (
     "CODEX_THREAD_ID",
     "CODEX_SESSION_ID",
     "CODEX_TUI_RECORD_SESSION",
