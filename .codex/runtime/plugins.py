@@ -43,7 +43,7 @@ NODE_SHIM_BYPASSED = True
 
 
 def resolve_executable() -> str:
-    return agent_cli.resolve_codex_executable()[0]
+    return agent_cli.host_launch('codex').resolve_executable()[0]
 
 
 def selection(executable: str, project: Path) -> tuple[dict[str, str | None], list[str]]:

@@ -27,7 +27,7 @@ RELAUNCH_SINGLE = {"--config", "-c", "--model", "-m", "--profile", "-p", "--sand
 RELAUNCH_FLAGS = {"--no-daemon", "--no-alt-screen", "--search", "--oss", "--strict-config",
                   "--approve-for-me", "--dangerously-bypass-approvals-and-sandbox"}
 LAUNCHER_CONFIG = {*(f'shell_environment_policy.set.{name}=""' for name in (client.RECORD_ENV, client.RECORD_PATH_ENV)),
-                   agent_cli.CODEX_KEEP_TAB_TITLE[1]}
+                   agent_cli.host_launch('codex').KEEP_TAB_TITLE[1]}
 
 
 def history_roots(root: Path) -> tuple[Path, ...]:
@@ -145,11 +145,11 @@ def verify_resume(executable: str) -> None:
 
 def open_tab(cli, item: dict, directory, label: str, instruction: str, status_path: Path, *, model=None,
              native_arguments=(), dangerously_skip_permissions=False, owned_backend=False) -> None:
-    executable, _ = cli.resolve_codex_executable()
+    executable, _ = cli.host_launch('codex').resolve_executable()
     verify_resume(executable)
     old_profile = os.environ.get(HOST.home_variable)
     os.environ[HOST.home_variable] = item["profile"]
-    arguments = [*cli.CODEX_KEEP_TAB_TITLE, *native_arguments, "resume", item["id"]]
+    arguments = [*cli.host_launch('codex').KEEP_TAB_TITLE, *native_arguments, "resume", item["id"]]
     if model:
         arguments += ["-m", model]
     arguments.append(instruction)

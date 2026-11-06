@@ -235,7 +235,7 @@ class ClaudeWorktreeInstallations(unittest.TestCase):
                 mock.patch.object(CLAUDE, 'tj_agents_marketplaces', return_value={}), \
                 mock.patch.object(CLAUDE, 'catalog_publishers', return_value={}), \
                 mock.patch.object(CLAUDE, 'synchronize', return_value=['base@tj-agents']) as synchronize, \
-                mock.patch.object(CLAUDE.agent_cli, 'resolve_claude_executable', return_value='claude'), \
+                mock.patch.object(CLAUDE.agent_cli.host_launch('claude'), 'resolve_executable', return_value='claude'), \
                 mock.patch.object(CLAUDE, 'refresh_marketplaces'), \
                 mock.patch.object(CLAUDE, 'apply') as apply:
             self.assertEqual(['base@tj-agents'], CLAUDE.reconcile(self.primary))
