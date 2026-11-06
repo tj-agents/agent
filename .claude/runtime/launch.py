@@ -4,9 +4,35 @@ import os
 from pathlib import Path
 import shutil
 import sys
+from collections.abc import Callable, Mapping, Sequence
+from types import ModuleType
+from typing import Protocol
+
+from launch_contract import Launch
 
 from launch_errors import LaunchError
 from native_executable import is_script
+
+
+class Adapter(Launch, Protocol):
+    def resolve_executable(
+        self,
+        home: str | Path | None = None,
+        which: Callable[[str], str | None] = shutil.which,
+    ) -> str: ...
+
+    def open_tab(
+        self,
+        cli: ModuleType,
+        working_directory: str | Path,
+        title: str,
+        arguments: Sequence[str],
+        status_file: Path | None = None,
+        require_session_start: bool = False,
+        clear: Sequence[str] = (),
+        force: Mapping[str, str] | None = None,
+    ) -> None: ...
+
 
 IS_WINDOWS = os.name == "nt"
 KEEP_TAB_TITLE = {"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}

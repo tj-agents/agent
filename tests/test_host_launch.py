@@ -9,9 +9,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_cli(runtime: Path) -> ModuleType:
-    for name in ("agent_cli.py", "package_root.py", "host.py", "launch_errors.py"):
+    for name in (
+        "agent_cli.py",
+        "package_root.py",
+        "host.py",
+        "launch_errors.py",
+        "launch_contract.py",
+    ):
         shutil.copy2(ROOT / ".agents/agent/runtime" / name, runtime / name)
-    spec = importlib.util.spec_from_file_location("isolated_launch_cli", runtime / "agent_cli.py")
+    spec = importlib.util.spec_from_file_location(
+        "isolated_launch_cli", runtime / "agent_cli.py"
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -44,7 +52,11 @@ def test_host_launch_uses_only_its_declared_layout(
     marker.write_text("", encoding="utf-8")
     runtime = root / ".agents/agent/runtime"
     runtime.mkdir(parents=True)
-    adapter = root / f".{host}/runtime/launch.py" if authored else runtime / host / "launch.py"
+    adapter = (
+        root / f".{host}/runtime/launch.py"
+        if authored
+        else runtime / host / "launch.py"
+    )
     adapter.parent.mkdir(parents=True)
     adapter.write_text("SESSION_ENVIRONMENT = ('owned',)\n", encoding="utf-8")
     cli = load_cli(runtime)
