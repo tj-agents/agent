@@ -42,7 +42,7 @@ class LaunchCodexTests(unittest.TestCase):
 
         # For the call-order assertion: attached to the same mocks the fixtures installed.
         self.call_order = mock.Mock()
-        self.call_order.attach_mock(self.agent_cli.resolve_codex_executable, 'resolve_codex_executable')
+        self.call_order.attach_mock(self.agent_cli.host_launch('codex').resolve_executable, 'resolve_codex_executable')
         self.call_order.attach_mock(self.agent_cli.launch_tab, 'launch_tab')
 
     def run_main(self, *args):
@@ -255,7 +255,7 @@ class LaunchCodexTests(unittest.TestCase):
 
     def test_minimum_version_is_threaded_to_executable_resolution(self):
         self.run_main('--minimum-version', '0.160.0')
-        self.agent_cli.resolve_codex_executable.assert_called_once_with(minimum='0.160.0')
+        self.agent_cli.host_launch('codex').resolve_executable.assert_called_once_with(minimum='0.160.0')
 
     def test_stdio_is_hardened_against_encoding_errors(self):
         with mock.patch.object(self.agent_cli, 'make_stdio_encoding_lossy') as hardened:
@@ -300,7 +300,7 @@ class LaunchCodexTests(unittest.TestCase):
         self.assertNotIn('Launched', out)
 
     def test_a_launch_error_from_resolving_codex_is_reported_and_exits_nonzero(self):
-        self.agent_cli.resolve_codex_executable.side_effect = self.agent_cli.LaunchError('no native codex found')
+        self.agent_cli.host_launch('codex').resolve_executable.side_effect = self.agent_cli.LaunchError('no native codex found')
         code, out, err = self.run_main()
         self.assertEqual(code, 1)
         self.assertIn('no native codex found', err)

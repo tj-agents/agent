@@ -42,7 +42,7 @@ NODE_SHIM_BYPASSED = False
 
 
 def resolve_executable() -> str:
-    return agent_cli.resolve_claude_executable()
+    return agent_cli.host_launch('claude').resolve_executable()
 
 
 def known_marketplaces() -> dict:

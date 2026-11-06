@@ -1,10 +1,10 @@
 """Shared launch primitives for the native agent CLIs, on Windows and POSIX.
 
-Imported by Agent's private handoff launchers and session recovery so the environment scrub, executable
-discovery, lane lookup and terminal argument escaping have one owner. Not runnable on its own.
+Terminal launch, environment application, lane lookup and startup receipt mechanics shared by both hosts.
 """
 
-import glob
+from __future__ import annotations
+
 import importlib.util
 import json
 import os
@@ -16,39 +16,56 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from host import Host
+from launch_contract import Launch
+from launch_errors import LaunchError, LaunchTimeout
+from package_root import find_package_root
+
+if TYPE_CHECKING:
+    from claude import launch as claude_launch
+    from codex import launch as codex_launch
+    from claude.launch import Adapter as ClaudeLaunch
+    from codex.launch import Adapter as CodexLaunch
+
+    _claude_implementation: ClaudeLaunch = claude_launch
+    _codex_implementation: CodexLaunch = codex_launch
+
+_HOST_LAUNCHES: dict[Host, Launch] = {}
 IS_WINDOWS = os.name == 'nt'
 
-# Session state a Claude Code parent exports into anything it spawns. NO_COLOR=1 alone makes the child
-# black and white; the CLAUDE_CODE_* set binds it to the parent's messaging pipe and makes it behave as a
-# managed nested child rather than the independent session the caller asked for. CLAUDE_CODE_GIT_BASH_PATH
-# is machine configuration rather than session state and is deliberately absent from this list.
-SESSION_ENVIRONMENT = (
-    'NO_COLOR',
-    'CLAUDECODE',
-    'CLAUDE_CODE_CHILD_SESSION',
-    'CLAUDE_CODE_ENTRYPOINT',
-    'CLAUDE_CODE_SESSION_ID',
-    'CLAUDE_CODE_MESSAGING_SOCKET',
-    'CLAUDE_CODE_MESSAGING_TOKEN',
-    'CLAUDE_PID',
-    'WORKBOARD_LAUNCH_TOKEN',
-    'WORKBOARD_WORKFLOW_TOKEN',
-)
 
-# The launch title is the session's one name: peer lookup and recovery resolve the stored copy, so a host
-# retitling its tab would leave that name pointing at nothing on screen.
-CODEX_KEEP_TAB_TITLE = ('--config', 'tui.terminal_title=[]')
-CLAUDE_KEEP_TAB_TITLE = {'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1'}
+@overload
+def host_launch(host: Literal['codex']) -> CodexLaunch: ...
 
 
-class LaunchError(Exception):
-    """A launch precondition failed; the message is the whole report."""
+@overload
+def host_launch(host: Literal['claude']) -> ClaudeLaunch: ...
 
 
-class LaunchTimeout(LaunchError):
-    """A terminal control command did not answer in time, so whether it took effect is unknown."""
+@overload
+def host_launch(host: Host | str) -> Launch: ...
+
+
+def host_launch(host: Host | str) -> Launch:
+    kind = Host(host)
+    if kind not in _HOST_LAUNCHES:
+        root = find_package_root(HERE)
+        native = root / f'.{kind.value}' / 'runtime' / 'launch.py'
+        path = native if (root / '.git').exists() else HERE / kind.value / 'launch.py'
+        if not path.is_file():
+            raise LaunchError(f'The packaged {kind.value} launch adapter was not found under {root}.')
+        spec = importlib.util.spec_from_file_location(f'agent_{kind.value}_launch', path)
+        if spec is None or spec.loader is None:
+            raise LaunchError(f'The {kind.value} launch adapter cannot be loaded from {path}.')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _HOST_LAUNCHES[kind] = cast(Launch, module)
+    return _HOST_LAUNCHES[kind]
 
 
 def make_stdio_encoding_lossy():
@@ -70,180 +87,10 @@ def launch_environment(clear=(), force=None):
     Returned rather than applied, because on POSIX they travel inside the launched command line: a tab
     handler starts the command from an already-running terminal process that never sees ours.
     """
-    cleared = list(dict.fromkeys((*SESSION_ENVIRONMENT, *clear)))
+    session_state = (name for host in Host for name in host_launch(host).SESSION_ENVIRONMENT)
+    cleared = list(dict.fromkeys((*session_state, 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
     forced = dict(force or {})
     return [name for name in cleared if name not in forced], forced
-
-
-def _is_script(path):
-    try:
-        with open(path, 'rb') as f:
-            return f.read(2) == b'#!'
-    except OSError:
-        return True
-
-
-# The native executable, never the npm shim: a shim launches the TUI through an extra node process and
-# degrades it to monochrome and non-interactive, the failure handoff-codex first recorded. On Windows
-# `claude` on PATH resolves to that shim (claude.ps1/claude.cmd), so PATH is consulted only for a real
-# claude.exe; on POSIX the shim is a `#!` script, and npm with its prefix at ~/.local puts one at the native
-# install's own path, so any candidate that is one is refused.
-def resolve_claude_executable(home=None, which=shutil.which):
-    home = Path(home) if home else Path.home()
-    name = 'claude.exe' if IS_WINDOWS else 'claude'
-    local = home / '.local' / 'bin' / name
-    found = which(name)
-    for candidate in (str(local), found):
-        if candidate and os.path.isfile(candidate) and (IS_WINDOWS or not _is_script(os.path.realpath(candidate))):
-            return candidate
-
-    raise LaunchError(f'The native Claude Code executable was not found. Looked for {local} and a native {name} on PATH.')
-
-
-_CODEX_VERSION = re.compile(r'(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?')
-
-
-def parse_codex_version(text):
-    match = _CODEX_VERSION.search(text or '')
-    if not match:
-        return None
-    return {
-        'core': tuple(int(match.group(i)) for i in (1, 2, 3)),
-        'prerelease': match.group(4) or '',
-        'text': match.group(0),
-    }
-
-
-def compare_codex_version(left, right):
-    if left['core'] != right['core']:
-        return -1 if left['core'] < right['core'] else 1
-    # A prerelease ranks BELOW the release it precedes, so 0.151.0-alpha.7.1 loses to 0.151.0. Ranking by
-    # file date instead is what silently selected a three-versions-stale alpha over the current CLI.
-    if bool(left['prerelease']) != bool(right['prerelease']):
-        return -1 if left['prerelease'] else 1
-    if not left['prerelease']:
-        return 0
-
-    left_parts, right_parts = left['prerelease'].split('.'), right['prerelease'].split('.')
-    for i in range(max(len(left_parts), len(right_parts))):
-        if i >= len(left_parts):
-            return -1
-        if i >= len(right_parts):
-            return 1
-        a, b = left_parts[i], right_parts[i]
-        if a.isdigit() and b.isdigit():
-            a, b = int(a), int(b)
-        if a != b:
-            return -1 if a < b else 1
-    return 0
-
-
-def npm_global_prefix():
-    """The npm global install prefix, or None when npm is unavailable or reports nothing."""
-    try:
-        result = subprocess.run(['npm', 'config', 'get', 'prefix'], capture_output=True, text=True,
-                                 encoding='utf-8', errors='replace', timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    prefix = result.stdout.strip()
-    return prefix or None
-
-
-def codex_candidate_paths(which=shutil.which, local_app_data=None, npm_prefix=npm_global_prefix):
-    name = 'codex.exe' if IS_WINDOWS else 'codex'
-    candidates = []
-
-    # The npm package is a JavaScript entry point over a vendored native binary per platform, and the entry
-    # point is what lands on PATH. Launching that shim is the path that degrades the TUI to monochrome and
-    # non-interactive, so the vendored executable underneath it is launched instead - identical bits,
-    # without the node process in front. Windows npm puts the shim beside node_modules; POSIX npm symlinks
-    # bin/codex to the package's own bin/codex.js, two levels below the package root.
-    shim = which('codex')
-
-    # A session launched from a desktop entry (not a login shell) often has PATH built from the display
-    # manager rather than the shell rc files that add a user npm prefix's bin directory, so `which` finds
-    # nothing even though the global install is on disk. `npm config get prefix` resolves it directly,
-    # the same way the native install under home is checked for Claude, below any PATH lookup.
-    if not shim and not IS_WINDOWS:
-        prefix = npm_prefix()
-        if prefix:
-            direct = Path(prefix) / 'bin' / name
-            if direct.is_file():
-                shim = str(direct)
-
-    # `codex` on PATH is not always that shim: a standalone install, or a PATH that puts the vendored
-    # binary ahead of the npm one, lands the native executable on PATH directly. On POSIX that is whatever
-    # is not a `#!` script; on Windows the npm entry point is a `.cmd`/`.ps1`, never a `.exe`, so any `.exe`
-    # found here is native. Its realpath is included too, in case the PATH entry is itself a symlink.
-    if shim and ((IS_WINDOWS and Path(shim).suffix.casefold() == '.exe')
-                 or (not IS_WINDOWS and not _is_script(os.path.realpath(shim)))):
-        candidates.append(shim)
-        candidates.append(os.path.realpath(shim))
-
-    if shim:
-        roots = [
-            Path(shim).parent / 'node_modules' / '@openai' / 'codex',
-            Path(os.path.realpath(shim)).parent.parent,
-        ]
-        for root in dict.fromkeys(roots):
-            pattern = str(root / 'node_modules' / '@openai' / 'codex-*' / 'vendor' / '*' / 'bin' / name)
-            candidates.extend(sorted(glob.glob(pattern)))
-
-    # The Windows desktop app caches each downloaded runtime in its own hash-named directory and adds rather
-    # than replaces, so this folder accumulates stale payloads instead of holding only the current build.
-    # There is no desktop app cache anywhere else.
-    if IS_WINDOWS:
-        local_app_data = local_app_data or os.environ.get('LOCALAPPDATA')
-        if local_app_data:
-            desktop = Path(local_app_data) / 'OpenAI' / 'Codex' / 'bin'
-            candidates.extend(sorted(str(p) for p in desktop.rglob('codex.exe') if p.is_file()))
-
-    return list(dict.fromkeys(candidates))
-
-
-def resolve_codex_executable(minimum='0.154.0', candidates=None):
-    """The newest native Codex executable that answers --version, as (path, version)."""
-    paths = codex_candidate_paths() if candidates is None else candidates
-    found = []
-    for path in paths:
-        try:
-            result = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            continue
-        version = parse_codex_version(result.stdout + result.stderr)
-        if version:
-            found.append((path, version))
-
-    if not found:
-        raise LaunchError(
-            'No native Codex executable answered --version. Looked beside the `codex` shim on PATH for the npm '
-            "package's vendored binary" + (', and under the desktop app cache.' if IS_WINDOWS else '.')
-        )
-
-    best = found[0]
-    for candidate in found[1:]:
-        if compare_codex_version(candidate[1], best[1]) > 0:
-            best = candidate
-
-    floor = parse_codex_version(minimum)
-    if floor is None:
-        raise LaunchError(f'The minimum Codex version is not a version: {minimum}')
-    if compare_codex_version(best[1], floor) < 0:
-        inventory = '\n'.join(f'  {version["text"]}\t{path}' for path, version in found)
-        raise LaunchError(
-            f'The newest native Codex executable found is {best[1]["text"]}, below the required {minimum}.\n'
-            'The model roster is gated on the CLI version, so launching this build would silently drop newer models.\n'
-            'Update with: npm install -g @openai/codex@latest\n'
-            f'Found:\n{inventory}'
-        )
-    return best
-
-
-def claude_config_dir():
-    configured = os.environ.get('CLAUDE_CONFIG_DIR')
-    return Path(configured) if configured else Path.home() / '.claude'
 
 
 def prompt_file_argument(path):
@@ -261,7 +108,7 @@ def prompt_file_argument(path):
 def resolve_tab_directory(path):
     """The absolute-but-not-resolved working directory for a tab, validated to exist.
 
-    Not .resolve(): on Windows that rewrites a mapped or subst drive to its target, and Claude Code keys a
+    Not .resolve(): on Windows that rewrites a mapped or subst drive to its target, and native history keys a
     session's history by the directory string it was started in. Called by both Python launchers first,
     before any filesystem or lane-table work, so a bad directory is reported before anything else they
     check; launch_tab calls it again for callers that reach it directly. The error always names the
@@ -686,18 +533,3 @@ def bound_terminal_arguments(host, working_directory, target, arguments, status_
     return ["-I", "-B", str(startup_binding_script()), "--host", host, "--project",
             str(working_directory), "--target", str(target), *status,
             *(["--require-session-start"] if require_session_start else []), "--", *arguments]
-
-
-def open_claude_tab(working_directory, title, arguments, out=print, status_file=None, require_session_start=False,
-                    clear=(), force=None):
-    claude = resolve_claude_executable()
-
-    # Forced, not merely un-cleared: an automation-spawned terminal tab is not the interactive shell a
-    # human would have launched it from, so colour/terminal-capability auto-detection cannot be trusted to
-    # land on a good value on its own. FORCE_COLOR is the de-facto Node CLI convention (chalk/supports-color)
-    # to force colour outright. TERM=xterm-256color is forced the same way, but only ever reaches the
-    # session on Windows: launch_tab drops any forced TERM on POSIX, because the terminal that actually
-    # starts the tab sets TERM for that session itself, and forcing or clearing it here would fight that.
-    launch_tab(working_directory, sys.executable, title,
-               arguments=bound_terminal_arguments("claude", working_directory, claude, list(arguments), status_file, require_session_start),
-               clear=clear, force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', **CLAUDE_KEEP_TAB_TITLE, **(force or {})})

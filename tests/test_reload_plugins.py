@@ -233,7 +233,7 @@ class RefreshCliTests(unittest.TestCase):
 
     def test_live_hook_reload_failure_fails_verified_refresh(self):
         self.readiness.side_effect = RuntimeError("Live hooks still modified")
-        with mock.patch.object(agent_cli, "resolve_codex_executable", return_value=("codex", "version")), \
+        with mock.patch.object(agent_cli.host_launch('codex'), "resolve_executable", return_value=("codex", "version")), \
                 mock.patch.object(REFRESH, "selection", return_value=({}, [])), \
                 mock.patch.object(REFRESH, "refresh", return_value=[]), \
                 mock.patch.object(REFRESH, "verify", return_value={"problems": []}), \
@@ -242,7 +242,7 @@ class RefreshCliTests(unittest.TestCase):
         self.readiness.assert_called_once_with(Path.cwd().resolve(), "codex", running_session=True)
 
     def test_default_uses_native_commands_without_verification_or_bound_launch(self):
-        with mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"), \
+        with mock.patch.object(agent_cli.host_launch('claude'), "resolve_executable", return_value="claude"), \
                 mock.patch.object(REFRESH, "selection", return_value=({"tj-agents": "tj-agents/marketplace"}, ["workflow@tj-agents"])), \
                 mock.patch.object(REFRESH, "verify") as verify, \
                 mock.patch.object(plugin_refresh, "read_json", return_value={"tj-agents": {}}), \
@@ -265,7 +265,7 @@ class RefreshCliTests(unittest.TestCase):
                 self.assertEqual(code, REFRESH.main([]))
                 refresh.assert_not_called()
         with mock.patch.object(REFRESH.launch_check, "check", return_value="unconfigured"), \
-                mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"), \
+                mock.patch.object(agent_cli.host_launch('claude'), "resolve_executable", return_value="claude"), \
                 mock.patch.object(REFRESH, "selection", return_value=({}, [])), \
                 mock.patch.object(REFRESH, "refresh") as refresh, mock.patch("sys.stdout"), mock.patch("sys.stderr"):
             self.assertEqual(0, REFRESH.main(["--host", "claude"]))
@@ -400,7 +400,7 @@ class RefreshCliTests(unittest.TestCase):
         self.assertEqual(f"infonetica@tj-agents (user): {dependency}", str(raised.exception))
 
     def test_main_reports_refresh_problems_on_stderr_and_fails(self):
-        with mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"), \
+        with mock.patch.object(agent_cli.host_launch('claude'), "resolve_executable", return_value="claude"), \
                 mock.patch.object(REFRESH, "selection", return_value=({}, ["workflow@tj-agents"])), \
                 mock.patch.object(REFRESH, "refresh", side_effect=REFRESH.RefreshError("workflow@tj-agents (user): broken")), \
                 mock.patch("sys.stdout"), mock.patch("sys.stderr") as stderr:
@@ -566,7 +566,7 @@ class RefreshCliTests(unittest.TestCase):
         self.assertEqual(["Missing enabled native installation: base@tj-agents"], report["problems"])
 
     def test_verify_only_does_not_modify_installations(self):
-        with mock.patch.object(agent_cli, "resolve_codex_executable", return_value=("codex", "version")), \
+        with mock.patch.object(agent_cli.host_launch('codex'), "resolve_executable", return_value=("codex", "version")), \
                 mock.patch.object(REFRESH, "selection", return_value=({}, [])), \
                 mock.patch.object(REFRESH, "refresh") as refresh, \
                 mock.patch.object(REFRESH, "verify", return_value={"problems": []}) as verify, \
@@ -576,8 +576,8 @@ class RefreshCliTests(unittest.TestCase):
         verify.assert_called_once()
 
     def test_native_failure_is_reported_and_other_host_is_still_attempted(self):
-        with mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"), \
-                mock.patch.object(agent_cli, "resolve_codex_executable", return_value=("codex", "version")), \
+        with mock.patch.object(agent_cli.host_launch('claude'), "resolve_executable", return_value="claude"), \
+                mock.patch.object(agent_cli.host_launch('codex'), "resolve_executable", return_value=("codex", "version")), \
                 mock.patch.object(REFRESH, "selection", side_effect=[REFRESH.RefreshError("failed"), ({}, [])]), \
                 mock.patch.object(REFRESH, "refresh") as refresh, mock.patch("sys.stdout"), mock.patch("sys.stderr"):
             self.assertEqual(1, REFRESH.main([]))
@@ -667,7 +667,7 @@ class HeadReconcileTests(unittest.TestCase):
 
     def setUp(self):
         self.home = ClaudeHome(self)
-        patcher = mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude")
+        patcher = mock.patch.object(agent_cli.host_launch('claude'), "resolve_executable", return_value="claude")
         patcher.start()
         self.addCleanup(patcher.stop)
 

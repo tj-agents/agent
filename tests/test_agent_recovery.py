@@ -225,7 +225,7 @@ class RecoveryTests(unittest.TestCase):
                 mock.patch.object(RECOVERY, "_wrapper_identity", return_value=wrapper), \
                 mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
                 mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
-                mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
+                mock.patch.object(cli.host_launch('codex'), "resolve_executable", return_value=("native-codex", {})), \
                 mock.patch.object(cli, "launch_tab"):
             RECOVERY.open_session(Host.CODEX, "exact_id", roots=roots, cli=cli)
         receipt = RECOVERY._receipt(Host.CODEX, "exact_id", RECOVERY._profile(roots[Host.CODEX]))
@@ -250,7 +250,7 @@ class RecoveryTests(unittest.TestCase):
         self.write_codex()
         cli = mock.Mock()
         cli.resolve_tab_directory.side_effect = lambda value: Path(value)
-        cli.resolve_codex_executable.return_value = ("native-codex", {})
+        cli.host_launch('codex').resolve_executable.return_value = ("native-codex", {})
         real_load = RECOVERY._load
         with mock.patch.object(RECOVERY, "_load", side_effect=lambda name: cli if name == "agent_cli" else real_load(name)), \
              mock.patch.object(CODEX_SESSIONS, "verify_resume"):
@@ -278,7 +278,7 @@ class RecoveryTests(unittest.TestCase):
         prompt.write_text(content, encoding="utf-8")
         original = prompt.read_bytes()
         cli = RECOVERY._load("agent_cli")
-        with mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
+        with mock.patch.object(cli.host_launch('codex'), "resolve_executable", return_value=("native-codex", {})), \
              mock.patch.object(cli, "launch_tab") as launch, \
              mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
              contextlib.redirect_stdout(io.StringIO()):
@@ -315,7 +315,7 @@ Observed blocker: no send was attempted."""
         prompt.write_text(content, encoding="utf-8")
         original = prompt.read_bytes()
         cli = RECOVERY._load("agent_cli")
-        with mock.patch.object(cli, "open_claude_tab") as launch:
+        with mock.patch.object(cli.host_launch('claude'), "open_tab") as launch:
             RECOVERY.open_session(
                 Host.CLAUDE,
                 "claude_id",
@@ -325,7 +325,7 @@ Observed blocker: no send was attempted."""
                 prompt_path=prompt,
                 cli=cli,
             )
-        arguments = launch.call_args.args[2]
+        arguments = launch.call_args.args[3]
         self.assertEqual("--resume", arguments[0])
         self.assertEqual("claude_id", arguments[1])
         self.assertEqual(
@@ -345,7 +345,7 @@ Observed blocker: no send was attempted."""
         with mock.patch.dict("os.environ", {"CLAUDE_CONFIG_DIR": "wrong profile"}, clear=False), \
              mock.patch.object(RECOVERY, "_load", side_effect=lambda name: cli if name == "agent_cli" else real_load(name)):
             RECOVERY.open_session(Host.CLAUDE, "claude_id", roots={Host.CLAUDE: projects}, confirm_closed=True)
-        environment = cli.open_claude_tab.call_args.kwargs
+        environment = cli.host_launch('claude').open_tab.call_args.kwargs
         self.assertEqual(environment["force"], {"CLAUDE_CONFIG_DIR": RECOVERY._profile(projects)})
         self.assertNotIn("clear", environment)
 
@@ -357,7 +357,7 @@ Observed blocker: no send was attempted."""
         RECOVERY.open_session(Host.CLAUDE, "claude_id", prompt="Continue.", roots={Host.CLAUDE: projects}, confirm_closed=True,
                               cli=cli, native_arguments=["--add-dir", "C:/extra", "--settings", "s.json"])
         self.assertEqual(["--add-dir", "C:/extra", "--settings", "s.json", "--resume", "claude_id", "Continue."],
-                         cli.open_claude_tab.call_args.args[2])
+                         cli.host_launch('claude').open_tab.call_args.args[3])
 
     def test_default_claude_profile_resumes_without_config_dir(self):
         home = self.root / "home"
@@ -370,7 +370,7 @@ Observed blocker: no send was attempted."""
              mock.patch.object(RECOVERY.Path, "home", return_value=home), \
              mock.patch.object(RECOVERY, "_load", side_effect=lambda name: cli if name == "agent_cli" else real_load(name)):
             RECOVERY.open_session(Host.CLAUDE, "claude_id", roots={Host.CLAUDE: projects}, confirm_closed=True)
-        environment = cli.open_claude_tab.call_args.kwargs
+        environment = cli.host_launch('claude').open_tab.call_args.kwargs
         self.assertEqual(environment["clear"], ("CLAUDE_CONFIG_DIR",))
         self.assertNotIn("force", environment)
 
@@ -552,7 +552,7 @@ Observed blocker: no send was attempted."""
                     mock.patch.object(RECOVERY, "await_pickup", side_effect=outcome), \
                     mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
                     mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
-                    mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
+                    mock.patch.object(cli.host_launch('codex'), "resolve_executable", return_value=("native-codex", {})), \
                     mock.patch.object(cli, "launch_tab"):
                 with self.assertRaises(type(outcome)):
                     RECOVERY.open_session(Host.CODEX, "exact_id", roots=roots, cli=cli)
@@ -665,7 +665,7 @@ Observed blocker: no send was attempted."""
         with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
              mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
              mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
-             mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
+             mock.patch.object(cli.host_launch('codex'), "resolve_executable", return_value=("native-codex", {})), \
              mock.patch.object(cli, "launch_tab") as launch:
             RECOVERY.reopen("exact_id", hosts=(Host.CODEX,), roots={Host.CODEX: self.root / "sessions"},
                             focus=mock.Mock(), cli=cli)
@@ -678,7 +678,7 @@ Observed blocker: no send was attempted."""
         with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
              mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
              mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
-             mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
+             mock.patch.object(cli.host_launch('codex'), "resolve_executable", return_value=("native-codex", {})), \
              mock.patch.object(cli, "launch_tab") as launch:
             result = RECOVERY.reopen("exact_id", hosts=(Host.CODEX,), roots={Host.CODEX: self.root / "sessions"},
                                      focus=focus, cli=cli)
