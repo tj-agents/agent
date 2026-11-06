@@ -124,10 +124,10 @@ def main(argv=None):
         working_directory = agent_cli.resolve_tab_directory(args.working_directory)
         prompt_sentence, prompt_path = agent_cli.prompt_file_argument(args.prompt_path)
 
-        codex, _version = agent_cli.resolve_codex_executable(minimum=args.minimum_version)
+        codex, _version = agent_cli.host_launch('codex').resolve_executable(minimum=args.minimum_version)
         model, effort, tier = resolve_model(args, agent_cli)
         arguments = build_arguments(working_directory, model, effort, args.bypass_hook_trust, prompt_sentence,
-                                    agent_cli.CODEX_KEEP_TAB_TITLE)
+                                    agent_cli.host_launch('codex').KEEP_TAB_TITLE)
 
         # TERM is CLEARED here, never forced -- the opposite of handoff-claude, and not an oversight.
         # Claude Code exports TERM=xterm-256color; Codex is a Rust/crossterm binary, and on native Windows

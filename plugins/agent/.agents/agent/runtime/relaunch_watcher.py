@@ -13,13 +13,13 @@ import subprocess
 import sys
 import time
 
+import agent_cli
+from host import Host
 import session_close
 
 POLL_SECONDS = 0.5
 LAUNCH_TIMEOUT_SECONDS = 600
-SESSION_ENVIRONMENT = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_CODE_ENTRYPOINT",
-                       "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_TUI_RECORD_SESSION",
-                       "CODEX_TUI_SESSION_LOG_PATH")
+
 
 
 def arguments(argv=None):
@@ -97,7 +97,6 @@ def wait_for_exit(args, exited=session_close.verified_exited, clock=time.monoton
             sleep(POLL_SECONDS)
             continue
         if owned_backend is not None:
-            from host import Host
             from host_sessions import SESSIONS
 
             if not SESSIONS[Host(args.host)].backend_closed(owned_backend, session_close):
@@ -123,7 +122,6 @@ def launch_command(args):
     record = read_record(args.record)
     owned_backend = frozen_backend(args, record)
     if owned_backend is not None:
-        from host import Host
         from host_sessions import SESSIONS
 
         if not SESSIONS[Host(args.host)].backend_closed(owned_backend, session_close):
@@ -144,7 +142,8 @@ def launch(args, run=subprocess.run):
     record = read_record(args.record)
     if record.get("token") != args.token or record.get("state") != "waiting":
         return 1
-    environment = {key: value for key, value in os.environ.items() if key not in SESSION_ENVIRONMENT}
+    inherited = {name for host in Host for name in agent_cli.host_launch(host).RELAUNCH_ENVIRONMENT}
+    environment = {key: value for key, value in os.environ.items() if key not in inherited}
     try:
         result = run(launch_command(args), env=environment, cwd=str(args.recovery.parent), capture_output=True,
                      text=True, encoding="utf-8", errors="replace", timeout=LAUNCH_TIMEOUT_SECONDS, check=False)
@@ -153,7 +152,6 @@ def launch(args, run=subprocess.run):
         return 1
     details = {}
     if result.returncode == 0 and record.get('owned_backend') is not None:
-        from host import Host
         from host_sessions import SESSIONS
 
         try:

@@ -192,7 +192,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         shared.own_host_and_entry.return_value = entry
         close = {"request": str(self.root / "request"), "request_sha256": "a" * 64,
                  "result": str(self.root / "result"), "cancel": str(self.root / "cancel")}
-        with mock.patch.object(agent_cli, "resolve_claude_executable", return_value="claude"), \
+        with mock.patch.object(agent_cli.host_launch('claude'), "resolve_executable", return_value="claude"), \
                 mock.patch.object(self.relaunch, "arm_client_close", return_value=close) as arm:
             result = self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CLAUDE, arguments=lambda _: ["--model", "chosen"])
         self.assertEqual("armed", result["relaunch"])
@@ -207,7 +207,7 @@ class CodexRefreshRecoveryTests(unittest.TestCase):
         shared.own_host_and_entry.return_value = entry
         close = {"request": str(self.root / "request"), "request_sha256": "a" * 64,
                  "result": str(self.root / "result"), "cancel": str(self.root / "cancel")}
-        with mock.patch.object(agent_cli, "resolve_codex_executable", return_value=("codex", [])), \
+        with mock.patch.object(agent_cli.host_launch('codex'), "resolve_executable", return_value=("codex", [])), \
                 mock.patch.object(CODEX_SESSIONS.required_plugins, "check_launch"), \
                 mock.patch.object(self.relaunch, "arm_client_close", return_value=close):
             result = self.relaunch.relaunch(self.root, {}, shared=shared, host=Host.CODEX, arguments=lambda _: [])
