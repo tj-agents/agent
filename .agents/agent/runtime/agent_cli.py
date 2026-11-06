@@ -27,19 +27,24 @@ from launch_errors import LaunchError, LaunchTimeout
 from package_root import find_package_root
 
 if TYPE_CHECKING:
+    from claude import launch as claude_launch
+    from codex import launch as codex_launch
     from claude.launch import Adapter as ClaudeLaunch
     from codex.launch import Adapter as CodexLaunch
+
+    _claude_implementation: ClaudeLaunch = claude_launch
+    _codex_implementation: CodexLaunch = codex_launch
 
 _HOST_LAUNCHES: dict[Host, Launch] = {}
 IS_WINDOWS = os.name == 'nt'
 
 
 @overload
-def host_launch(host: Literal['codex', Host.CODEX]) -> CodexLaunch: ...
+def host_launch(host: Literal['codex']) -> CodexLaunch: ...
 
 
 @overload
-def host_launch(host: Literal['claude', Host.CLAUDE]) -> ClaudeLaunch: ...
+def host_launch(host: Literal['claude']) -> ClaudeLaunch: ...
 
 
 @overload
@@ -55,6 +60,8 @@ def host_launch(host: Host | str) -> Launch:
         if not path.is_file():
             raise LaunchError(f'The packaged {kind.value} launch adapter was not found under {root}.')
         spec = importlib.util.spec_from_file_location(f'agent_{kind.value}_launch', path)
+        if spec is None or spec.loader is None:
+            raise LaunchError(f'The {kind.value} launch adapter cannot be loaded from {path}.')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         _HOST_LAUNCHES[kind] = cast(Launch, module)
