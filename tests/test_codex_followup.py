@@ -11,7 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +22,19 @@ FOLLOWUP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FOLLOWUP)
 THREAD = '00000000-0000-4000-8000-000000000001'
 CLIENT = '00000000-0000-4000-8000-000000000002'
+
+
+def managed_binding(root):
+    return {
+        'token': 'a' * 64,
+        'profile': FOLLOWUP.path_key(root),
+        'recipient': {
+            'thread_id': THREAD,
+            'cwd': FOLLOWUP.path_key(root),
+            'frontend_message_id': 'frontend-input',
+        },
+        'frontend_message_id': 'frontend-input',
+    }
 
 
 class Session:
@@ -78,7 +91,7 @@ class FollowupTests(unittest.TestCase):
         self.receipt_path = self.root / 'receipt.json'
         self.message = self.root / 'message.txt'
         self.message.write_text('exact message', encoding='utf-8')
-        self.receipt = {'version': 1, 'thread_id': THREAD, 'client_id': CLIENT,
+        self.receipt = {'version': 2, 'launch_binding': None, 'thread_id': THREAD, 'client_id': CLIENT,
                         'cwd': FOLLOWUP.path_key(self.root),
                         'codex_home': FOLLOWUP.path_key(self.root),
                         'message_sha256': hashlib.sha256(b'exact message').hexdigest(),
@@ -87,6 +100,14 @@ class FollowupTests(unittest.TestCase):
         admission = patch.object(FOLLOWUP, 'admit_route')
         admission.start()
         self.addCleanup(admission.stop)
+        self.binding = managed_binding(self.root)
+        self.client = MagicMock()
+        self.client.recipient_binding.return_value = self.binding
+        self.client.frozen_binding.return_value = self.binding
+        self.receipt['launch_binding'] = self.binding
+        client_runtime = patch.object(FOLLOWUP, 'client_runtime', return_value=self.client)
+        client_runtime.start()
+        self.addCleanup(client_runtime.stop)
 
     def submit(self, proxy):
         return FOLLOWUP.send(proxy, self.receipt, self.receipt_path, 'exact message')
@@ -234,6 +255,20 @@ class FollowupTests(unittest.TestCase):
         proxy.assert_not_called()
         self.assertFalse(self.receipt_path.exists())
 
+    def test_missing_managed_binding_refuses_before_proxy_connection(self):
+        self.client.recipient_binding.side_effect = RuntimeError('no exact binding')
+        with patch.object(FOLLOWUP, 'Proxy') as proxy, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(2, FOLLOWUP.main(self.arguments()))
+        proxy.assert_not_called()
+        self.assertFalse(self.receipt_path.exists())
+
+    def test_legacy_unbound_receipt_never_opens_the_current_proxy(self):
+        legacy = dict(self.receipt, launch_binding=None)
+        self.receipt_path.write_text(json.dumps(legacy), encoding='utf-8')
+        with patch.object(FOLLOWUP, 'Proxy') as proxy, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(2, FOLLOWUP.main(['status', '--receipt', str(self.receipt_path)]))
+        proxy.assert_not_called()
+
     def test_correction_requires_verified_original_delivery(self):
         original = dict(self.receipt, client_id='00000000-0000-4000-8000-000000000003')
         original_path = self.root / 'original.json'
@@ -359,7 +394,7 @@ class FollowupTests(unittest.TestCase):
             code = FOLLOWUP.main(['status', '--receipt', str(self.receipt_path)])
         result = json.loads(output.getvalue())
         self.assertEqual(2, code)
-        self.assertEqual('unavailable', result['status'])
+        self.assertEqual('unverified', result['status'])
         self.assertNotIn('paste', result['next_action'])
 
     def test_odd_server_item_content_still_prints_json_status(self):
@@ -512,13 +547,19 @@ for line in sys.stdin:
         proxy = self.create_proxy(source)
         proxy.deadline = time.monotonic() - 1
 
-        def proxy_with_caller_deadline(executable, profile, deadline):
+        def proxy_with_caller_deadline(executable, profile, deadline, **_):
             proxy.deadline = deadline
             return proxy
 
+        client = MagicMock()
+        binding = managed_binding(root)
+        client.recipient_binding.return_value = binding
+        client.frozen_binding.return_value = binding
+        client.native_contains.return_value = True
         output = io.StringIO()
         with patch.object(FOLLOWUP, 'Proxy', side_effect=proxy_with_caller_deadline), \
                 patch.object(FOLLOWUP, 'responsibility', return_value='owner'), \
+                patch.object(FOLLOWUP, 'client_runtime', return_value=client), \
                 patch.object(proxy, 'request', wraps=proxy.request) as request, \
                 contextlib.redirect_stdout(output):
             code = FOLLOWUP.main(['--timeout', '1', 'send', '--thread', THREAD, '--cwd', str(root),

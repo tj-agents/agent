@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -111,6 +111,22 @@ class FakeClient:
         assert token == "binding-token"
         return self.binding
 
+    def observer_binding(self, ticket: dict[str, Any]) -> dict[str, Any]:
+        record = cast(
+            dict[str, Any], json.loads(self.binding.read_text(encoding="utf-8"))
+        )
+        for key in (
+            "token",
+            "pid",
+            "backend",
+            "profile",
+            "recording_path",
+            "created_at",
+        ):
+            if record.get(key) != ticket.get(key):
+                raise RuntimeError("binding changed")
+        return record
+
     @staticmethod
     def process_arguments(pid: int) -> list[str]:
         assert pid == 20
@@ -124,6 +140,23 @@ class FakeClient:
     @staticmethod
     def comparable_path(path: Path) -> Path:
         return path
+
+
+def test_capacity_backend_guard_uses_the_durable_observer_binding(
+    tmp_path: Path,
+) -> None:
+    monitor = capacity.CapacityMonitor(
+        {"recording_path": str(tmp_path / "events.jsonl"), "created_at": 0}
+    )
+
+    class OwnedClient:
+        def observer_binding(self, _ticket: dict[str, Any]) -> dict[str, Any]:
+            return {"backend": {"kind": "handoff"}}
+
+        def daemon_identity(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("capacity selected a shared daemon")
+
+    assert monitor._backend_matches(OwnedClient())
 
 
 class FakeProxy:
