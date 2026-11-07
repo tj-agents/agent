@@ -445,9 +445,7 @@ def test_cli_revision_is_not_acknowledged_until_its_release_is_installed() -> No
         "nameWithOwner": "tj-agents/cli",
         "defaultBranchRef": {"name": "main", "target": {"oid": revision}},
     }
-    reconciler = events.Reconciler(
-        refresh=mock.Mock(return_value=0), policy=mock.Mock()
-    )
+    reconciler = events.Reconciler(refresh=mock.Mock(return_value=0))
     with (
         mock.patch.object(
             native_runtime, "prepare", side_effect=RuntimeError("release not published")

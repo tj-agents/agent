@@ -53,7 +53,7 @@ class SubscriberFixture(unittest.TestCase):
         self.state = self.directory / "machine-events-state.json"
         self.write(self.directory / "machine-events.json", {"topic": "t" * 40})
         self.refresh = mock.Mock(return_value=0)
-        self.factory = lambda state: watch.machine_events.Reconciler(state, refresh=self.refresh, policy=mock.Mock())
+        self.factory = lambda state: watch.machine_events.Reconciler(state, refresh=self.refresh)
 
     def write(self, path, value):
         watch.plugins.write_json(path, value)
@@ -268,7 +268,7 @@ class SubscriberBootstrapTests(SubscriberFixture):
         self.assertEqual(install.background_receipt(context), watch.plugins.read_json(self.service))
 
     def test_failed_synchronous_catch_up_does_not_start_supervision(self):
-        failing = install.Step("plugin and merge-policy catch-up", mock.Mock(side_effect=RuntimeError("offline")), mock.Mock())
+        failing = install.Step("plugin catch-up", mock.Mock(side_effect=RuntimeError("offline")), mock.Mock())
         service = install.Step("background machine events", mock.Mock(return_value=["missing"]), mock.Mock())
         self.assertEqual(2, install.run_steps([failing, service], mock.Mock(), False, io.StringIO(), io.StringIO()))
         service.check.assert_not_called()
