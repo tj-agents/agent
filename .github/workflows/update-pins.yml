@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   update:
-    uses: tj-agents/github-actions/.github/workflows/update-pins.yml@4149f103fd7ba02730926116e82080915ca0248f
+    uses: tj-agents/github-actions/.github/workflows/update-pins.yml@2e8b5afabfe67e7d2bd18c835ddeac6ef06bfb12
     with:
       repositories: tj-agents/github-actions
     secrets:
