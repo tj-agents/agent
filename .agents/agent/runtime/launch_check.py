@@ -266,7 +266,7 @@ def check(project: Path, fetch=https_get, update=update_host, now: float | None 
         if settled != "current":
             result = settled
     if result == "failed" and recover and not os.environ.get(INSTALL_RECOVERY):
-        recover_install(project, "plugin and merge-policy catch-up")
+        recover_install(project, "plugin catch-up")
         return check(project, fetch, update, now, hosts, updated, recover=False)
     return result
 
