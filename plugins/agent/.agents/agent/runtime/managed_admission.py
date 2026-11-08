@@ -34,7 +34,7 @@ from tj_agent.plugins import sources
 PRODUCERS = frozenset({"tj-agents/agent", "tj-agents/core"})
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 MAX_AGE = 3600
-VERIFYING: set[tuple[str, Host]] = set()
+VERIFYING: set[tuple[str, str, Host]] = set()
 GUARD = "managed_admission.py"
 
 
@@ -56,9 +56,24 @@ def package_root(script: Path) -> Path:
     raise AdmissionError("Executing admission guard has no package root")
 
 
-def receipt_path(project: Path, host: Host, session: str = "") -> Path:
+def receipt_path(
+    project: Path,
+    host: Host,
+    *,
+    native_project: Path | None = None,
+    session: str = "",
+) -> Path:
+    native_project = (native_project or project).resolve()
     key = hashlib.sha256(
-        (str(project.resolve()) + "\0" + host.value + "\0" + session).encode()
+        (
+            str(project.resolve())
+            + "\0"
+            + str(native_project)
+            + "\0"
+            + host.value
+            + "\0"
+            + session
+        ).encode()
     ).hexdigest()
     return Path(plugin_autoupdate.state_directory()) / "admission" / (key + ".json")
 
@@ -84,9 +99,20 @@ def signatures(paths: list[Path]) -> dict[str, list[int]]:
                 stat = path.stat()
                 result[str(path)] = [stat.st_dev, stat.st_ino, stat.st_mode]
                 if not path.is_dir():
-                    result[str(path)].extend(
-                        [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
-                    )
+                    if path.name == ".snapshot-digest":
+                        result[str(path)].extend(
+                            [
+                                stat.st_size,
+                                int.from_bytes(
+                                    hashlib.sha256(path.read_bytes()).digest(),
+                                    byteorder="big",
+                                ),
+                            ]
+                        )
+                    else:
+                        result[str(path)].extend(
+                            [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
+                        )
             except FileNotFoundError:
                 result[str(path)] = []
     return result
@@ -97,6 +123,15 @@ def configuration_paths(project: Path, host: Host) -> list[Path]:
         *(root / ".agents/plugins.json" for root in (project, *project.parents)),
         *host_plugins.PLUGINS[host].configuration_paths(project),
     ]
+
+
+def managed_scope(project: Path, required: tuple[str, ...] | None = None) -> bool:
+    required = (
+        required
+        if required is not None
+        else required_plugins.selected(required_plugins.project_root(project))
+    )
+    return any(identity.endswith("@tj-agents") for identity in required)
 
 
 def pinned_sources(
@@ -203,7 +238,7 @@ def selected_closure(required: tuple[str, ...], roster: dict[str, Any]) -> set[s
 
 def ensure_hooks(project: Path, host: Host, executable: str | None = None) -> None:
     required = required_plugins.selected(required_plugins.project_root(project))
-    managed = any(identity.endswith("@tj-agents") for identity in required)
+    managed = managed_scope(project, required)
     try:
         reason = host_plugins.PLUGINS[host].ensure_hooks(project, executable)
         if managed and reason:
@@ -220,26 +255,26 @@ def verify(
     project: Path,
     host: Host,
     executable: str | None = None,
-    roots: dict[str, Path] | None = None,
+    *,
+    native_project: Path | None = None,
 ) -> dict[str, Any] | None:
+    native_project = (native_project or project).resolve()
     project = required_plugins.project_root(project)
     required = required_plugins.selected(project)
-    if not required or not any(
-        identity.endswith("@tj-agents") for identity in required
-    ):
+    if not managed_scope(project, required):
         return None
-    key = (str(project), host)
+    key = (str(project), str(native_project), host)
     if key in VERIFYING:
         return None
     VERIFYING.add(key)
     try:
         try:
-            return cached(project, host)
+            return cached(project, host, native_project)
         except (AdmissionError, OSError, ValueError, KeyError, TypeError):
             pass
         plugins = host_plugins.PLUGINS[host]
         binary = executable or plugins.resolve_executable()
-        location = plugins.marketplace_location(binary, project, "tj-agents")
+        location = plugins.marketplace_location(binary, native_project, "tj-agents")
         if not location:
             raise AdmissionError("Selected marketplace checkout is unavailable")
         marketplace = Path(location).resolve()
@@ -252,7 +287,7 @@ def verify(
                 "rev-parse",
                 "HEAD",
             ],
-            project,
+            native_project,
         ).strip()
         if not REVISION.fullmatch(revision):
             raise AdmissionError("Selected marketplace is not at an immutable revision")
@@ -266,7 +301,7 @@ def verify(
                 "show",
                 f"{revision}:{plugins.CATALOG}",
             ],
-            project,
+            native_project,
         )
         catalog = read(catalog_path)
         if catalog != json.loads(expected_catalog):
@@ -283,7 +318,7 @@ def verify(
                     "show",
                     f"{revision}:plugins.json",
                 ],
-                project,
+                native_project,
             )
         )
         if not isinstance(roster, dict):
@@ -320,7 +355,7 @@ def verify(
                 "https://github.com/tj-agents/marketplace.git",
                 "refs/heads/main",
             ],
-            project,
+            native_project,
         ).split()
         if not remote or revision != remote[0]:
             raise AdmissionError(
@@ -334,20 +369,24 @@ def verify(
         ]
         catalog_proof = signatures(catalog_watch)
         native = required_plugins.inventory(
-            binary, plugins, project, (), "tj-agents" if host is Host.CODEX else None
+            binary,
+            plugins,
+            native_project,
+            (),
+            "tj-agents" if host is Host.CODEX else None,
         )
         observed: dict[str, int] = {}
-        for entry in plugins.installations(project, native):
+        for entry in plugins.installations(native_project, native):
             if not isinstance(entry, dict) or entry.get("enabled") is not True:
                 continue
-            located = plugins.location(entry, project)
+            located = plugins.location(entry, native_project)
             if (
                 located is not None
                 and located[0].endswith("@tj-agents")
                 and located[0].split("@", 1)[0] in entries
             ):
                 observed[located[0]] = observed.get(located[0], 0) + 1
-        roots = required_plugins.enabled_roots(plugins, project, native)
+        roots = required_plugins.enabled_roots(plugins, native_project, native)
         missing = relevant - roots.keys()
         if missing:
             raise AdmissionError(
@@ -355,13 +394,13 @@ def verify(
                 + ", ".join(sorted(missing))
             )
         reason = plugins.ensure_hooks(
-            project,
+            native_project,
             binary,
             required_roots={identity: roots[identity] for identity in sorted(relevant)},
         )
         if reason:
             raise AdmissionError("Required hook adoption is pending: " + reason)
-        configuration_watch = configuration_paths(project, host)
+        configuration_watch = configuration_paths(native_project, host)
         configuration_proof = signatures(configuration_watch)
         installed: dict[str, dict[str, str]] = {}
         guards: list[str] = []
@@ -426,6 +465,7 @@ def verify(
         document: dict[str, Any] = {
             "version": 1,
             "project": str(project),
+            "native_project": str(native_project),
             "host": host.value,
             "marketplace": {"root": str(marketplace), "revision": revision},
             "producers": pair,
@@ -435,7 +475,9 @@ def verify(
             "watch": [str(path) for path in watch],
         }
         document["signatures"] = proof
-        plugin_autoupdate.write_json(receipt_path(project, host), document)
+        plugin_autoupdate.write_json(
+            receipt_path(project, host, native_project=native_project), document
+        )
         return document
     except AdmissionError:
         raise
@@ -454,12 +496,16 @@ def verify(
         VERIFYING.remove(key)
 
 
-def cached(project: Path, host: Host) -> dict[str, Any]:
+def cached(
+    project: Path, host: Host, native_project: Path | None = None
+) -> dict[str, Any]:
+    native_project = (native_project or project).resolve()
     project = required_plugins.project_root(project)
-    document = read(receipt_path(project, host))
+    document = read(receipt_path(project, host, native_project=native_project))
     if (
         document.get("version") != 1
         or document.get("project") != str(project)
+        or document.get("native_project") != str(native_project)
         or document.get("host") != host.value
         or not 0 <= time.time() - document["checked"] < MAX_AGE
         or signatures([Path(path) for path in document["watch"]])
@@ -495,18 +541,23 @@ def executing_identity(document: Mapping[str, Any], root: Path) -> str:
 
 
 def gate(project: Path, host: Host, session: str, event: str, root: Path) -> None:
-    if not required_plugins.selected(required_plugins.project_root(project)):
+    native_project = project.resolve()
+    project = required_plugins.project_root(project)
+    if not managed_scope(project):
         return
     if not session:
         raise AdmissionError(
             "Native session identity is unavailable for managed admission"
         )
-    document = cached(project, host)
+    document = cached(project, host, native_project)
     declared = read(root / "harness.json").get("plugin", "")
     marketplace, _, name = declared.partition("/")
     identity = f"{name}@{marketplace}"
     path = receipt_path(
-        required_plugins.project_root(project), host, session + "@" + identity
+        project,
+        host,
+        native_project=native_project,
+        session=session + "@" + identity,
     )
     if event == "SessionStart":
         proof = signatures([root])
@@ -524,7 +575,10 @@ def gate(project: Path, host: Host, session: str, event: str, root: Path) -> Non
     for guard in document["guards"]:
         record = read(
             receipt_path(
-                required_plugins.project_root(project), host, session + "@" + guard
+                project,
+                host,
+                native_project=native_project,
+                session=session + "@" + guard,
             )
         )
         if (
@@ -560,7 +614,7 @@ def maintenance_command(project: Path, host: Host) -> str:
         "--host",
         host.value,
         "--project",
-        str(required_plugins.project_root(project)),
+        str(project.resolve()),
         "--verify",
     ]
     return (

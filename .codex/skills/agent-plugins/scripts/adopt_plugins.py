@@ -14,6 +14,7 @@ import tempfile
 import lock_io
 import plugin_selection
 import repo_config
+from plugin_runtime import process
 
 
 LOCK = Path(__file__).resolve().parent / "marketplace_plugins.lock.json"
@@ -179,7 +180,7 @@ def current_roster() -> dict:
 
     with tempfile.TemporaryDirectory(prefix="tj-agents-marketplace-") as directory:
         source = Path(directory) / "marketplace"
-        result = subprocess.run(
+        result = process.run(
             ["git", "clone", "--quiet", "--depth=1", "--branch", "main",
              "https://github.com/tj-agents/marketplace.git", str(source)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
