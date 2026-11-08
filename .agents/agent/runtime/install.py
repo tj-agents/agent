@@ -822,7 +822,7 @@ STEPS = (
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
-    Step("agent-store CLI", check_agent_store, apply_agent_store, required=True),
+    Step("agent-store CLI", check_agent_store, apply_agent_store),
     Step("launch-check runtime", check_runtime, apply_runtime),
     Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands),
     Step("shell profiles", check_profile, apply_profile),

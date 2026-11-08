@@ -10,21 +10,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOTS = (
     ".agents/agent/runtime",
-    ".agents/agent-store/runtime",
     ".agents/agent/utility",
     ".codex/runtime",
     ".claude/runtime",
 )
 LAUNCHERS = {"run", "Popen", "call", "check_call", "check_output"}
-FOREGROUND = {
-    (".agents/agent/runtime/agent_cli.py", "launch_tab"),
-    (".agents/agent/runtime/agent_cli.py", "_launch_new_window"),
-    (".agents/agent/runtime/startup_binding.py", "run_session"),
-    (".agents/agent/runtime/startup_binding.py", "main"),
-    (".agents/agent/runtime/terminal_command.py", "run_target"),
-    (".agents/agent/runtime/tj_agent/recovery.py", "focus_session"),
-    (".codex/runtime/client.py", "prepare"),
-}
+FOREGROUND: set[tuple[str, str]] = set()
 
 
 class ProcessBoundaries(ast.NodeVisitor):
@@ -71,13 +62,7 @@ class ProcessBoundaries(ast.NodeVisitor):
         self.scope = previous
 
     def visit_Call(self, node: ast.Call) -> None:
-        independent_posix_worker = (
-            self.path.endswith("/session_close.py")
-            and self.scope == "start_detached"
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "Popen"
-        )
-        if self.raw(node.func) and not independent_posix_worker:
+        if self.raw(node.func):
             self.reject(node, "use tj_cli.process")
         if any(keyword.arg == "creationflags" for keyword in node.keywords):
             self.reject(

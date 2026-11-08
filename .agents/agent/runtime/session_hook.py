@@ -21,6 +21,7 @@ sys.path.insert(0, str(HERE))
 
 from tj_agent.host import Host
 import agent_store
+from tj_cli import process
 
 LAUNCH_ENV = "TJ_RUN_LAUNCH_ID"
 TITLE_ENV = "AGENT_CLI_TAB_TITLE"
@@ -36,7 +37,7 @@ def payload() -> dict:
 
 def worktree(cwd: str) -> str | None:
     try:
-        result = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True,
+        result = process.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True,
                                 text=True, timeout=5, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -80,7 +81,7 @@ def end(host: Host, session_id: str) -> None:
 def prompt() -> None:
     tj = shutil.which("tj")
     if tj:
-        subprocess.run([tj, "done", "--cancel"], capture_output=True, timeout=8, check=False)
+        process.run([tj, "done", "--cancel"], capture_output=True, timeout=8, check=False)
 
 
 def main(argv=None) -> int:

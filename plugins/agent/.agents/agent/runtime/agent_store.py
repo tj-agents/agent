@@ -14,7 +14,7 @@ import tempfile
 import urllib.request
 import zipfile
 
-from tj_cli import native_install
+from tj_cli import native_install, process
 
 REPOSITORY = "tj-agents/agent-store"
 PIN = Path(__file__).resolve().with_name("agent-store.json")
@@ -45,7 +45,7 @@ def run(*arguments: str, stdin: str | None = None) -> dict:
     if not path.is_file():
         raise AgentStoreError("missing", f"agent-store is not installed at {path}; run the Agent install")
     try:
-        result = subprocess.run([str(path), *arguments], input=stdin, capture_output=True, text=True,
+        result = process.run([str(path), *arguments], input=stdin, capture_output=True, text=True,
                                 encoding="utf-8", timeout=TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         raise AgentStoreError("unexpected", f"agent-store could not run: {error}") from error
@@ -64,7 +64,7 @@ def installed_version() -> str | None:
     if not path.is_file():
         return None
     try:
-        result = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=10,
+        result = process.run([str(path), "--version"], capture_output=True, text=True, timeout=10,
                                 check=False)
     except (OSError, subprocess.SubprocessError):
         return None

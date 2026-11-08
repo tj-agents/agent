@@ -11,6 +11,7 @@ from launch_contract import Liveness
 from launch_errors import LaunchError
 from native_executable import is_script
 from tj_agent.host import Host
+from tj_cli import process
 
 HOST = Host.CLAUDE
 IS_WINDOWS = os.name == "nt"
@@ -63,7 +64,7 @@ def resume_arguments(directory, title, session_id):
     return ["--resume", session_id, "--name", title]
 
 
-def liveness(run=subprocess.run) -> dict[str, Liveness]:
+def liveness(run=process.run) -> dict[str, Liveness]:
     """Every Claude session the host lists, by session id: alive while it reports a pid."""
     try:
         result = run([executable(), "agents", "--json", "--all"], capture_output=True, text=True,
@@ -81,7 +82,7 @@ def liveness(run=subprocess.run) -> dict[str, Liveness]:
     }
 
 
-def respawn(background, run=subprocess.run):
+def respawn(background, run=process.run):
     result = run([executable(), "respawn", background], capture_output=True, text=True, encoding="utf-8",
                  timeout=60, check=False)
     if result.returncode != 0:

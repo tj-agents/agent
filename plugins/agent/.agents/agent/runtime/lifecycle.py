@@ -16,6 +16,7 @@ from tj_agent.host import Host
 from launch_contract import Liveness
 import agent_cli
 import agent_store
+from tj_cli import process
 
 DONE = "Done"
 COMMAND_TIMEOUT_SECONDS = 60
@@ -30,7 +31,7 @@ def command(arguments: list[str], cwd: Path | None = None) -> str:
     if not executable:
         raise LifecycleError(f"{arguments[0]} is not on PATH")
     try:
-        result = subprocess.run([executable, *arguments[1:]], cwd=cwd, capture_output=True, text=True,
+        result = process.run([executable, *arguments[1:]], cwd=cwd, capture_output=True, text=True,
                                 encoding="utf-8", timeout=COMMAND_TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         raise LifecycleError(f"{' '.join(arguments)} could not run: {error}") from error
