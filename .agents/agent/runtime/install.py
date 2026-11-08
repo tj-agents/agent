@@ -39,6 +39,7 @@ import required_plugins
 import runtime_delivery
 import native_runtime
 from tj_agent import content
+from tj_cli import process
 
 COMMAND_TIMEOUT_SECONDS = 60
 INSTALLER_TIMEOUT_SECONDS = 600
@@ -69,7 +70,7 @@ class Context:
     home: Path
     environ: dict
     windows: bool
-    run: Callable = subprocess.run
+    run: Callable = process.run
     which: Callable = shutil.which
     documents: Path | None = None
     user_environment: object = None
@@ -413,7 +414,7 @@ def build_hidden_bash(context: Context, real: str) -> None:
         if compiled.returncode or not build.is_file():
             raise InstallError(f"Failed to build {build}: {compiled.stderr.strip()}")
         probe = context.run([str(build), *HIDDEN_BASH_PROBE], capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", timeout=10, check=False, creationflags=plugin_autoupdate.NO_WINDOW,
+                            errors="replace", timeout=10, check=False,
                             env={**context.environ, "TJ_AGENTS_REAL_GIT_BASH": real})
         if probe.returncode != 73 or probe.stdout != "HIDDEN_BASH_OK":
             raise InstallError("The hidden Bash proxy did not preserve Bash output and exit status")
@@ -438,7 +439,7 @@ def apply_hidden_bash(context: Context) -> list[str]:
 
 def run_installer(context: Context, command: list[str]) -> subprocess.CompletedProcess:
     return context.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=INSTALLER_TIMEOUT_SECONDS, check=False, creationflags=plugin_autoupdate.NO_WINDOW)
+                       timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
 
 
 def output_lines(result: subprocess.CompletedProcess) -> list[str]:
@@ -819,7 +820,7 @@ def plugin_setup_executables(context: Context) -> dict[Host, str | None]:
 
 
 def check_plugin_setup(context: Context) -> list[str]:
-    if native_runtime.missing():
+    if native_runtime.pending():
         return check_native_cli(context)
     return required_plugins.check_setup(plugin_setup_project(context), tuple(Host), plugin_setup_executables(context))
 
@@ -850,9 +851,9 @@ def apply_background(context: Context) -> list[str]:
 
 
 def check_native_cli(context: Context) -> list[str]:
-    absent = native_runtime.missing()
-    if absent:
-        return ["install native CLI binaries: " + ", ".join(absent)]
+    pending = native_runtime.pending()
+    if pending:
+        return ["install or update native CLI binaries: " + ", ".join(pending)]
     return []
 
 
@@ -863,8 +864,8 @@ def apply_native_cli(context: Context) -> list[str]:
 
 
 STEPS = (
+    Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("preconditions", check_preconditions, nothing, required=True),
-    Step("native CLI", check_native_cli, apply_native_cli),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("event channel and publishers", check_channel, apply_channel),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
@@ -887,7 +888,7 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
     failed_steps = set()
     for step in steps:
         if "native CLI" in failed_steps:
-            print(f"n/a    {step.name}: native CLI prerequisite failed", file=out)
+            print(f"n/a    {step.name}: native CLI prerequisite unavailable", file=out)
             continue
         if step.name == "background machine events" and failed_steps & {
                 "event channel and publishers", "launch-check runtime", "plugin catch-up",
@@ -908,6 +909,8 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
                 continue
             if check_only:
                 drift = True
+                if step.name == "native CLI":
+                    failed_steps.add(step.name)
                 for item in pending:
                     print(f"drift  {step.name}: {item}", file=out)
                 continue
@@ -932,8 +935,6 @@ def selected_steps(names: set[str]) -> tuple[Step, ...]:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
         selected.update({"plugin catch-up", "harness permissions"})
-    if selected & {"plugin setup", "plugin catch-up", "background machine events"}:
-        selected.add("native CLI")
     return tuple(step for step in STEPS if not selected or step.required or step.name in selected)
 
 

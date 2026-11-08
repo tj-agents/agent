@@ -25,12 +25,12 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from host import Host  # noqa: E402
+from tj_cli import process  # noqa: E402
 
 
 GIT_TIMEOUT_SECONDS = 30
 SWEEP_TIMEOUT_SECONDS = 1800
 SCRIPT_NAME = "plugin_autoupdate.py"
-NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 CLI_TIMEOUT_SECONDS = 60
 STILL_ACTIVE = 259
 FAILURE_BACKOFF_SECONDS = 24 * 60 * 60
@@ -399,9 +399,8 @@ def remote_revision(source: str, ref: object = None) -> str | None:
     if is_pinned(reference):
         return reference.lower()
     try:
-        result = subprocess.run(["git", "ls-remote", source, reference], capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT_SECONDS, check=False,
-                                creationflags=NO_WINDOW)
+        result = process.run(["git", "ls-remote", source, reference], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode:
@@ -415,9 +414,8 @@ def remote_revision(source: str, ref: object = None) -> str | None:
 
 def run_cli(command: list[str], *, cwd: Path) -> bool | str:
     try:
-        result = subprocess.run(command, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace", timeout=CLI_TIMEOUT_SECONDS, check=False,
-                                creationflags=NO_WINDOW)
+        result = process.run(command, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=CLI_TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return False
     if result.returncode and "was not found in marketplace" in (result.stderr + result.stdout):
@@ -608,9 +606,9 @@ def sweep_worktrees(codex_config: dict) -> str:
     if script is None:
         return "engineering package not installed"
     try:
-        result = subprocess.run([console_python(), "-B", str(script)], stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                timeout=SWEEP_TIMEOUT_SECONDS, check=False, creationflags=NO_WINDOW)
+        result = process.run([console_python(), "-B", str(script)], stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             timeout=SWEEP_TIMEOUT_SECONDS, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         return f"failed: {error}"
     return "ran" if result.returncode == 0 else f"failed with exit code {result.returncode}"

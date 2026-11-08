@@ -4,6 +4,7 @@ import io
 import json
 import os
 import queue
+import shlex
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import host_plugins
@@ -196,8 +197,12 @@ class AdmissionFixture:
             return json.dumps(self.catalog)
         return "f" * 40
 
-    def verify(self, host: Host = Host.CODEX) -> dict[str, Any]:
-        result = admission.verify(self.project, host, "fixture", self.roots)
+    def verify(
+        self, host: Host = Host.CODEX, native_project: Path | None = None
+    ) -> dict[str, Any]:
+        result = admission.verify(
+            self.project, host, "fixture", native_project=native_project
+        )
         assert result is not None
         return result
 
@@ -313,6 +318,83 @@ def test_exact_snapshot_binds_once_then_cheap_event_checks(
         plugin_refresh, "package_tree", side_effect=AssertionError("event hash")
     ):
         admission.gate(case.project, Host.CODEX, "session", "PreToolUse", snapshot)
+
+
+def test_snapshot_usage_touch_keeps_the_binding_but_marker_content_does_not(
+    case: AdmissionFixture,
+) -> None:
+    case.verify()
+    snapshot = case.root / "snapshot"
+    shutil.copytree(case.roots["agent@tj-agents"], snapshot)
+    marker = snapshot / ".snapshot-digest"
+    marker.write_text("sha256:" + "0" * 64, encoding="utf-8")
+    case.bind(roots={"agent": snapshot, "base": case.roots["base@tj-agents"]})
+    os.utime(marker)
+    admission.gate(case.project, Host.CODEX, "session", "PreToolUse", snapshot)
+    marker.write_text("sha256:" + "1" * 64, encoding="utf-8")
+    with pytest.raises(admission.AdmissionError, match="has not adopted"):
+        admission.gate(case.project, Host.CODEX, "session", "PreToolUse", snapshot)
+
+
+def test_external_only_selection_skips_managed_admission(
+    case: AdmissionFixture,
+) -> None:
+    (case.project / ".agents/plugins.json").write_text(
+        json.dumps({"schema_version": 1, "plugins": ["other@example"]}),
+        encoding="utf-8",
+    )
+    assert admission.verify(case.project, Host.CODEX, "fixture") is None
+    admission.gate(case.project, Host.CODEX, "", "SessionStart", case.root / "external")
+
+
+def test_verification_uses_the_effective_native_directory_and_fresh_inventory(
+    case: AdmissionFixture,
+) -> None:
+    native_project = case.project / "nested native configuration"
+    native_project.mkdir()
+    observed: list[Path] = []
+
+    def inventory(*arguments: object, **_kwargs: object) -> list[dict[str, object]]:
+        observed.append(cast(Path, arguments[2]))
+        return case.inventory()
+
+    with patch.object(required_plugins, "inventory", side_effect=inventory):
+        document = admission.verify(
+            case.project,
+            Host.CODEX,
+            "fixture",
+            native_project=native_project,
+        )
+    assert document is not None
+    assert document["project"] == str(case.project.resolve())
+    assert document["native_project"] == str(native_project.resolve())
+    assert observed == [native_project.resolve()]
+
+
+def test_native_directories_keep_independent_admission_and_session_receipts(
+    case: AdmissionFixture,
+) -> None:
+    first = case.project / "first native configuration"
+    second = case.project / "second native configuration"
+    first.mkdir()
+    second.mkdir()
+    case.verify()
+    case.verify(native_project=first)
+    case.verify(native_project=second)
+    assert admission.receipt_path(
+        case.project, Host.CODEX, native_project=first
+    ) != admission.receipt_path(case.project, Host.CODEX, native_project=second)
+    agent = case.roots["agent@tj-agents"]
+    for native_project, session in (
+        (first, "first-session"),
+        (second, "second-session"),
+    ):
+        for root in case.roots.values():
+            admission.gate(native_project, Host.CODEX, session, "SessionStart", root)
+    admission.gate(first, Host.CODEX, "first-session", "PreToolUse", agent)
+    (agent / "value.txt").write_text("tampered", encoding="utf-8")
+    with pytest.raises(admission.AdmissionError, match="identity changed"):
+        admission.gate(first, Host.CODEX, "first-session", "PreToolUse", agent)
 
 
 def test_expired_and_package_hook_catalog_or_configuration_changes_invalidate(
@@ -447,11 +529,13 @@ def test_host_denial_shapes_and_timeout_are_fail_closed(case: AdmissionFixture) 
     denied = admission.denial("PreToolUse", "pending")
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "continue" not in denied
+    native_project = case.project / "nested native context"
+    native_project.mkdir()
     payload = json.dumps(
         {
             "hook_event_name": "PreToolUse",
             "session_id": "session",
-            "cwd": str(case.project),
+            "cwd": str(native_project),
         }
     )
     with (
@@ -462,12 +546,49 @@ def test_host_denial_shapes_and_timeout_are_fail_closed(case: AdmissionFixture) 
         contextlib.redirect_stdout(io.StringIO()) as output,
     ):
         assert admission.main() == 0
-        assert (
-            json.loads(output.getvalue())["hookSpecificOutput"]["permissionDecision"]
-            == "deny"
+        result = json.loads(output.getvalue())["hookSpecificOutput"]
+        assert result["permissionDecision"] == "deny"
+        recovery_arguments = [
+            sys.executable,
+            "-B",
+            str(Path(admission.__file__).resolve().with_name("reload_plugins.py")),
+            "--host",
+            Host.CODEX.value,
+            "--project",
+            str(native_project.resolve()),
+            "--verify",
+        ]
+        recovery_command = (
+            subprocess.list2cmdline(recovery_arguments)
+            if os.name == "nt"
+            else shlex.join(recovery_arguments)
         )
-        assert "reload_plugins.py" in output.getvalue()
-        assert "--verify" in output.getvalue()
+        assert result["permissionDecisionReason"].endswith(
+            "Run from a terminal: " + recovery_command
+        )
+
+
+def test_nested_native_context_has_an_admitted_session_receipt(
+    case: AdmissionFixture,
+) -> None:
+    native_project = case.project / "nested native context"
+    native_project.mkdir()
+    document = case.verify(native_project=native_project)
+    for root in case.roots.values():
+        admission.gate(
+            native_project, Host.CODEX, "nested-session", "SessionStart", root
+        )
+    admission.gate(
+        native_project,
+        Host.CODEX,
+        "nested-session",
+        "PreToolUse",
+        case.roots["agent@tj-agents"],
+    )
+    assert (
+        admission.cached(case.project, Host.CODEX, native_project=native_project)
+        == document
+    )
 
 
 def test_setup_check_contract_reaches_the_shared_admission_checker(
@@ -657,7 +778,7 @@ def test_managed_inventory_failure_blocks_before_native_launch(
         patch.object(required_plugins, "reconcile_selection"),
         patch.object(required_plugins, "inventory", NATIVE_INVENTORY),
         patch.object(
-            required_plugins.subprocess,
+            required_plugins.process,
             "run",
             side_effect=subprocess.TimeoutExpired("fixture", 20)
             if failure == "timeout"

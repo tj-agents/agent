@@ -17,6 +17,8 @@ import tempfile
 import threading
 import time
 
+from tj_cli import process
+
 
 GITHUB_SOURCE = re.compile(
     r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)?"
@@ -44,7 +46,7 @@ def command(executable):
 
 
 def run(arguments, cwd, timeout=TIMEOUT):
-    return subprocess.run(
+    return process.run(
         arguments, cwd=cwd, check=True, capture_output=True,
         text=True, encoding="utf-8", timeout=timeout,
     ).stdout.strip()
@@ -56,12 +58,11 @@ class AppServer:
             from codex.websocket import WebSocketStdio
 
         self.timeout = timeout
-        self.process = subprocess.Popen(
+        self.process = process.start(
             [*command(executable), *launch_args, "app-server", *(["proxy"] if existing else [])], cwd=cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=not existing, encoding=None if existing else "utf-8", bufsize=-1 if existing else 1,
             env=dict(os.environ, **(environment or {})),
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
         self.messages = queue.Queue()
         self.sequence = 0
@@ -207,7 +208,7 @@ def normalized_bytes(content):
 
 def committed_files(root, revision, relative, cwd):
     tree = revision if relative == "." else f"{revision}:{relative}"
-    archive = subprocess.run(
+    archive = process.run(
         ["git", "-C", str(root), "archive", "--format=tar", tree],
         cwd=cwd, check=True, capture_output=True, timeout=TIMEOUT,
     ).stdout
@@ -393,7 +394,7 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
         if not launch_args and not environment:
             inventory = json.loads(run([*command(executable), "plugin", "list", "--json"], cwd, limit))
         else:
-            completed = subprocess.run(
+            completed = process.run(
                 [*command(executable), *launch_args, "plugin", "list", "--json"], cwd=cwd,
                 env=dict(os.environ, **(environment or {})), check=True, capture_output=True,
                 text=True, encoding="utf-8", timeout=limit,

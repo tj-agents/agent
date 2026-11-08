@@ -158,7 +158,7 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual("github.com", saved["GH_HOST"])
         self.assertFalse(any(key.startswith("GIT_CONFIG_") or key in {"TJ_AGENT", "GH_TOKEN", "GITHUB_TOKEN"} for key in saved))
         self.assertEqual(["/usr/bin/gh", "repo", "view"], run.call_args.args[0])
-        self.assertEqual(events.plugins.NO_WINDOW, run.call_args.kwargs["creationflags"])
+        self.assertNotIn("creationflags", run.call_args.kwargs)
 
     def test_listener_lock_has_no_age_expiry_and_releases_with_handle(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -231,7 +231,7 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(0, result.returncode, result.stderr)
 
     def test_subscriber_step_requires_the_channel_and_installed_runtime(self):
-        self.assertEqual(["preconditions", "native CLI", "event channel and publishers", "launch-check runtime", "background machine events"],
+        self.assertEqual(["native CLI", "preconditions", "event channel and publishers", "launch-check runtime", "background machine events"],
                          [step.name for step in install.selected_steps({"background machine events"})])
 
 

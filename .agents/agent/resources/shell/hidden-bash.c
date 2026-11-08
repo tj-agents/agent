@@ -1,6 +1,4 @@
-// Windows GUI-subsystem proxy for Claude Code's Git Bash child processes.
-// Claude currently starts the configured Bash executable without CREATE_NO_WINDOW.
-// Keep the proxy windowless and pass the inherited standard handles to real Bash.
+// Claude's executable-only Bash setting needs an adapter to tj_hook's command interface.
 #include <windows.h>
 #include <wchar.h>
 #include <stdlib.h>
@@ -40,13 +38,38 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR ignored, int s
     }
     while (*tail == L' ' || *tail == L'\t') ++tail;
 
-    size_t command_length = wcslen(bash) + wcslen(tail) + 4;
+    DWORD path_length = GetEnvironmentVariableW(L"PATH", NULL, 0);
+    wchar_t *search = path_length ? (wchar_t *)calloc(path_length, sizeof(wchar_t)) : NULL;
+    if (!search || !GetEnvironmentVariableW(L"PATH", search, path_length)) {
+        free(search);
+        free(bash);
+        return fail("hidden-bash: PATH is unavailable\n");
+    }
+    DWORD hook_length = SearchPathW(search, L"tj_hook.exe", NULL, 0, NULL, NULL);
+    if (!hook_length) {
+        free(search);
+        free(bash);
+        return fail("hidden-bash: tj_hook is not installed on PATH\n");
+    }
+    wchar_t *hook = (wchar_t *)calloc((size_t)hook_length + 1, sizeof(wchar_t));
+    if (!hook || !SearchPathW(search, L"tj_hook.exe", NULL, hook_length + 1, hook, NULL)) {
+        free(search);
+        free(hook);
+        free(bash);
+        return fail("hidden-bash: tj_hook path is unavailable\n");
+    }
+    free(search);
+    const wchar_t *separator = L"\" --preserve-descendants -- \"";
+    size_t command_length = wcslen(hook) + wcslen(bash) + wcslen(tail) + wcslen(separator) + 4;
     wchar_t *command = (wchar_t *)calloc(command_length, sizeof(wchar_t));
     if (!command) {
+        free(hook);
         free(bash);
         return fail("hidden-bash: allocation failed\n");
     }
     wcscat(command, L"\"");
+    wcscat(command, hook);
+    wcscat(command, separator);
     wcscat(command, bash);
     wcscat(command, L"\"");
     if (*tail) {
@@ -61,11 +84,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR ignored, int s
     startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION process = {0};
-    BOOL started = CreateProcessW(bash, command, NULL, NULL, TRUE,
-                                  CREATE_NO_WINDOW, NULL, NULL, &startup, &process);
+    BOOL started = CreateProcessW(hook, command, NULL, NULL, TRUE,
+                                  0, NULL, NULL, &startup, &process);
     free(command);
+    free(hook);
     free(bash);
-    if (!started) return fail("hidden-bash: failed to start real Git Bash\n");
+    if (!started) return fail("hidden-bash: failed to start tj_hook\n");
     WaitForSingleObject(process.hProcess, INFINITE);
     DWORD code = 127;
     GetExitCodeProcess(process.hProcess, &code);
