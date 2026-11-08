@@ -76,6 +76,7 @@ class StartupBindingTests(unittest.TestCase):
             return argv, environment, None
 
         with mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
+                mock.patch.object(SESSIONS[Host.CODEX], 'handoff_executable', return_value=sys.executable), \
                 mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', side_effect=prepare):
             with self.assertRaisesRegex(self.binding.StartupBindingError, 'fixture hook failed'):
                 self.binding.run_session(Host.CODEX, sys.executable, root, [str(script)], require_session_start=True)
@@ -141,7 +142,7 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual([{'kind': 'windows-terminal', 'session': 'terminal-session',
                            'binding': {'pid': 71, 'started_at': 8.0}}], captured)
 
-    def test_immediate_ack_records_once_with_prelaunch_terminal(self):
+    def test_claude_immediate_ack_records_once_with_prelaunch_terminal(self):
         process = mock.Mock(pid=72)
         process.wait.return_value = 0
         terminal = {'kind': 'windows-terminal', 'session': 'terminal-session',
@@ -149,15 +150,15 @@ class StartupBindingTests(unittest.TestCase):
                     'tab_binding': {'runtime_id': 'uia-tab', 'observed_title': 'launch nonce',
                                     'evidence': 'windows-uia-unique-title-at-launch'}}
         with mock.patch.object(self.binding.subprocess, 'Popen', return_value=process), \
-                mock.patch.object(SESSIONS[Host.CODEX], 'prepare_frontend', return_value=([], {}, None)), \
+                mock.patch.object(SESSIONS[Host.CLAUDE], 'prepare_frontend', return_value=([], {}, None)), \
                 mock.patch.object(self.binding.required_plugins, 'check', return_value={}), \
                 mock.patch.object(self.binding, '_acknowledged', return_value=True), \
                 mock.patch.object(self.binding, '_record_launch_binding') as record:
-            result = self.binding.run_session(Host.CODEX, 'native.exe', Path.cwd(), (),
+            result = self.binding.run_session(Host.CLAUDE, 'native.exe', Path.cwd(), (),
                                               require_session_start=True, terminal=terminal)
 
         self.assertEqual(0, result)
-        record.assert_called_once_with(Host.CODEX, 72, terminal)
+        record.assert_called_once_with(Host.CLAUDE, 72, terminal)
 
     def test_ordinary_status_retains_prelaunch_terminal_binding(self):
         directory = tempfile.TemporaryDirectory(prefix='startup status ')
@@ -185,6 +186,31 @@ class StartupBindingTests(unittest.TestCase):
         status = json.loads(status_path.read_text(encoding='utf-8'))
         self.assertEqual('exited', status['state'])
         self.assertEqual(terminal, status['terminal'])
+
+    def test_codex_directory_option_preserves_the_original_frontend_project(self):
+        directory = tempfile.TemporaryDirectory(prefix='startup codex project ')
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        selected = root / 'selected'
+        selected.mkdir()
+        started = []
+
+        def run_session(*arguments, **_kwargs):
+            started.append(arguments)
+            return 0
+
+        with mock.patch.object(self.binding.required_plugins, 'check_launch_roots', return_value=(selected, {})), \
+                mock.patch.object(self.binding.host_plugins.PLUGINS[Host.CODEX], 'ensure_hooks'), \
+                mock.patch.object(self.binding, 'run_session', side_effect=run_session):
+            result = self.binding.main([
+                '--host', 'codex', '--project', str(root), '--target', 'native-codex', '--require-session-start',
+                '--', '--no-daemon', '-C', 'selected', 'resume', 'exact_id',
+            ])
+
+        self.assertEqual(0, result)
+        self.assertTrue(started[0][2].samefile(root))
+        self.assertEqual(['--no-daemon', '-C', 'selected', 'resume', 'exact_id'], started[0][3])
+
 
     def test_failed_plugin_setup_still_starts_the_host_without_the_session_start_handshake(self):
         directory = tempfile.TemporaryDirectory(prefix='startup degraded ')

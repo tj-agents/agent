@@ -105,7 +105,9 @@ def monitor(
         frontend_op({"RunUserShellCommand": {"command": COMMAND}}),
     )
     ticket: dict[str, Any] = {
-        "token": "ticket-token",
+        "schema_version": 1,
+        "token": "a" * 64,
+        "host": "codex",
         "pid": 20,
         "backend": {"pid": 10, "process_start_time": "123"},
         "profile": str(profile),
@@ -151,6 +153,23 @@ def test_native_fixture_resumes_once_without_reexecuting_shell(
         {"type": "text", "text": shell_commands.CONTINUATION, "text_elements": []}
     ]
     assert set(request) == {"threadId", "clientUserMessageId", "input"}
+
+
+def test_shell_guard_uses_the_durable_observer_binding(
+    monitor: tuple[shell_commands.ShellMonitor, FakeServer],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance, server = monitor
+    monkeypatch.setattr(
+        client, "observer_binding", lambda _ticket: {"backend": {"kind": "handoff"}}
+    )
+    monkeypatch.setattr(
+        client,
+        "daemon_identity",
+        lambda *_args, **_kwargs: pytest.fail("shell selected a shared daemon"),
+    )
+    instance.step(server)
+    assert len(server.sent) == 1
 
 
 def test_shell_after_capacity_continuation_keeps_verified_input_attribution(

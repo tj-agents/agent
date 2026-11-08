@@ -1,17 +1,17 @@
-"""Codex's native sessions: transcripts, recovery, relaunch and exact close (Python 3.9+)."""
+"""Codex's native sessions: transcripts, recovery and exact close (Python 3.9+)."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 
-import agent_cli
 from codex import capacity, client, frontend_input, shell_commands
+from codex import handoff_runtime
 from host import Host
-import required_plugins
 import transcripts
 from tj_cli import process
 
@@ -20,13 +20,6 @@ FRONTEND_FROM_REGISTRATION = False
 FRONTEND_STATE = (client.RECORD_ENV, client.RECORD_PATH_ENV)
 TOOL_CALL_TYPES = ('function_call', 'custom_tool_call', 'local_shell_call')
 ARGUMENT_KEYS = ('arguments', 'input', 'action')
-RELAUNCH_SINGLE = {"--config", "-c", "--model", "-m", "--profile", "-p", "--sandbox", "-s",
-                   "--ask-for-approval", "-a", "--add-dir", "--enable", "--disable",
-                   "--remote", "--remote-auth-token-env", "--local-provider"}
-RELAUNCH_FLAGS = {"--no-daemon", "--no-alt-screen", "--search", "--oss", "--strict-config",
-                  "--approve-for-me", "--dangerously-bypass-approvals-and-sandbox"}
-LAUNCHER_CONFIG = {*(f'shell_environment_policy.set.{name}=""' for name in (client.RECORD_ENV, client.RECORD_PATH_ENV)),
-                   agent_cli.CODEX_KEEP_TAB_TITLE[1]}
 
 
 def history_roots(root: Path) -> tuple[Path, ...]:
@@ -103,6 +96,36 @@ def resume_command(session_id: str) -> str:
     return f'codex resume {session_id}'
 
 
+def requires_verified_handoff(require_session_start: bool, arguments=()) -> bool:
+    return (require_session_start and client.is_session(arguments)
+            and '--no-daemon' not in arguments
+            and not any(value.split('=')[0] == '--remote' for value in arguments))
+
+
+def handoff_executable(target: str, project: Path, environment: Mapping[str, str], *, allow_managed: bool = True) -> str:
+    return handoff_runtime.handoff_executable(target, project, environment, allow_managed=allow_managed)
+
+
+def validate_open(owned_backend: bool) -> None:
+    return None
+
+
+def recovery_owns_backend(item: dict, requested: bool | None, native_arguments=()) -> bool:
+    external = ('--no-daemon' in native_arguments
+                or any(value.split('=')[0] == '--remote' for value in native_arguments))
+    if requested and (external or item.get('status') != 'closed'):
+        raise ValueError('A required managed Codex recovery needs one verified closed local session')
+    return requested is not False and not external and item.get('status') == 'closed'
+
+
+def recovery_receipt(status_path: Path, item: dict, owned_backend: bool) -> dict:
+    if not owned_backend:
+        return {}
+    binding = client.launch_binding(status_path, item['id'], item['cwd'], item['profile'])
+    return {'status_path': str(status_path.resolve()),
+            'client_binding': {key: binding[key] for key in ('token', 'recipient', 'profile')}}
+
+
 def verify_resume(executable: str) -> None:
     try:
         result = process.run([executable, "resume", "--help"], text=True, capture_output=True, timeout=15)
@@ -113,7 +136,7 @@ def verify_resume(executable: str) -> None:
 
 
 def open_tab(cli, item: dict, directory, label: str, instruction: str, status_path: Path, *, model=None,
-             native_arguments=(), dangerously_skip_permissions=False) -> None:
+             native_arguments=(), dangerously_skip_permissions=False, owned_backend=False) -> None:
     executable, _ = cli.resolve_codex_executable()
     verify_resume(executable)
     old_profile = os.environ.get(HOST.home_variable)
@@ -125,7 +148,8 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
     try:
         cli.launch_tab(
             directory, sys.executable, label,
-            cli.bound_terminal_arguments(HOST.value, directory, executable, arguments, status_path),
+            cli.bound_terminal_arguments(HOST.value, directory, executable, arguments, status_path,
+                                         require_session_start=owned_backend),
             clear=("TERM",),
             force={HOST.home_variable: item["profile"]},
         )
@@ -136,8 +160,10 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
             os.environ[HOST.home_variable] = old_profile
 
 
-def prepare_frontend(arguments, project: Path, environment, executable=None):
-    prepared, values, ticket = client.prepare(arguments, project, environment, executable=executable)
+def prepare_frontend(arguments, project: Path, environment, executable=None, *, handoff=False, hook_roots=None):
+    prepared, values, ticket = client.prepare(
+        arguments, project, environment, executable=executable, handoff=handoff, hook_roots=hook_roots,
+    )
     if ticket is not None:
         ticket["_shell_executable"] = executable
         ticket["_capacity_executable"] = executable
@@ -155,13 +181,16 @@ def attach_frontend(ticket, pid: int) -> None:
     finally:
         if ticket is not None:
             ticket.update(hidden)
-    if ticket is not None and ticket.get("backend") and hidden.get("_shell_executable"):
+    if ticket is not None:
         ticket["pid"] = pid
-        shell_commands.start(ticket, client)
-        capacity.start(ticket)
-    elif ticket is not None:
-        print("Codex capacity recovery requires a managed shared app-server; this session will not auto-retry.",
-              file=sys.stderr)
+    if ticket is not None and ticket.get("backend") and hidden.get("_shell_executable"):
+        try:
+            client.observer_binding(ticket)
+        except (OSError, RuntimeError, ValueError, TypeError) as error:
+            print(f"Codex observers are unavailable for this managed backend: {error}", file=sys.stderr)
+        else:
+            shell_commands.start(ticket, client)
+            capacity.start(ticket)
 
 
 def release_frontend(ticket) -> None:
@@ -174,73 +203,70 @@ def release_frontend(ticket) -> None:
     client.release(ticket)
 
 
+def handoff_recipient(ticket, register_session, terminal):
+    if ticket is None or (ticket.get('backend') or {}).get('kind') != 'handoff':
+        raise RuntimeError('Codex handoff has no owned native backend binding')
+    table = register_session.process_table()
+    lookup = register_session.build_process_lookup()
+    def peer_state(pid):
+        info = lookup(pid)
+        return ('present', info) if info is not None else ('absent', None)
+    try:
+        record, submitted = client.bind_recipient(ticket, table, peer_state)
+    except client.RecipientPending:
+        return None
+    recipient = record['recipient']
+    store_module = register_session._load_session_store()
+    if store_module is None:
+        raise RuntimeError('Agent Store is unavailable for the verified handoff recipient')
+    with store_module.SessionStore() as store:
+        session = store.get_session(store_module.session_handle(HOST.value, recipient['thread_id']))
+        if session is None or session.ended_at is not None:
+            raise RuntimeError('Handoff SessionStart has no existing live Agent Store registration')
+        if (not session.profile or client.comparable_path(Path(session.profile).resolve())
+                != client.comparable_path(Path(record['profile']).resolve())):
+            raise RuntimeError('Handoff Agent Store registration has a different profile')
+    details = client_details({**record, **submitted})
+    if terminal is not None:
+        details['terminal'] = terminal
+    entry = register_session.record({'session_id': recipient['thread_id'], 'cwd': recipient['cwd']}, client={
+        'pid': record['frontend']['pid'], 'host': HOST.value,
+        'pid_started_at': record['frontend']['started_at'], **details,
+    }, require_existing=True)
+    if entry is None:
+        raise RuntimeError('Verified handoff recipient could not be attached to Agent Store')
+    with store_module.SessionStore() as store:
+        session = store.get_session(store_module.session_handle(HOST.value, recipient['thread_id']))
+        if (session is None or session.ended_at is not None or session.pid != record['frontend']['pid']
+                or session.pid_started_at != record['frontend']['started_at']
+                or client.comparable_path(Path(session.cwd).resolve()) != client.comparable_path(Path(recipient['cwd']).resolve())
+                or client.comparable_path(Path(session.profile).resolve()) != client.comparable_path(Path(record['profile']).resolve())):
+            raise RuntimeError('Agent Store did not retain the exact verified handoff client')
+    return {'token': record['token'], 'recipient': recipient, 'profile': record['profile']}
 
 def debug_arguments(arguments: list[str], directory: Path) -> tuple[list[str], str | None]:
     return arguments, None
-
-
-def native_arguments(argv: list[str]) -> list[str]:
-    kept, index, selector, subcommand = [], 0, False, False
-    while index < len(argv):
-        token = argv[index]
-        name, equals, _ = token.partition("=")
-        index += 1
-        if token == "--":
-            break
-        if not token.startswith("-"):
-            if token in {"resume", "fork"} and not subcommand:
-                subcommand, selector = True, True
-                continue
-            if selector:
-                selector = False
-                continue
-            continue
-        if len(token) > 2 and token[:2] in {"-c", "-m", "-p", "-s", "-a", "-C", "-i"}:
-            name, equals = token[:2], True
-        if name in RELAUNCH_FLAGS and not equals:
-            kept.append(token)
-        elif name in RELAUNCH_SINGLE and equals:
-            value = token[2:].removeprefix("=") if name in {"-c", "-m", "-p", "-s", "-a"} else token.partition("=")[2]
-            if name not in {"-c", "--config"} or value not in LAUNCHER_CONFIG:
-                kept.append(token)
-        elif name in RELAUNCH_SINGLE and index < len(argv):
-            if name not in {"-c", "--config"} or argv[index] not in LAUNCHER_CONFIG:
-                kept += [token, argv[index]]
-            index += 1
-        elif name in {"--cd", "-C", "--image", "-i"} and not equals:
-            index += 1
-        elif name == "--dangerously-bypass-hook-trust":
-            raise RuntimeError("Refusing to carry a hook-trust bypass into recovery")
-        elif name == "--last":
-            selector = False
-    return kept
-
-
-def validate_relaunch(entry: dict, project: Path) -> None:
-    native_cwd = entry.get("native_cwd")
-    if (not isinstance(native_cwd, str) or not Path(native_cwd).is_absolute()
-            or Path(native_cwd).resolve() != project.resolve()):
-        raise RuntimeError("the refresh checkout does not match this Codex thread's native checkout")
-
-
-def check_relaunch(project: Path, executable: str, native: list[str], session_id: str, prompt: str) -> None:
-    required_plugins.check_launch(project, HOST, executable, [*native, "resume", session_id, prompt])
-
 
 
 def current_client(session_id: str, nearest, shared, *, project=None):
     info, record = client.recorded_client(session_id, nearest, shared.process_info,
                                           shared.register_session.process_table(), project=project,
                                           peer_state=shared.process_state)
-    return info, {
+    return info, client_details(record, shared.register_session)
+
+
+def client_details(record, registration=None):
+    return {
         "client_identity": "managed-input", "launch_cwd": record["launch_cwd"],
         "title": record.get("title"), "client_message_id": record["client_message_id"],
         "native_turn_id": record["turn_id"],
+        "frontend_message_id": record.get("frontend_message_id", record["client_message_id"]),
+        "launch_token": record.get("token"),
         "native_rollout": record["native_rollout"],
         "native_cwd": record.get("native_cwd"),
         "recording_path": record["recording_path"], "backend": record["backend"],
         "profile": record["profile"],
-        "terminal": shared.register_session.terminal_identity(record.get("terminal_environment", {})),
+        "terminal": registration.terminal_identity(record.get("terminal_environment", {})) if registration else None,
     }
 
 
@@ -272,6 +298,8 @@ def revalidate_client(entry: dict, shared) -> None:
 
 def verify_frontend(entry: dict, shared) -> None:
     revalidate_client(entry, shared)
+    if (entry.get('backend') or {}).get('kind') == 'handoff':
+        return
     context = client.process_context(entry["pid"])
     if (client.comparable_path(Path(context.get(client.RECORD_PATH_ENV) or ''))
             != client.comparable_path(Path(entry.get("recording_path") or ''))
@@ -280,7 +308,7 @@ def verify_frontend(entry: dict, shared) -> None:
             or (entry.get("backend") is not None and client.daemon_identity(
                 {HOST.home_variable: entry["profile"]}, expected_pid=entry["backend"]["pid"],
             ) != entry["backend"])
-            or client.latest_input(entry["recording_path"]) != entry.get("client_message_id")):
+            or client.latest_input(entry["recording_path"]) != entry.get("frontend_message_id", entry.get("client_message_id"))):
         raise shared.Refusal("the frontend input or backend binding changed before close")
 
 

@@ -1,0 +1,372 @@
+"""Own one native handoff backend through the launch wrapper's pipe lease."""
+
+from __future__ import annotations
+
+import json
+import os
+import queue
+import secrets
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import IO, Any
+
+
+def identity(pid: int) -> dict[str, int | float]:
+    from tj_cli import processes
+
+    info = processes.process_info(pid)
+    if info is None:
+        raise RuntimeError("Owned launch process identity is unavailable")
+    return {"pid": info.pid, "started_at": info.started_at}
+
+
+def write_record(path: Path, value: dict[str, Any]) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def stop(child: subprocess.Popen[bytes]) -> None:
+    if child.poll() is None:
+        child.terminate()
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait(timeout=5)
+
+
+def native_identity(
+    child: subprocess.Popen[bytes], command: list[str]
+) -> dict[str, int | float]:
+    from codex import client
+    from startup_binding import register_session
+    from tj_cli import processes
+
+    launch = identity(child.pid)
+    deadline = time.monotonic() + 2
+    while child.poll() is None:
+        processes.require_live(launch, "Owned launcher identity changed")
+        table = register_session.process_table()
+        descendants = {child.pid}
+        while children := {
+            pid
+            for pid, info in table.items()
+            if info.ppid in descendants and pid not in descendants
+        }:
+            descendants.update(children)
+        matches = []
+        for pid in descendants:
+            info = processes.process_info(pid)
+            if info is None:
+                continue
+            candidate = {"pid": info.pid, "started_at": info.started_at}
+            if not processes.descends_from(candidate, launch):
+                continue
+            arguments = client.process_arguments(pid)
+            if (
+                arguments
+                and client.comparable_path(Path(arguments[0]).resolve())
+                == client.comparable_path(Path(command[0]).resolve())
+                and arguments[1:] == command[1:]
+            ):
+                matches.append(candidate)
+        if len(matches) > 1:
+            raise RuntimeError("Owned native process identity is ambiguous")
+        if matches:
+            candidate = matches[0]
+            processes.require_live(candidate, "Owned native process identity changed")
+            processes.require_live(launch, "Owned launcher identity changed")
+            if child.poll() is None and processes.descends_from(candidate, launch):
+                return candidate
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+    raise RuntimeError("Owned native process identity is unavailable")
+
+
+def confirm_exit(native: dict[str, int | float]) -> None:
+    from tj_cli import processes
+
+    deadline = time.monotonic() + 2
+    while processes.matches(native):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Owned native process exit is unconfirmed")
+        time.sleep(0.02)
+
+
+class Endpoint:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.parent_identity: tuple[int, int] | None = None
+        self.socket_identity: tuple[int, int] | None = None
+
+    @staticmethod
+    def identity(path: Path) -> tuple[int, int] | None:
+        try:
+            value = path.lstat()
+        except FileNotFoundError:
+            return None
+        return value.st_dev, value.st_ino
+
+    def capture(self, child: subprocess.Popen[bytes]) -> None:
+        deadline = time.monotonic() + 10
+        while child.poll() is None:
+            try:
+                parent = self.path.parent.lstat()
+            except FileNotFoundError:
+                parent = None
+            if parent is not None:
+                if not stat.S_ISDIR(parent.st_mode) or (
+                    getattr(parent, "st_file_attributes", 0)
+                    & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+                ):
+                    raise RuntimeError("Owned socket parent is not a native directory")
+                current = parent.st_dev, parent.st_ino
+                if self.parent_identity is None:
+                    self.parent_identity = current
+                elif self.parent_identity != current:
+                    raise RuntimeError("Owned socket parent changed during startup")
+                socket = self.identity(self.path)
+                if socket is not None and child.poll() is None:
+                    self.socket_identity = socket
+                    return
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Owned native endpoint was not created")
+            time.sleep(0.02)
+        raise RuntimeError("Owned backend exited before its endpoint was captured")
+
+    def evidence(self) -> dict[str, tuple[int, int] | None]:
+        return {"parent": self.parent_identity, "socket": self.socket_identity}
+
+    def remove(self) -> None:
+        parent = self.identity(self.path.parent)
+        if parent is None:
+            return
+        if self.parent_identity is None or parent != self.parent_identity:
+            raise RuntimeError(
+                "Owned endpoint cleanup cannot verify its original parent"
+            )
+        if self.socket_identity is None:
+            raise RuntimeError(
+                "Owned endpoint cleanup never captured its original socket"
+            )
+        socket = self.identity(self.path)
+        if socket is not None:
+            if self.socket_identity is None or socket != self.socket_identity:
+                raise RuntimeError(
+                    "Owned endpoint cleanup cannot verify its original socket"
+                )
+            if (
+                self.identity(self.path.parent) != self.parent_identity
+                or self.identity(self.path) != self.socket_identity
+            ):
+                raise RuntimeError("Owned endpoint changed before cleanup")
+            self.path.unlink()
+        if self.identity(self.path.parent) != self.parent_identity:
+            raise RuntimeError("Owned endpoint parent changed before directory cleanup")
+        self.path.parent.rmdir()
+
+
+def read_reply(stream: IO[bytes], result: queue.Queue[bytes]) -> None:
+    result.put(stream.readline(65537))
+
+
+class Lease:
+    def __init__(
+        self,
+        executable: str,
+        project: Path,
+        environment: dict[str, str],
+        directory: Path,
+        launch_arguments: list[str],
+    ) -> None:
+        from tj_cli import process
+
+        socket = (
+            Path(tempfile.gettempdir()).resolve()
+            / ("tja-" + secrets.token_hex(12))
+            / "s"
+        )
+        wrapper = identity(os.getpid())
+        self.process = process.start(
+            [sys.executable, "-I", "-B", str(Path(__file__).resolve())],
+            cwd=project,
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            start_new_session=os.name != "nt",
+        )
+        assert self.process.stdin is not None
+        assert self.process.stdout is not None
+        self.writer = self.process.stdin
+        self.reader = self.process.stdout
+        try:
+            specification = {
+                "executable": executable,
+                "project": str(project),
+                "socket_path": str(socket),
+                "directory": str(directory),
+                "arguments": launch_arguments,
+                "token": directory.name,
+                "wrapper": wrapper,
+            }
+            self.writer.write((json.dumps(specification) + "\n").encode("utf-8"))
+            self.writer.flush()
+            replies: queue.Queue[bytes] = queue.Queue(maxsize=1)
+            threading.Thread(
+                target=read_reply, args=(self.reader, replies), daemon=True
+            ).start()
+            try:
+                reply = replies.get(timeout=15)
+            except queue.Empty as error:
+                raise RuntimeError("Owned backend supervisor did not start") from error
+            value = json.loads(reply)
+            if value.get("state") != "running":
+                raise RuntimeError(value.get("error") or "Owned backend did not start")
+            self.backend = value["backend"]
+            self.supervisor = value["supervisor"]
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        self.writer.close()
+        try:
+            self.process.wait(timeout=12)
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                "Owned backend cleanup is unconfirmed; preserve its launch evidence"
+            ) from error
+        finally:
+            self.reader.close()
+        if self.process.returncode:
+            raise RuntimeError(
+                "Owned backend cleanup failed; preserve its launch evidence"
+            )
+
+
+def wait_for_eof(stream: IO[bytes], ended: threading.Event) -> None:
+    try:
+        while stream.read(4096):
+            pass
+    finally:
+        ended.set()
+
+
+def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
+    from tj_cli import process, processes
+
+    directory = Path(specification["directory"])
+    socket = Path(specification["socket_path"])
+    endpoint = Endpoint(socket)
+    receipt = directory / "backend.json"
+    state: dict[str, Any] = {
+        "state": "starting",
+        "socket_path": str(socket),
+        "token": specification["token"],
+        "wrapper": specification["wrapper"],
+    }
+    child = None
+    native = None
+    try:
+        if not socket.is_absolute() or socket.parent.exists():
+            raise RuntimeError(
+                "Owned native socket requires a new absolute private directory"
+            )
+        processes.require_live(
+            specification["wrapper"], "Launch wrapper is unavailable"
+        )
+        if (
+            not processes.descends_from(identity(os.getpid()), specification["wrapper"])
+            or specification["token"] != directory.name
+        ):
+            raise RuntimeError(
+                "Backend supervisor does not belong to this launch wrapper"
+            )
+        if (
+            not directory.is_absolute()
+            or not directory.is_dir()
+            or not Path(specification["executable"]).is_absolute()
+            or not Path(specification["project"]).is_absolute()
+            or not isinstance(specification["arguments"], list)
+            or not all(isinstance(value, str) for value in specification["arguments"])
+        ):
+            raise RuntimeError("Owned native backend specification is invalid")
+        command = [
+            specification["executable"],
+            *specification["arguments"],
+            "app-server",
+            "--listen",
+            "unix://" + str(socket),
+        ]
+        with (directory / "backend.log").open("ab") as diagnostic:
+            child = process.start(
+                command,
+                cwd=specification["project"],
+                stdin=subprocess.DEVNULL,
+                stdout=diagnostic,
+                stderr=diagnostic,
+                close_fds=True,
+            )
+            endpoint.capture(child)
+            native = native_identity(child, command)
+            state.update(
+                state="running",
+                filesystem=endpoint.evidence(),
+                supervisor=identity(os.getpid()),
+                backend={
+                    "kind": "handoff",
+                    **native,
+                    "socket_path": str(socket),
+                    "parent_identity": endpoint.parent_identity,
+                    "socket_identity": endpoint.socket_identity,
+                },
+            )
+            write_record(receipt, state)
+            print(json.dumps(state), flush=True)
+            ended = threading.Event()
+            threading.Thread(
+                target=wait_for_eof, args=(stream, ended), daemon=True
+            ).start()
+            while not ended.wait(0.1):
+                if child.poll() is not None:
+                    break
+            stop(child)
+            confirm_exit(native)
+        endpoint.remove()
+        state.update(state="exited", returncode=child.returncode)
+        write_record(receipt, state)
+        return 0
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+        if child is not None:
+            try:
+                stop(child)
+                if native is not None:
+                    confirm_exit(native)
+                endpoint.remove()
+            except (OSError, RuntimeError, subprocess.SubprocessError) as cleanup:
+                state["cleanup_error"] = str(cleanup)
+        state.update(state="failed", error=str(error), filesystem=endpoint.evidence())
+        write_record(receipt, state)
+        print(json.dumps(state), flush=True)
+        return 1
+
+
+def main() -> int:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    raw = sys.stdin.buffer.readline(65537)
+    if not raw or len(raw) > 65536:
+        return 1
+    return supervise(json.loads(raw), sys.stdin.buffer)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

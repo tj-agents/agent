@@ -53,13 +53,17 @@ def run(arguments, cwd, timeout=TIMEOUT):
 
 
 class AppServer:
-    def __init__(self, executable, cwd, launch_args=(), environment=None, timeout=TIMEOUT, existing=False):
+    def __init__(self, executable, cwd, launch_args=(), environment=None, timeout=TIMEOUT, existing=False,
+                 socket_path=None):
+        if socket_path is not None and not existing:
+            raise ValueError("An owned socket requires an existing native app server")
         if existing:
             from codex.websocket import WebSocketStdio
 
         self.timeout = timeout
         self.process = process.start(
-            [*command(executable), *launch_args, "app-server", *(["proxy"] if existing else [])], cwd=cwd,
+            [*command(executable), *launch_args, "app-server", *(["proxy"] if existing else []),
+             *(["--sock", str(socket_path)] if socket_path is not None else [])], cwd=cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=not existing, encoding=None if existing else "utf-8", bufsize=-1 if existing else 1,
             env=dict(os.environ, **(environment or {})),

@@ -514,7 +514,7 @@ def _load_session_store():
         return None
 
 
-def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, preserve_turn=False):
+def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, preserve_turn=False, require_existing=False):
     module = _load_session_store()
     if module is None:
         return
@@ -525,7 +525,14 @@ def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, pre
     with store:
         try:
             handle = module.session_handle(host, session_id)
-            if preserve_turn and store.get_session(handle) is not None:
+            if require_existing:
+                def attach_existing(session):
+                    if (not session.profile or os.path.normcase(str(Path(session.profile).resolve()))
+                            != profile_identity(host)):
+                        raise ValueError("Session profile changed before client attachment")
+                    session.attach_client(pid, pid_started_at, cwd)
+                store.update_session(handle, attach_existing)
+            elif preserve_turn and store.get_session(handle) is not None:
                 store.update_session(handle, lambda session: session.attach_client(pid, pid_started_at, cwd))
             else:
                 store.start_session(host, session_id, cwd, module.Checkout.probe(cwd), title=title, pid=pid,
@@ -540,7 +547,7 @@ def launcher_title(data):
     return os.environ.get(TITLE_ENV)
 
 
-def record(data, lookup=None, host_names=None, client=None):
+def record(data, lookup=None, host_names=None, client=None, require_existing=False):
     session = data.get("session_id") or data.get("sessionId")
     if not session:
         return None
@@ -570,7 +577,8 @@ def record(data, lookup=None, host_names=None, client=None):
     if client is not None:
         entry["client_identity"] = client["client_identity"]
         entry["launch_cwd"] = client.get("launch_cwd", cwd)
-        for key in ("client_message_id", "native_turn_id", "native_rollout", "native_cwd", "recording_path", "backend", "profile"):
+        for key in ("client_message_id", "frontend_message_id", "launch_token", "native_turn_id", "native_rollout",
+                    "native_cwd", "recording_path", "backend", "profile"):
             if key in client:
                 entry[key] = client[key]
     destination = state_directory() / f"{session}.json"
@@ -581,7 +589,8 @@ def record(data, lookup=None, host_names=None, client=None):
     if profile_identity(host) is not None:
         try:
             _record_session_start(host, str(session), cwd, title, pid, pid_started_at,
-                                  **({"preserve_turn": True} if client is not None else {}))
+                                  **({"preserve_turn": True} if client is not None else {}),
+                                  **({"require_existing": True} if require_existing else {}))
         except Exception:
             pass
     return entry

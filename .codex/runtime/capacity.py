@@ -250,23 +250,19 @@ class CapacityMonitor:
             print(f"Codex capacity recovery stopped safely: {error}", file=sys.stderr)
 
     def _run(self) -> None:
-        from codex import client, hook_trust
+        from codex import client
 
         self.recording.view_changes = client.VIEW_CHANGES
         ticket = self.ticket
         if not ticket.get("backend") or not ticket.get("_capacity_executable"):
             return
         launch_args = ticket.get("_capacity_launch_args", [])
-        server_context = hook_trust.AppServer(
-            ticket["_capacity_executable"],
-            Path(ticket["launch_cwd"]),
-            launch_args=launch_args,
-            environment={"CODEX_HOME": ticket["profile"]},
-            timeout=15,
-            existing=True,
+        server_context = client.observer_server(
+            ticket, ticket["_capacity_executable"], launch_args=launch_args, timeout=15
         )
         self.process = server_context.process
         with server_context as server:
+            client.observer_binding(ticket)
             while not self.stop_event.wait(2):
                 try:
                     latest, epoch, identity = self.recording.snapshot()
@@ -289,13 +285,11 @@ class CapacityMonitor:
                     self._recover(server, client, candidate, latest, epoch)
 
     def _backend_matches(self, client: Any) -> bool:
-        return bool(
-            client.daemon_identity(
-                {"CODEX_HOME": self.ticket["profile"]},
-                expected_pid=self.ticket["backend"]["pid"],
-            )
-            == self.ticket["backend"]
-        )
+        try:
+            client.observer_binding(self.ticket)
+        except (OSError, RuntimeError, ValueError, TypeError):
+            return False
+        return True
 
     def _candidates(self) -> list[dict[str, Any]]:
         directory = state_root() / "capacity-inputs" / digest(self.ticket["profile"])
