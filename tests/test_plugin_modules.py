@@ -28,7 +28,7 @@ import sys
 
 class RejectEntryPoints(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname in {"reload_plugins", "host_plugins", "claude.plugins", "codex.plugins"}:
+        if fullname in {"host_plugins", "claude.plugins", "codex.plugins"}:
             raise ImportError("Library imported an entry point: " + fullname)
 
 sys.meta_path.insert(0, RejectEntryPoints())

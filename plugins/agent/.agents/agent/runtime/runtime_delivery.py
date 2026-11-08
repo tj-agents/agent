@@ -193,14 +193,35 @@ def _atomic(path: Path, body: bytes) -> None:
             temporary.unlink()
 
 
-def _lock(root: Path):
-    import plugin_autoupdate
+def acquire_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = path.open("a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
 
+            stream.seek(0)
+            if not stream.read(1):
+                stream.write(b"0")
+                stream.flush()
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        stream.close()
+        return None
+    return stream
+
+
+def _lock(root: Path):
     path = root.parent / ".agent-runtime-delivery.lock"
     deadline = time.monotonic() + 30
     lock = None
     while lock is None and time.monotonic() < deadline:
-        lock = plugin_autoupdate.acquire_lock(path)
+        lock = acquire_lock(path)
         if lock is None:
             time.sleep(0.02)
     if lock is None:

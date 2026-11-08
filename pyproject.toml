@@ -14,24 +14,21 @@ tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "0ba09610956ddb69
 dev = ["mypy>=2.4.0", "pytest>=9.1.1", "ruff>=0.17.1"]
 
 [tool.ruff]
-include = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/plugins/scripts/config_conflicts.py", "tests/test_conflicted_plugin_settings.py", "tests/test_handoff_followup.py", ".codex/runtime/shell_commands.py", "tests/test_codex_shell_commands.py", ".agents/agent/runtime/native_runtime.py", "tests/test_native_runtime.py", ".codex/runtime/capacity.py", "tests/test_codex_capacity.py", ".codex/runtime/frontend_input.py", "tests/test_codex_observers.py", ".agents/agent/utility/plugins/scripts/machine_paths.py", "tests/test_local_codex_refresh.py", "tests/test_managed_admission.py", "tests/test_admission_source_coherence.py", "tests/test_observer_launch.py", "tests/test_hidden_observer_integration.py", "tests/fixtures/hidden_observer.py", ".agents/agent/runtime/managed_admission.py"]
+include = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/plugins/scripts/config_conflicts.py", "tests/test_conflicted_plugin_settings.py", "tests/test_handoff_followup.py", ".codex/runtime/shell_commands.py", "tests/test_codex_shell_commands.py", ".agents/agent/runtime/native_runtime.py", "tests/test_native_runtime.py", ".codex/runtime/capacity.py", "tests/test_codex_capacity.py", ".codex/runtime/frontend_input.py", "tests/test_codex_observers.py", ".agents/agent/utility/plugins/scripts/machine_paths.py", "tests/test_local_codex_refresh.py", "tests/test_observer_launch.py", "tests/test_hidden_observer_integration.py", "tests/fixtures/hidden_observer.py"]
 target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "N", "UP", "B", "A", "BLE", "C4", "SIM", "PTH", "PIE", "RET", "RUF"]
 
-[tool.ruff.lint.per-file-ignores]
-".agents/agent/runtime/managed_admission.py" = ["E402"]
-
 [tool.mypy]
 strict = true
 warn_unreachable = true
 explicit_package_bases = true
-files = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/plugins/scripts/config_conflicts.py", "tests/test_conflicted_plugin_settings.py", "tests/test_handoff_followup.py", ".codex/runtime/shell_commands.py", "tests/test_codex_shell_commands.py", ".agents/agent/runtime/native_runtime.py", "tests/test_native_runtime.py", ".codex/runtime/capacity.py", "tests/test_codex_capacity.py", ".codex/runtime/frontend_input.py", "tests/test_codex_observers.py", ".agents/agent/utility/plugins/scripts/machine_paths.py", "tests/test_local_codex_refresh.py", "tests/test_managed_admission.py", "tests/test_admission_source_coherence.py", "tests/test_observer_launch.py", "tests/test_hidden_observer_integration.py", "tests/fixtures/hidden_observer.py", ".agents/agent/runtime/managed_admission.py"]
+files = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/plugins/scripts/config_conflicts.py", "tests/test_conflicted_plugin_settings.py", "tests/test_handoff_followup.py", ".codex/runtime/shell_commands.py", "tests/test_codex_shell_commands.py", ".agents/agent/runtime/native_runtime.py", "tests/test_native_runtime.py", ".codex/runtime/capacity.py", "tests/test_codex_capacity.py", ".codex/runtime/frontend_input.py", "tests/test_codex_observers.py", ".agents/agent/utility/plugins/scripts/machine_paths.py", "tests/test_local_codex_refresh.py", "tests/test_observer_launch.py", "tests/test_hidden_observer_integration.py", "tests/fixtures/hidden_observer.py"]
 mypy_path = [".agents/agent/runtime", ".codex/runtime", "plugins/agent/.agents/agent/runtime", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["host", "host_sessions", "plugin_autoupdate", "close_fixtures", "repo_config", "test_codex_followup", "test_required_plugins", "codex.*", "host_plugins", "plugin_refresh", "required_plugins", "tj_agent", "tj_agent.*"]
+module = ["host", "host_sessions", "close_fixtures", "repo_config", "test_codex_followup", "test_required_plugins", "codex.*", "host_plugins", "required_plugins", "runtime_delivery", "tj_agent", "tj_agent.*"]
 follow_imports = "skip"
 
 [[tool.mypy.overrides]]

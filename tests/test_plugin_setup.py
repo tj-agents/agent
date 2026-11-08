@@ -25,16 +25,6 @@ state.write_text(sys.argv[-1], encoding='utf-8')
 
 
 class PluginSetupTests(unittest.TestCase):
-    def test_setup_repairs_a_declared_missing_plugin_then_verifies_its_runtime(self):
-        import reload_plugins
-
-        missing = required_plugins.MissingRequiredPluginsError('missing', self.project, ['selected@publisher'])
-        with mock.patch.object(required_plugins, 'check', side_effect=[missing, {'selected@publisher': self.runtime}]), \
-                mock.patch.object(reload_plugins, 'repair_missing') as repair:
-            self.assertEqual([], required_plugins.converge_setup(self.project, ('codex',), {'codex': None}))
-        repair.assert_called_once_with('codex', self.project, ('selected@publisher',), None)
-        self.assertTrue(self.state.exists())
-
     def setUp(self):
         reconciliation = mock.patch.object(required_plugins, "reconcile_selection", return_value=[])
         reconciliation.start()

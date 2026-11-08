@@ -1,10 +1,9 @@
-"""Native bootstrap precedes admission and acknowledges only installed releases."""
+"""Native bootstrap acknowledges only installed releases."""
 
 from __future__ import annotations
 
 import importlib
 import io
-import json
 import os
 import shutil
 import subprocess
@@ -20,14 +19,7 @@ sys.path.insert(0, str(RUNTIME))
 
 import native_runtime  # noqa: E402
 
-events = importlib.import_module("machine_events")
-autoupdate = importlib.import_module("plugin_autoupdate")
 install = importlib.import_module("install")
-launch = importlib.import_module("launch_check")
-required = importlib.import_module("required_plugins")
-reload = importlib.import_module("reload_plugins")
-host = importlib.import_module("host")
-startup_binding = importlib.import_module("startup_binding")
 
 
 @pytest.fixture(autouse=True)
@@ -127,121 +119,6 @@ def test_old_release_noop_cannot_admit_incompatible_native_tools(
         native_runtime.prepare()
     ensure.assert_called_once_with(directory, revision=None)
     expose.assert_not_called()
-
-
-def test_launch_bootstraps_before_native_plugin_inventory(tmp_path: Path) -> None:
-    order: list[str] = []
-
-    def inventory(*arguments: object, admission: bool) -> dict[str, Path]:
-        assert admission
-        order.append("plugins")
-        return {}
-
-    with (
-        mock.patch.object(required, "launch_context", return_value=(tmp_path, ())),
-        mock.patch.object(
-            native_runtime, "prepare", side_effect=lambda: order.append("native")
-        ),
-        mock.patch.object(
-            reload,
-            "prepare_required",
-            side_effect=inventory,
-        ),
-    ):
-        assert launch.prepare_launch_roots(tmp_path, host.Host.CODEX, "codex", []) == (
-            tmp_path,
-            {},
-        )
-    assert order == ["native", "plugins"]
-
-
-@pytest.mark.parametrize("host_name", ["claude", "codex"])
-@pytest.mark.parametrize("startup", [False, True])
-@pytest.mark.parametrize("managed", [False, True])
-@pytest.mark.parametrize("failure", ["busy", "runtime", "os"])
-def test_native_preparation_failure_blocks_only_managed_launches(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    host_name: str,
-    startup: bool,
-    managed: bool,
-    failure: str,
-) -> None:
-    project = tmp_path / "selected project ü"
-    (project / ".agents").mkdir(parents=True)
-    (project / ".agents/plugins.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "plugins": ["agent@tj-agents" if managed else "other@example"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path / "native"))
-    error = (
-        RuntimeError("native release unavailable")
-        if failure == "runtime"
-        else OSError("native install unavailable")
-    )
-    with (
-        mock.patch.object(required, "launch_context", return_value=(project, ())),
-        mock.patch.object(native_runtime, "pending", return_value=("tj_hook",)),
-        mock.patch.object(
-            autoupdate,
-            "state_directory",
-            return_value=tmp_path / "state",
-        ),
-        mock.patch.object(
-            autoupdate,
-            "acquire_lock",
-            return_value=None if failure == "busy" else mock.Mock(),
-        ),
-        mock.patch.object(
-            native_install, "ensure_native", side_effect=error
-        ) as install,
-        mock.patch.object(reload, "prepare_required") as inventory,
-        mock.patch.object(launch, "recover_install") as recover,
-        mock.patch.object(launch, "check", return_value="current") as check,
-        mock.patch.object(startup_binding.managed_admission, "verify") as verify,
-        mock.patch.object(startup_binding, "run_session", return_value=0) as native,
-        mock.patch.object(startup_binding, "_prelaunch_terminal", return_value=None),
-        mock.patch.object(
-            startup_binding.register_session, "terminal_identity", return_value=None
-        ),
-    ):
-        arguments = [
-            "--host",
-            host_name,
-            "--project",
-            str(tmp_path),
-            "--target",
-            "native",
-        ]
-        if startup:
-            arguments.append("--require-session-start")
-        entrypoint = startup_binding.main if startup else launch.main
-        result = entrypoint(arguments)
-
-    assert result == int(managed)
-    inventory.assert_not_called()
-    recover.assert_not_called()
-    verify.assert_not_called()
-    if failure == "busy":
-        install.assert_not_called()
-    else:
-        install.assert_called_once_with(tmp_path / "native", revision=None)
-    if managed:
-        native.assert_not_called()
-        check.assert_not_called()
-        assert "Managed readiness" in capsys.readouterr().err
-    elif startup:
-        native.assert_called_once()
-        assert "require_session_start" not in native.call_args.kwargs
-    else:
-        check.assert_not_called()
-        assert "launching anyway" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Git configuration validation")
@@ -380,57 +257,6 @@ def test_native_git_preparation_preserves_empty_inherited_configuration(
     assert result.stdout.strip() == ""
 
 
-@pytest.mark.parametrize("host_name", ["claude", "codex"])
-def test_startup_prepares_git_before_skipped_plugin_admission(
-    tmp_path: Path, host_name: str
-) -> None:
-    events: list[str] = []
-
-    def prepare_roots(*_arguments: object, **_keywords: object) -> tuple[None, None]:
-        events.append("admission")
-        return None, None
-
-    def run_session(*_arguments: object, **_keywords: object) -> int:
-        events.append("native frontend")
-        return 0
-
-    with (
-        mock.patch.object(
-            startup_binding.native_runtime,
-            "prepare_git_environment",
-            side_effect=lambda: events.append("git"),
-        ),
-        mock.patch.object(
-            startup_binding.launch_check,
-            "prepare_launch_roots",
-            side_effect=prepare_roots,
-        ),
-        mock.patch.object(
-            startup_binding.launch_check, "check", return_value="skipped"
-        ),
-        mock.patch.object(startup_binding, "run_session", side_effect=run_session),
-        mock.patch.object(startup_binding, "_prelaunch_terminal", return_value=None),
-        mock.patch.object(
-            startup_binding.register_session, "terminal_identity", return_value=None
-        ),
-    ):
-        result = startup_binding.main(
-            [
-                "--host",
-                host_name,
-                "--project",
-                str(tmp_path),
-                "--target",
-                "native",
-                "--",
-                "--help",
-            ]
-        )
-
-    assert result == 0
-    assert events == ["git", "admission", "native frontend"]
-
-
 def test_installer_snapshots_prepared_git_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -500,39 +326,6 @@ def test_relative_override_stays_bound_when_the_host_changes_directory(
     assert Path(shutil.which(names[1]) or "").resolve() == directory / names[1]
 
 
-def test_maintenance_launch_does_not_install_native_tools(tmp_path: Path) -> None:
-    with (
-        mock.patch.object(required, "launch_context", return_value=(None, ())),
-        mock.patch.object(native_runtime, "prepare") as prepare,
-    ):
-        assert launch.prepare_launch_roots(
-            tmp_path, host.Host.CODEX, "codex", ["--help"]
-        ) == (None, None)
-    prepare.assert_not_called()
-
-
-def test_cli_revision_is_not_acknowledged_until_its_release_is_installed() -> None:
-    revision = "a" * 40
-    current = {
-        "nameWithOwner": "tj-agents/cli",
-        "defaultBranchRef": {"name": "main", "target": {"oid": revision}},
-    }
-    reconciler = events.Reconciler(refresh=mock.Mock(return_value=0))
-    with (
-        mock.patch.object(
-            native_runtime, "prepare", side_effect=RuntimeError("release not published")
-        ),
-        pytest.raises(RuntimeError, match="not published"),
-    ):
-        reconciler.repository(current)
-    assert "tj-agents/cli" not in reconciler.state
-    with mock.patch.object(native_runtime, "prepare", return_value=()) as prepare:
-        reconciler.repository(current)
-        reconciler.repository(current)
-    prepare.assert_called_once_with(revision=revision)
-    assert reconciler.state["tj-agents/cli"]["revision"] == revision
-
-
 def test_installer_check_reports_missing_pair_without_installing(
     tmp_path: Path,
 ) -> None:
@@ -565,52 +358,6 @@ def test_failed_native_install_prevents_dependent_steps(tmp_path: Path) -> None:
     dependent.assert_not_called()
 
 
-@pytest.mark.parametrize("check_only", [False, True])
-def test_fresh_install_bootstraps_before_identity_checks(
-    tmp_path: Path, check_only: bool
-) -> None:
-    context = install.Context(home=tmp_path, environ={}, windows=os.name == "nt")
-    ready = False
-
-    def prepare() -> tuple[str, ...]:
-        nonlocal ready
-        ready = True
-        return ("tj", "tj_hook")
-
-    def identity(**kwargs: object) -> None:
-        assert ready
-
-    with (
-        mock.patch.object(
-            native_runtime, "pending", side_effect=lambda: () if ready else ("tj_hook",)
-        ),
-        mock.patch.object(native_runtime, "prepare", side_effect=prepare) as bootstrap,
-        mock.patch.object(
-            install.machine_events, "require_tommy", side_effect=identity
-        ) as who,
-    ):
-        steps = install.selected_steps({"native CLI"})
-        assert install.run_steps(
-            steps, context, check_only, io.StringIO(), io.StringIO()
-        ) == int(check_only)
-    assert ready is not check_only
-    assert bootstrap.call_count == int(not check_only)
-    assert who.call_count == int(not check_only)
-
-
-def test_explicit_refresh_bootstraps_before_any_native_admission(
-    tmp_path: Path,
-) -> None:
-    with (
-        mock.patch.object(
-            native_runtime, "prepare", side_effect=RuntimeError("release unavailable")
-        ),
-        mock.patch.object(reload, "prepare_required") as inventory,
-    ):
-        assert reload.main(["--all", "--project", str(tmp_path)]) == 1
-    inventory.assert_not_called()
-
-
 def test_installer_check_converges_when_parent_shell_path_omits_native_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -624,41 +371,9 @@ def test_installer_check_converges_when_parent_shell_path_omits_native_directory
 
     with (
         mock.patch.object(install, "machine_context", side_effect=context),
-        mock.patch.object(events, "require_tommy"),
         mock.patch.object(native_runtime, "pending", return_value=()),
         mock.patch.object(native_runtime, "prepare") as prepare,
     ):
         assert install.main(["--check", "--step", "native CLI"]) == 0
         assert install.main(["--check", "--step", "native CLI"]) == 0
     prepare.assert_not_called()
-
-
-def test_supervisor_retains_the_selected_native_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    directory = tmp_path / "native bin ü"
-    context = install.Context(
-        home=tmp_path, environ={"TJ_BIN_DIR": str(directory)}, windows=os.name == "nt"
-    )
-    service = importlib.import_module("event_service")
-    assert "--native-bin-dir=" + str(directory.resolve()) in service.arguments(context)
-    monkeypatch.delenv("TJ_BIN_DIR", raising=False)
-    with (
-        mock.patch.object(events, "require_tommy"),
-        mock.patch.object(events, "catch_up_states", return_value=[]),
-        mock.patch.object(events, "Reconciler") as reconciler,
-    ):
-        reconciler.return_value.state = {}
-        reconciler.return_value.catch_up.return_value = []
-        assert (
-            events.main(
-                [
-                    "--native-bin-dir",
-                    str(directory),
-                    "--state-directory",
-                    str(tmp_path / "state"),
-                ]
-            )
-            == 0
-        )
-    assert native_install.default_bin_dir() == directory.resolve()
