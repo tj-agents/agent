@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import agent_cli
+from tj_cli import process
 
 
 def handoff_executable(
@@ -49,10 +49,7 @@ def handoff_executable(
         return str(candidate), version
 
     def invoke(executable: str, *arguments: str) -> str:
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = subprocess.CREATE_NO_WINDOW
-        result = subprocess.run(
+        result: subprocess.CompletedProcess[str] = process.run(
             [executable, *arguments],
             cwd=project,
             env=dict(environment),
@@ -60,7 +57,6 @@ def handoff_executable(
             text=True,
             encoding="utf-8",
             timeout=15,
-            creationflags=creationflags,
         )
         if result.returncode:
             raise ValueError(

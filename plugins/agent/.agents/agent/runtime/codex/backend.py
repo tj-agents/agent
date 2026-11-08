@@ -41,6 +41,65 @@ def stop(child: subprocess.Popen[bytes]) -> None:
         child.wait(timeout=5)
 
 
+def native_identity(
+    child: subprocess.Popen[bytes], command: list[str]
+) -> dict[str, int | float]:
+    from codex import client
+    from startup_binding import register_session
+    from tj_cli import processes
+
+    launch = identity(child.pid)
+    deadline = time.monotonic() + 2
+    while child.poll() is None:
+        processes.require_live(launch, "Owned launcher identity changed")
+        table = register_session.process_table()
+        descendants = {child.pid}
+        while children := {
+            pid for pid, info in table.items()
+            if info.ppid in descendants and pid not in descendants
+        }:
+            descendants.update(children)
+        matches = []
+        for pid in descendants:
+            info = processes.process_info(pid)
+            if info is None:
+                continue
+            candidate = {"pid": info.pid, "started_at": info.started_at}
+            if not processes.descends_from(candidate, launch):
+                continue
+            arguments = client.process_arguments(pid)
+            if (
+                arguments
+                and client.comparable_path(Path(arguments[0]).resolve())
+                == client.comparable_path(Path(command[0]).resolve())
+                and arguments[1:] == command[1:]
+            ):
+                matches.append(candidate)
+        if len(matches) > 1:
+            raise RuntimeError("Owned native process identity is ambiguous")
+        if matches:
+            candidate = matches[0]
+            processes.require_live(candidate, "Owned native process identity changed")
+            processes.require_live(launch, "Owned launcher identity changed")
+            if child.poll() is None and processes.descends_from(candidate, launch):
+                return candidate
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.02)
+    raise RuntimeError("Owned native process identity is unavailable")
+
+
+def confirm_exit(native: dict[str, int | float]) -> None:
+    from tj_cli import processes
+
+    deadline = time.monotonic() + 2
+    while processes.matches(native):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Owned native process exit is unconfirmed")
+        time.sleep(0.02)
+
+
 class Endpoint:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -127,23 +186,21 @@ class Lease:
         directory: Path,
         launch_arguments: list[str],
     ) -> None:
+        from tj_cli import process
+
         socket = (
             Path(tempfile.gettempdir()).resolve()
             / ("tja-" + secrets.token_hex(12))
             / "s"
         )
         wrapper = identity(os.getpid())
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = subprocess.CREATE_NO_WINDOW
-        self.process = subprocess.Popen(
+        self.process = process.start(
             [sys.executable, "-I", "-B", str(Path(__file__).resolve())],
             cwd=project,
             env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
             start_new_session=os.name != "nt",
         )
         assert self.process.stdin is not None
@@ -204,7 +261,7 @@ def wait_for_eof(stream: IO[bytes], ended: threading.Event) -> None:
 
 
 def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
-    from tj_cli import processes
+    from tj_cli import process, processes
 
     directory = Path(specification["directory"])
     socket = Path(specification["socket_path"])
@@ -217,6 +274,7 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
         "wrapper": specification["wrapper"],
     }
     child = None
+    native = None
     try:
         if not socket.is_absolute() or socket.parent.exists():
             raise RuntimeError(
@@ -241,33 +299,31 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
             or not all(isinstance(value, str) for value in specification["arguments"])
         ):
             raise RuntimeError("Owned native backend specification is invalid")
-        creationflags = 0
-        if sys.platform == "win32":
-            creationflags = subprocess.CREATE_NO_WINDOW
+        command = [
+            specification["executable"],
+            *specification["arguments"],
+            "app-server",
+            "--listen",
+            "unix://" + str(socket),
+        ]
         with (directory / "backend.log").open("ab") as diagnostic:
-            child = subprocess.Popen(
-                [
-                    specification["executable"],
-                    *specification["arguments"],
-                    "app-server",
-                    "--listen",
-                    "unix://" + str(socket),
-                ],
+            child = process.start(
+                command,
                 cwd=specification["project"],
                 stdin=subprocess.DEVNULL,
                 stdout=diagnostic,
                 stderr=diagnostic,
-                creationflags=creationflags,
                 close_fds=True,
             )
             endpoint.capture(child)
+            native = native_identity(child, command)
             state.update(
                 state="running",
                 filesystem=endpoint.evidence(),
                 supervisor=identity(os.getpid()),
                 backend={
                     "kind": "handoff",
-                    **identity(child.pid),
+                    **native,
                     "socket_path": str(socket),
                     "parent_identity": endpoint.parent_identity,
                     "socket_identity": endpoint.socket_identity,
@@ -283,6 +339,7 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
                 if child.poll() is not None:
                     break
             stop(child)
+            confirm_exit(native)
         endpoint.remove()
         state.update(state="exited", returncode=child.returncode)
         write_record(receipt, state)
@@ -291,6 +348,8 @@ def supervise(specification: dict[str, Any], stream: IO[bytes]) -> int:
         if child is not None:
             try:
                 stop(child)
+                if native is not None:
+                    confirm_exit(native)
                 endpoint.remove()
             except (OSError, RuntimeError, subprocess.SubprocessError) as cleanup:
                 state["cleanup_error"] = str(cleanup)
