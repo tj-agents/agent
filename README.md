@@ -114,7 +114,7 @@ the launcher reports it and preserves the receipt rather than submitting the res
 ## Skills
 
 - `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
-  `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`, `agent:close`
+  `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`
 - `agent-store:inspect`
 - `codex:hooks`, `codex:memory`
 

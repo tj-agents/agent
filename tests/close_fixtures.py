@@ -28,7 +28,6 @@ def load(name, relative):
     return module
 
 
-CLOSE = load("test_close_command", "plugins/agent/.agents/agent/utility/close/scripts/agent_close.py")
 WATCHER = load("test_close_watch", "plugins/agent/.agents/agent/utility/peer/scripts/client_close_watcher.py")
 LIFECYCLE = load("test_close_hooks", "plugins/agent/.agents/agent/runtime/close_lifecycle.py")
 
@@ -44,7 +43,6 @@ class CloseFixture:
         self.rollout.parent.mkdir(parents=True)
         self.patch(mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(self.root),
             "CODEX_HOME": str(self.profile), "CLAUDE_CONFIG_DIR": str(self.profile)}))
-        self.patch(mock.patch.object(CLOSE, "_session_close", return_value=session_close))
         self.spawn = self.patch(mock.patch.object(session_close, "start_agent_watcher", return_value=99))
         self.patch(mock.patch.object(LIFECYCLE.secrets, "token_urlsafe", return_value="token"))
         self.stop_patch = mock.patch.object(processes, "stop", side_effect=lambda _identity, *, before_signal: before_signal())
@@ -132,15 +130,16 @@ class CloseFixture:
         with self.rollout.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record) + "\n")
 
-    def assess_args(self, decision="complete", reason="owned delivery is finished"):
-        return ["assess", "--host", self.host, "--session-id", "one", "--profile", str(self.profile),
-                "--decision", decision, "--reason", reason, "--transcript", str(self.transcript)]
-
-    def assess(self, decision="keep-open", reason="work remains"):
-        return CLOSE.main(self.assess_args(decision, reason))
+    def assess(self, decision="restart", reason="resume this session after plugin refresh"):
+        try:
+            result = LIFECYCLE.assess(Host(self.host), "one", self.profile, decision, reason,
+                                      session_close, self.transcript)
+        except (OSError, RuntimeError, ValueError):
+            return 2
+        return 2 if result["status"] == "unavailable" else 0
 
     def arm(self):
-        assert self.assess("complete") == 0
+        assert self.assess() == 0
         self.request_path = self.root / "close-lifecycle/requests/token.json"
         self.digest = hashlib.sha256(self.request_path.read_bytes()).hexdigest()
         self.request = WATCHER.load_request(self.request_path, self.digest)
