@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 
+from tj_cli import process
 from host import Host
 import host_plugins
 
@@ -171,7 +172,7 @@ def check(project: Path, host: Host, executable: str | None = None,
             raise managed_admission.AdmissionError(f"Managed readiness could not be established: {error}") from error
         raise
     if admission:
-        managed_admission.verify(project, host, binary, roots)
+        managed_admission.verify(project, host, binary, native_project=launch_directory)
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(
@@ -213,11 +214,10 @@ def inventory(binary: str, plugins: host_plugins.Plugins, launch_directory: Path
     try:
         if os.name == "nt" and Path(binary).suffix.casefold() == ".ps1":
             command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", *command]
-        result = subprocess.run(
+        result = process.run(
             command, cwd=launch_directory, capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=INVENTORY_TIMEOUT_SECONDS if timeout is None else timeout,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except (OSError, subprocess.SubprocessError) as error:
         scope = f" for marketplace {marketplace}" if marketplace is not None else ""
@@ -388,9 +388,9 @@ def invoke(target: Target, arguments: list[str], timeout: int, project: Path,
            inherit: bool = False) -> subprocess.CompletedProcess:
     command = [sys.executable, "-B", str(target.script), "setup", *arguments]
     if inherit:
-        return subprocess.run(command, cwd=project, timeout=timeout, check=False)
-    return subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          cwd=project, timeout=timeout, check=False)
+        return process.run(command, cwd=project, timeout=timeout, check=False)
+    return process.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       cwd=project, timeout=timeout, check=False)
 
 
 def reconcile_selection(project: Path, *, check_only: bool = False) -> list[str]:
@@ -405,7 +405,7 @@ def reconcile_selections(projects: Sequence[Path], *, check_only: bool = False) 
     script = Path(__file__).resolve().parents[1] / "utility/plugins/scripts/adopt_plugins.py"
     additional = [argument for project in projects[1:] for argument in ("--also-root", str(project))]
     try:
-        result = subprocess.run(
+        result = process.run(
             [sys.executable, "-B", str(script), "--root", str(projects[0]), "--converge-existing",
              "--mode", "check" if check_only else "write", *additional],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False,

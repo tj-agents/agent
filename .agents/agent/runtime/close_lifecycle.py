@@ -285,8 +285,10 @@ def assess(
     shared: Any,
     supplied: Path | None = None,
 ) -> dict[str, Any]:
-    if decision not in ("keep-open", "complete", "restart") or not reason.strip():
-        raise ValueError("assessment needs an explicit decision and a nonempty reason")
+    if decision != "restart" or not reason.strip():
+        raise ValueError(
+            "assessment needs an explicit restart decision and a nonempty reason"
+        )
     native = current_input(host, session_id, supplied)
     if shared.path_key(native["profile"]) != shared.path_key(profile):
         raise ValueError("native input belongs to a different profile")
@@ -300,10 +302,7 @@ def assess(
     }
     with _assessment_lock(session_id):
         require_input(host, session_id, native)
-        if decision == "keep-open":
-            cancel(host, session_id, reason)
-            assessment["status"] = "kept-open"
-        elif _state_path(session_id).exists():
+        if _state_path(session_id).exists():
             assessment["reason"] = "a close request is already pending for this session"
             previous = _read(
                 state_root() / "assessments" / _state_path(session_id).name
@@ -315,71 +314,16 @@ def assess(
             return assessment
         record_assessment(assessment)
     try:
-        if decision in ("complete", "restart"):
-            assessment.update(
-                _arm(host, session_id, profile, native, shared, supplied, assessment),
-                status="armed",
-            )
+        assessment.update(
+            _arm(host, session_id, profile, native, shared, supplied, assessment),
+            status="armed",
+        )
     except (OSError, RuntimeError, ValueError) as error:
         assessment["reason"] = str(error)
         with _assessment_lock(session_id):
             if _owns_assessment(assessment):
                 record_assessment(assessment)
     return assessment
-
-
-def assessed(
-    host: Host, session_id: str, turn_id: str | None, data: dict[str, Any]
-) -> bool:
-    from host_sessions import SESSIONS
-
-    path = state_root() / "assessments" / _state_path(session_id).name
-    state = _read(path)
-    current = _read(_input_path(session_id))
-    return (
-        isinstance(state, dict)
-        and state.get("host") == host.value
-        and state.get("session_id") == session_id
-        and isinstance(current, dict)
-        and state.get("input_generation") == current.get("input_generation")
-        and state.get("decision") in ("keep-open", "complete", "restart")
-        and state.get("status") in ("kept-open", "unavailable", "armed")
-        and SESSIONS[host].completes(state, data, turn_id)
-    )
-
-
-def request_assessment(
-    host: Host, session_id: str, turn_id: str | None, data: dict[str, Any]
-) -> None:
-    from host_sessions import SESSIONS
-
-    if data.get("stop_hook_active") is True or assessed(
-        host, session_id, turn_id, data
-    ):
-        return
-    supplied = _text(data.get("transcript_path") or data.get("transcriptPath"))
-    native = {
-        "turn_id": turn_id,
-        **SESSIONS[host].close_target(session_id, Path(supplied) if supplied else None),
-    }
-    if not SESSIONS[host].completes(native, data, turn_id):
-        return
-    print(
-        json.dumps(
-            {
-                "decision": "block",
-                "reason": (
-                    "Apply agent:close to this input before finishing. Run its "
-                    "assess command to record an explicit keep-open or complete "
-                    "decision. Keep the session open for unfinished work, user "
-                    "questions, approval, cleanup or an explicit keep-open request. "
-                    "A merged PR or this Stop does not authorize closure. If close "
-                    "proof is unavailable, report its reason and preserve the "
-                    "session."
-                ),
-            }
-        )
-    )
 
 
 def run(event: str, host: Host, data: dict[str, Any]) -> int:
@@ -403,15 +347,12 @@ def run(event: str, host: Host, data: dict[str, Any]) -> int:
         if _read(_input_path(session_id)) is None:
             remember_input(host, session_id, turn_id, data)
         if owned and _armed(state) and Path(state["cancel"]).exists():
-            request_assessment(host, session_id, turn_id, data)
             return 0
         if owned and _armed(state) and Path(state["completion"]).exists():
             _signal(state["cancel"], {"cancelled": True, "reason": "another stop"})
             return 0
         if owned and _armed(state) and SESSIONS[host].completes(state, data, turn_id):
             _signal(state["completion"], {"token": state["completion_token"]})
-        elif not owned or not _armed(state):
-            request_assessment(host, session_id, turn_id, data)
         return 0
     if event == "end":
         cancel(host, session_id, "session ended")

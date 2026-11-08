@@ -16,6 +16,12 @@ SERVICE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SERVICE)
 
 
+def task_enabled(body, enabled):
+    root = ET.fromstring(body)
+    root.find(f"{{{SERVICE.NAMESPACE}}}Settings/{{{SERVICE.NAMESPACE}}}Enabled").text = str(enabled).lower()
+    return ET.tostring(root, encoding="unicode")
+
+
 class Supervisor:
     def __init__(self, context):
         self.context = context
@@ -42,8 +48,12 @@ class Supervisor:
                 stdout = json.dumps({"sid": self.sid, "account": self.account, "xml": self.xml,
                                      "state": "Running" if self.running else "Ready"}, ensure_ascii=False)
             else:
-                self.xml = SERVICE.task_xml(self.context, self.sid)
-                self.running = True
+                enabled = True
+                if self.xml and "if($enabled){Start-ScheduledTask" in script:
+                    values, _ = SERVICE.xml_values(self.xml)
+                    enabled = values.get("/Task/Settings/Enabled", "true") not in ("false", "0")
+                self.xml = task_enabled(SERVICE.task_xml(self.context, self.sid), enabled)
+                self.running = enabled
                 stdout = ""
             return subprocess.CompletedProcess(argv, 0, stdout, "")
         operation = argv[2]
@@ -73,6 +83,13 @@ class ServiceTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="events ü % $ space ")
         self.addCleanup(temporary.cleanup)
         self.home = Path(temporary.name)
+        interpreter = self.home / "python" / "python.exe"
+        interpreter.parent.mkdir()
+        interpreter.touch()
+        interpreter.with_name("pythonw.exe").touch()
+        executable = mock.patch.object(SERVICE.sys, "executable", str(interpreter))
+        executable.start()
+        self.addCleanup(executable.stop)
 
     def context(self, windows=False):
         context = SimpleNamespace(home=self.home, environ={}, windows=windows, state_directory=self.home / "state % $ ü",
@@ -101,8 +118,8 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(context.run.sid, values["/Task/Triggers/LogonTrigger/UserId"])
         self.assertIn("--watch", values["/Task/Actions/Exec/Arguments"])
         self.assertIn("ü", values["/Task/Actions/Exec/Arguments"])
+        self.assertEqual("pythonw.exe", Path(values["/Task/Actions/Exec/Command"]).name)
         for argv, kwargs in context.run.calls:
-            self.assertIn("Hidden", argv)
             self.assertEqual("utf-8", kwargs["encoding"])
             self.assertNotIn("topic", base64.b64decode(argv[-1]).decode("utf-16-le"))
 
@@ -132,7 +149,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual([], SERVICE.apply(context))
         self.assertEqual(before, context.run.xml)
 
-    def test_windows_explicit_disabled_elevated_or_other_user_values_still_drift(self):
+    def test_windows_disabled_trigger_elevated_or_other_user_values_still_drift(self):
         context = self.context(windows=True)
         SERVICE.apply(context)
         original = context.run.xml
@@ -140,12 +157,34 @@ class ServiceTests(unittest.TestCase):
                               ("LeastPrivilege", "HighestAvailable"),
                               (context.run.sid, "S-1-5-21-other")):
             with self.subTest(after=after):
-                context.run.xml = original.replace(before, after)
+                context.run.xml = original.replace(before, after, 1)
                 self.assertIn("machine-event scheduled task command or settings differ", SERVICE.check(context))
+
+    def test_windows_disabled_task_stays_disabled_during_startup_repair(self):
+        context = self.context(windows=True)
+        context.run.xml = task_enabled(SERVICE.task_xml(context, context.run.sid), False)
+        before = context.run.xml
+        self.assertEqual([], SERVICE.check(context))
+        self.assertEqual([], SERVICE.apply(context))
+        self.assertEqual(before, context.run.xml)
+        self.assertFalse(context.run.running)
+        self.assertTrue(all("ConvertTo-Json" in base64.b64decode(argv[-1]).decode("utf-16-le")
+                            for argv, _ in context.run.calls))
+
+    def test_windows_disabled_task_definition_can_update_without_restarting(self):
+        context = self.context(windows=True)
+        context.run.xml = task_enabled(SERVICE.task_xml(context, context.run.sid), False).replace("--watch", "--wrong")
+        self.assertEqual(["machine-event scheduled task command or settings differ"], SERVICE.check(context))
+        self.assertTrue(SERVICE.apply(context))
+        self.assertEqual([], SERVICE.check(context))
+        values, _ = SERVICE.xml_values(context.run.xml)
+        self.assertEqual("false", values["/Task/Settings/Enabled"])
+        self.assertIn("--watch", values["/Task/Actions/Exec/Arguments"])
+        self.assertFalse(context.run.running)
 
     def test_windows_preserves_task_owned_by_someone_else(self):
         context = self.context(windows=True)
-        context.run.xml = SERVICE.task_xml(context, context.run.sid).replace(SERVICE.marker(context), "Someone else's task")
+        context.run.xml = task_enabled(SERVICE.task_xml(context, context.run.sid), False).replace(SERVICE.marker(context), "Someone else's task")
         before = context.run.xml
         for operation in (SERVICE.check, SERVICE.apply):
             with self.assertRaisesRegex(SERVICE.ServiceError, "unowned scheduled task"):
@@ -154,18 +193,18 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(all("ConvertTo-Json" in base64.b64decode(argv[-1]).decode("utf-16-le")
                             for argv, _ in context.run.calls))
 
-    def test_windows_fallback_launches_console_python_through_hidden_powershell(self):
+    def test_windows_worker_requires_adjacent_pythonw(self):
         context = self.context(windows=True)
-        context.which = lambda name: None if name == "pythonw.exe" else "/fake/powershell.exe"
         with mock.patch.object(Path, "is_file", return_value=False):
-            executable, argv = SERVICE.windows_action(context)
-        self.assertEqual("/fake/powershell.exe", executable)
-        self.assertIn("-WindowStyle Hidden", argv)
-        encoded = argv.split()[-1]
-        script = base64.b64decode(encoded).decode("utf-16-le")
-        self.assertIn("--watch", script)
-        self.assertIn("Claude''s home", script)
-        self.assertIn("exit $LASTEXITCODE", script)
+            with self.assertRaisesRegex(SERVICE.ServiceError, "pythonw.exe is required"):
+                SERVICE.windows_action(context)
+
+    def test_windows_worker_uses_adjacent_pythonw(self):
+        context = self.context(windows=True)
+        with mock.patch.object(SERVICE.sys, "executable", "/python/pythonw.exe"), \
+                mock.patch.object(Path, "is_file", return_value=True):
+            command = SERVICE.service_command(context)
+        self.assertEqual("pythonw.exe", Path(command[0]).name)
 
     def test_windows_rejects_additional_action(self):
         context = self.context(windows=True)
@@ -205,6 +244,34 @@ class ServiceTests(unittest.TestCase):
             SERVICE.apply(context)
         self.assertEqual("[Service]\nExecStart=/someone/else\n", path.read_text(encoding="utf-8"))
         self.assertEqual(["show"], [argv[2] for argv, _ in context.run.calls])
+
+    def test_linux_disabled_unit_stays_disabled_during_startup_repair(self):
+        context = self.context()
+        SERVICE.apply(context)
+        context.run.enabled = False
+        context.run.running = False
+        context.run.calls.clear()
+        self.assertEqual([], SERVICE.check(context))
+        self.assertEqual([], SERVICE.apply(context))
+        self.assertFalse(context.run.enabled)
+        self.assertFalse(context.run.running)
+        self.assertTrue(all(argv[2] == "show" for argv, _ in context.run.calls))
+
+    def test_linux_disabled_unit_definition_can_update_without_restarting(self):
+        context = self.context()
+        SERVICE.apply(context)
+        context.run.enabled = False
+        context.run.running = False
+        path = SERVICE.unit_path(context)
+        path.write_text(path.read_text(encoding="utf-8").replace("Restart=on-failure", "Restart=no"), encoding="utf-8")
+        context.run.calls.clear()
+        self.assertTrue(SERVICE.apply(context))
+        self.assertEqual([], SERVICE.check(context))
+        self.assertEqual(SERVICE.unit_contents(context), path.read_text(encoding="utf-8"))
+        self.assertFalse(context.run.enabled)
+        self.assertFalse(context.run.running)
+        self.assertNotIn("enable", [argv[2] for argv, _ in context.run.calls])
+        self.assertNotIn("restart", [argv[2] for argv, _ in context.run.calls])
 
     def test_linux_rejects_unmanaged_dropins_and_foreign_fragment(self):
         context = self.context()

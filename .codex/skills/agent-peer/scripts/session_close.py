@@ -19,6 +19,9 @@ from pathlib import Path
 import register_session
 
 
+process = register_session.shared_process()
+
+
 IDENTITY_TOLERANCE_SECONDS = 2.0
 SUBPROCESS_TIMEOUT_SECONDS = 20
 DEFAULT_TIMEOUTS = {
@@ -362,7 +365,7 @@ def qualified_windows_wrapper(entry):
         if register_session.stem(child.name) not in console_names:
             return None
     try:
-        command = subprocess.run(
+        command = process.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
              "(Get-CimInstance -Class Win32_Process -Filter 'ProcessId = %d').CommandLine" % wrapper.pid],
             capture_output=True, text=True, encoding="utf-8", check=False,
@@ -508,7 +511,7 @@ def same_session_process(left, right):
 
 def git(cwd, *arguments):
     try:
-        result = subprocess.run(
+        result = process.run(
             ["git", "-C", str(cwd), *arguments], text=True, encoding="utf-8",
             capture_output=True, check=False, timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
@@ -581,9 +584,7 @@ def windows_system_command(name: str) -> str:
 
 
 def current_windows_user(kwargs, timeout):
-    from tj_cli.process import run
-
-    completed = run(
+    completed = process.run(
         [windows_system_command("whoami.exe"), "/user", "/fo", "csv", "/nh"],
         **kwargs, check=False, timeout=timeout,
     )
@@ -617,20 +618,18 @@ def _write_observer_store_receipt(staging):
 
 def detached_command(script, arguments, launcher):
     """Build a scheduler-safe command that restores only the owned context."""
-    command = [sys.executable, "-I", "-B", str(launcher), "--state-directory", str(state_directory().resolve())]
+    interpreter = Path(sys.executable).with_name("pythonw.exe") if os.name == "nt" else Path(sys.executable)
+    if os.name == "nt":
+        if not interpreter.is_file():
+            raise Refusal("pythonw.exe is required for an independent detached observer")
+    command = [str(interpreter), "-I", "-B", str(launcher), "--state-directory", str(state_directory().resolve()),
+               "--search-path", os.environ.get("PATH", os.defpath)]
     for option, key in (("--codex-home", "CODEX_HOME"), ("--claude-config-dir", "CLAUDE_CONFIG_DIR")):
         value = os.environ.get(key)
         if value:
             command += [option, str(Path(value).resolve())]
-    return [*command, "--", str(Path(script).resolve()), *arguments]
-
-
-def windows_observer_command(command: list[str]) -> list[str]:
-    for directory in os.get_exec_path():
-        launcher = Path(directory).absolute() / "tj_hook.exe"
-        if shutil.which(launcher) is not None:
-            return [str(launcher), "--", *command]
-    raise Refusal("tj_hook.exe is not installed on PATH; repair the CLI installation before starting an observer")
+    command += ["--", str(Path(script).resolve()), *arguments]
+    return command
 
 
 def start_detached(script, arguments, extra=(), stage=True):
@@ -646,6 +645,7 @@ def start_detached(script, arguments, extra=(), stage=True):
         if store is not None:
             for name in OBSERVER_STORE_FILES[1:]:
                 shutil.copy2(store.with_name(name), staging / name)
+            shutil.copytree(register_session.process_runtime() / "tj_cli", staging / "tj_cli")
             _write_observer_store_receipt(staging)
         command = [sys.executable, str(staging / Path(script).name), *arguments]
     else:
@@ -654,13 +654,9 @@ def start_detached(script, arguments, extra=(), stage=True):
               "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     timeout = bounded_timeout("AGENT_FINISH_SPAWN_TIMEOUT_SECONDS")
     if os.name == "nt":
-        from tj_cli.process import run
-
         scheduler = windows_system_command("schtasks.exe")
         launcher = (staging / "detached_launch.py") if stage else here.with_name("detached_launch.py")
-        command = windows_observer_command(
-            detached_command(script if not stage else staging / Path(script).name, arguments, launcher),
-        )
+        command = detached_command(script if not stage else staging / Path(script).name, arguments, launcher)
         task = "agent-finish-reaper-" + uuid.uuid4().hex
         scheduler_kwargs = {
             "cwd": str(state_directory()), "stdin": subprocess.DEVNULL,
@@ -677,7 +673,7 @@ def start_detached(script, arguments, extra=(), stage=True):
             with stream:
                 stream.write(windows_task_xml(user, command, state_directory()))
             registered = True
-            create = run(
+            create = process.run(
                 [scheduler, "/create", "/tn", task, "/xml", xml_path, "/f"],
                 **scheduler_kwargs, check=False, timeout=timeout,
             )
@@ -686,8 +682,8 @@ def start_detached(script, arguments, extra=(), stage=True):
                     "could not create a detached cleanup observer ("
                     + scheduler_diagnostic(create) + ")"
                 )
-            started = run([scheduler, "/run", "/tn", task], **scheduler_kwargs,
-                          check=False, timeout=timeout)
+            started = process.run([scheduler, "/run", "/tn", task], **scheduler_kwargs,
+                                  check=False, timeout=timeout)
             if started.returncode:
                 raise Refusal(
                     "could not start a detached cleanup observer ("
@@ -701,7 +697,7 @@ def start_detached(script, arguments, extra=(), stage=True):
             Path(xml_path).unlink(missing_ok=True)
             if registered:
                 try:
-                    run([scheduler, "/delete", "/tn", task, "/f"],
+                    process.run([scheduler, "/delete", "/tn", task, "/f"],
                         **scheduler_kwargs, check=False, timeout=timeout)
                 except subprocess.TimeoutExpired:
                     pass
