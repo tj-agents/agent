@@ -25,9 +25,6 @@ def load(name, path):
 class StartupBindingTests(unittest.TestCase):
     def setUp(self):
         self.binding = load('startup_binding_tests', ROOT / 'plugins/agent/.agents/agent/runtime/startup_binding.py')
-        git_environment = mock.patch.object(self.binding.native_runtime, 'prepare_git_environment')
-        git_environment.start()
-        self.addCleanup(git_environment.stop)
 
     def test_windows_terminal_uses_application_title(self):
         cli = load('agent_cli_windows_tests', ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py')

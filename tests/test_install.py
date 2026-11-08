@@ -64,7 +64,6 @@ class Machine(unittest.TestCase):
         for name, value in (
             ("pending", ()),
             ("prepare", ()),
-            ("prepare_git_environment", ()),
         ):
             native = mock.patch.object(install.native_runtime, name, return_value=value)
             native.start()
@@ -690,6 +689,26 @@ class AutoUpdateTests(Machine):
         self.converge(step("Claude marketplace auto-update"), self.context(windows=False))
 
 
+class GitLongPathsTests(Machine):
+    def test_long_paths_converge_in_the_global_git_config(self):
+        config = self.home / ".gitconfig"
+        self.converge(step("Git long paths"), self.context(run=subprocess.run))
+        result = subprocess.run(["git", "config", "--file", str(config), "--get", "core.longpaths"],
+                                capture_output=True, text=True, timeout=30, check=True)
+        self.assertEqual("true", result.stdout.strip())
+
+    def test_an_explicit_global_config_file_is_the_one_written(self):
+        config = self.root / "explicit gitconfig"
+        self.converge(step("Git long paths"), self.context(run=subprocess.run, GIT_CONFIG_GLOBAL=str(config)))
+        self.assertFalse((self.home / ".gitconfig").exists())
+        self.assertIn("longpaths = true", config.read_text(encoding="utf-8"))
+
+    def test_long_paths_are_windows_only(self):
+        out = io.StringIO()
+        self.assertEqual(0, install.run_steps([step("Git long paths")], self.context(windows=False), True, out))
+        self.assertIn("n/a    Git long paths", out.getvalue())
+
+
 class RunStepsTests(Machine):
     def test_cli_step_selection_preserves_defaults_and_declared_order(self):
         cases = (
@@ -767,7 +786,7 @@ class RunStepsTests(Machine):
 
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
-            "native CLI", "native permission defaults",
+            "Git long paths", "native CLI", "native permission defaults",
             "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
             "Codex profile agents", "harness permissions", "plugin setup",
         ], [item.name for item in install.STEPS])
