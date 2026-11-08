@@ -166,7 +166,7 @@ def current_input(
     native = SESSIONS[host].close_target(
         session_id, supplied or (Path(recorded) if recorded else None)
     )
-    if host.value == "codex" and not _text(state.get("turn_id")):
+    if host is Host.CODEX and not _text(state.get("turn_id")):
         raise ValueError("native input hook receipt has no Codex turn")
     return {**state, **native}
 
