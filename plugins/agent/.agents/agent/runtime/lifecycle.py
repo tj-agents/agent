@@ -12,7 +12,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from host import Host
+from tj_agent.host import Host
 from launch_contract import Liveness
 import agent_cli
 import agent_store

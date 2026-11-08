@@ -15,7 +15,7 @@ import sys
 import time
 
 from tj_cli import process
-from host import Host
+from tj_agent.host import Host
 import host_plugins
 
 

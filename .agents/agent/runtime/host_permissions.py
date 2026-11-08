@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude import permissions as claude_permissions  # noqa: E402
 from codex import permissions as codex_permissions  # noqa: E402
-from host import Host  # noqa: E402
+from tj_agent.host import Host  # noqa: E402
 
 CODEX_KEYS = frozenset({"approval_policy", "default_permissions", "sandbox_mode", "sandbox_workspace_write"})
 MODES = {

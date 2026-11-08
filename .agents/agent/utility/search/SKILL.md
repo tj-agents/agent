@@ -17,4 +17,4 @@ Run with `python` on Windows or `python3` on Linux, for the current host unless 
 python -B "<package-root>/.agents/agent/runtime/history.py" search --host claude --pattern "agent-store"
 ```
 
-The search is literal and case-insensitive over message text. `--regex`, `--show-lines`, `--project`, `--cwd`, `--worktree <dir>`, `--count` and `--history-root` narrow it. Summarise hits and their resume commands rather than dumping transcripts.
+The search is literal and case-insensitive over message text and tool-call input. `--regex`, `--show-lines`, `--project`, `--cwd`, `--worktree <dir>`, `--count` and `--history-root` narrow it. Summarise hits and their resume commands rather than dumping transcripts.

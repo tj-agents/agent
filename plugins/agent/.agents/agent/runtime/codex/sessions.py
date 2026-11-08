@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from host import Host
+from tj_agent.host import Host
 import transcripts
 
 HOST = Host.CODEX

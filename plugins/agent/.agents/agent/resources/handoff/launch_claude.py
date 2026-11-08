@@ -95,17 +95,17 @@ def resolve_model(args, agent_cli):
     effort = args.effort
     tier = ''
     if args.lane:
-        route = agent_cli.resolve_lane('claude', lane=args.lane).get('handoff')
+        route = agent_cli.resolve_lane(agent_cli.Host.CLAUDE, lane=args.lane).get('handoff')
         if route:
             raise agent_cli.LaunchError(
                 f"--lane {args.lane} routes to Codex {route['lane']}; use agent:handoff --host codex, "
                 "or omit --lane for an explicit user-named model."
             )
     if args.frontier:
-        model, effort = agent_cli.resolve_lane_model('claude', frontier=True)
+        model, effort = agent_cli.resolve_lane_model(agent_cli.Host.CLAUDE, frontier=True)
         tier = 'frontier -> '
     elif not model and args.lane:
-        model, effort = agent_cli.resolve_lane_model('claude', lane=args.lane)
+        model, effort = agent_cli.resolve_lane_model(agent_cli.Host.CLAUDE, lane=args.lane)
         tier = f'lane {args.lane} -> '
 
     if model and model.strip().lower().split('[', 1)[0] in ('default', 'sonnet', 'opus', 'opusplan'):
@@ -129,11 +129,11 @@ def main(argv=None):
         model, effort, tier = resolve_model(args, agent_cli)
         parent = agent_cli.parent_session(args.parent)
         prompt_sentence += agent_cli.parent_rule(parent)
-        adapter = agent_cli.host_launch('claude')
+        adapter = agent_cli.host_launch(agent_cli.Host.CLAUDE)
         arguments = adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort)
         if args.dangerously_skip_permissions:
             arguments.insert(0, '--dangerously-skip-permissions')
-        shown = agent_cli.launch('claude', working_directory, args.title, arguments, item=args.item, parent=parent)
+        shown = agent_cli.launch(agent_cli.Host.CLAUDE, working_directory, args.title, arguments, item=args.item, parent=parent)
 
         selection = f'{tier}{model}' if model else 'the CLI default model'
         if effort:

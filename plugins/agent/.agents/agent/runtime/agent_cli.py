@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, cast
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from host import Host
+from tj_agent.host import Host
 from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout
 from package_root import find_package_root
@@ -37,21 +37,20 @@ _HOST_LAUNCHES: dict[Host, Launch] = {}
 IS_WINDOWS = os.name == 'nt'
 
 
-def host_launch(host: Host | str) -> Launch:
-    kind = Host(host)
-    if kind not in _HOST_LAUNCHES:
+def host_launch(host: Host) -> Launch:
+    if host not in _HOST_LAUNCHES:
         root = find_package_root(HERE)
-        native = root / f'.{kind.value}' / 'runtime' / 'launch.py'
-        path = native if (root / '.git').exists() else HERE / kind.value / 'launch.py'
+        native = root / f'.{host.value}' / 'runtime' / 'launch.py'
+        path = native if (root / '.git').exists() else HERE / host.value / 'launch.py'
         if not path.is_file():
-            raise LaunchError(f'The packaged {kind.value} launch adapter was not found under {root}.')
-        spec = importlib.util.spec_from_file_location(f'agent_{kind.value}_launch', path)
+            raise LaunchError(f'The packaged {host.value} launch adapter was not found under {root}.')
+        spec = importlib.util.spec_from_file_location(f'agent_{host.value}_launch', path)
         if spec is None or spec.loader is None:
-            raise LaunchError(f'The {kind.value} launch adapter cannot be loaded from {path}.')
+            raise LaunchError(f'The {host.value} launch adapter cannot be loaded from {path}.')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        _HOST_LAUNCHES[kind] = cast(Launch, module)
-    return _HOST_LAUNCHES[kind]
+        _HOST_LAUNCHES[host] = cast(Launch, module)
+    return _HOST_LAUNCHES[host]
 
 
 def make_stdio_encoding_lossy():
@@ -97,7 +96,7 @@ def resolve_tab_directory(path):
     Not .resolve(): on Windows that rewrites a mapped or subst drive to its target, and native history keys a
     session's history by the directory string it was started in. Called by both Python launchers first,
     before any filesystem or lane-table work, so a bad directory is reported before anything else they
-    check; launch_tab calls it again for callers that reach it directly. The error always names the
+    check. The error always names the
     absolute path.
     """
     directory = Path(os.path.abspath(path))
@@ -149,22 +148,22 @@ def _lanes_module():
 # configured default, because guessing a lane from a prompt is how an expensive model ends up serving a
 # rename. frontier resolves the tier above the ladder, which no lane resolves to: its selection is the
 # user's explicit request, never task shape.
-def resolve_lane(harness, lane=None, frontier=False):
+def resolve_lane(host, lane=None, frontier=False):
     if not lane and not frontier:
         raise LaunchError('resolve_lane needs a lane or frontier.')
     if lane and frontier:
         raise LaunchError('A lane and the frontier tier are mutually exclusive.')
     lanes = _lanes_module()
     try:
-        entry = lanes.frontier(harness) if frontier else lanes.resolve(harness, lane)
+        entry = lanes.frontier(host) if frontier else lanes.resolve(host, lane)
     except SystemExit as exc:
         raise LaunchError(str(exc)) from None
     return entry
 
 
-def resolve_lane_model(harness, lane=None, frontier=False):
+def resolve_lane_model(host, lane=None, frontier=False):
     """(model, effort) for a lane or the frontier tier; effort is None when the table prices none."""
-    entry = resolve_lane(harness, lane=lane, frontier=frontier)
+    entry = resolve_lane(host, lane=lane, frontier=frontier)
     return entry['model'], entry.get('effort')
 
 
@@ -315,7 +314,7 @@ def launch(host, directory, title, arguments, item=None, parent=None, want_sessi
     clear = [name for name in adapter.TAB_CLEARED if IS_WINDOWS or name != 'TERM']
     force = {name: value for name, value in adapter.TAB_FORCED.items() if IS_WINDOWS or name != 'TERM'}
     cleared, forced = launch_environment(clear=clear, force=force)
-    command = [tj, 'run', '--host', str(Host(host)), '--title', title, '--cwd', str(directory),
+    command = [tj, 'run', '--host', str(host), '--title', title, '--cwd', str(directory),
                *(['--item', item] if item else []), '--launch-id', launch_id,
                *(['--parent', parent] if parent else []), '--', adapter.executable(), *arguments]
     open_tab(directory, title, command, cleared, forced, environ, run)
