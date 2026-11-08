@@ -769,7 +769,7 @@ def apply_catch_up(context: Context) -> list[str]:
         changes.append(f"event channel unreachable ({type(error).__name__}); the first launch replays recent events")
     if machine_events.main([]):
         raise InstallError("catch-up left failures; see machine-events.log")
-    return changes + ["plugins and merge policies are current"]
+    return changes + ["plugins are current"]
 
 
 def check_preconditions(context: Context) -> list[str]:
@@ -873,7 +873,7 @@ STEPS = (
     Step("shell profiles", check_profile, apply_profile),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
-    Step("plugin and merge-policy catch-up", check_catch_up, apply_catch_up),
+    Step("plugin catch-up", check_catch_up, apply_catch_up),
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
@@ -891,11 +891,11 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
             print(f"n/a    {step.name}: native CLI prerequisite unavailable", file=out)
             continue
         if step.name == "background machine events" and failed_steps & {
-                "event channel and publishers", "launch-check runtime", "plugin and merge-policy catch-up",
+                "event channel and publishers", "launch-check runtime", "plugin catch-up",
                 "harness permissions", "plugin setup"}:
             print("n/a    background machine events: prerequisite install step failed", file=out)
             continue
-        if step.name == "plugin setup" and failed_steps & {"plugin and merge-policy catch-up", "harness permissions"}:
+        if step.name == "plugin setup" and failed_steps & {"plugin catch-up", "harness permissions"}:
             print("n/a    plugin setup: prerequisite install step failed", file=out)
             continue
         try:
@@ -934,7 +934,7 @@ def selected_steps(names: set[str]) -> tuple[Step, ...]:
     if "shell profiles" in selected:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
-        selected.update({"plugin and merge-policy catch-up", "harness permissions"})
+        selected.update({"plugin catch-up", "harness permissions"})
     return tuple(step for step in STEPS if not selected or step.required or step.name in selected)
 
 
