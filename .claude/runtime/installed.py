@@ -1,13 +1,14 @@
-"""Claude's installed plugin builds against its marketplace pins (Python 3.9+)."""
+"""Claude's installed plugin builds against its marketplace pins, and their refresh (Python 3.9+)."""
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import re
+import subprocess
+from typing import Any
 
-from host import Host
+from tj_agent.host import Host
 
 HOST = Host.CLAUDE
 RELOAD = "type /reload-plugins"
@@ -45,11 +46,6 @@ def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
     return found
 
 
-def running_root() -> Path | None:
-    value = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    return Path(value) if value else None
-
-
 def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
     return None
 
@@ -59,3 +55,34 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
     if build and build.group(1) != pin[:12]:
         return f"this session loaded {build.group(1)}, current {pin[:12]}"
     return None
+
+
+def refresh(report: Any, marketplaces: tuple[str, ...]) -> None:
+    for marketplace in marketplaces:
+        report.step(HOST, f"marketplace {marketplace}", ["claude", "plugin", "marketplace", "update", marketplace])
+    listing = report.step(HOST, "list", ["claude", "plugin", "list", "--json"])
+    if listing is None:
+        return
+    plugins = sorted({row["id"] for row in json.loads(listing.stdout)
+                      if row["scope"] == "user" and row["id"].rpartition("@")[2] in marketplaces})
+    for plugin in plugins:
+        report.step(HOST, plugin, ["claude", "plugin", "update", plugin, "--scope", "user", "--json", "-y"])
+
+
+def sessions(report: Any) -> list[dict]:
+    try:
+        return json.loads(report.run(["claude", "agents", "--json"]).stdout or "[]")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return []
+
+
+def restart(report: Any) -> None:
+    rows = sessions(report)
+    for row in rows:
+        if row.get("kind") == "background" and row.get("pid") and row.get("id"):
+            report.step(HOST, f"respawn {row.get('name') or row['id']}", ["claude", "respawn", row["id"]])
+    live = [row.get("name") or row.get("sessionId", "")[:8] for row in rows
+            if row.get("kind") == "interactive" and row.get("pid")]
+    if live:
+        print(f"{len(live)} open Claude session(s) still run the old plugins until you {RELOAD} in them: "
+              + ", ".join(live))

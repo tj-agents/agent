@@ -15,6 +15,7 @@ import pytest
 import test_codex_followup as followup
 import test_native_completion as completion
 import test_startup_binding as startup
+from tj_agent.host import Host
 
 
 @pytest.fixture
@@ -25,7 +26,7 @@ def binding() -> Iterator[Any]:
         fixture.setUp()
         stack.enter_context(
             mock.patch.object(
-                startup.SESSIONS[startup.Host.CODEX],
+                startup.SESSIONS[Host.CODEX],
                 "handoff_executable",
                 side_effect=lambda target, _project, _environment, **_options: target,
             )
@@ -45,7 +46,7 @@ def caller() -> Iterator[Any]:
 def test_owned_backend_prepare_failure_never_starts_a_frontend(binding: Any) -> None:
     with (
         mock.patch.object(
-            startup.SESSIONS[startup.Host.CODEX],
+            startup.SESSIONS[Host.CODEX],
             "prepare_frontend",
             side_effect=RuntimeError("owned endpoint unavailable"),
         ),
@@ -53,7 +54,7 @@ def test_owned_backend_prepare_failure_never_starts_a_frontend(binding: Any) -> 
         pytest.raises(binding.StartupBindingError, match="could not be prepared"),
     ):
         binding.run_session(
-            startup.Host.CODEX,
+            Host.CODEX,
             "native",
             Path.cwd(),
             [],
@@ -68,7 +69,7 @@ def test_handoff_runtime_failure_prevents_plugin_checks_and_native_launch(
 ) -> None:
     with (
         mock.patch.object(
-            startup.SESSIONS[startup.Host.CODEX],
+            startup.SESSIONS[Host.CODEX],
             "handoff_executable",
             side_effect=RuntimeError("Codex handoff requires native Codex 0.166.0"),
         ),
@@ -98,7 +99,7 @@ def test_handoff_runtime_failure_prevents_plugin_checks_and_native_launch(
 def test_handoff_runtime_is_shared_by_preflight_backend_and_frontend(
     binding: Any, tmp_path: Path
 ) -> None:
-    adapter = startup.SESSIONS[startup.Host.CODEX]
+    adapter = startup.SESSIONS[Host.CODEX]
     process = mock.Mock(pid=72)
     process.wait.return_value = 0
     with (
@@ -107,7 +108,7 @@ def test_handoff_runtime_is_shared_by_preflight_backend_and_frontend(
             binding.required_plugins, "check_launch_roots", return_value=(tmp_path, {})
         ) as plugins,
         mock.patch.object(
-            binding.host_plugins.PLUGINS[startup.Host.CODEX], "ensure_hooks"
+            binding.host_plugins.PLUGINS[Host.CODEX], "ensure_hooks"
         ) as hooks,
         mock.patch.object(
             adapter, "prepare_frontend", return_value=([], {}, {})
@@ -142,7 +143,7 @@ def test_handoff_runtime_is_shared_by_preflight_backend_and_frontend(
 
 
 def test_ordinary_launch_does_not_resolve_a_handoff_runtime(binding: Any) -> None:
-    adapter = startup.SESSIONS[startup.Host.CODEX]
+    adapter = startup.SESSIONS[Host.CODEX]
     process = mock.Mock(pid=72)
     process.wait.return_value = 0
     with (
@@ -152,7 +153,7 @@ def test_ordinary_launch_does_not_resolve_a_handoff_runtime(binding: Any) -> Non
         mock.patch.object(adapter, "release_frontend"),
         mock.patch.object(binding.subprocess, "Popen", return_value=process),
     ):
-        assert binding.run_session(startup.Host.CODEX, "native", Path.cwd(), []) == 0
+        assert binding.run_session(Host.CODEX, "native", Path.cwd(), []) == 0
     resolve.assert_not_called()
 
 
@@ -163,7 +164,7 @@ def test_native_directory_is_resolved_once_through_owned_startup(
     monkeypatch: pytest.MonkeyPatch,
     directory_option: str,
 ) -> None:
-    adapter = startup.SESSIONS[startup.Host.CODEX]
+    adapter = startup.SESSIONS[Host.CODEX]
     backend = __import__("codex.backend", fromlist=["Lease"])
     original = tmp_path / "original checkout"
     selected = original / "selected café"
@@ -189,7 +190,7 @@ def test_native_directory_is_resolved_once_through_owned_startup(
             binding.required_plugins, "check_launch_roots", side_effect=roots
         ),
         mock.patch.object(
-            binding.host_plugins.PLUGINS[startup.Host.CODEX], "ensure_hooks"
+            binding.host_plugins.PLUGINS[Host.CODEX], "ensure_hooks"
         ) as hooks,
         mock.patch.object(backend, "Lease", return_value=lease) as prepare_backend,
         mock.patch.object(adapter.client, "await_backend") as readiness,
@@ -245,7 +246,7 @@ def test_native_directory_is_resolved_once_through_owned_startup(
 def test_handoff_runtime_uses_only_verified_public_version_metadata(
     tmp_path: Path, scenario: str
 ) -> None:
-    adapter = startup.SESSIONS[startup.Host.CODEX]
+    adapter = startup.SESSIONS[Host.CODEX]
     selected = tmp_path / "selected codex.exe"
     managed = tmp_path / "managed café codex.exe"
     for path in (selected, managed):
@@ -314,7 +315,7 @@ def test_handoff_runtime_uses_only_verified_public_version_metadata(
         run.assert_called_once()
 
 
-@pytest.mark.parametrize("host", [startup.Host.CLAUDE, startup.Host.CODEX])
+@pytest.mark.parametrize("host", [Host.CLAUDE, Host.CODEX])
 def test_required_hook_failure_preserves_each_host_startup_contract(
     binding: Any,
     host: Any,
@@ -333,7 +334,7 @@ def test_required_hook_failure_preserves_each_host_startup_contract(
         mock.patch.object(adapter, "release_frontend"),
         mock.patch.object(binding.subprocess, "Popen", return_value=process) as spawn,
     ):
-        if host == startup.Host.CODEX:
+        if host == Host.CODEX:
             with pytest.raises(
                 binding.StartupBindingError,
                 match="required hooks could not be verified",
@@ -361,22 +362,20 @@ def test_owned_frontend_attach_failure_stops_child_and_releases_lease(
     with (
         mock.patch.object(binding.subprocess, "Popen", return_value=process),
         mock.patch.object(
-            startup.SESSIONS[startup.Host.CODEX],
+            startup.SESSIONS[Host.CODEX],
             "prepare_frontend",
             return_value=([], {}, ticket),
         ),
         mock.patch.object(
-            startup.SESSIONS[startup.Host.CODEX],
+            startup.SESSIONS[Host.CODEX],
             "attach_frontend",
             side_effect=OSError("attach failed"),
         ),
-        mock.patch.object(
-            startup.SESSIONS[startup.Host.CODEX], "release_frontend"
-        ) as release,
+        mock.patch.object(startup.SESSIONS[Host.CODEX], "release_frontend") as release,
         pytest.raises(binding.StartupBindingError, match="could not be attached"),
     ):
         binding.run_session(
-            startup.Host.CODEX,
+            Host.CODEX,
             "native",
             Path.cwd(),
             [],
@@ -396,14 +395,14 @@ def test_ack_without_recipient_stays_one_unconfirmed_launch(binding: Any) -> Non
     with (
         mock.patch.object(binding.subprocess, "Popen", return_value=process) as spawn,
         mock.patch.object(
-            startup.SESSIONS[startup.Host.CODEX],
+            startup.SESSIONS[Host.CODEX],
             "prepare_frontend",
             return_value=([], {}, {}),
         ),
-        mock.patch.object(startup.SESSIONS[startup.Host.CODEX], "attach_frontend"),
-        mock.patch.object(startup.SESSIONS[startup.Host.CODEX], "release_frontend"),
+        mock.patch.object(startup.SESSIONS[Host.CODEX], "attach_frontend"),
+        mock.patch.object(startup.SESSIONS[Host.CODEX], "release_frontend"),
         mock.patch.object(
-            startup.SESSIONS[startup.Host.CODEX],
+            startup.SESSIONS[Host.CODEX],
             "handoff_recipient",
             side_effect=[None, receipt],
         ),
@@ -412,7 +411,7 @@ def test_ack_without_recipient_stays_one_unconfirmed_launch(binding: Any) -> Non
     ):
         assert (
             binding.run_session(
-                startup.Host.CODEX,
+                Host.CODEX,
                 "native",
                 Path.cwd(),
                 [],
@@ -559,7 +558,7 @@ def test_native_followup_completion_keeps_frontend_anchor_separate() -> None:
 
 
 def test_exact_native_command_line_read_never_starts_a_shell() -> None:
-    client = startup.SESSIONS[startup.Host.CODEX].client
+    client = startup.SESSIONS[Host.CODEX].client
     with mock.patch.object(
         client.subprocess, "run", side_effect=AssertionError("unexpected shell")
     ):
@@ -654,7 +653,12 @@ def attachment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Attachment:
     monkeypatch.setattr(registration, "_load_session_store", lambda: store_module)
     with store_module.SessionStore() as store:
         handle = store.start_session(
-            "codex", "thread", str(directory), pid=11, pid_started_at=11.0
+            "codex",
+            "thread",
+            str(directory),
+            pid=11,
+            pid_started_at=11.0,
+            profile=str(Host.CODEX.configuration_root),
         )
         store.upsert_work_item(
             "fixture-work-item",

@@ -16,7 +16,7 @@ from typing import IO, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from host import Host
+from tj_agent.host import Host
 
 
 def state_root() -> Path:

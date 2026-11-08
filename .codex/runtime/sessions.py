@@ -11,7 +11,7 @@ import sys
 
 from codex import capacity, client, frontend_input, shell_commands
 from codex import handoff_runtime
-from host import Host
+from tj_agent.host import Host
 import transcripts
 from tj_cli import process
 
@@ -138,18 +138,18 @@ def verify_resume(executable: str) -> None:
 
 def open_tab(cli, item: dict, directory, label: str, instruction: str, status_path: Path, *, model=None,
              native_arguments=(), dangerously_skip_permissions=False, owned_backend=False) -> None:
-    executable, _ = cli.host_launch('codex').resolve_executable()
+    executable, _ = cli.host_launch(HOST).resolve_executable()
     verify_resume(executable)
     old_profile = os.environ.get(HOST.home_variable)
     os.environ[HOST.home_variable] = item["profile"]
-    arguments = [*cli.host_launch('codex').KEEP_TAB_TITLE, *native_arguments, "resume", item["id"]]
+    arguments = [*cli.host_launch(HOST).KEEP_TAB_TITLE, *native_arguments, "resume", item["id"]]
     if model:
         arguments += ["-m", model]
     arguments.append(instruction)
     try:
         cli.launch_tab(
             directory, sys.executable, label,
-            cli.bound_terminal_arguments(HOST.value, directory, executable, arguments, status_path,
+            cli.bound_terminal_arguments(HOST, directory, executable, arguments, status_path,
                                          require_session_start=owned_backend),
             clear=("TERM",),
             force={HOST.home_variable: item["profile"]},

@@ -31,6 +31,7 @@ CHECKOUT = _load("checkout")
 HOOK = _load("session_hook")
 
 GIT = shutil.which("git")
+PROFILE = "profile"
 
 
 def _git_environment():
@@ -143,7 +144,7 @@ class SchemaTests(unittest.TestCase):
         self.addCleanup(store.close)
         store.upsert_work_item("local-a", "repo", "feature", "item")
         store.upsert_work_item("local-b", "repo", "feature", "other")
-        store.start_session("codex", "owner")
+        store.start_session("codex", "owner", profile=PROFILE)
         store.claim_work_item("codex:owner", "local-a", "owner")
 
         self.assertTrue(store.bind_work_item_reference(
@@ -439,6 +440,11 @@ class HookLifecycleTests(unittest.TestCase):
         with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))):
             return HOOK.main([event, "--host", host])
 
+    def _start(self, host, payload):
+        with STORE.SessionStore() as store:
+            store.start_session(host, payload["session_id"], payload["cwd"], STORE.Checkout.probe(payload["cwd"]),
+                                profile=PROFILE)
+
     def _row(self, handle):
         store = STORE.SessionStore()
         try:
@@ -448,7 +454,7 @@ class HookLifecycleTests(unittest.TestCase):
 
     def test_start_prompt_stop_session_end_lifecycle(self):
         payload = {"session_id": "a2bcd5c4-bf6d-4087-95e3-d7ba7f711875", "cwd": str(self.repo)}
-        self.assertEqual(0, self._invoke("session-start", "claude", payload))
+        self._start("claude", payload)
         handle = "claude:a2bcd5c4-bf6d-4087-95e3-d7ba7f711875"
         row = self._row(handle)
         self.assertEqual("working", row.turn_state)
@@ -476,7 +482,7 @@ class HookLifecycleTests(unittest.TestCase):
         foreign = dict(entry, session_id="other-id", host="codex")
         (registry / "other-id.json").write_text(json.dumps(foreign), encoding="utf-8")
         payload = {"session_id": "moved-id", "cwd": str(self.repo)}
-        self._invoke("session-start", "claude", payload)
+        self._start("claude", payload)
         self.assertEqual(0, self._invoke("stop", "claude", payload))
         moved = json.loads((registry / "moved-id.json").read_text(encoding="utf-8"))
         self.assertEqual(self.repo.resolve(), Path(moved.pop("cwd")).resolve())
@@ -492,7 +498,7 @@ class HookLifecycleTests(unittest.TestCase):
         registry.mkdir(parents=True)
         entry = {"session_id": "locked-id", "host": "claude", "cwd": str(self.root), "pid": 7, "pid_started_at": 1.5}
         (registry / "locked-id.json").write_text(json.dumps(entry), encoding="utf-8")
-        self._invoke("session-start", "claude", {"session_id": "locked-id", "cwd": str(self.root)})
+        self._start("claude", {"session_id": "locked-id", "cwd": str(self.root)})
         follower = HOOK.load_sibling(HOOK.__file__, "cli_session_registry")
         with mock.patch.object(follower.os, "replace", side_effect=PermissionError("in use")), \
                 mock.patch.object(follower, "REPLACE_DELAY_SECONDS", 0):
@@ -515,7 +521,7 @@ class HookLifecycleTests(unittest.TestCase):
         for directory, expected in ((self.repo / "tests", self.repo), (nested, nested)):
             with self.subTest(directory=directory.name):
                 payload = {"session_id": "rooted-id", "cwd": str(directory)}
-                self._invoke("session-start", "codex", payload)
+                self._start("codex", payload)
                 self.assertEqual(0, self._invoke("stop", "codex", payload))
                 registered = json.loads((registry / "rooted-id.json").read_text(encoding="utf-8"))
                 self.assertEqual(expected.resolve(), Path(registered["cwd"]).resolve())
@@ -530,7 +536,7 @@ class HookLifecycleTests(unittest.TestCase):
 
     def test_first_prompt_titles_an_untitled_session_and_later_prompts_keep_it(self):
         payload = {"session_id": "titled-id", "cwd": str(self.repo)}
-        self._invoke("session-start", "claude", payload)
+        self._start("claude", payload)
         self._invoke("prompt", "claude", dict(payload, prompt="/recover"))
         self.assertIsNone(self._row("claude:titled-id").title)
         self._invoke("prompt", "claude", dict(payload, prompt="  Fix the\n crash   recovery lookup "))
@@ -540,7 +546,7 @@ class HookLifecycleTests(unittest.TestCase):
     def test_stop_on_a_feature_branch_creates_one_work_item_every_session_on_it_shares(self):
         _run_git(self.repo, "checkout", "-q", "-b", "Fix/Recovery")
         first = {"session_id": "first-id", "cwd": str(self.repo)}
-        self._invoke("session-start", "claude", first)
+        self._start("claude", first)
         self._invoke("prompt", "claude", dict(first, prompt="Fix crash recovery"))
         self._invoke("stop", "claude", first)
         key = self._row("claude:first-id").work_item
@@ -550,13 +556,13 @@ class HookLifecycleTests(unittest.TestCase):
                          (item.repo, item.branch, item.title, item.status))
 
         second = {"session_id": "second-id", "cwd": str(self.repo)}
-        self._invoke("session-start", "codex", second)
+        self._start("codex", second)
         self.assertEqual(key, self._row("codex:second-id").work_item)
 
     def test_stop_on_the_default_branch_creates_no_work_item(self):
         branch = _run_git(self.repo, "branch", "--show-current")
         payload = {"session_id": "main-id", "cwd": str(self.repo)}
-        self._invoke("session-start", "claude", payload)
+        self._start("claude", payload)
         self._invoke("stop", "claude", payload)
         self.assertEqual(branch, self._row("claude:main-id").branch)
         self.assertIsNone(self._row("claude:main-id").work_item)
@@ -579,14 +585,14 @@ class HookLifecycleTests(unittest.TestCase):
         _run_git(self.repo, "update-ref", "refs/remotes/origin/develop", "HEAD")
         _run_git(self.repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
         payload = {"session_id": "develop-id", "cwd": str(self.repo)}
-        self._invoke("session-start", "claude", payload)
+        self._start("claude", payload)
         self._invoke("stop", "claude", payload)
         self.assertIsNone(self._row("claude:develop-id").work_item)
 
     def test_a_named_work_item_on_the_branch_absorbs_the_automatic_one(self):
         _run_git(self.repo, "checkout", "-q", "-b", "Feature/Named")
         payload = {"session_id": "absorb-id", "cwd": str(self.repo)}
-        self._invoke("session-start", "claude", payload)
+        self._start("claude", payload)
         self._invoke("stop", "claude", payload)
         automatic = self._row("claude:absorb-id").work_item
         named = STORE.work_item_key("github.com/tj-agents/core", "feature", "named")
@@ -602,7 +608,7 @@ class HookLifecycleTests(unittest.TestCase):
     def test_registering_a_tracker_reference_adopts_the_branch_work_item(self):
         _run_git(self.repo, "checkout", "-q", "-b", "Feature/Tracked")
         payload = {"session_id": "tracked-id", "cwd": str(self.repo)}
-        self._invoke("session-start", "claude", payload)
+        self._start("claude", payload)
         self._invoke("stop", "claude", payload)
         automatic = self._row("claude:tracked-id").work_item
         store = STORE.SessionStore()
@@ -619,11 +625,11 @@ class HookLifecycleTests(unittest.TestCase):
     def test_resume_start_clears_ended_at_and_end_reason(self):
         payload = {"session_id": "exact-id", "cwd": str(self.repo)}
         handle = "codex:exact-id"
-        self._invoke("session-start", "codex", payload)
+        self._start("codex", payload)
         self._invoke("session-end", "codex", payload)
         self.assertIsNotNone(self._row(handle).ended_at)
 
-        self._invoke("session-start", "codex", payload)
+        self._start("codex", payload)
         row = self._row(handle)
         self.assertIsNone(row.ended_at)
         self.assertIsNone(row.end_reason)
@@ -632,7 +638,7 @@ class HookLifecycleTests(unittest.TestCase):
     def test_end_and_reopen_persist_through_update_session(self):
         store = STORE.SessionStore()
         try:
-            store.start_session("claude", "id-1", self.repo)
+            store.start_session("claude", "id-1", self.repo, profile=PROFILE)
             store.update_session("claude:id-1", lambda session: session.end("finished"))
             store.update_session("claude:id-1", lambda session: session.end("closed"))
             ended = store.get_session("claude:id-1")
@@ -645,24 +651,24 @@ class HookLifecycleTests(unittest.TestCase):
         self.assertIsNone(reopened.ended_at)
         self.assertIsNone(reopened.end_reason)
 
-    def test_session_start_hook_malformed_stdin_exits_zero(self):
+    def test_hook_malformed_stdin_exits_zero(self):
         with mock.patch.object(sys, "stdin", io.StringIO("not json {{{")):
-            self.assertEqual(0, HOOK.main(["session-start", "--host", "claude"]))
+            self.assertEqual(0, HOOK.main(["prompt", "--host", "claude"]))
 
-    def test_session_start_hook_unwritable_db_path_exits_zero(self):
+    def test_hook_unwritable_db_path_exits_zero(self):
         blocker = self.root / "blocker-file"
         blocker.write_text("not a directory", encoding="utf-8")
         with mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(blocker / "nested")}, clear=False):
             payload = {"session_id": "id", "cwd": str(self.repo)}
             with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(payload))):
-                self.assertEqual(0, HOOK.main(["session-start", "--host", "claude"]))
+                self.assertEqual(0, HOOK.main(["prompt", "--host", "claude"]))
 
     def test_work_item_auto_attach_requires_exactly_one_match(self):
         store = STORE.SessionStore()
         try:
             repo = "github.com/tj-agents/core"
             store.upsert_work_item("github.com/tj-agents/core:f/a", repo, "f", "a", status="active", branch="topic")
-            store.start_session("claude", "attach-id", self.repo, STORE.Checkout.probe(self.repo))
+            store.start_session("claude", "attach-id", self.repo, STORE.Checkout.probe(self.repo), profile=PROFILE)
             store.record_stop("claude:attach-id", STORE.Checkout.probe(self.repo))
         finally:
             store.close()
@@ -679,7 +685,7 @@ class HookLifecycleTests(unittest.TestCase):
         store = STORE.SessionStore()
         try:
             store.upsert_work_item("github.com/tj-agents/core:f/b", "github.com/tj-agents/core", "f", "b", status="active", branch="topic")
-            store.start_session("claude", "attach-id-2", self.repo, STORE.Checkout.probe(self.repo))
+            store.start_session("claude", "attach-id-2", self.repo, STORE.Checkout.probe(self.repo), profile=PROFILE)
             store.record_stop("claude:attach-id-2", STORE.Checkout.probe(self.repo))
             row = store.get_session("claude:attach-id-2")
             self.assertIsNone(row.work_item)
@@ -694,7 +700,7 @@ class HookLifecycleTests(unittest.TestCase):
             try:
                 store = STORE.SessionStore()
                 try:
-                    store.start_session("claude", f"thread-{index}", self.repo)
+                    store.start_session("claude", f"thread-{index}", self.repo, profile=PROFILE)
                 finally:
                     store.close()
             except Exception as error:  # noqa: BLE001
@@ -718,10 +724,10 @@ class HookLifecycleTests(unittest.TestCase):
         store = STORE.SessionStore()
         try:
             store.upsert_work_item("some-key", "repo", "f", "a", status="active")
-            store.start_session("claude", "id-1", self.repo)
+            store.start_session("claude", "id-1", self.repo, profile=PROFILE)
             store.claim_work_item("claude:id-1", "some-key", "owner")
             store.update_session("claude:id-1", lambda session: session.end("handed_off", successor="codex:id-2"))
-            store.start_session("claude", "id-1", self.repo)
+            store.start_session("claude", "id-1", self.repo, profile=PROFILE)
             row = store.get_session("claude:id-1")
         finally:
             store.close()
@@ -732,10 +738,10 @@ class HookLifecycleTests(unittest.TestCase):
         store = STORE.SessionStore()
         try:
             store.upsert_work_item("some-key", "repo", "f", "a", status="active")
-            store.start_session("claude", "id-2", self.repo)
+            store.start_session("claude", "id-2", self.repo, profile=PROFILE)
             store.claim_work_item("claude:id-2", "some-key", "owner")
             store.update_session("claude:id-2", lambda session: session.end("closed"))
-            store.start_session("claude", "id-2", self.repo)
+            store.start_session("claude", "id-2", self.repo, profile=PROFILE)
             row = store.get_session("claude:id-2")
         finally:
             store.close()
@@ -760,7 +766,7 @@ class HookLifecycleTests(unittest.TestCase):
 
         with mock.patch.object(CHECKOUT.process, "run", side_effect=counting_run):
             calls.clear()
-            self.assertEqual(0, self._invoke("session-start", "claude", payload))
+            self._start("claude", payload)
             self.assertLessEqual(len(calls), 2)
 
             calls.clear()
@@ -784,10 +790,10 @@ class ClaimWorkItemTests(unittest.TestCase):
         store = self._store()
         try:
             self._seed_work_item(store, "key-1")
-            store.start_session("claude", "a")
+            store.start_session("claude", "a", profile=PROFILE)
             store.claim_work_item("claude:a", "key-1", "owner")
             store.update_session("claude:a", lambda session: session.end("closed"))
-            store.start_session("codex", "b")
+            store.start_session("codex", "b", profile=PROFILE)
             removed = store.claim_work_item("codex:b", "key-1", "owner")
             predecessor = store.get_session("claude:a")
             successor = store.get_session("codex:b")
@@ -801,9 +807,9 @@ class ClaimWorkItemTests(unittest.TestCase):
         store = self._store()
         try:
             self._seed_work_item(store, "key-1")
-            store.start_session("claude", "a")
+            store.start_session("claude", "a", profile=PROFILE)
             store.claim_work_item("claude:a", "key-1", "owner")
-            store.start_session("codex", "b")
+            store.start_session("codex", "b", profile=PROFILE)
             with mock.patch.object(STORE.Session, "claim", side_effect=RuntimeError("boom")):
                 with self.assertRaises(RuntimeError):
                     store.claim_work_item("codex:b", "key-1", "owner", predecessor="claude:a")
@@ -819,10 +825,10 @@ class ClaimWorkItemTests(unittest.TestCase):
         store = self._store()
         try:
             self._seed_work_item(store, "key-1")
-            store.start_session("claude", "a")
+            store.start_session("claude", "a", profile=PROFILE)
             store.claim_work_item("claude:a", "key-1", "owner")
-            store.start_session("codex", "b")
-            store.start_session("codex", "c")
+            store.start_session("codex", "b", profile=PROFILE)
+            store.start_session("codex", "c", profile=PROFILE)
         finally:
             store.close()
 
@@ -865,12 +871,12 @@ class ClaimWorkItemTests(unittest.TestCase):
         store = self._store()
         try:
             self._seed_work_item(store, "key-1")
-            store.start_session("claude", "a")
+            store.start_session("claude", "a", profile=PROFILE)
             store.claim_work_item("claude:a", "key-1", "owner")
             store.update_session("claude:a", lambda session: session.end("closed"))
-            store.start_session("codex", "b")
+            store.start_session("codex", "b", profile=PROFILE)
             store.claim_work_item("codex:b", "key-1", "owner")
-            store.start_session("claude", "a", self.temp.name)
+            store.start_session("claude", "a", self.temp.name, profile=PROFILE)
             row = store.get_session("claude:a")
         finally:
             store.close()
@@ -880,9 +886,9 @@ class ClaimWorkItemTests(unittest.TestCase):
         store = self._store()
         try:
             self._seed_work_item(store, "key-1")
-            store.start_session("claude", "a")
+            store.start_session("claude", "a", profile=PROFILE)
             store.claim_work_item("claude:a", "key-1", "owner")
-            store.start_session("codex", "b")
+            store.start_session("codex", "b", profile=PROFILE)
             with self.assertRaises(ValueError):
                 store.claim_work_item("codex:b", "key-1", "owner", branch="feature-branch")
             item = store.get_work_item("key-1")
@@ -894,7 +900,7 @@ class ClaimWorkItemTests(unittest.TestCase):
         store = self._store()
         try:
             self._seed_work_item(store, "key-1")
-            store.start_session("codex", "b")
+            store.start_session("codex", "b", profile=PROFILE)
             store.claim_work_item("codex:b", "key-1", "bounded: docs", branch="feature-branch")
             item = store.get_work_item("key-1")
         finally:
@@ -905,7 +911,7 @@ class ClaimWorkItemTests(unittest.TestCase):
         store = self._store()
         try:
             self._seed_work_item(store, "key-1")
-            store.start_session("codex", "b")
+            store.start_session("codex", "b", profile=PROFILE)
             store.claim_work_item("codex:b", "key-1", "owner", branch="feature-branch")
             item = store.get_work_item("key-1")
         finally:
@@ -918,7 +924,7 @@ class ClaimWorkItemTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "title must be non-empty"):
                 store.claim_registered_work_item(
                     "claude", "registered", self.temp.name, None, "key-1", "repo", "feature", "item",
-                    "owner", title="  ", registration=STORE.ClientRegistration("Claude tab", 1, 1.0),
+                    "owner", title="  ", registration=STORE.ClientRegistration("Claude tab", 1, 1.0), profile=PROFILE,
                 )
             self.assertIsNone(store.get_work_item("key-1"))
             self.assertIsNone(store.get_session("claude:registered"))
@@ -939,7 +945,7 @@ class BranchWorkItemRuleTests(unittest.TestCase):
         return STORE.Checkout(self.temp.name, "repo", branch, "abc", default)
 
     def _stopped(self, session_id, branch):
-        handle = self.store.start_session("claude", session_id)
+        handle = self.store.start_session("claude", session_id, profile=PROFILE)
         self.store.record_stop(handle, self._checkout(branch))
         return self.store.get_session(handle).work_item
 
@@ -981,7 +987,7 @@ class BranchWorkItemRuleTests(unittest.TestCase):
         automatic = self._stopped("a", "topic")
         self.store.claim_registered_work_item(
             "codex", "c", self.temp.name, self._checkout("topic"), "repo:f/i", "repo", "f", "i", "owner",
-            branch="topic", title="Named", registration=STORE.ClientRegistration("Codex tab", 7, 7.0),
+            branch="topic", title="Named", registration=STORE.ClientRegistration("Codex tab", 7, 7.0), profile=PROFILE,
         )
         self.assertIsNone(self.store.get_work_item(automatic))
         self.assertEqual("repo:f/i", self.store.get_session("claude:a").work_item)
@@ -993,22 +999,22 @@ class BranchWorkItemRuleTests(unittest.TestCase):
         automatic = self._stopped("a", "topic")
         self.store.claim_registered_work_item(
             "codex", "c", self.temp.name, self._checkout("topic"), "repo:f/i", "repo", "f", "i", "bounded: docs",
-            branch="topic", title="Named", registration=STORE.ClientRegistration("Codex tab", 7, 7.0),
+            branch="topic", title="Named", registration=STORE.ClientRegistration("Codex tab", 7, 7.0), profile=PROFILE,
         )
         self.assertEqual("topic", self.store.get_work_item("repo:f/i").branch)
         self.assertEqual(automatic, self.store.get_session("claude:a").work_item)
-        self.store.start_session("claude", "d")
+        self.store.start_session("claude", "d", profile=PROFILE)
         self.store.claim_work_item("claude:d", "repo:f/i", "bounded: review", branch="topic")
         self.assertIsNotNone(self.store.get_work_item(automatic))
-        self.store.start_session("claude", "e")
+        self.store.start_session("claude", "e", profile=PROFILE)
         self.store.claim_work_item("claude:e", "repo:f/i", "owner", branch="topic")
         self.assertIsNone(self.store.get_work_item(automatic))
         self.assertEqual("repo:f/i", self.store.get_session("claude:a").work_item)
 
     def test_sessions_on_hosts_come_with_their_work_items(self):
         automatic = self._stopped("a", "topic")
-        self.store.start_session("claude", "b")
-        self.store.start_session("codex", "c")
+        self.store.start_session("claude", "b", profile=PROFILE)
+        self.store.start_session("codex", "c", profile=PROFILE)
         pairs = self.store.sessions_with_work_items_on_hosts(["claude"])
         found = {session.handle: item.key if item else None for session, item in pairs}
         self.assertEqual({"claude:a": automatic, "claude:b": None}, found)

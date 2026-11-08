@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from tj_agent.host import Host
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "plugins/agent/.agents/agent/runtime/work_item_sessions.py"
@@ -19,7 +21,8 @@ class InterruptedTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}):
             store_module = WORK_ITEM_SESSIONS._session_store()
             with store_module.SessionStore() as store:
-                handle = store.start_session("claude", "dead", directory, pid=4000003, pid_started_at=1.0)
+                handle = store.start_session("claude", "dead", directory, pid=4000003, pid_started_at=1.0,
+                                             profile=str(Host.CLAUDE.configuration_root))
                 store.update_session(handle, lambda session: setattr(session, "last_activity_at", 1767225600.25))
             with mock.patch.object(WORK_ITEM_SESSIONS, "_pid_is_dead", return_value=True), \
                     mock.patch.object(WORK_ITEM_SESSIONS, "_read_time_status", return_value="closed"):

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude import installed as claude_installed
 from codex import installed as codex_installed
-from host import Host
+from tj_agent.host import Host
 
 MARKETPLACES = ("tj-agents", "agents")
 RUNTIME = Path(__file__).resolve().parent
@@ -36,13 +36,17 @@ def installed_behind(host: Host) -> list[str]:
     return found
 
 
+def running_root(host: Host) -> Path:
+    value = os.environ.get(host.plugin_root_variable)
+    return Path(value) if value else RUNTIME.parents[2]
+
+
 def running_behind(host: Host) -> str | None:
     pin = claude_installed.pins("tj-agents").get("agent")
     install = claude_installed.installs("tj-agents").get("agent")
     if not pin or not install or install[0] != pin:
         return None
-    root = INSTALLED[host].running_root() or RUNTIME.parents[2]
-    behind = INSTALLED[host].loaded_build_behind(root, pin, install[1])
+    behind = INSTALLED[host].loaded_build_behind(running_root(host), pin, install[1])
     return f"agent@tj-agents: {behind}" if behind else None
 
 

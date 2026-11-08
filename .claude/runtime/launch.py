@@ -12,6 +12,7 @@ from launch_contract import Launch
 
 from launch_errors import LaunchError
 from native_executable import is_script
+from tj_agent.host import Host
 
 
 class Adapter(Launch, Protocol):
@@ -34,6 +35,7 @@ class Adapter(Launch, Protocol):
     ) -> None: ...
 
 
+HOST = Host.CLAUDE
 IS_WINDOWS = os.name == "nt"
 KEEP_TAB_TITLE = {"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
 SESSION_ENVIRONMENT: tuple[str, ...] = (
@@ -41,7 +43,7 @@ SESSION_ENVIRONMENT: tuple[str, ...] = (
     "CLAUDECODE",
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_SESSION_ID",
+    HOST.session_variable,
     "CLAUDE_CODE_MESSAGING_SOCKET",
     "CLAUDE_CODE_MESSAGING_TOKEN",
     "CLAUDE_PID",
@@ -83,7 +85,7 @@ def open_tab(
         sys.executable,
         title,
         arguments=cli.bound_terminal_arguments(
-            "claude",
+            HOST,
             working_directory,
             claude,
             list(arguments),

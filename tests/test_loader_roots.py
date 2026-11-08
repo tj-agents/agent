@@ -50,7 +50,15 @@ def test_lane_loader_refuses_missing_inner_resolver(loader_package_roots):
     outer, inner = loader_package_roots
     runtime = inner / ".agents/agent/runtime"
     runtime.mkdir(parents=True)
-    for name in ("agent_cli.py", "package_root.py", "host.py", "launch_errors.py", "launch_contract.py"):
+    for name in (
+        "agent_cli.py",
+        "package_root.py",
+        "tj_agent/__init__.py",
+        "tj_agent/host.py",
+        "launch_errors.py",
+        "launch_contract.py",
+    ):
+        (runtime / name).parent.mkdir(exist_ok=True)
         shutil.copy2(
             ROOT / "plugins/agent/.agents/agent/runtime" / name, runtime / name
         )

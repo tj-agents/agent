@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import agent_cli
+from tj_agent.host import Host
 from tj_cli import process
 
 
@@ -24,7 +25,7 @@ def handoff_executable(
         "Codex handoff requires an installed native Codex 0.166.0 or newer "
         "for paginated input verification"
     )
-    launch = agent_cli.host_launch("codex")
+    launch = agent_cli.host_launch(Host.CODEX)
     floor = launch.parse_version("0.166.0")
     assert floor is not None
 

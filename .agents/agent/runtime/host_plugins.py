@@ -8,7 +8,7 @@ from typing import Protocol
 
 from claude import plugins as claude_plugins
 from codex import plugins as codex_plugins
-from host import Host
+from tj_agent.host import Host
 
 
 class Plugins(Protocol):

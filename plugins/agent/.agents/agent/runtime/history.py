@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from host import Host
+from tj_agent.host import Host
 from host_sessions import SESSIONS
 
 

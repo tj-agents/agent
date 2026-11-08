@@ -92,17 +92,17 @@ def resolve_model(args, agent_cli):
     effort = args.effort
     tier = ''
     if args.lane:
-        route = agent_cli.resolve_lane('claude', lane=args.lane).get('handoff')
+        route = agent_cli.resolve_lane(agent_cli.Host.CLAUDE, lane=args.lane).get('handoff')
         if route:
             raise agent_cli.LaunchError(
                 f"--lane {args.lane} routes to Codex {route['lane']}; use agent:handoff --host codex, "
                 "or omit --lane for an explicit user-named model."
             )
     if args.frontier:
-        model, effort = agent_cli.resolve_lane_model('claude', frontier=True)
+        model, effort = agent_cli.resolve_lane_model(agent_cli.Host.CLAUDE, frontier=True)
         tier = 'frontier -> '
     elif not model and args.lane:
-        model, effort = agent_cli.resolve_lane_model('claude', lane=args.lane)
+        model, effort = agent_cli.resolve_lane_model(agent_cli.Host.CLAUDE, lane=args.lane)
         tier = f'lane {args.lane} -> '
 
     if model and model.strip().lower().split('[', 1)[0] in ('default', 'sonnet', 'opus', 'opusplan'):
@@ -145,7 +145,7 @@ def main(argv=None):
         arguments = build_arguments(args, model, effort, prompt_sentence)
 
         status_path = agent_cli.handoff_status_path()
-        agent_cli.host_launch('claude').open_tab(agent_cli, working_directory, args.title, arguments, status_file=status_path, require_session_start=True)
+        agent_cli.host_launch(agent_cli.Host.CLAUDE).open_tab(agent_cli, working_directory, args.title, arguments, status_file=status_path, require_session_start=True)
         agent_cli.await_handoff_startup(status_path)
 
         selection = f'{tier}{model}' if model else 'the CLI default model'
