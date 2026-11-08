@@ -265,8 +265,13 @@ def _launch_windows_terminal(directory, title, command, cleared, forced, environ
             env=_environment_for(environ, cleared, forced))
 
 
-def open_tab(directory, title, command, cleared=(), forced=None, environ=os.environ, run=subprocess.run):
+_REAL_RUN = subprocess.run
+
+
+def open_tab(directory, title, command, cleared=(), forced=None, environ=os.environ, run=_REAL_RUN):
     """Open `command` as a new tab titled `title`, in Windows Terminal or the current tmux server."""
+    if run is _REAL_RUN and 'PYTEST_CURRENT_TEST' in os.environ:
+        raise LaunchError('Refusing to open a real terminal tab under pytest; inject a fake run.')
     forced = dict(forced or {})
     if IS_WINDOWS:
         return _launch_windows_terminal(directory, title, command, cleared, forced, environ, run)
