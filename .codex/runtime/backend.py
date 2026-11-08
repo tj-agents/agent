@@ -55,7 +55,8 @@ def native_identity(
         table = register_session.process_table()
         descendants = {child.pid}
         while children := {
-            pid for pid, info in table.items()
+            pid
+            for pid, info in table.items()
             if info.ppid in descendants and pid not in descendants
         }:
             descendants.update(children)
