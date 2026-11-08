@@ -7,13 +7,17 @@ import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from tj_cli import processes
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / ".codex/runtime/backend.py"
+SOURCE = ROOT / "plugins/agent/.agents/agent/runtime/codex/backend.py"
+NATIVE = ROOT / "tests/fixtures/owned_native.py"
+EXECUTABLE = str(Path(vars(sys)["_base_executable"]).resolve())
+sys.path.insert(0, str(SOURCE.parents[1]))
 
 
 def load_backend() -> Any:
@@ -24,8 +28,8 @@ def load_backend() -> Any:
     return module
 
 
-def wait_for(predicate: Callable[[], bool]) -> None:
-    deadline = time.monotonic() + 10
+def wait_for(predicate: Callable[[], bool], timeout: float = 10) -> None:
+    deadline = time.monotonic() + timeout
     while not predicate():
         if time.monotonic() >= deadline:
             raise RuntimeError("Owned process fixture did not settle")
@@ -44,26 +48,14 @@ def fixture_main() -> int:
     if sys.argv[1] == "--idle-fixture":
         sys.stdin.buffer.read()
         return 0
-    if sys.argv[1] == "--native-fixture":
-        socket = Path(sys.argv[sys.argv.index("--listen") + 1].removeprefix("unix://"))
-        socket.parent.mkdir()
-        socket.write_bytes(b"owned fixture")
-        info = processes.process_info(os.getpid())
-        assert info is not None
-        load_backend().write_record(
-            Path(os.environ["OWNED_FIXTURE_DIRECTORY"]) / "native.json",
-            {"pid": info.pid, "started_at": info.started_at, "cwd": str(Path.cwd())},
-        )
-        while True:
-            time.sleep(0.1)
     directory = Path(sys.argv[2])
     backend = load_backend()
     lease = backend.Lease(
-        sys.executable,
+        EXECUTABLE,
         directory,
         dict(os.environ),
         directory,
-        [str(Path(__file__).resolve()), "--native-fixture"],
+        [str(NATIVE)],
     )
     backend.write_record(
         directory / "wrapper.json",
@@ -117,7 +109,8 @@ def wrappers(
         running.append(process)
         directories.append(directory)
         wait_for(
-            lambda: (directory / "wrapper.json").exists() or process.poll() is not None
+            lambda: (directory / "wrapper.json").exists() or process.poll() is not None,
+            timeout=20,
         )
         assert (directory / "wrapper.json").exists(), read_record(
             directory / "backend.json"
@@ -150,6 +143,12 @@ def test_wrapper_exit_reaps_its_backend_and_private_endpoint(
     native = read_record(directory / "native.json")
     socket = Path(binding["backend"]["socket_path"])
     assert processes.matches(binding["backend"])
+    assert binding["backend"]["pid"] == native["pid"]
+    info = processes.process_info(native["pid"])
+    assert info is not None
+    assert binding["backend"]["started_at"] == info.started_at
+    assert processes.descends_from(binding["backend"], binding["supervisor"])
+    assert processes.descends_from(binding["supervisor"], binding["wrapper"])
     assert native["cwd"] == str(directory)
     assert socket.is_relative_to(directory / "socket space café")
     assert wrapper.stdin is not None
@@ -159,7 +158,7 @@ def test_wrapper_exit_reaps_its_backend_and_private_endpoint(
     wrapper.wait(timeout=15)
     wait_for(lambda: not processes.matches(binding["backend"]))
     wait_for(lambda: not processes.matches(binding["supervisor"]))
-    assert not processes.matches(native)
+    assert processes.process_info(native["pid"]) is None
     receipt = read_record(directory / "backend.json")
     assert receipt["state"] == "exited"
     assert receipt["token"] == directory.name
@@ -177,6 +176,14 @@ def test_one_wrapper_exit_preserves_the_other_owned_backend(
     second, second_directory = wrappers("second")
     first_binding = read_record(first_directory / "wrapper.json")
     second_binding = read_record(second_directory / "wrapper.json")
+    assert (
+        first_binding["backend"]["pid"]
+        == read_record(first_directory / "native.json")["pid"]
+    )
+    assert (
+        second_binding["backend"]["pid"]
+        == read_record(second_directory / "native.json")["pid"]
+    )
     assert first.stdin is not None
     first.stdin.write(b"abort")
     first.stdin.close()
@@ -213,8 +220,8 @@ def test_startup_identity_failure_reaps_the_child_and_removes_its_endpoint(
             "directory": str(directory),
             "project": str(directory),
             "socket_path": str(socket),
-            "executable": sys.executable,
-            "arguments": [str(Path(__file__).resolve()), "--native-fixture"],
+            "executable": EXECUTABLE,
+            "arguments": [str(NATIVE)],
             "token": directory.name,
             "wrapper": wrapper,
         },
@@ -222,7 +229,7 @@ def test_startup_identity_failure_reaps_the_child_and_removes_its_endpoint(
     )
     assert result == 1
     assert read_record(directory / "backend.json")["state"] == "failed"
-    assert not processes.matches(read_record(directory / "native.json"))
+    assert processes.process_info(read_record(directory / "native.json")["pid"]) is None
     assert not socket.exists()
     assert not socket.parent.exists()
 
@@ -272,15 +279,19 @@ def test_startup_cleanup_preserves_never_captured_endpoint(
             "directory": str(tmp_path),
             "project": str(tmp_path),
             "socket_path": str(socket),
-            "executable": sys.executable,
-            "arguments": [str(Path(__file__).resolve()), "--native-fixture"],
+            "executable": EXECUTABLE,
+            "arguments": [str(NATIVE)],
             "token": tmp_path.name,
             "wrapper": backend.identity(os.getppid()),
         },
         io.BytesIO(),
     )
     assert result == 1
-    wait_for_process_exit(read_record(tmp_path / "native.json"))
+    wait_for(
+        lambda: (
+            processes.process_info(read_record(tmp_path / "native.json")["pid"]) is None
+        )
+    )
     receipt = read_record(tmp_path / "backend.json")
     assert receipt["state"] == "failed"
     assert receipt["filesystem"] == {"parent": None, "socket": None}
@@ -304,6 +315,68 @@ def test_cleanup_preserves_parent_when_original_socket_was_never_observed(
     assert endpoint.identity(socket.parent) == endpoint.parent_identity
 
 
+@pytest.mark.parametrize(
+    "selection",
+    [
+        "root",
+        "child",
+        "foreign",
+        "executable",
+        "endpoint",
+        "duplicate",
+        "reused",
+        "missing",
+    ],
+)
+def test_native_identity_requires_one_live_exact_command_in_the_launch_tree(
+    monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    from codex import client
+    from startup_binding import register_session
+
+    backend = load_backend()
+    command = [EXECUTABLE, "app-server", "--listen", "unix:///private/s"]
+    infos = {
+        201: processes.ProcessInfo(201, 1, 201.0),
+        202: processes.ProcessInfo(202, 201, 202.0),
+        203: processes.ProcessInfo(203, 201, 203.0),
+    }
+    commands = {201: ["launcher"], 202: command, 203: ["other"]}
+    if selection == "root":
+        commands[201], commands[202] = command, ["other"]
+    elif selection == "foreign":
+        infos[202] = infos[202]._replace(ppid=999)
+    elif selection == "executable":
+        commands[202] = [EXECUTABLE + ".foreign", *command[1:]]
+    elif selection == "endpoint":
+        commands[202] = [*command[:-1], "unix:///foreign/s"]
+    elif selection == "duplicate":
+        commands[203] = command
+    elif selection == "missing":
+        commands[202] = ["other"]
+
+    def arguments(pid: int) -> list[str]:
+        if selection == "reused" and pid == 202:
+            infos[202] = infos[202]._replace(started_at=999.0)
+        return commands[pid]
+
+    monkeypatch.setattr(processes, "process_info", infos.get)
+    monkeypatch.setattr(register_session, "process_table", lambda: infos)
+    monkeypatch.setattr(client, "process_arguments", arguments)
+    clock = iter([0.0, 3.0])
+    monkeypatch.setattr(backend.time, "monotonic", lambda: next(clock))
+    child = SimpleNamespace(pid=201, poll=lambda: None)
+    if selection in {"root", "child"}:
+        pid = 201 if selection == "root" else 202
+        assert backend.native_identity(child, command) == {
+            "pid": pid,
+            "started_at": float(pid),
+        }
+    else:
+        with pytest.raises(RuntimeError, match=r"identity|ambiguous"):
+            backend.native_identity(child, command)
+
+
 @pytest.mark.parametrize("changed", ["token", "wrapper"])
 def test_supervisor_refuses_a_foreign_launch_before_starting_native_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
@@ -325,8 +398,8 @@ def test_supervisor_refuses_a_foreign_launch_before_starting_native_code(
             "directory": str(tmp_path),
             "project": str(tmp_path),
             "socket_path": str(socket),
-            "executable": sys.executable,
-            "arguments": [str(Path(__file__).resolve()), "--native-fixture"],
+            "executable": EXECUTABLE,
+            "arguments": [str(NATIVE)],
             "token": "other" if changed == "token" else tmp_path.name,
             "wrapper": backend.identity(
                 foreign.pid if changed == "wrapper" else os.getppid()

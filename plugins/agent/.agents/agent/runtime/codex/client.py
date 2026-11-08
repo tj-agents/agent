@@ -173,11 +173,12 @@ def prepare(arguments, project, environment, executable=None, handoff=False, hoo
         if '--no-daemon' in arguments or any(value.split('=')[0] == '--remote' for value in arguments):
             raise RuntimeError('A handoff owns its native endpoint; an external backend cannot be selected')
         effective, configuration = required_plugins.launch_context(Path(project), HOST, arguments)
-        if effective is None or effective.resolve() != Path(project).resolve():
-            raise RuntimeError('Handoff launch checkout does not match its verified native configuration')
+        if effective is None:
+            raise RuntimeError('Handoff launch checkout has no verified native configuration')
+        ticket['launch_cwd'] = str(effective.resolve())
         backend_environment = {key: value for key, value in values.items()
                                if key not in (RECORD_ENV, RECORD_PATH_ENV)}
-        lease = Lease(executable, Path(project), backend_environment, path.parent, list(configuration))
+        lease = Lease(executable, effective.resolve(), backend_environment, path.parent, list(configuration))
         try:
             ticket.update(backend=lease.backend, supervisor=lease.supervisor, wrapper=identity(os.getpid()),
                           executable=str(Path(executable).resolve()), _lease=lease)
@@ -362,7 +363,8 @@ def verify_owned_processes(record, *, table=None, peer_state=None):
     supervisor = processes.require_live(record['supervisor'], 'Handoff supervisor identity changed')
     backend = processes.require_live(record['backend'], 'Handoff backend identity changed')
     wrapper = processes.require_live(record['wrapper'], 'Handoff wrapper identity changed')
-    if (frontend.pid != record['pid'] or frontend.ppid != wrapper.pid or backend.ppid != supervisor.pid
+    if (frontend.pid != record['pid'] or frontend.ppid != wrapper.pid or backend.pid == supervisor.pid
+            or not processes.descends_from(record['backend'], record['supervisor'])
             or not processes.descends_from(record['supervisor'], record['wrapper'])):
         raise RuntimeError('Handoff process ownership changed')
     endpoint = record['backend']['socket_path']
