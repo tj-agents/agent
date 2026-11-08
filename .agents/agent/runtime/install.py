@@ -443,6 +443,29 @@ def hidden_bash_plan(context: Context) -> tuple[bool, dict[str, str]]:
     return stale, variables
 
 
+def global_git_config(context: Context) -> Path:
+    return context.path_from("GIT_CONFIG_GLOBAL", context.home / ".gitconfig")
+
+
+def git_longpaths(context: Context) -> bool:
+    result = context.run(["git", "config", "--file", str(global_git_config(context)), "--type=bool", "--get",
+                          "core.longpaths"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         timeout=30, check=False)
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def check_git_longpaths(context: Context) -> list[str]:
+    return [] if git_longpaths(context) else [f"set core.longpaths in {global_git_config(context)}"]
+
+
+def apply_git_longpaths(context: Context) -> list[str]:
+    if git_longpaths(context):
+        return []
+    context.run(["git", "config", "--file", str(global_git_config(context)), "core.longpaths", "true"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=True)
+    return [f"core.longpaths is true in {global_git_config(context)}"]
+
+
 def check_hidden_bash(context: Context) -> list[str]:
     stale, variables = hidden_bash_plan(context)
     return (["build shell/hidden-bash.exe"] if stale else []) + [f"set user {name}" for name in variables]
@@ -802,6 +825,7 @@ def apply_native_cli(context: Context) -> list[str]:
 
 
 STEPS = (
+    Step("Git long paths", check_git_longpaths, apply_git_longpaths, windows_only),
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
@@ -902,7 +926,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--step", action="append", choices=[step.name for step in STEPS],
                         help="run named steps with their dependencies and required preconditions; repeat to select several")
     parsed = parser.parse_args(arguments)
-    native_runtime.prepare_git_environment()
     context = machine_context()
     context.onboard = parsed.onboard
     native_runtime.expose()
