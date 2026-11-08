@@ -12,32 +12,14 @@ route: infer
 
 # Refresh plugins
 
-Every `claude`, `codex`, handoff and open launch already applies plugin updates published since the last
-check. This runs the same refresh for a running session, including installation and native readback of newly declared plugins. Run it on your own judgement; never ask first. On Windows:
+Every plugin is installed once per machine and shared by every project. This updates those installs on both hosts
+from the marketplaces, updates the native `tj` binaries, restarts background Claude sessions, and names the open
+sessions still on the old plugins. Run it on your own judgement; never ask first.
 
-```powershell
-python -B '<skill-directory>/scripts/refresh_plugins.py' --project '<absolute-checkout>'
+```text
+python -B <skill-directory>/scripts/refresh_plugins.py [--host claude|codex]   # python3 on Linux/macOS
 ```
 
-On Linux/macOS use `python3`. It updates only installs whose plugin files differ from the published head, on both hosts. If it
-reports `current` but a plugin is still stale, rerun with `--all` (optionally `--host claude|codex`).
-`--verify` also checks native installations against remote main; `--verify-only` changes nothing.
-
-It fails loudly on a native update that did not persist and a plugin the host lists with errors; report
-those.
-
-Treat missing, failed, timed-out or untrusted required hooks as a stop on ordinary work. A refresh must
-verify installed publisher bytes, trust only the verified current hook hashes through Codex's native
-configuration API, and read back hook readiness before reporting success. Never bypass hook trust or
-disable a required hook to complete a refresh. Run the affected hooks and verify their successful
-execution before resuming; hash trust establishes permission to run, not execution. If recovery cannot
-be verified, retain the current owner and report the failed hook and exact recovery action.
-
-The host entry point names how this session adopts the result.
-
-Keep the same conversation through recovery. If a verified Claude or Codex session needs a fresh client,
-Agent arms its exact attributable frontend close and resumes that same session with its original profile,
-directory and safe native options. The watcher requires the immutable close request digest and its matching
-closed result before resuming. Checkpoint before the turn ends; the resumed client must verify required hook
-execution before ordinary work. `--no-relaunch` reports incomplete adoption and never arms a close. Trust
-failures remain failures; refresh never bypasses trust or creates another conversation.
+A failed step is reported and the rest still run; exit 1 lists the failures. New sessions load the result. An open
+Claude session needs a human `/reload-plugins`; an open Codex session needs `codex resume <id>` for hook changes.
+Tell Tommy which sessions the notice names.

@@ -15,10 +15,8 @@ from git_isolation import isolate_git_config
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import install
-import reload_plugins
 import required_plugins
 from host import Host
-from claude import plugins as claude_plugins
 
 
 class SelectionConvergenceTests(unittest.TestCase):
@@ -60,8 +58,7 @@ class SelectionConvergenceTests(unittest.TestCase):
         collect.assert_not_called()
         self.assertEqual(before, (self.project / ".agents/plugins.json").read_bytes())
 
-        def inventory(project, *_args, admission=False):
-            self.assertFalse(admission)
+        def inventory(project, *_args):
             selection = required_plugins.selected(project)
             self.assertIn("agent@tj-agents", selection)
             self.assertIn("cli@tj-agents", selection)
@@ -74,50 +71,6 @@ class SelectionConvergenceTests(unittest.TestCase):
                 mock.patch.object(install, "plugin_setup_executables", return_value={}):
             install.apply_plugin_setup(context)
         self.assertEqual([], required_plugins.reconcile_selection(self.project, check_only=True))
-
-    def test_launch_repairs_declarations_before_attempting_missing_plugin_install(self):
-        calls = []
-
-        def inventory(project, *_args, admission=False):
-            self.assertFalse(admission)
-            selected = required_plugins.selected(project)
-            self.assertIn("cli@tj-agents", selected)
-            calls.append("inventory")
-            if len(calls) == 1:
-                raise required_plugins.MissingRequiredPluginsError("missing", project, ["cli@tj-agents"])
-            return {"cli@tj-agents": self.project}
-
-        with mock.patch.object(required_plugins, "check", side_effect=inventory), \
-                mock.patch.object(reload_plugins, "repair_missing") as repair:
-            roots = reload_plugins.prepare_required(self.project, Host.CODEX, "codex")
-        repair.assert_called_once_with(Host.CODEX, self.project, ("cli@tj-agents",), "codex")
-        self.assertEqual({"cli@tj-agents": self.project}, roots)
-
-    def test_invalid_selection_blocks_repair_without_changing_files(self):
-        path = self.project / ".agents/plugins.json"
-        path.write_text("{broken", encoding="utf-8")
-        with mock.patch.object(required_plugins, "check") as inventory, \
-                self.assertRaisesRegex(required_plugins.RequiredPluginsError, "could not converge"):
-            reload_plugins.prepare_required(self.project, Host.CODEX)
-        inventory.assert_not_called()
-        self.assertEqual("{broken", path.read_text(encoding="utf-8"))
-
-    def test_registered_worktrees_rebuild_stale_host_settings_before_selection(self):
-        required_plugins.reconcile_selection(self.project)
-        path = self.project / ".claude/settings.json"
-        path.write_text(json.dumps({
-            "extraKnownMarketplaces": {"cpp-agents": {"source": {"source": "github", "repo": "tj-agents/cpp"}}},
-            "enabledPlugins": {"cpp@cpp-agents": True},
-        }), encoding="utf-8")
-        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.project / "claude home")}), \
-                mock.patch.object(claude_plugins, "repository_projects", return_value=[self.project]), \
-                mock.patch.object(claude_plugins, "selected", wraps=claude_plugins.selected) as selection, \
-                mock.patch.object(claude_plugins, "tj_agents_marketplaces", side_effect=RuntimeError("after selection")), \
-                self.assertRaisesRegex(RuntimeError, "after selection"):
-            claude_plugins.synchronize([self.project])
-        selection.assert_called_once_with(self.project.resolve())
-        self.assertNotIn("cpp-agents", path.read_text(encoding="utf-8"))
-        self.assertIn("engineering@tj-agents", json.loads(path.read_text(encoding="utf-8"))["enabledPlugins"])
 
     def test_managed_installed_runtime_converges_without_a_checkout_or_plugin_manifest(self):
         runtime = self.project / "installed"

@@ -59,7 +59,7 @@ def test_repeated_launches_preserve_literal_path_without_duplicate_prefixes(
     interpreter.touch()
     initial = os.pathsep.join([str(interpreter.parent), "", "/tools", "/tools"])
     monkeypatch.setenv("PATH", initial)
-    monkeypatch.setattr(binding.launch_check, "state_directory", lambda: tmp_path)
+    monkeypatch.setattr(binding, "state_directory", lambda: tmp_path)
     process = Mock(pid=72)
     process.wait.return_value = 0
     spawn = Mock(return_value=process)

@@ -23,7 +23,7 @@ def runtime_module(name):
     raise RuntimeError(f"The shipped {name}.py runtime was not found")
 
 
-IDENTITY_RULES = runtime_module("plugin_autoupdate")
+IDENTITY_RULES = runtime_module("required_plugins")
 MARKETPLACE_NAME = IDENTITY_RULES.MARKETPLACE_NAME
 MARKETPLACE_REPOSITORY = IDENTITY_RULES.MARKETPLACE_REPOSITORY
 

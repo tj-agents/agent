@@ -96,7 +96,7 @@ def record_assessment(state: dict[str, Any]) -> None:
 
 
 def _assessment_lock(session_id: str) -> IO[bytes]:
-    from plugin_autoupdate import acquire_lock
+    from runtime_delivery import acquire_lock
 
     acquire: Callable[[Path], IO[bytes] | None] = acquire_lock
     path = (
