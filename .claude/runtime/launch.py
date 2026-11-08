@@ -10,14 +10,16 @@ from collections.abc import Callable
 from launch_contract import Liveness
 from launch_errors import LaunchError
 from native_executable import is_script
+from tj_agent.host import Host
 
+HOST = Host.CLAUDE
 IS_WINDOWS = os.name == "nt"
 SESSION_ENVIRONMENT: tuple[str, ...] = (
     "NO_COLOR",
     "CLAUDECODE",
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_SESSION_ID",
+    HOST.session_variable,
     "CLAUDE_CODE_MESSAGING_SOCKET",
     "CLAUDE_CODE_MESSAGING_TOKEN",
     "CLAUDE_PID",

@@ -84,11 +84,11 @@ def resolve_model(args, agent_cli):
     tier = ''
     if args.frontier:
         tier = 'frontier -> '
-        model, frontier_effort = agent_cli.resolve_lane_model('codex', frontier=True)
+        model, frontier_effort = agent_cli.resolve_lane_model(agent_cli.Host.CODEX, frontier=True)
         if not effort:
             effort = frontier_effort
     elif args.lane and not (model and effort):
-        lane_model, lane_effort = agent_cli.resolve_lane_model('codex', lane=args.lane)
+        lane_model, lane_effort = agent_cli.resolve_lane_model(agent_cli.Host.CODEX, lane=args.lane)
         if not model:
             model = lane_model
             tier = f'lane {args.lane} -> '
@@ -105,12 +105,12 @@ def main(argv=None):
         args = parse_args(argv, agent_cli)
         working_directory = agent_cli.resolve_tab_directory(args.working_directory)
         prompt_sentence, prompt_path = agent_cli.prompt_file_argument(args.prompt_path)
-        adapter = agent_cli.host_launch('codex')
+        adapter = agent_cli.host_launch(agent_cli.Host.CODEX)
         adapter.resolve_executable(minimum=args.minimum_version)
         model, effort, tier = resolve_model(args, agent_cli)
         parent = agent_cli.parent_session(args.parent)
         prompt_sentence += agent_cli.parent_rule(parent)
-        shown = agent_cli.launch('codex', working_directory, args.title,
+        shown = agent_cli.launch(agent_cli.Host.CODEX, working_directory, args.title,
                                  adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort),
                                  item=args.item, parent=parent, want_session=bool(effort))
         if effort:

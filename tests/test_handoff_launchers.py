@@ -51,7 +51,7 @@ class ClaudeLauncherTests(LauncherCase):
         code, out, _ = self.run_launcher('--model', 'claude-opus-5-5', '--item', '98', '--parent', 'codex:p')
         self.assertEqual(0, code)
         host, directory, title, arguments = self.launch.call_args.args
-        self.assertEqual(('claude', 'agent#98 review'), (host, title))
+        self.assertEqual((self.cli.Host.CLAUDE, 'agent#98 review'), (host, title))
         self.assertEqual(['--name', 'agent#98 review', '--model', 'claude-opus-5-5'], arguments[:4])
         self.assertIn('"parent tab" (codex:p)', arguments[-1])
         self.assertEqual({'item': '98', 'parent': 'codex:p'}, self.launch.call_args.kwargs)
@@ -83,7 +83,7 @@ class CodexLauncherTests(LauncherCase):
 
     def setUp(self):
         super().setUp()
-        self.adapter = self.cli.host_launch('codex')
+        self.adapter = self.cli.host_launch(self.cli.Host.CODEX)
         patcher = mock.patch.object(self.adapter, 'resolve_executable', return_value=('/bin/codex', {}))
         patcher.start()
         self.addCleanup(patcher.stop)

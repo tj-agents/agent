@@ -19,7 +19,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from host import Host
+from tj_agent.host import Host
 import agent_store
 
 LAUNCH_ENV = "TJ_RUN_LAUNCH_ID"

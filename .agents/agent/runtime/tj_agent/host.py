@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 class Host(Enum):
-    CLAUDE = ("claude", "CLAUDE_CONFIG_DIR", ".claude", "CLAUDE_CODE_SESSION_ID", "projects")
-    CODEX = ("codex", "CODEX_HOME", ".codex", "CODEX_THREAD_ID", "sessions")
+    CLAUDE = ("claude", "CLAUDE_CONFIG_DIR", ".claude", "CLAUDE_CODE_SESSION_ID", "projects", "CLAUDE_PLUGIN_ROOT")
+    CODEX = ("codex", "CODEX_HOME", ".codex", "CODEX_THREAD_ID", "sessions", "PLUGIN_ROOT")
 
     def __new__(cls, value: str, *_data: str) -> Host:
         member = object.__new__(cls)
@@ -17,11 +17,12 @@ class Host(Enum):
         return member
 
     def __init__(self, value: str, home_variable: str, home_directory: str, session_variable: str,
-                 history_directory: str) -> None:
+                 history_directory: str, plugin_root_variable: str) -> None:
         self.home_variable = home_variable
         self.home_directory = home_directory
         self.session_variable = session_variable
         self.history_directory = history_directory
+        self.plugin_root_variable = plugin_root_variable
 
     def __str__(self) -> str:
         return self.value

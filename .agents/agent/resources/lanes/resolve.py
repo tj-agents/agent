@@ -16,14 +16,17 @@ resolved to the default rung would spend the wrong model with nothing to notice 
 import argparse
 import json
 import os
+from pathlib import Path
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-HOSTS = ("claude", "codex")
+sys.path.insert(0, str(Path(HERE).parents[1] / "runtime"))
+
+from tj_agent.host import Host  # noqa: E402
 
 
 def table(host):
-    path = os.environ.get(f"LANES_{host.upper()}") or os.path.join(HERE, f"{host}.json")
+    path = os.environ.get(f"LANES_{host.name}") or os.path.join(HERE, f"{host}.json")
     try:
         with open(path, encoding="utf-8-sig") as f:
             return json.load(f)
@@ -34,8 +37,6 @@ def table(host):
 
 
 def resolve(host, lane):
-    if host not in HOSTS:
-        raise SystemExit(f"lanes: unknown host {host!r}; known hosts are {', '.join(HOSTS)}")
     data = table(host)
     lanes = data.get("lanes") or {}
     if lane not in lanes:
@@ -43,7 +44,7 @@ def resolve(host, lane):
 
     rung = lanes[lane]
     effort_key = data.get("effort_key", "effort")
-    out = {"lane": lane, "host": host, "model": rung["model"]}
+    out = {"lane": lane, "host": str(host), "model": rung["model"]}
     if effort_key in rung:
         out["effort"] = rung[effort_key]
         out["effort_key"] = effort_key
@@ -56,14 +57,12 @@ def resolve(host, lane):
 
 def frontier(host):
     """The tier above the ladder. No lane resolves to it; only an explicit user request selects it."""
-    if host not in HOSTS:
-        raise SystemExit(f"lanes: unknown host {host!r}; known hosts are {', '.join(HOSTS)}")
     data = table(host)
     tier = data.get("frontier") or {}
     if not tier.get("model"):
         raise SystemExit(f"lanes: the {host} table prices no frontier tier")
     effort_key = data.get("effort_key", "effort")
-    out = {"host": host, "model": tier["model"]}
+    out = {"host": str(host), "model": tier["model"]}
     if effort_key in tier:
         out["effort"] = tier[effort_key]
         out["effort_key"] = effort_key
@@ -71,12 +70,12 @@ def frontier(host):
 
 
 def ladder():
-    return {host: {lane: rung for lane, rung in table(host)["lanes"].items()} for host in HOSTS}
+    return {host: {lane: rung for lane, rung in table(host)["lanes"].items()} for host in Host}
 
 
 def main():
     p = argparse.ArgumentParser(add_help=True)
-    p.add_argument("--host", choices=HOSTS)
+    p.add_argument("--host", type=Host, choices=list(Host))
     p.add_argument("--lane")
     p.add_argument("--lanes", action="store_true", help="print both ladders side by side and exit")
     p.add_argument("--format", choices=["json", "env", "line"], default="json")
@@ -84,8 +83,8 @@ def main():
 
     if a.lanes:
         both = ladder()
-        for lane in sorted(both["claude"]):
-            c, x = both["claude"][lane], both["codex"].get(lane, {})
+        for lane in sorted(both[Host.CLAUDE]):
+            c, x = both[Host.CLAUDE][lane], both[Host.CODEX].get(lane, {})
             print(
                 f"{lane}  claude: {c['model']}"
                 f"{'/' + c['effort'] if 'effort' in c else ''}"
