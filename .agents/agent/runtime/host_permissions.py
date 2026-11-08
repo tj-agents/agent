@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tomllib
 
+from tj_cli import process
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude import permissions as claude_permissions  # noqa: E402
@@ -102,10 +104,9 @@ def desktop_executables() -> list[Path]:
             "Get-CimInstance Win32_Process -Filter \"Name = 'Codex.exe'\" | "
             "Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"
         )
-        result = subprocess.run(
+        result = process.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
             capture_output=True, text=True, encoding="utf-8", check=True, timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         rows = json.loads(result.stdout) if result.stdout.strip() else []
         rows = [rows] if isinstance(rows, dict) else rows
@@ -114,18 +115,18 @@ def desktop_executables() -> list[Path]:
         return [Path(row["ExecutablePath"]) for row in rows]
     if sys.platform == "linux":
         paths = []
-        for process in Path("/proc").iterdir():
-            if not process.name.isdigit():
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
                 continue
             try:
-                if (process / "comm").read_text(encoding="utf-8", errors="replace").strip().casefold() != Host.CODEX.value:
+                if (entry / "comm").read_text(encoding="utf-8", errors="replace").strip().casefold() != Host.CODEX.value:
                     continue
-                paths.append((process / "exe").resolve(strict=True))
+                paths.append((entry / "exe").resolve(strict=True))
             except FileNotFoundError:
                 continue
         return paths
-    result = subprocess.run(["ps", "-axo", "comm="], capture_output=True, text=True,
-                            encoding="utf-8", check=True, timeout=15)
+    result = process.run(["ps", "-axo", "comm="], capture_output=True, text=True,
+                         encoding="utf-8", check=True, timeout=15)
     return [Path(line.strip()) for line in result.stdout.splitlines()
             if Path(line.strip()).name.casefold() == Host.CODEX.value]
 

@@ -49,7 +49,7 @@ def executable(name: str) -> str:
 def git(run, arguments: list[str], cwd: Path | None = None) -> str:
     completed = run(
         [executable("git"), *arguments], cwd=cwd, text=True, encoding="utf-8",
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()

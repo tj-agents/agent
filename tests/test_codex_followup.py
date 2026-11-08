@@ -13,6 +13,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+from tj_cli import process as shared_process
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -481,7 +483,7 @@ while True:
             calls.append((command, kwargs['env']))
             return original([sys.executable, '-u', str(script)], **kwargs)
 
-        with patch.object(FOLLOWUP.subprocess, 'Popen', side_effect=launch):
+        with patch.object(shared_process, 'start', side_effect=launch):
             proxy = FOLLOWUP.Proxy('codex-native', temp.name, time.monotonic() + timeout)
 
         def stop_proxy():

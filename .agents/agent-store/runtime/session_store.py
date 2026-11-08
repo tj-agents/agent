@@ -1,4 +1,4 @@
-"""SQLite repository for sessions, work items and their remote references (Python 3.9+)."""
+"""SQLite repository for sessions, work items and their remote references (Python 3.12+)."""
 
 import contextlib
 from dataclasses import fields

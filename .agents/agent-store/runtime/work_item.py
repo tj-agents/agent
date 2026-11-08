@@ -1,4 +1,4 @@
-"""Work items, their identities and their remote tracker references (Python 3.9+)."""
+"""Work items, their identities and their remote tracker references (Python 3.12+)."""
 
 from dataclasses import dataclass
 import re

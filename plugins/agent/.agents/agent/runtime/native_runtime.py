@@ -10,8 +10,8 @@ from tj_cli.git_environment import native_plugin_environment
 from tj_cli.paths import prepend
 
 
-def missing() -> tuple[str, ...]:
-    return native_install.missing_native(native_install.default_bin_dir())
+def pending() -> tuple[str, ...]:
+    return native_install.pending_native(native_install.default_bin_dir())
 
 
 def search_path(value: str) -> str:
@@ -40,10 +40,10 @@ def expose() -> None:
 
 
 def prepare(*, revision: str | None = None) -> tuple[str, ...]:
-    """Repair missing binaries or apply an exact producer revision, then expose them."""
+    """Converge compatible binaries or an exact producer revision before admission."""
     prepare_git_environment()
     changed: tuple[str, ...] = ()
-    if revision is not None or missing():
+    if revision is not None or pending():
         directory = plugin_autoupdate.state_directory()
         directory.mkdir(parents=True, exist_ok=True)
         lock = plugin_autoupdate.acquire_lock(directory / "native-cli.lock")
@@ -55,6 +55,12 @@ def prepare(*, revision: str | None = None) -> tuple[str, ...]:
             changed = native_install.ensure_native(
                 native_install.default_bin_dir(), revision=revision
             )
+            if remaining := pending():
+                raise RuntimeError(
+                    "Native CLI installation is not compatible: "
+                    + ", ".join(remaining)
+                    + "; wait for a compatible published CLI release, then retry"
+                )
         finally:
             lock.close()
     expose()

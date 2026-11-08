@@ -344,6 +344,8 @@ def launch_host() -> Host | None:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    import managed_admission
+    import required_plugins
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", type=Path, default=Path.cwd())
@@ -353,9 +355,6 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     effective_project = arguments.project.resolve()
     if arguments.host:
-        import required_plugins
-        import managed_admission
-
         try:
             native_arguments = arguments.arguments[1:] if arguments.arguments[:1] == ["--"] else arguments.arguments
             effective_project = prepare_launch(arguments.project.resolve(), arguments.host,
