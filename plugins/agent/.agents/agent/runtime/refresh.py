@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 from pathlib import Path
 import subprocess
 import sys
@@ -47,6 +48,13 @@ class Report:
         print(f"{host}: {label} FAILED: {detail}", file=sys.stderr)
 
 
+def current(host: Host, marketplace: str, plugin: str) -> bool:
+    pin = claude_installed.pins(marketplace).get(plugin)
+    install = claude_installed.installs(marketplace).get(plugin)
+    return bool(pin and install and install[0] == pin
+                and INSTALLED[host].build_current(marketplace, plugin, install[1]))
+
+
 def refresh_native(report: Report) -> None:
     try:
         changed = native_runtime.prepare()
@@ -63,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     hosts = [arguments.host] if arguments.host else list(Host)
     report = Report()
     for host in hosts:
-        INSTALLED[host].refresh(report, MARKETPLACES)
+        INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host))
     refresh_native(report)
     for host in hosts:
         INSTALLED[host].restart(report)
