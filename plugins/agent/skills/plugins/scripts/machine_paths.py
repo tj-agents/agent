@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import lock_io
+from plugin_runtime import process
 
 COMMITTED_SETTINGS = (
     ".claude/settings.json",
@@ -41,7 +42,7 @@ def portable_tracked_text(root: Path, relative: str) -> str | None:
         return None
 
     def git(*arguments: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        result: subprocess.CompletedProcess[str] = process.run(
             ["git", "--literal-pathspecs", *arguments],
             cwd=root,
             capture_output=True,
@@ -49,6 +50,7 @@ def portable_tracked_text(root: Path, relative: str) -> str | None:
             encoding="utf-8",
             timeout=10,
         )
+        return result
 
     def checked(*arguments: str) -> str:
         result = git(*arguments)

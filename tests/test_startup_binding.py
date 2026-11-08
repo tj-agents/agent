@@ -228,6 +228,32 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertTrue(started[0][2].samefile(selected))
 
+    def test_admission_uses_the_effective_native_launch_directory(self):
+        directory = tempfile.TemporaryDirectory(prefix='startup native directory ')
+        self.addCleanup(directory.cleanup)
+        outer = Path(directory.name)
+        native_project = outer / 'nested'
+        native_project.mkdir()
+        with mock.patch.object(
+            self.binding.launch_check,
+            'prepare_launch_roots',
+            return_value=(native_project, {}),
+        ), mock.patch.object(
+            self.binding.launch_check, 'check', return_value='current'
+        ), mock.patch.object(
+            self.binding.managed_admission, 'ensure_hooks'
+        ), mock.patch.object(
+            self.binding.managed_admission, 'verify'
+        ) as verify, mock.patch.object(
+            self.binding, 'run_session', return_value=0
+        ):
+            self.assertEqual(0, self.binding.main([
+                '--host', 'codex', '--project', str(outer), '--target', 'native-codex',
+            ]))
+        verify.assert_called_once_with(
+            native_project, Host.CODEX, 'native-codex', native_project=native_project
+        )
+
     def test_failed_plugin_setup_still_starts_the_host_without_the_session_start_handshake(self):
         directory = tempfile.TemporaryDirectory(prefix='startup degraded ')
         self.addCleanup(directory.cleanup)

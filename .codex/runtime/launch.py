@@ -8,6 +8,8 @@ import shutil
 import subprocess
 from typing import Protocol
 
+from tj_cli import process
+
 from launch_contract import Launch
 
 from launch_errors import LaunchError
@@ -80,7 +82,7 @@ def compare_version(left, right):
 def npm_global_prefix():
     """The npm global install prefix, or None when npm is unavailable or reports nothing."""
     try:
-        result = subprocess.run(
+        result = process.run(
             ["npm", "config", "get", "prefix"],
             capture_output=True,
             text=True,
@@ -153,7 +155,7 @@ def resolve_executable(minimum="0.154.0", candidates=None):
     found = []
     for path in paths:
         try:
-            result = subprocess.run(
+            result = process.run(
                 [path, "--version"], capture_output=True, text=True, timeout=30
             )
         except (OSError, subprocess.SubprocessError):

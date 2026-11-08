@@ -36,46 +36,47 @@ def scheduler(arguments: list[str], **kwargs: object) -> SimpleNamespace:
     return SimpleNamespace(returncode=0, stdout=output, stderr="")
 
 
-def test_windows_task_starts_the_hidden_launcher_with_exact_arguments(
+def test_windows_task_starts_adjacent_pythonw_with_exact_arguments(
     tmp_path: Path,
 ) -> None:
-    directory = tmp_path / "installed cli"
+    directory = tmp_path / "python"
     directory.mkdir()
-    launcher = directory / "tj_hook.exe"
-    launcher.touch()
-    launcher.chmod(0o700)
-    child = [
-        sys.executable,
-        "-I",
-        "-B",
-        "C:/agent scripts/watcher.py",
-        "--request",
-        'quoted "value"',
-    ]
-    with mock.patch.object(
-        session_close.os, "get_exec_path", return_value=[str(directory)]
+    executable = directory / "python.exe"
+    executable.touch()
+    pythonw = directory / "pythonw.exe"
+    pythonw.touch()
+    runtime_os = SimpleNamespace(name="nt", environ={}, defpath=os.defpath)
+    with (
+        mock.patch.object(session_close, "os", runtime_os),
+        mock.patch.object(session_close.sys, "executable", str(executable)),
     ):
-        command = session_close.windows_observer_command(child)
+        command = session_close.detached_command(
+            Path("C:/agent scripts/watcher.py"),
+            ["--request", 'quoted "value"'],
+            Path("C:/agent scripts/detached_launch.py"),
+        )
     document = ET.fromstring(
         session_close.windows_task_xml("S-1-5-21-1", command, tmp_path)
     )
     namespace = {"task": session_close.TASK_SCHEDULER_NAMESPACE}
-    assert str(launcher.absolute()) == document.findtext(
-        ".//task:Command", namespaces=namespace
-    )
-    assert subprocess.list2cmdline(["--", *child]) == document.findtext(
+    assert str(pythonw) == document.findtext(".//task:Command", namespaces=namespace)
+    assert subprocess.list2cmdline(command[1:]) == document.findtext(
         ".//task:Arguments", namespaces=namespace
     )
 
 
-def test_missing_hidden_launcher_refuses_before_scheduling(tmp_path: Path) -> None:
+def test_missing_adjacent_pythonw_refuses_before_scheduling(tmp_path: Path) -> None:
+    executable = tmp_path / "python.exe"
+    executable.touch()
+    runtime_os = SimpleNamespace(name="nt", environ={}, defpath=os.defpath)
     with (
-        mock.patch.object(
-            session_close.os, "get_exec_path", return_value=[str(tmp_path)]
-        ),
-        pytest.raises(session_close.Refusal, match=r"tj_hook\.exe is not installed"),
+        mock.patch.object(session_close, "os", runtime_os),
+        mock.patch.object(session_close.sys, "executable", str(executable)),
+        pytest.raises(session_close.Refusal, match=r"pythonw\.exe is required"),
     ):
-        session_close.windows_observer_command([sys.executable, "watcher.py"])
+        session_close.detached_command(
+            Path("watcher.py"), [], Path("detached_launch.py")
+        )
 
 
 def test_scheduler_controls_use_the_windows_system_directory(tmp_path: Path) -> None:
@@ -87,7 +88,7 @@ def test_scheduler_controls_use_the_windows_system_directory(tmp_path: Path) -> 
         mock.patch.dict(
             os.environ, {"SystemRoot": str(system.parent), "PATH": str(tmp_path)}
         ),
-        mock.patch("tj_cli.process.run", side_effect=scheduler) as run,
+        mock.patch.object(session_close.process, "run", side_effect=scheduler) as run,
     ):
         assert session_close.current_windows_user({}, 1) == "S-1-5-21-123-456-789-1001"
     assert str(command) == run.call_args.args[0][0]
