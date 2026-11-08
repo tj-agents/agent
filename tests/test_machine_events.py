@@ -15,9 +15,8 @@ import machine_events as events
 import install
 
 
-def current(repository="tj-agents/core", revision="a", policy="policy", marketplace=True):
+def current(repository="tj-agents/core", revision="a", marketplace=True):
     return {"nameWithOwner": repository, "defaultBranchRef": {"name": "main", "target": {"oid": revision}},
-            "policy": {"oid": policy} if policy else None,
             "marketplace": {"oid": "manifest"} if marketplace else None}
 
 
@@ -31,22 +30,22 @@ class HintTests(unittest.TestCase):
         self.assertIsNone(events.parse_hint({"event": "keepalive"}))
 
 
+def broken(repository):
+    return {"nameWithOwner": repository, "defaultBranchRef": {"name": "main", "target": {}}}
+
+
 class ReconcileTests(unittest.TestCase):
     def setUp(self):
         native = mock.patch.object(events.native_runtime, "prepare", return_value=())
         native.start()
         self.addCleanup(native.stop)
         self.refresh = mock.Mock(return_value=0)
-        self.policy = mock.Mock()
-        self.reconciler = events.Reconciler(refresh=self.refresh, policy=self.policy)
+        self.reconciler = events.Reconciler(refresh=self.refresh)
 
-    def test_duplicate_hint_does_not_repeat_work_and_changed_policy_uses_only_repo(self):
+    def test_duplicate_hint_does_not_repeat_work(self):
         self.reconciler.repository(current())
         self.reconciler.repository(current())
         self.refresh.assert_called_once_with()
-        self.policy.assert_called_once_with("tj-agents/core")
-        self.reconciler.repository(current(revision="b", policy="new-policy", marketplace=False))
-        self.assertEqual(2, self.policy.call_count)
 
     def test_a_publisher_revision_change_refreshes_even_with_an_unchanged_catalog(self):
         self.reconciler.repository(current())
@@ -61,7 +60,7 @@ class ReconcileTests(unittest.TestCase):
             self.reconciler.repository(current(repository="Concertable/domain"))
             self.refresh.assert_called_once_with()
             events.plugins.write_json(state_file, self.reconciler.state)
-            reloaded = events.Reconciler(events.plugins.read_json(state_file), refresh=self.refresh, policy=self.policy)
+            reloaded = events.Reconciler(events.plugins.read_json(state_file), refresh=self.refresh)
             reloaded.repository(current(repository="Concertable/domain", revision="b"))
         self.refresh.assert_called_once_with()
 
@@ -74,16 +73,14 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual(2, self.refresh.call_count)
 
     def test_standalone_plugin_changes_refresh_without_a_marketplace_manifest(self):
-        state = current(policy=None, marketplace=False)
+        state = current(marketplace=False)
         state["plugin"] = {"oid": "plugin-manifest"}
         self.reconciler.repository(state)
         self.refresh.assert_called_once_with()
-        self.policy.assert_not_called()
 
     def test_catch_up_refreshes_once_for_many_marketplaces(self):
         self.reconciler.catch_up([current(f"tj-agents/repo{i}") for i in range(50)])
         self.refresh.assert_called_once_with()
-        self.assertEqual(50, self.policy.call_count)
 
     def test_repository_and_catch_up_reconciliation_never_launch_worktree_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -99,13 +96,11 @@ class ReconcileTests(unittest.TestCase):
                 self.assertEqual(0, events.main(["--repo", "tj-agents/core", "--state-directory", directory]))
                 self.assertEqual(0, events.main(["--state-directory", directory]))
         cleanup.assert_not_called()
-        self.policy.assert_called_once_with("tj-agents/core")
         self.assertEqual(2, self.refresh.call_count)
 
-    def bind(self, reconciler, state=None, refresh=None, policy=None):
+    def bind(self, reconciler, state=None, refresh=None):
         reconciler.state = state if state is not None else {}
         reconciler.refresh = self.refresh
-        reconciler.policy = self.policy
 
     def test_plugin_refresh_keeps_the_generic_updater_cleanup_disabled(self):
         with mock.patch.object(events.plugins, "main", return_value=0) as update, \
@@ -131,23 +126,17 @@ class ReconcileTests(unittest.TestCase):
             mock.patch.object(events.plugins, "refresh_declared", side_effect=declared),
             mock.patch("claude.plugins.update_registered"),
         ):
-            self.assertEqual([], events.Reconciler(policy=self.policy).catch_up([]))
+            self.assertEqual([], events.Reconciler().catch_up([]))
 
-    def test_absent_policy_never_gets_a_default_gate(self):
-        self.reconciler.repository(current(policy=None, marketplace=False))
-        self.policy.assert_not_called()
-        self.refresh.assert_not_called()
-
-    def test_catch_up_isolates_one_policy_failure_and_continues(self):
-        self.policy.side_effect = [RuntimeError("private repo"), None]
+    def test_catch_up_isolates_one_malformed_repository_and_continues(self):
         with self.assertLogs(events.LOG, level="ERROR"):
-            failures = self.reconciler.catch_up([current("tj-agents/private"), current("tj-agents/other")])
+            failures = self.reconciler.catch_up([broken("tj-agents/private"), current("tj-agents/other")])
         self.assertEqual(["tj-agents/private"], failures)
         self.assertIn("tj-agents/other", self.reconciler.state)
         self.assertNotIn("tj-agents/private", self.reconciler.state)
 
     def test_failed_action_is_not_acknowledged(self):
-        self.policy.side_effect = RuntimeError("offline")
+        self.refresh.side_effect = RuntimeError("offline")
         with self.assertRaises(RuntimeError):
             self.reconciler.repository(current())
         self.assertEqual({}, self.reconciler.state)
@@ -158,17 +147,17 @@ class IdentityTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             events.require_tommy(lambda _: {"login": "tomjseery-bot[bot]"})
 
-    def test_tokens_and_agent_git_overrides_never_reach_policy_subprocess(self):
-        run = mock.Mock(return_value=mock.Mock(returncode=0))
+    def test_tokens_and_agent_git_overrides_never_reach_the_github_cli_subprocess(self):
+        run = mock.Mock(return_value=mock.Mock(returncode=0, stdout=""))
         environment = {"TJ_AGENT": "1", "GH_TOKEN": "bot", "GITHUB_TOKEN": "bot",
                        "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_VALUE_0": "helper", "GH_HOST": "other.example", "KEEP_ME": "yes"}
-        with mock.patch.dict(os.environ, environment), mock.patch.object(events, "policy_script", return_value=Path("/installed/merge_policy.py")):
-            events.reconcile_policy("tj-agents/core", run=run)
+        with mock.patch.dict(os.environ, environment), mock.patch.object(events.plugins.shutil, "which", return_value="/usr/bin/gh"):
+            events.github_cli(["repo", "view"], run=run)
         saved = run.call_args.kwargs["env"]
         self.assertEqual("yes", saved["KEEP_ME"])
         self.assertEqual("github.com", saved["GH_HOST"])
         self.assertFalse(any(key.startswith("GIT_CONFIG_") or key in {"TJ_AGENT", "GH_TOKEN", "GITHUB_TOKEN"} for key in saved))
-        self.assertEqual(["reconcile", "--repo", "tj-agents/core"], run.call_args.args[0][-3:])
+        self.assertEqual(["/usr/bin/gh", "repo", "view"], run.call_args.args[0])
         self.assertNotIn("creationflags", run.call_args.kwargs)
 
     def test_listener_lock_has_no_age_expiry_and_releases_with_handle(self):
