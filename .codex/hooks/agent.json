@@ -15,9 +15,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
-            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
-            "timeout": 10
+            "timeout": 30,
+            "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" start --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" start --host codex"
           }
         ]
       }
@@ -37,21 +37,8 @@
         "hooks": [
           {
             "type": "command",
-            "timeout": 15,
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/codex/capacity.py\" candidate",
-            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/codex/capacity.py\" candidate"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 60,
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex",
-            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex"
+            "timeout": 10,
+            "command": "tj done --cancel"
           }
         ]
       }
@@ -61,9 +48,9 @@
         "hooks": [
           {
             "type": "command",
-            "timeout": 3,
-            "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex",
-            "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex"
+            "timeout": 5,
+            "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" end --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" end --host codex"
           }
         ]
       }

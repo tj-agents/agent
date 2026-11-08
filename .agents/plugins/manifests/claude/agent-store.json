@@ -1,6 +1,6 @@
 {
   "name": "agent-store",
-  "description": "Recorded agent executions, sessions, ownership and references.",
+  "description": "Links between tracker work items and the agent sessions working on them.",
   "author": {"name": "Tommy Seery"},
   "repository": "https://github.com/tj-agents/agent",
   "skills": "./skills/",

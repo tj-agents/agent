@@ -1,9 +1,9 @@
 {
   "name": "agent-store",
-  "description": "Recorded agent executions, sessions, ownership and references.",
+  "description": "Links between tracker work items and the agent sessions working on them.",
   "author": {"name": "Tommy Seery"},
   "repository": "https://github.com/tj-agents/agent",
   "skills": "./skills/",
   "keywords": ["agents", "sessions", "registry"],
-  "interface": {"displayName": "Agent Store", "shortDescription": "Recorded agent executions, sessions, ownership and references.", "longDescription": "Recorded agent executions, sessions, ownership and references.", "developerName": "Tommy Seery", "category": "Productivity", "capabilities": [], "defaultPrompt": "Inspect recorded agent state."}
+  "interface": {"displayName": "Agent Store", "shortDescription": "Links between tracker work items and the agent sessions working on them.", "longDescription": "Links between tracker work items and the agent sessions working on them.", "developerName": "Tommy Seery", "category": "Productivity", "capabilities": [], "defaultPrompt": "Inspect recorded agent state."}
 }

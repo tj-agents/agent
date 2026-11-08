@@ -1,4 +1,14 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>tj-agents/github-actions:renovate-default"]
+  "extends": ["github>tj-agents/github-actions:renovate-default"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The agent-store release Agent installs",
+      "managerFilePatterns": ["/^\\.agents/agent/runtime/agent-store\\.json$/"],
+      "matchStrings": ["\"version\": \"(?<currentValue>v[^\"]+)\""],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "tj-agents/agent-store"
+    }
+  ]
 }
