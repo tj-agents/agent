@@ -22,7 +22,6 @@ FOREGROUND = {
     (".agents/agent/runtime/startup_binding.py", "run_session"),
     (".agents/agent/runtime/startup_binding.py", "main"),
     (".agents/agent/runtime/terminal_command.py", "run_target"),
-    (".agents/agent/runtime/relaunch_watcher.py", "launch"),
     (".agents/agent/runtime/tj_agent/recovery.py", "focus_session"),
     (".codex/runtime/client.py", "prepare"),
 }

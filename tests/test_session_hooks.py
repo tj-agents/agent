@@ -55,7 +55,8 @@ class SessionHookTests(unittest.TestCase):
                 for hook in group["hooks"]:
                     with self.subTest(command=hook["command"][:60]):
                         self.assertTrue(hook["command"].startswith("tj_hook -- python3 -I -B -c "))
-                        self.assertTrue(hook["commandWindows"].startswith("cmd.exe /d /s /v:off /c tj_hook -- python -I -B -c "))
+                        self.assertTrue(hook["commandWindows"].startswith(
+                            "cmd.exe /d /s /v:off /c tj_hook -- python -I -B -c "))
 
     def test_claude_hooks_use_the_native_launcher(self):
         for groups in hooks("claude").values():

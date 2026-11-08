@@ -1,18 +1,20 @@
 {
   "repository": "tj-agents/marketplace",
-  "revision": "27b59949d77daaffe152af9c54856b45b8453aa1",
+  "revision": "efb6557f2c07616d54d874041bcf190ddbb163f7",
   "marketplace": {
     "name": "tj-agents",
-    "description": "Shared base, Agent Store, agent, CLI, workflow, engineering, documentation, C++, .NET, React, Neovim, Rust, Python, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
+    "description": "Shared base, Agent Store, agent, CLI, workflow, engineering, documentation, C++, .NET, React, Neovim, Rust, Python, GitHub, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
     "owner": "Tommy Seery",
     "plugins": [
       {
         "name": "base",
-        "repository": "core"
+        "repository": "core",
+        "revision": "01eab1cf7cb6f3cc0a7a24be2d9770b8ac94eeb5"
       },
       {
         "name": "agent-store",
         "repository": "agent",
+        "revision": "b354217d980a143516a3bd6029d60ffcc9ea3e7b",
         "requires": [
           "base"
         ]
@@ -20,6 +22,7 @@
       {
         "name": "agent",
         "repository": "agent",
+        "revision": "b354217d980a143516a3bd6029d60ffcc9ea3e7b",
         "requires": [
           "base",
           "agent-store",
@@ -29,6 +32,7 @@
       {
         "name": "codex",
         "repository": "agent",
+        "revision": "b354217d980a143516a3bd6029d60ffcc9ea3e7b",
         "requires": [
           "agent"
         ]
@@ -43,6 +47,7 @@
       {
         "name": "workflow",
         "repository": "core",
+        "revision": "01eab1cf7cb6f3cc0a7a24be2d9770b8ac94eeb5",
         "requires": [
           "base",
           "agent-store",
@@ -52,6 +57,7 @@
       {
         "name": "engineering",
         "repository": "core",
+        "revision": "01eab1cf7cb6f3cc0a7a24be2d9770b8ac94eeb5",
         "requires": [
           "base",
           "workflow",
@@ -61,7 +67,8 @@
       },
       {
         "name": "docs",
-        "repository": "core"
+        "repository": "core",
+        "revision": "01eab1cf7cb6f3cc0a7a24be2d9770b8ac94eeb5"
       },
       {
         "name": "cpp",
@@ -141,10 +148,24 @@
         ]
       },
       {
+        "name": "seaorm",
+        "repository": "rust",
+        "requires": [
+          "rust"
+        ]
+      },
+      {
         "name": "python",
         "repository": "python",
         "requires": [
           "engineering"
+        ]
+      },
+      {
+        "name": "github",
+        "repository": "github",
+        "requires": [
+          "base"
         ]
       },
       {
@@ -177,6 +198,13 @@
         ]
       },
       {
+        "name": "learning",
+        "repository": "learning",
+        "requires": [
+          "base"
+        ]
+      },
+      {
         "name": "personal",
         "repository": "personal",
         "requires": [
@@ -185,10 +213,15 @@
         ]
       },
       {
+        "name": "teams",
+        "repository": "work"
+      },
+      {
         "name": "work",
         "repository": "work",
         "requires": [
-          "engineering"
+          "engineering",
+          "teams"
         ]
       },
       {
