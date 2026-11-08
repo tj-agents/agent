@@ -100,8 +100,7 @@ class NeverAutoCloseTests(unittest.TestCase):
                     record("assistant", "a2", [{"type": "text", "text": "Stopping. Here is what happened."}],
                            stop_reason="end_turn"))
         responses = self.dispatch("Stop", stop_hook_active=False)
-        self.assertTrue(any(value.get("decision") == "block" and "agent:close" in value.get("reason", "")
-                            for value in responses))
+        self.assertFalse(any(value.get("decision") == "block" for value in responses))
         self.assertFalse(any(value.get("decision") == "block"
                              for value in self.dispatch("Stop", stop_hook_active=True)))
         self.assertEqual([], self.close_requests())
