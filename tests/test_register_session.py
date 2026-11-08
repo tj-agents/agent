@@ -315,6 +315,7 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
         runtime = store.parents[2] / "agent" / "runtime"
         runtime.mkdir(parents=True)
         shutil.copy2(ROOT / "plugins/agent/.agents/agent/runtime/host.py", runtime / "host.py")
+        shutil.copytree(ROOT / "plugins/agent/.agents/agent-store/runtime/tj_cli", store.parent / "tj_cli")
         for name in register_session.OBSERVER_STORE_FILES[1:]:
             shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime" / name, store.with_name(name))
         if layout == "source":
@@ -400,15 +401,15 @@ class ProcessLookupSafetyTests(unittest.TestCase):
     def test_ps_distinguishes_missing_process_from_inspection_failures(self):
         missing = mock.Mock(returncode=1, stdout="", stderr="")
         denied = mock.Mock(returncode=1, stdout="", stderr="permission denied")
-        with mock.patch("subprocess.run", return_value=missing):
+        with mock.patch.object(register_session.shared_process(), "run", return_value=missing):
             self.assertIsNone(register_session._ps_lookup(101))
-        with mock.patch("subprocess.run", return_value=denied):
+        with mock.patch.object(register_session.shared_process(), "run", return_value=denied):
             with self.assertRaises(OSError):
                 register_session._ps_lookup(101)
 
     def test_ps_rejects_malformed_identity_instead_of_reporting_absence(self):
         malformed = mock.Mock(returncode=0, stdout="not-a-pid codex now", stderr="")
-        with mock.patch("subprocess.run", return_value=malformed):
+        with mock.patch.object(register_session.shared_process(), "run", return_value=malformed):
             with self.assertRaises(ValueError):
                 register_session._ps_lookup(101)
 

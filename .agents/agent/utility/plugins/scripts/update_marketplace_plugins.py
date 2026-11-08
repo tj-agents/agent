@@ -10,12 +10,14 @@ import re
 import subprocess
 import sys
 
+from plugin_runtime import process
+
 
 TARGET = Path(__file__).resolve().with_name("marketplace_plugins.lock.json")
 
 
 def git(source: Path, *args: str) -> str:
-    result = subprocess.run(
+    result = process.run(
         ["git", "-C", str(source), *args], capture_output=True, check=False,
         text=True, encoding="utf-8", timeout=30,
     )

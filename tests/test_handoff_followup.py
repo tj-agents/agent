@@ -44,7 +44,7 @@ def test_handoff_title_override_preserves_required_plugin_verification(
     with (
         mock.patch("managed_admission.verify") as admission,
         mock.patch.object(
-            required_plugins.REQUIRED.subprocess,
+            required_plugins.REQUIRED.process,
             "run",
             return_value=subprocess.CompletedProcess(
                 [], 0, json.dumps({"installed": [entry]}), ""
@@ -60,7 +60,10 @@ def test_handoff_title_override_preserves_required_plugin_verification(
     assert project == inventory.project.resolve()
     assert roots.keys() == {"agent@tj-agents"}
     admission.assert_called_once_with(
-        project, required_plugins.Host.CODEX, "native-codex", roots
+        project,
+        required_plugins.Host.CODEX,
+        "native-codex",
+        native_project=inventory.project.resolve(),
     )
     assert run.call_args.args[0] == [
         "native-codex",
@@ -87,7 +90,7 @@ def test_title_override_does_not_admit_plugin_activation_overrides(
     inventory: Any, option: tuple[str, str]
 ) -> None:
     inventory.select("agent@tj-agents")
-    with mock.patch.object(required_plugins.REQUIRED.subprocess, "run") as run:
+    with mock.patch.object(required_plugins.REQUIRED.process, "run") as run:
         with pytest.raises(
             required_plugins.REQUIRED.RequiredPluginsError, match="launch override"
         ):

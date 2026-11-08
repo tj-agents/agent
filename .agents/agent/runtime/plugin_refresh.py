@@ -7,7 +7,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import subprocess
+
+from tj_cli import process
 
 import plugin_autoupdate
 
@@ -49,8 +50,8 @@ def selected(sources: dict[str, str | None], enabled: list[str]) -> tuple[dict[s
 
 
 def run(command: list[str], project: Path) -> str:
-    result = subprocess.run(command, cwd=project, capture_output=True, text=True,
-                            encoding="utf-8", errors="replace", timeout=TIMEOUT)
+    result = process.run(command, cwd=project, capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", timeout=TIMEOUT)
     if result.returncode:
         detail = (result.stderr or result.stdout).strip() or f"Command exited {result.returncode}"
         raise RefreshError(f"{' '.join(command[1:])}: {detail}")

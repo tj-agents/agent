@@ -9,12 +9,12 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 
 from host import Host
 import plugin_autoupdate as plugins
 import native_runtime
+from tj_cli import process
 
 OWNERS = ("tj-agents", "Concertable", "tomjseery")
 TOPIC_VARIABLE = "UPDATE_TOPIC"
@@ -35,7 +35,7 @@ def tommy_environment():
     return environment
 
 
-def github_cli(arguments, input=None, run=subprocess.run):
+def github_cli(arguments, input=None, run=process.run):
     environment = tommy_environment()
     shim = os.path.normcase(str(Path.home() / ".agents-state/bin/bot-identity"))
     path = os.pathsep.join(entry for entry in environment.get("PATH", "").split(os.pathsep)
@@ -45,13 +45,13 @@ def github_cli(arguments, input=None, run=subprocess.run):
         raise RuntimeError("GitHub CLI must be installed and signed in as tomjseery")
     result = run([executable, *arguments], input=input,
                  env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                 timeout=60, check=False, creationflags=plugins.NO_WINDOW)
+                 timeout=60, check=False)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or "GitHub API failed")
     return result.stdout
 
 
-def gh(arguments, payload=None, run=subprocess.run):
+def gh(arguments, payload=None, run=process.run):
     output = github_cli(["api", *arguments], input=None if payload is None else json.dumps(payload), run=run)
     return json.loads(output) if output.strip() else None
 

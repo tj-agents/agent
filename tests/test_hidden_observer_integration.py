@@ -15,6 +15,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"
 FIXTURE = Path(__file__).parent / "fixtures/hidden_observer.py"
+CLEANUP_EXIT_WAIT_SECONDS = 1
+CLEANUP_POLL_SECONDS = 0.05
 
 
 def new_terminal_windows(
@@ -54,8 +56,12 @@ def cleanup_fixture_processes(state: Path) -> None:
             try:
                 processes.stop(identity, before_signal=authorize_stop)
             except processes.Refusal:
-                if processes.matches(identity):
-                    raise
+                deadline = time.monotonic() + CLEANUP_EXIT_WAIT_SECONDS
+                while processes.matches(identity):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    time.sleep(min(CLEANUP_POLL_SECONDS, remaining))
 
 
 @pytest.mark.parametrize(
@@ -107,16 +113,49 @@ def test_fixture_cleanup_preserves_refusal_for_matching_process(
     refusal = processes.Refusal("cannot acquire exact frontend process handle")
     matches = Mock(return_value=True)
     stop = Mock(side_effect=refusal)
+    clock = Mock(side_effect=[0.0, 0.0, CLEANUP_EXIT_WAIT_SECONDS])
+    sleep = Mock()
     monkeypatch.setattr(processes, "matches", matches)
     monkeypatch.setattr(processes, "stop", stop)
+    monkeypatch.setattr(time, "monotonic", clock)
+    monkeypatch.setattr(time, "sleep", sleep)
 
     with pytest.raises(processes.Refusal) as caught:
         cleanup_fixture_processes(tmp_path)
 
     assert caught.value is refusal
-    assert matches.call_args_list == [call(identity), call(identity)]
+    assert matches.call_args_list == [call(identity), call(identity), call(identity)]
     stop.assert_called_once()
     assert stop.call_args.args == (identity,)
+    sleep.assert_called_once_with(CLEANUP_POLL_SECONDS)
+
+
+@pytest.mark.parametrize(
+    "name", ["child-started.json", "started.json", "frontend.json"]
+)
+def test_fixture_cleanup_accepts_delayed_exact_process_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    from tj_cli import processes
+
+    identity = {"pid": 123, "started_at": 456.0}
+    (tmp_path / name).write_text(json.dumps(identity), encoding="utf-8")
+    refusal = processes.Refusal("exact fixture process is exiting")
+    matches = Mock(side_effect=[True, True, False])
+    stop = Mock(side_effect=refusal)
+    clock = Mock(side_effect=[0.0, 0.0])
+    sleep = Mock()
+    monkeypatch.setattr(processes, "matches", matches)
+    monkeypatch.setattr(processes, "stop", stop)
+    monkeypatch.setattr(time, "monotonic", clock)
+    monkeypatch.setattr(time, "sleep", sleep)
+
+    cleanup_fixture_processes(tmp_path)
+
+    assert matches.call_args_list == [call(identity), call(identity), call(identity)]
+    stop.assert_called_once()
+    assert stop.call_args.args == (identity,)
+    sleep.assert_called_once_with(CLEANUP_POLL_SECONDS)
 
 
 @pytest.mark.skipif(
@@ -184,4 +223,4 @@ def test_detached_observer_and_descendant_remain_hidden_after_frontend_exit(
     assert observations
     assert all(not item["visible"] and not item["windows"] for item in observations)
     if os.name == "nt":
-        assert all(item["console"] for item in observations)
+        assert all(not item["console"] for item in observations)
