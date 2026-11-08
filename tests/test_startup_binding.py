@@ -103,7 +103,8 @@ class StartupBindingTests(unittest.TestCase):
         process.terminate.assert_not_called()
 
     def test_bypass_flag_starts_the_native_target_without_any_checks(self):
-        with mock.patch.object(self.binding.subprocess, 'call', return_value=0) as call,                 mock.patch.object(self.binding.launch_check, 'prepare_launch_roots') as roots:
+        with mock.patch.object(self.binding.subprocess, 'call', return_value=0) as call, \
+                mock.patch.object(self.binding.required_plugins, 'check_launch_roots') as roots:
             self.assertEqual(0, self.binding.main(['--host', 'codex', '--project', str(Path.cwd()),
                                                    '--target', 'native.exe', '--require-session-start',
                                                    '--', 'resume', '--no-tj']))
@@ -173,8 +174,7 @@ class StartupBindingTests(unittest.TestCase):
             kwargs['on_running'](72)
             return 0
 
-        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(None, None)), \
-                mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='not-applicable'), \
+        with mock.patch.object(self.binding.required_plugins, 'check_launch_roots', return_value=(None, None)), \
                 mock.patch.object(self.binding, '_prelaunch_terminal', side_effect=lambda: calls.append(('capture', terminal)) or terminal), \
                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
             result = self.binding.main(['--host', 'codex', '--project', directory.name, '--target', 'native.exe',
@@ -186,49 +186,6 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual('exited', status['state'])
         self.assertEqual(terminal, status['terminal'])
 
-    def test_update_check_uses_the_calling_host_with_the_launch_check_signature(self):
-        directory = tempfile.TemporaryDirectory(prefix='startup update check ')
-        self.addCleanup(directory.cleanup)
-        calls = []
-
-        def check(project, fetch=None, update=None, now=None, hosts=tuple(Host), updated=None, *, recover=True):
-            calls.append((project, hosts))
-            return 'current'
-
-        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(None, None)), \
-                mock.patch.object(self.binding.launch_check, 'check', side_effect=check), \
-                mock.patch.object(self.binding, 'run_session', return_value=0):
-            result = self.binding.main(['--host', 'claude', '--project', directory.name, '--target', 'native-claude'])
-
-        self.assertEqual(0, result)
-        self.assertEqual([(Path(directory.name).resolve(), (Host.CLAUDE,))], calls)
-
-    def test_admission_uses_the_effective_native_launch_directory(self):
-        directory = tempfile.TemporaryDirectory(prefix='startup native directory ')
-        self.addCleanup(directory.cleanup)
-        outer = Path(directory.name)
-        native_project = outer / 'nested'
-        native_project.mkdir()
-        with mock.patch.object(
-            self.binding.launch_check,
-            'prepare_launch_roots',
-            return_value=(native_project, {}),
-        ), mock.patch.object(
-            self.binding.launch_check, 'check', return_value='current'
-        ), mock.patch.object(
-            self.binding.managed_admission, 'ensure_hooks'
-        ), mock.patch.object(
-            self.binding.managed_admission, 'verify'
-        ) as verify, mock.patch.object(
-            self.binding, 'run_session', return_value=0
-        ):
-            self.assertEqual(0, self.binding.main([
-                '--host', 'codex', '--project', str(outer), '--target', 'native-codex',
-            ]))
-        verify.assert_called_once_with(
-            native_project, Host.CODEX, 'native-codex', native_project=native_project
-        )
-
     def test_failed_plugin_setup_still_starts_the_host_without_the_session_start_handshake(self):
         directory = tempfile.TemporaryDirectory(prefix='startup degraded ')
         self.addCleanup(directory.cleanup)
@@ -239,7 +196,8 @@ class StartupBindingTests(unittest.TestCase):
             return 0
 
         failure = RuntimeError('Required plugin setup failed: react@tj-agents needs machine@tj-agents')
-        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=failure),                 mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='failed'),                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
+        with mock.patch.object(self.binding.required_plugins, 'check_launch_roots', side_effect=failure), \
+                mock.patch.object(self.binding, 'run_session', side_effect=run_session):
             result = self.binding.main(['--host', 'claude', '--project', directory.name, '--target', 'native-claude',
                                         '--require-session-start'])
 
@@ -263,8 +221,7 @@ class StartupBindingTests(unittest.TestCase):
             '--settings', 'override.json', '--setting-sources=project,local',
             '--plugin-dir', 'plugins', '--plugin-url=https://example.test/plugin', '--', '--settings', 'literal prompt',
         ]
-        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', return_value=(root, roots)) as prepare, \
-                mock.patch.object(self.binding.launch_check, 'check', autospec=True, return_value='current'), \
+        with mock.patch.object(self.binding.required_plugins, 'check_launch_roots', return_value=(root, roots)) as prepare, \
                 mock.patch.object(self.binding, 'run_session', side_effect=run_session):
             result = self.binding.main([
                 '--host', 'claude', '--project', directory.name, '--target', 'native-claude',
@@ -274,64 +231,8 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertEqual([
             mock.call(root.resolve(), Host.CLAUDE, 'native-claude', arguments),
-            mock.call(root.resolve(), Host.CLAUDE, 'native-claude', arguments),
         ], prepare.call_args_list)
         self.assertIs(roots, calls[0]['hook_roots'])
-
-    def test_updated_plugin_roster_replaces_removed_startup_participants_before_spawn(self):
-        directory = tempfile.TemporaryDirectory(prefix='startup updated roster ')
-        self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
-
-        def dispatcher(name):
-            plugin = root / name
-            manifest = plugin / '.claude-plugin/plugin.json'
-            hooks = plugin / 'hooks.json'
-            manifest.parent.mkdir(parents=True)
-            hooks.write_text(json.dumps({'hooks': {'SessionStart': [
-                {'hooks': [{'command': 'python hook_dispatch.py'}]},
-            ]}}), encoding='utf-8')
-            manifest.write_text(json.dumps({'hooks': ['hooks.json']}), encoding='utf-8')
-            return plugin
-
-        old_roots = {'old@tj-agents': dispatcher('old')}
-        new_roots = {'new@tj-agents': dispatcher('new')}
-        installed = {'roots': old_roots}
-
-        def prepare_launch_roots(*_args):
-            return root, installed['roots']
-
-        def update_roster(*_args, **_kwargs):
-            installed['roots'] = new_roots
-            return 'updated'
-
-        process = mock.Mock(pid=72)
-        process.wait.return_value = 0
-
-        def native_prepare(argv, _project, environment, **_kwargs):
-            return argv, environment, None
-
-        with mock.patch.object(self.binding.launch_check, 'prepare_launch_roots', side_effect=prepare_launch_roots) as preflight, \
-                mock.patch.object(self.binding.launch_check, 'check', autospec=True, side_effect=update_roster), \
-                mock.patch.object(SESSIONS[Host.CLAUDE], 'prepare_frontend', side_effect=native_prepare), \
-                mock.patch.object(self.binding.subprocess, 'Popen', return_value=process) as spawn, \
-                mock.patch.object(self.binding, '_acknowledged', return_value=True), \
-                mock.patch.object(self.binding, '_record_launch_binding'), \
-                mock.patch.object(self.binding, '_prelaunch_terminal', return_value=None):
-            result = self.binding.main([
-                '--host', 'claude', '--project', directory.name, '--target', 'native-claude',
-                '--require-session-start', '--', '--settings', 'override.json', '--', 'literal prompt',
-            ])
-
-        self.assertEqual(0, result)
-        self.assertEqual([
-            mock.call(root.resolve(), Host.CLAUDE, 'native-claude',
-                      ['--settings', 'override.json', '--', 'literal prompt']),
-            mock.call(root.resolve(), Host.CLAUDE, 'native-claude',
-                      ['--settings', 'override.json', '--', 'literal prompt']),
-        ], preflight.call_args_list)
-        required = json.loads(spawn.call_args.kwargs['env'][self.binding.REQUIRED_HOOKS_ENV])
-        self.assertEqual(['new@tj-agents'], required)
 
 
 if __name__ == '__main__':
