@@ -51,7 +51,7 @@ class EventTests(unittest.TestCase):
 
     def test_a_prompt_cancels_the_pending_closeout(self):
         with mock.patch.object(hook.shutil, 'which', return_value='tj'), \
-                mock.patch.object(hook.subprocess, 'run') as run:
+                mock.patch.object(hook.process, 'run') as run:
             self.assertEqual(0, self.main('prompt', '--host', 'claude'))
         self.assertEqual(['tj', 'done', '--cancel'], run.call_args.args[0])
 
