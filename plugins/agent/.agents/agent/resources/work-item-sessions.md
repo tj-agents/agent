@@ -27,8 +27,8 @@ the row and clears `ended_at`/`end_reason`, because a resumed session is alive a
 sets `turn_state: working`. Stop sets `turn_state: awaiting_input` and refreshes cwd/branch/head. Claude
 SessionEnd sets `ended_at` and keeps an earlier end reason, else `closed`. Codex has no SessionEnd hook,
 so a hand-closed Codex tab reads as interrupted. Start and Stop attach an unclaimed session to a work item
-when exactly one non-`done` work item in the same repo records the current branch. `agent:close`
-best-effort record `closed` for their own session before closing it; their exit observer
+when exactly one non-`done` work item in the same repo records the current branch. A verified
+client-close request best-effort records `closed` for its own session before closing it; its exit observer
 deletes the row once the host has exited. Marking a work item `done` deletes its other ended
 sessions, and those on this machine whose process has exited; live ones, running ones on other machines and
 the caller's stay until their own closeout.
