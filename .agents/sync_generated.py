@@ -1300,6 +1300,30 @@ def canonical_text(data: bytes) -> bytes:
     return text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
 
 
+def stamp_codex_versions(output: dict[str, bytes], packages: list[str]) -> None:
+    for package in packages:
+        prefix = f"plugins/{package}/"
+        manifest = f"{prefix}.codex-plugin/plugin.json"
+        excluded = {
+            manifest,
+            f"{prefix}.claude-plugin/plugin.json",
+            f"{prefix}{CODEX_HOOK_MANIFEST}",
+        }
+        digest = hashlib.sha256()
+        for path in sorted(output):
+            if not path.startswith(prefix) or path in excluded:
+                continue
+            content = canonical_text(output[path])
+            digest.update(path.removeprefix(prefix).encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(str(len(content)).encode("ascii"))
+            digest.update(b"\0")
+            digest.update(content)
+        payload = json.loads(output[manifest])
+        payload["version"] = digest.hexdigest()[:12]
+        output[manifest] = dump(payload).encode("utf-8")
+
+
 def package_digest(output: dict[str, bytes], package: str) -> str:
     prefix = f"plugins/{package}/"
     digest = hashlib.sha256()
@@ -1733,6 +1757,7 @@ def build(root: Path) -> dict[str, bytes]:
             emit(f"plugins/{package}/.{host}-plugin/plugin.json", dump(manifest))
 
     bind_claude_hook_commands(output, list(publications))
+    stamp_codex_versions(output, list(publications))
     bind_codex_hook_snapshots(root, output, list(publications))
     emit(".agents/INDEX.md", "\n".join(repository_index))
     claude_entries, codex_entries = [], []
