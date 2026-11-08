@@ -242,6 +242,31 @@ def test_supervisor_interpreter_redirector_preserves_exact_wrapper_lineage(
     assert launch.verify() == FRONTEND_MESSAGE
 
 
+def test_backend_launcher_preserves_exact_supervisor_lineage(
+    launch: OwnedLaunch,
+) -> None:
+    launch.infos[103] = launch.infos[103]._replace(ppid=105)
+    launch.infos[105] = processes.ProcessInfo(105, 102, 102.5)
+    assert launch.verify() == FRONTEND_MESSAGE
+
+
+@pytest.mark.parametrize("matching", [False, True])
+def test_recipient_directory_must_match_the_owned_launch(
+    launch: OwnedLaunch, matching: bool
+) -> None:
+    launch.record["launch_cwd"] = str(launch.server.directory / "selected")
+    launch.save()
+    if matching:
+        launch.server.directory = Path(launch.record["launch_cwd"])
+        record, _submitted = launch.client.bind_recipient(
+            launch.record, launch.table, launch.peer_state
+        )
+        assert record["recipient"]["cwd"] == launch.record["launch_cwd"]
+    else:
+        with pytest.raises(RuntimeError, match="has not reached"):
+            launch.client.bind_recipient(launch.record, launch.table, launch.peer_state)
+
+
 @pytest.mark.parametrize("role", ["frontend", "backend", "supervisor", "wrapper"])
 def test_reused_process_id_refuses_the_owned_binding(
     launch: OwnedLaunch, role: str

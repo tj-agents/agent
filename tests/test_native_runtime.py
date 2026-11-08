@@ -187,6 +187,11 @@ def test_native_preparation_failure_blocks_only_managed_launches(
     )
     with (
         mock.patch.object(required, "launch_context", return_value=(project, ())),
+        mock.patch.object(
+            startup_binding.SESSIONS[host.Host.CODEX],
+            "requires_verified_handoff",
+            return_value=False,
+        ),
         mock.patch.object(native_runtime, "pending", return_value=("tj_hook",)),
         mock.patch.object(
             autoupdate,
