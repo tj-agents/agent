@@ -90,7 +90,7 @@ class InstallRecoveryTests(unittest.TestCase):
 
         with mock.patch.object(install, "repair", side_effect=lambda step, project: repaired.append(step) or []):
             self.assertEqual("current", self.check(reconcile))
-        self.assertEqual(["plugin and merge-policy catch-up"], repaired)
+        self.assertEqual(["plugin catch-up"], repaired)
 
     def test_a_refresh_that_stays_failed_after_repair_reports_failure_without_looping(self):
         self.configure_channel()

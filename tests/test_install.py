@@ -691,13 +691,13 @@ class CatchUpTests(Machine):
         state = self.home / ".agents-state" / "machine-events-state.json"
 
         def catch_up(argv):
-            install.plugin_autoupdate.write_json(state, {"tj-agents/core": {"revision": "a" * 40, "policy": None}})
+            install.plugin_autoupdate.write_json(state, {"tj-agents/core": {"revision": "a" * 40}})
             return 0
 
         with mock.patch.object(install.machine_events, "catch_up_states", lambda api: iter(self.rows)), \
                 mock.patch.object(install.machine_events, "main", side_effect=catch_up) as main, \
                 mock.patch.object(install.launch_check, "mark_current", return_value=True) as mark:
-            self.converge(step("plugin and merge-policy catch-up"), self.context(windows=False))
+            self.converge(step("plugin catch-up"), self.context(windows=False))
         main.assert_called_once_with([])
         mark.assert_called_once_with()
 
@@ -706,7 +706,7 @@ class CatchUpTests(Machine):
         with mock.patch.object(install.machine_events, "catch_up_states", lambda api: iter(self.rows)), \
                 mock.patch.object(install.machine_events, "main", return_value=1), \
                 mock.patch.object(install.launch_check, "mark_current", side_effect=OSError("offline")):
-            self.assertEqual(2, install.run_steps([step("plugin and merge-policy catch-up")], self.context(windows=False),
+            self.assertEqual(2, install.run_steps([step("plugin catch-up")], self.context(windows=False),
                                                 False, io.StringIO(), err))
         self.assertIn("machine-events.log", err.getvalue())
 
@@ -761,7 +761,7 @@ class RunStepsTests(Machine):
             (["--check", "--step", "shell profiles", "--step", "launch-check runtime"],
              ["preconditions", "launch-check runtime", "shell profiles"]),
             (["--step", "plugin setup"],
-             ["preconditions", "native CLI", "plugin and merge-policy catch-up", "harness permissions", "plugin setup"]),
+             ["preconditions", "native CLI", "plugin catch-up", "harness permissions", "plugin setup"]),
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
@@ -832,7 +832,7 @@ class RunStepsTests(Machine):
         later.assert_not_called()
 
     def test_failed_catchup_skips_plugin_setup_even_when_scoped(self):
-        catchup = install.Step("plugin and merge-policy catch-up", mock.Mock(side_effect=RuntimeError("offline")), mock.Mock())
+        catchup = install.Step("plugin catch-up", mock.Mock(side_effect=RuntimeError("offline")), mock.Mock())
         permissions = install.Step("harness permissions", mock.Mock(return_value=[]), mock.Mock())
         plugin = install.Step("plugin setup", mock.Mock(return_value=["needed"]), mock.Mock())
         out, err = io.StringIO(), io.StringIO()
@@ -850,7 +850,7 @@ class RunStepsTests(Machine):
         self.assertEqual([
             "preconditions", "native CLI", "native permission defaults", "event channel and publishers",
             "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
-            "Codex profile agents", "plugin and merge-policy catch-up", "harness permissions",
+            "Codex profile agents", "plugin catch-up", "harness permissions",
             "plugin setup", "background machine events",
         ], [item.name for item in install.STEPS])
 

@@ -1,10 +1,12 @@
 name: Publish update
 on:
-  push:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
 permissions:
   contents: read
 jobs:
   publish:
-    uses: tj-agents/github-actions/.github/workflows/publish-update.yml@8d0f28a33f6340f1cfa82dfb40796473ff3a1f27
+    uses: tj-agents/github-actions/.github/workflows/publish-update.yml@2e8b5afabfe67e7d2bd18c835ddeac6ef06bfb12 # main
     secrets:
       UPDATE_TOPIC: ${{ secrets.UPDATE_TOPIC }}
