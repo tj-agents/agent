@@ -18,5 +18,6 @@
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": "Apply the agent project policies."
-  }
+  },
+  "version": "5dbe08fe8f6c"
 }

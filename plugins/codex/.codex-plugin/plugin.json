@@ -19,5 +19,6 @@
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": "Use the Codex session capability."
-  }
+  },
+  "version": "fc12ec36c732"
 }
