@@ -18,7 +18,7 @@
         "agent sessions"
       ],
       "requires": [
-        "python"
+        "agent-store"
       ],
       "provenance": [
         "house"

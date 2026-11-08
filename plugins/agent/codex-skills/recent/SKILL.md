@@ -1,12 +1,12 @@
 ---
 name: recent
-description: List recent conversations for the selected Codex or Claude profile and return exact native resume commands. Use when asked which conversation to resume or what the last session covered.
+description: List recent Claude or Codex conversations with their exact resume commands. Use when asked which conversation to resume, what the last session covered, or which conversation owns a worktree.
 kind: utility
 domain: agent
 profile: core
 applicability: agent sessions
-requires: python
 provenance: house
+requires: python
 ---
 
 # Recent conversations

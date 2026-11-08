@@ -1,4 +1,5 @@
-"""SessionStart and SessionEnd hook: register this session in agent-store, and end it.
+"""Session hooks: SessionStart registers this session in agent-store, SessionEnd ends it, and each prompt
+cancels a pending no-PR closeout of the `tj run` tab (`tj done --cancel`).
 
 A session started by `tj run` binds to its launch (`TJ_RUN_LAUNCH_ID`) and inherits the launch's title,
 parent, terminal, wrapper and work item. A Codex thread is also named after its title, so it is
@@ -11,6 +12,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -75,12 +77,24 @@ def end(host: Host, session_id: str) -> None:
             raise
 
 
+def prompt() -> None:
+    tj = shutil.which("tj")
+    if tj:
+        subprocess.run([tj, "done", "--cancel"], capture_output=True, timeout=8, check=False)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("event", choices=("start", "end"))
+    parser.add_argument("event", choices=("start", "prompt", "end"))
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     args = parser.parse_args(argv)
     data = payload()
+    if args.event == "prompt":
+        try:
+            prompt()
+        except (OSError, subprocess.SubprocessError) as error:
+            print(f"tj done --cancel: {error}", file=sys.stderr)
+        return 0
     session_id = data.get("session_id") or data.get("sessionId")
     if not isinstance(session_id, str) or not session_id:
         return 0

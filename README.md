@@ -1,7 +1,7 @@
 # agent
 
-Agent owns behavior that acts on an agent session: session registration, recovery, handoff, refresh, peers,
-lanes, the session store and machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS
+Agent owns behavior that acts on an agent session: session registration, the lifecycle commands, handoff,
+refresh, lanes and machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS
 mechanics with no agent judgement, such as closing a terminal or the clipboard, belong in `tj-agents/cli`;
 common behavior and the engineering and workflow process belong in `tj-agents/core`.
 
@@ -9,12 +9,12 @@ Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 
 ## Packages
 
-- `agent-store`: recorded sessions and execution state.
-- `agent`: host-neutral coordination, recovery, history, lanes and refresh.
+- `agent-store`: the skill that reads the [agent-store](https://github.com/tj-agents/agent-store) link store.
+- `agent`: the lifecycle commands, session hooks, handoff, history, lanes and refresh.
 - `codex`: Codex-specific hooks and memory.
 
 The generated packages have no dependency on a Core checkout. Shared runtime is authored beneath
-`.agents/agent/runtime` and `.agents/agent-store/runtime`; generated payloads embed the canonical paths
+`.agents/agent/runtime`; generated payloads embed the canonical paths
 they consume. Claude-only and Codex-only runtime is authored in `.claude/runtime` and `.codex/runtime`
 and ships as the `claude` and `codex` packages inside `.agents/agent/runtime`, so runtime and tests run
 from the generated `plugins/agent` tree.
@@ -41,7 +41,7 @@ Generated Claude and Codex command hooks run through this native launcher. Templ
 the wrapping; authored hook manifests keep the payload executable and arguments.
 
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
-the machine event channel, a supervised background subscriber, the launch runtime in `~/.agents-state/bin`, packaged shell profiles, Codex
+the machine event channel, a supervised background subscriber, the pinned `agent-store` binary, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
@@ -49,14 +49,6 @@ Managed launches and refresh repair only the failing install step and retry read
 unconfigured event channel, a failed plugin update (catch-up) or missing required plugins (plugin setup).
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
-
-Managed Codex frontends with the shared app-server can recover automatically from the exact native
-`serverOverloaded` capacity failure. Recovery is bound to the recorded frontend input and its exact
-loaded thread, preserves the selected model and native permissions, and records a durable one-send
-receipt before continuing. It does not run for private `--no-daemon` or unmanaged sessions. Codex's
-`turn/start` API has no conditional “only if this failed turn is still current” parameter, so a very
-small race remains between the final input check and native acceptance; an interrupt or newer input
-observed before submission cancels recovery.
 
 Before checking native installations, launch, refresh and installer plugin setup reconcile an existing
 repository selection and regenerate both hosts' settings through the same scope and ownership checks
@@ -97,23 +89,27 @@ Agent tree. Cache timestamps cannot select an older runtime. Launch updates incl
 project's Codex selection when locating that native package; publisher lookup failure preserves the
 installed runtime and reports the update failure.
 
-Managed Codex conversations connected to the shared daemon automatically respond after user-issued
-`!<command>` commands finish.
-The native shell still executes the command once; the launcher waits for its recorded output and terminal
-completion before starting a response in that same conversation. New input, interrupts and conversation
-switches cancel a pending response. The response keeps the conversation's existing model and permissions;
-approvals remain with the native terminal. The observer exits with its frontend. Claude keeps its native
-command handling.
+## Lifecycle
 
-Attribution requires a normal user message in the managed frontend before its first shell command.
-A shell command entered first in a fresh window, an unmanaged frontend or a `--no-daemon` session has no
-automatic response. Native launch options that select an embedded server, including custom command-line
-configuration and profiles, also prevent the automatic response. If native delivery becomes uncertain,
-the launcher reports it and preserves the receipt rather than submitting the response twice.
+```text
+tj start 461 [--codex] [--lane L4]   worktree via worktrunk, card In Progress, agent in a tj run tab
+tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
+tj reload [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
+```
+
+`tj` dispatches these to the `tj-start`, `tj-status` and `tj-reload` shims the installer writes beside it.
+Every agent tab is a Windows Terminal or tmux tab whose root process is `tj run`, from
+[TJ CLI](https://github.com/tj-agents/cli). `tj run` records the launch in agent-store. The SessionStart
+hook then binds the native session to that launch, so the session inherits its title, work item and parent,
+and a Codex thread is named after its title. Liveness always comes from the hosts:
+`claude agents --json`, and for Codex the threads loaded in the shared app-server daemon. Codex launches
+attach to that daemon, so they carry no `-c` overrides; a requested reasoning effort is applied to the first
+turn through the daemon. The store holds links only. Its release is pinned in
+`.agents/agent/runtime/agent-store.json`, which Renovate bumps.
 
 ## Skills
 
-- `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:peer`, `agent:plugins`,
+- `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:plugins`,
   `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`
 - `agent-store:inspect`
 - `codex:hooks`, `codex:memory`

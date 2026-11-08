@@ -12,7 +12,6 @@
       "listen",
       "message",
       "open",
-      "peer",
       "plugins",
       "recent",
       "recover",
@@ -31,6 +30,7 @@
       ],
       "requires": [
         "python",
+        "tj",
         "native host"
       ],
       "provenance": [
@@ -73,8 +73,7 @@
         "agent sessions"
       ],
       "requires": [
-        "python",
-        "codex app-server"
+        "codex"
       ],
       "provenance": [
         "house"
@@ -88,23 +87,7 @@
         "agent sessions"
       ],
       "requires": [
-        "python",
-        "native host"
-      ],
-      "provenance": [
-        "house"
-      ]
-    },
-    {
-      "name": "peer",
-      "kind": "utility",
-      "profile": "core",
-      "applicability": [
-        "agent sessions"
-      ],
-      "requires": [
-        "python",
-        "native host"
+        "tj"
       ],
       "provenance": [
         "house"
@@ -147,8 +130,7 @@
         "agent sessions"
       ],
       "requires": [
-        "python",
-        "native host"
+        "tj"
       ],
       "provenance": [
         "house"
