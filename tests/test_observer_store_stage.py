@@ -95,7 +95,7 @@ class ObserverStoreStageTests(unittest.TestCase):
             '("AGENT_STATE_DIRECTORY", "CODEX_HOME", "CLAUDE_CONFIG_DIR")}))\n', encoding='utf-8')
         result = subprocess.run([sys.executable, '-I', '-B', str(launcher), '--state-directory', str(state),
                                  '--search-path', os.environ.get('PATH', os.defpath),
-                                 '--codex-home', str(codex), '--claude-config-dir', str(claude), '--',
+                                 '--profile', f'CODEX_HOME={codex}', '--profile', f'CLAUDE_CONFIG_DIR={claude}', '--',
                                  str(probe), str(output)], capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({"AGENT_STATE_DIRECTORY": str(state.resolve()), "CODEX_HOME": str(codex.resolve()),
@@ -107,8 +107,8 @@ class ObserverStoreStageTests(unittest.TestCase):
                 mock.patch.object(session_close.shutil, 'which', return_value=sys.executable):
             command = session_close.detached_command(self.state / 'watcher.py', ['--request', 'exact'], SCRIPTS / 'detached_launch.py')
         self.assertIn('--state-directory', command)
-        self.assertIn('--codex-home', command)
-        self.assertIn('--claude-config-dir', command)
+        self.assertIn(f"CODEX_HOME={(self.state / 'codex').resolve()}", command)
+        self.assertIn(f"CLAUDE_CONFIG_DIR={(self.state / 'claude').resolve()}", command)
         self.assertNotIn('UNRELATED', ' '.join(command))
 
 if __name__ == '__main__':

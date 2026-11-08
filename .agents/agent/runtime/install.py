@@ -30,7 +30,7 @@ RUNTIME = Path(__file__).resolve().parent
 ROOT = RUNTIME.parents[2]
 sys.path.insert(0, str(RUNTIME))
 
-from host import Host
+from tj_agent.host import Host
 import host_permissions
 import required_plugins
 import runtime_delivery

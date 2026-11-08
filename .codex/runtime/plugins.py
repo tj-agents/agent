@@ -7,7 +7,7 @@ from pathlib import Path
 
 import agent_cli
 from codex import hook_trust
-from host import Host
+from tj_agent.host import Host
 import required_plugins
 
 HOST = Host.CODEX
@@ -35,7 +35,7 @@ NODE_SHIM_BYPASSED = True
 
 
 def resolve_executable() -> str:
-    return agent_cli.host_launch('codex').resolve_executable()[0]
+    return agent_cli.host_launch(HOST).resolve_executable()[0]
 
 
 def installations(project: Path, entries: list) -> list:

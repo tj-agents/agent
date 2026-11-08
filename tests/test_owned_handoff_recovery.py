@@ -29,7 +29,7 @@ def launch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     sessions = load_source(
         "owned_recovery_sessions", ROOT / ".codex/runtime/sessions.py"
     )
-    host = importlib.import_module("host")
+    host = importlib.import_module("tj_agent.host")
     hosts = importlib.import_module("host_sessions")
     monkeypatch.setitem(hosts.SESSIONS, host.Host.CODEX, sessions)
     root = tmp_path / "recovery checkout café"

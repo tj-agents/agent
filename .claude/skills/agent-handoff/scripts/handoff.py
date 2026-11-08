@@ -21,7 +21,7 @@ def _package_root():
 def _host_type():
     runtime = _package_root() / '.agents' / 'agent' / 'runtime'
     sys.path.insert(0, str(runtime))
-    from host import Host
+    from tj_agent.host import Host
     return Host
 
 

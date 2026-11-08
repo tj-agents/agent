@@ -13,7 +13,7 @@ PATH = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime" / "close_lif
 spec = importlib.util.spec_from_file_location("close_lifecycle", PATH)
 LIFECYCLE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(LIFECYCLE)
-from host import Host  # noqa: E402
+from tj_agent.host import Host  # noqa: E402
 from host_sessions import SESSIONS  # noqa: E402
 
 

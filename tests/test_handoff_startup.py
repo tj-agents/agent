@@ -11,6 +11,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import launcher_test_support
+from tj_agent.host import Host
 
 
 def load(name, path):
@@ -31,8 +32,8 @@ class HandoffStartupTests(unittest.TestCase):
     def run_launch(self, host, status, terminal_timeout=False):
         launcher = load(f'handoff_startup_{host}', ROOT / f'plugins/agent/.agents/agent/resources/handoff/launch_{host}.py')
         cli = load(f'handoff_cli_{host}', ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py')
-        cli.host_launch('codex').resolve_executable = mock.Mock(return_value=launcher_test_support.CODEX_EXECUTABLE)
-        cli.host_launch('claude').resolve_executable = mock.Mock(return_value='/bin/claude')
+        cli.host_launch(Host.CODEX).resolve_executable = mock.Mock(return_value=launcher_test_support.CODEX_EXECUTABLE)
+        cli.host_launch(Host.CLAUDE).resolve_executable = mock.Mock(return_value='/bin/claude')
         cli.launch_tab = mock.Mock()
         real_wait = cli.await_handoff_startup
         cli.await_handoff_startup = mock.Mock()

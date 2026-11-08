@@ -53,16 +53,14 @@ def candidate_path(
 
 
 def write_candidate(payload: dict[str, Any], root: Path | None = None) -> bool:
+    from tj_agent.host import Host
+
     thread_id, turn_id, cwd = (
         payload.get("session_id"),
         payload.get("turn_id"),
         payload.get("cwd"),
     )
-    profile = (
-        payload.get("codex_home")
-        or os.environ.get("CODEX_HOME")
-        or str(Path.home() / ".codex")
-    )
+    profile = payload.get("codex_home") or str(Host.CODEX.configuration_root)
     if not all(
         isinstance(value, str) and value and len(value) <= 512
         for value in (thread_id, turn_id, cwd)
@@ -690,6 +688,7 @@ def stop(ticket: dict[str, Any]) -> None:
 
 
 def main() -> int:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("candidate",))
     parser.parse_args()

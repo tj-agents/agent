@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import host_plugins
 import launch_status
 import native_runtime
-from host import Host
+from tj_agent.host import Host
 from host_sessions import SESSIONS
 import required_plugins
 from terminal_command import command_for_target, without_binding_state

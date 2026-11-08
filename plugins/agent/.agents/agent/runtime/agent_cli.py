@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from host import Host
+from tj_agent.host import Host
 from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout
 from package_root import find_package_root
@@ -40,32 +40,31 @@ IS_WINDOWS = os.name == 'nt'
 
 
 @overload
-def host_launch(host: Literal['codex']) -> CodexLaunch: ...
+def host_launch(host: Literal[Host.CODEX]) -> CodexLaunch: ...
 
 
 @overload
-def host_launch(host: Literal['claude']) -> ClaudeLaunch: ...
+def host_launch(host: Literal[Host.CLAUDE]) -> ClaudeLaunch: ...
 
 
 @overload
-def host_launch(host: Host | str) -> Launch: ...
+def host_launch(host: Host) -> Launch: ...
 
 
-def host_launch(host: Host | str) -> Launch:
-    kind = Host(host)
-    if kind not in _HOST_LAUNCHES:
+def host_launch(host: Host) -> Launch:
+    if host not in _HOST_LAUNCHES:
         root = find_package_root(HERE)
-        native = root / f'.{kind.value}' / 'runtime' / 'launch.py'
-        path = native if (root / '.git').exists() else HERE / kind.value / 'launch.py'
+        native = root / f'.{host.value}' / 'runtime' / 'launch.py'
+        path = native if (root / '.git').exists() else HERE / host.value / 'launch.py'
         if not path.is_file():
-            raise LaunchError(f'The packaged {kind.value} launch adapter was not found under {root}.')
-        spec = importlib.util.spec_from_file_location(f'agent_{kind.value}_launch', path)
+            raise LaunchError(f'The packaged {host.value} launch adapter was not found under {root}.')
+        spec = importlib.util.spec_from_file_location(f'agent_{host.value}_launch', path)
         if spec is None or spec.loader is None:
-            raise LaunchError(f'The {kind.value} launch adapter cannot be loaded from {path}.')
+            raise LaunchError(f'The {host.value} launch adapter cannot be loaded from {path}.')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        _HOST_LAUNCHES[kind] = cast(Launch, module)
-    return _HOST_LAUNCHES[kind]
+        _HOST_LAUNCHES[host] = cast(Launch, module)
+    return _HOST_LAUNCHES[host]
 
 
 def make_stdio_encoding_lossy():
@@ -163,22 +162,22 @@ def _lanes_module():
 # configured default, because guessing a lane from a prompt is how an expensive model ends up serving a
 # rename. frontier resolves the tier above the ladder, which no lane resolves to: its selection is the
 # user's explicit request, never task shape.
-def resolve_lane(harness, lane=None, frontier=False):
+def resolve_lane(host, lane=None, frontier=False):
     if not lane and not frontier:
         raise LaunchError('resolve_lane needs a lane or frontier.')
     if lane and frontier:
         raise LaunchError('A lane and the frontier tier are mutually exclusive.')
     lanes = _lanes_module()
     try:
-        entry = lanes.frontier(harness) if frontier else lanes.resolve(harness, lane)
+        entry = lanes.frontier(host) if frontier else lanes.resolve(host, lane)
     except SystemExit as exc:
         raise LaunchError(str(exc)) from None
     return entry
 
 
-def resolve_lane_model(harness, lane=None, frontier=False):
+def resolve_lane_model(host, lane=None, frontier=False):
     """(model, effort) for a lane or the frontier tier; effort is None when the table prices none."""
-    entry = resolve_lane(harness, lane=lane, frontier=frontier)
+    entry = resolve_lane(host, lane=lane, frontier=frontier)
     return entry['model'], entry.get('effort')
 
 
@@ -530,6 +529,6 @@ def await_handoff_startup(status_path, timeout=480, wrapper_timeout=45,
 
 def bound_terminal_arguments(host, working_directory, target, arguments, status_file=None, require_session_start=False):
     status = ["--status-file", str(status_file)] if status_file else []
-    return ["-I", "-B", str(startup_binding_script()), "--host", host, "--project",
+    return ["-I", "-B", str(startup_binding_script()), "--host", str(host), "--project",
             str(working_directory), "--target", str(target), *status,
             *(["--require-session-start"] if require_session_start else []), "--", *arguments]

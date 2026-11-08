@@ -15,7 +15,7 @@ host registry leaves that host's target untouched with a warning. `--print <scri
 resolved invocation for a declared script (by filename) on this machine, one line per installed root,
 for use in skill prose.
 
-Setup runs `--apply`. Honours `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `AGENT_STATE_DIRECTORY` so tests
+Setup runs `--apply`. Honours each host's home variable and `AGENT_STATE_DIRECTORY` so tests
 never touch real user files, and the opt-out `TJ_AGENTS_HARNESS_PERMISSIONS=off`.
 """
 
@@ -33,6 +33,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness_permissions
+from plugin_runtime import Host
 
 
 STATE_DIRECTORY_ENV = "AGENT_STATE_DIRECTORY"
@@ -91,14 +92,9 @@ def write_text_atomic(path: Path, text: str) -> None:
     write_bytes_atomic(path, text.encode("utf-8"))
 
 
-def claude_config_root(environ: dict) -> Path:
-    configured = environ.get("CLAUDE_CONFIG_DIR")
-    return Path(configured).expanduser() if configured else Path.home() / ".claude"
-
-
-def codex_home(environ: dict) -> Path:
-    configured = environ.get("CODEX_HOME")
-    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+def configuration_root(host: Host, environ: dict) -> Path:
+    configured = environ.get(host.home_variable)
+    return Path(configured).expanduser() if configured else Path.home() / host.home_directory
 
 
 def state_directory(environ: dict) -> Path:
@@ -141,7 +137,7 @@ def _entry_recency(entry: dict) -> str:
 
 
 def claude_plugin_roots(environ: dict, warnings: list[str]) -> tuple[set[Path], bool]:
-    plugins_directory = claude_config_root(environ) / "plugins"
+    plugins_directory = configuration_root(Host.CLAUDE, environ) / "plugins"
     path = plugins_directory / "installed_plugins.json"
     if not path.is_file():
         return set(), True
@@ -182,7 +178,7 @@ def claude_plugin_roots(environ: dict, warnings: list[str]) -> tuple[set[Path], 
 
 
 def codex_marketplaces(environ: dict, warnings: list[str]) -> tuple[set[str], bool]:
-    path = codex_home(environ) / "config.toml"
+    path = configuration_root(Host.CODEX, environ) / "config.toml"
     if not path.is_file():
         return set(), True
     try:
@@ -217,7 +213,7 @@ def codex_plugin_roots(environ: dict, warnings: list[str]) -> tuple[set[Path], b
     trusted_marketplaces, marketplaces_ok = codex_marketplaces(environ, warnings)
     if not marketplaces_ok:
         return set(), False
-    base = codex_home(environ) / "plugins" / "cache"
+    base = configuration_root(Host.CODEX, environ) / "plugins" / "cache"
     roots: set[Path] = set()
     if not base.is_dir():
         return roots, True
@@ -326,10 +322,10 @@ def _strict_json(path: Path, label: str) -> dict:
 def _strict_sidecar(environ: dict) -> dict:
     path = sidecar_path(environ)
     if not path.is_file():
-        return {"schema_version": 2, "claude": {}, "codex": {}}
+        return {"schema_version": 2, Host.CLAUDE.value: {}, Host.CODEX.value: {}}
     _safe_path(path)
     value = _strict_json(path, str(path))
-    if value.get("schema_version") != 2 or not isinstance(value.get("claude"), dict) or not isinstance(value.get("codex"), dict):
+    if value.get("schema_version") != 2 or any(not isinstance(value.get(host.value), dict) for host in Host):
         raise PermissionSyncError(f"{path}: invalid ownership sidecar")
     return value
 
@@ -346,7 +342,7 @@ def _claude_plan(path: Path, desired: list[str], sidecar: dict, warnings: list[s
     if not isinstance(allow, list) or any(not isinstance(entry, str) for entry in allow):
         warnings.append(f"{path}: settings, permissions or permissions.allow has an unexpected shape; leaving untouched")
         return None
-    owned = sidecar["claude"].get(str(path), [])
+    owned = sidecar[Host.CLAUDE.value].get(str(path), [])
     if not isinstance(owned, list) or any(not isinstance(entry, str) for entry in owned):
         raise PermissionSyncError(f"invalid Claude ownership entry for {path}")
     previously_owned = set(owned)
@@ -372,7 +368,7 @@ def _owned_codex(path: Path, sidecar: dict, header: str) -> bool:
         return False
     _safe_path(path)
     current = hashlib.sha256(path.read_bytes()).hexdigest().upper()
-    if sidecar["codex"].get(str(path)) == current:
+    if sidecar[Host.CODEX.value].get(str(path)) == current:
         return True
     try:
         return path.read_text(encoding="utf-8-sig").startswith(header)
@@ -381,7 +377,7 @@ def _owned_codex(path: Path, sidecar: dict, header: str) -> bool:
 
 
 def _codex_plan(environ: dict, rules: list[dict], sidecar: dict) -> list[tuple[Path, str | None]]:
-    directory = codex_home(environ) / "rules"
+    directory = configuration_root(Host.CODEX, environ) / "rules"
     path = directory / CODEX_RULES_NAME
     text = _codex_text(rules)
     changes: list[tuple[Path, str | None]] = []
@@ -406,7 +402,7 @@ def synchronize(environ: dict, mode: str) -> tuple[list[str], list[str]]:
     changes: list[str] = []
     writes: list[tuple[Path, str | None]] = []
     if claude_ok:
-        path = claude_config_root(environ) / "settings.json"
+        path = configuration_root(Host.CLAUDE, environ) / "settings.json"
         _safe_path(path)
         plan = _claude_plan(path, claude_allow, sidecar, warnings)
         if plan is not None:
@@ -415,21 +411,21 @@ def synchronize(environ: dict, mode: str) -> tuple[list[str], list[str]]:
                 writes.append((path, text))
                 changes.append(f"converge Claude permissions.allow in {path}")
             if owned:
-                sidecar["claude"][str(path)] = owned
+                sidecar[Host.CLAUDE.value][str(path)] = owned
             else:
-                sidecar["claude"].pop(str(path), None)
+                sidecar[Host.CLAUDE.value].pop(str(path), None)
     if codex_ok:
         for path, text in _codex_plan(environ, codex_rules, sidecar):
             writes.append((path, text))
             changes.append(f"{'write' if text is not None else 'remove'} Codex rules {path}")
             if text is None:
-                sidecar["codex"].pop(str(path), None)
+                sidecar[Host.CODEX.value].pop(str(path), None)
             else:
-                sidecar["codex"][str(path)] = hashlib.sha256(text.encode("utf-8")).hexdigest().upper()
+                sidecar[Host.CODEX.value][str(path)] = hashlib.sha256(text.encode("utf-8")).hexdigest().upper()
     sidecar["schema_version"] = 2
     after = json.dumps(sidecar, indent=2, ensure_ascii=False) + "\n"
     current_state = state.read_text(encoding="utf-8-sig") if state.is_file() else None
-    untracked = current_state is None and not sidecar["claude"] and not sidecar["codex"]
+    untracked = current_state is None and not any(sidecar[host.value] for host in Host)
     if after != current_state and not untracked:
         writes.append((state, after))
         if not changes:
