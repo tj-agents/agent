@@ -204,7 +204,7 @@ class StartupBindingTests(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertEqual([(Path(directory.name).resolve(), (Host.CLAUDE,))], calls)
 
-    def test_codex_directory_option_selects_the_backend_project_before_startup(self):
+    def test_codex_directory_option_preserves_the_original_frontend_project(self):
         directory = tempfile.TemporaryDirectory(prefix='startup codex project ')
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
@@ -226,7 +226,8 @@ class StartupBindingTests(unittest.TestCase):
             ])
 
         self.assertEqual(0, result)
-        self.assertTrue(started[0][2].samefile(selected))
+        self.assertTrue(started[0][2].samefile(root))
+        self.assertEqual(['--no-daemon', '-C', 'selected', 'resume', 'exact_id'], started[0][3])
 
     def test_admission_uses_the_effective_native_launch_directory(self):
         directory = tempfile.TemporaryDirectory(prefix='startup native directory ')

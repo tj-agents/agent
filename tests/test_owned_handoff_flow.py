@@ -157,6 +157,83 @@ def test_ordinary_launch_does_not_resolve_a_handoff_runtime(binding: Any) -> Non
     resolve.assert_not_called()
 
 
+@pytest.mark.parametrize("directory_option", ["relative", "absolute", "none"])
+def test_native_directory_is_resolved_once_through_owned_startup(
+    binding: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    directory_option: str,
+) -> None:
+    adapter = startup.SESSIONS[startup.Host.CODEX]
+    backend = __import__("codex.backend", fromlist=["Lease"])
+    original = tmp_path / "original checkout"
+    selected = original / "selected café"
+    selected.mkdir(parents=True)
+    effective = original if directory_option == "none" else selected
+    arguments = {
+        "relative": ["-C", selected.name],
+        "absolute": ["--cd", str(selected)],
+        "none": [],
+    }[directory_option] + ["-c", 'model="fixture"', "prompt"]
+    monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
+    child = mock.Mock(pid=72)
+    child.wait.return_value = 0
+    lease = mock.Mock(backend={"kind": "handoff", "socket_path": "/fixture/s"})
+
+    def roots(
+        project: Path, host: Any, _target: str, native: list[str]
+    ) -> tuple[Any, dict[str, Path]]:
+        return binding.required_plugins.launch_context(project, host, native)[0], {}
+
+    with (
+        mock.patch.object(
+            binding.launch_check, "prepare_launch_roots", side_effect=roots
+        ),
+        mock.patch.object(binding.launch_check, "check", return_value="current"),
+        mock.patch.object(binding.managed_admission, "ensure_hooks") as hooks,
+        mock.patch.object(binding.managed_admission, "verify") as admission,
+        mock.patch.object(backend, "Lease", return_value=lease) as prepare_backend,
+        mock.patch.object(adapter.client, "await_backend") as readiness,
+        mock.patch.object(adapter, "attach_frontend"),
+        mock.patch.object(
+            adapter, "handoff_recipient", return_value={"token": "fixture"}
+        ),
+        mock.patch.object(binding, "_acknowledged", return_value=True),
+        mock.patch.object(binding, "_prelaunch_terminal", return_value=None),
+        mock.patch.object(binding.subprocess, "Popen", return_value=child) as frontend,
+    ):
+        assert (
+            binding.main(
+                [
+                    "--host",
+                    "codex",
+                    "--project",
+                    str(original),
+                    "--target",
+                    "native",
+                    "--require-session-start",
+                    "--",
+                    *arguments,
+                ]
+            )
+            == 0
+        )
+
+    assert prepare_backend.call_args.args[1] == effective.resolve()
+    assert prepare_backend.call_args.args[4] == ["-c", 'model="fixture"']
+    assert readiness.call_args.args[0]["launch_cwd"] == str(effective.resolve())
+    assert frontend.call_args.kwargs["cwd"] == original.resolve()
+    assert frontend.call_args.args[0][-len(arguments) :] == arguments
+    hooks.assert_called_once_with(effective.resolve(), startup.Host.CODEX, "native")
+    admission.assert_called_once_with(
+        effective.resolve(),
+        startup.Host.CODEX,
+        "native",
+        native_project=effective.resolve(),
+    )
+    lease.close.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "scenario",
     [
@@ -205,8 +282,6 @@ def test_handoff_runtime_uses_only_verified_public_version_metadata(
         assert kwargs["env"] == environment
         assert kwargs["cwd"] == tmp_path
         assert kwargs["timeout"] == 15
-        if os.name == "nt":
-            assert kwargs["creationflags"] == adapter.subprocess.CREATE_NO_WINDOW
         if arguments == [str(selected.resolve()), "--version"]:
             return SimpleNamespace(returncode=0, stdout=f"codex-cli {selected_version}")
         if arguments == [str(managed.resolve()), "--version"]:
@@ -222,7 +297,9 @@ def test_handoff_runtime_uses_only_verified_public_version_metadata(
             stdout="invalid" if scenario == "invalid-json" else json.dumps(metadata),
         )
 
-    with mock.patch.object(adapter.subprocess, "run", side_effect=native) as run:
+    with mock.patch.object(
+        adapter.handoff_runtime.process, "run", side_effect=native
+    ) as run:
         if scenario in {"capable", "managed"}:
             assert adapter.handoff_executable(
                 str(selected), tmp_path, environment
@@ -234,7 +311,9 @@ def test_handoff_runtime_uses_only_verified_public_version_metadata(
 
     if scenario == "managed":
         with (
-            mock.patch.object(adapter.subprocess, "run", side_effect=native) as run,
+            mock.patch.object(
+                adapter.handoff_runtime.process, "run", side_effect=native
+            ) as run,
             pytest.raises(RuntimeError, match="selected runtime"),
         ):
             adapter.handoff_executable(

@@ -445,7 +445,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         if parsed.status_file is not None:
             options["on_phase"] = phase
-        returncode = run_session(parsed.host, parsed.target, effective_project or parsed.project.resolve(), arguments, **options,
+        returncode = run_session(parsed.host, parsed.target, parsed.project.resolve(), arguments, **options,
                                  on_unconfirmed=lambda child_pid: report("unconfirmed", child_pid=child_pid),
                                  on_running=lambda child_pid=None, **details: report(
                                      "running", running_at=time.time(), child_pid=child_pid, **details))
