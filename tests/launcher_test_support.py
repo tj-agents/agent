@@ -33,7 +33,7 @@ def real_agent_cli(name, claude='/bin/claude'):
     collide in `sys.modules`.
     """
     module = _load_agent_cli_module(name)
-    module.resolve_claude_executable = mock.Mock(return_value=claude)
+    module.host_launch('claude').resolve_executable = mock.Mock(return_value=claude)
     module.sync_claude_standards = mock.Mock()
     module.launch_tab = mock.Mock()
     module.await_handoff_startup = mock.Mock()
@@ -52,7 +52,7 @@ def real_agent_cli_for_e2e(name, run, claude='/bin/claude'):
     """
     with mock.patch('subprocess.run', side_effect=run):
         module = _load_agent_cli_module(name)
-    module.resolve_claude_executable = mock.Mock(return_value=claude)
+    module.host_launch('claude').resolve_executable = mock.Mock(return_value=claude)
     module.sync_claude_standards = mock.Mock()
     module.await_handoff_startup = mock.Mock()
     return module
@@ -64,7 +64,7 @@ def real_agent_cli_for_codex(name, codex=CODEX_EXECUTABLE):
     per caller so two tests loading this in the same process never collide in `sys.modules`.
     """
     module = _load_agent_cli_module(name)
-    module.resolve_codex_executable = mock.Mock(return_value=codex)
+    module.host_launch('codex').resolve_executable = mock.Mock(return_value=codex)
     module.launch_tab = mock.Mock()
     module.await_handoff_startup = mock.Mock()
     return module
@@ -75,6 +75,6 @@ def real_agent_cli_for_codex_e2e(name, run, codex=CODEX_EXECUTABLE):
     to `run`, same reasoning as real_agent_cli_for_e2e above."""
     with mock.patch('subprocess.run', side_effect=run):
         module = _load_agent_cli_module(name)
-    module.resolve_codex_executable = mock.Mock(return_value=codex)
+    module.host_launch('codex').resolve_executable = mock.Mock(return_value=codex)
     module.await_handoff_startup = mock.Mock()
     return module

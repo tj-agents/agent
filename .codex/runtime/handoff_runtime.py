@@ -24,7 +24,9 @@ def handoff_executable(
         "Codex handoff requires an installed native Codex 0.166.0 or newer "
         "for paginated input verification"
     )
-    floor = agent_cli.parse_codex_version("0.166.0")
+    launch = agent_cli.host_launch("codex")
+    floor = launch.parse_version("0.166.0")
+    assert floor is not None
 
     def probe(path: str) -> tuple[str, dict[str, Any]]:
         candidate = Path(path)
@@ -41,7 +43,7 @@ def handoff_executable(
                 if stream.read(2) == b"#!" or not os.access(candidate, os.X_OK):
                     raise ValueError("the runtime path is not a native executable")
         result = invoke(str(candidate), "--version")
-        version = agent_cli.parse_codex_version(result)
+        version = launch.parse_version(result)
         if version is None:
             raise ValueError("the runtime did not report a Codex version")
         return str(candidate), version
@@ -64,7 +66,7 @@ def handoff_executable(
 
     try:
         selected, version = probe(target)
-        if agent_cli.compare_codex_version(version, floor) >= 0:
+        if launch.compare_version(version, floor) >= 0:
             return selected
         if not allow_managed:
             raise ValueError(f"the selected runtime is {version['text']}")
@@ -84,7 +86,7 @@ def handoff_executable(
             raise ValueError(
                 "the managed runtime version does not match read-only daemon metadata"
             )
-        if agent_cli.compare_codex_version(installed, floor) < 0:
+        if launch.compare_version(installed, floor) < 0:
             raise ValueError(f"the installed managed runtime is {installed['text']}")
         return managed
     except (OSError, ValueError, subprocess.SubprocessError) as error:
