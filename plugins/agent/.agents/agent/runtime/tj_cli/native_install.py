@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -20,6 +21,9 @@ from typing import BinaryIO, Final
 _REPOSITORY: Final = "tj-agents/cli"
 _RECEIPT: Final = ".tj-native.json"
 _SHA256_LENGTH: Final = 64
+_MINIMUM_NATIVE_VERSION: Final = (0, 2, 0)
+_VERSION_TIMEOUT: Final = 5.0
+_NATIVE_VERSION = re.compile(r"\Atj_hook (0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)\n?\Z")
 
 
 class NativeInstallError(RuntimeError):
@@ -45,6 +49,21 @@ def missing_native(directory: Path) -> tuple[str, ...]:
     return tuple(
         name for name in _binary_names() if not _is_executable(directory / name)
     )
+
+
+def pending_native(directory: Path) -> tuple[str, ...]:
+    """Return native names that are missing or do not support the current runtime."""
+    if missing := missing_native(directory):
+        return missing
+    hook = directory.resolve() / _binary_names()[1]
+    try:
+        result = _run([str(hook), "--version"], timeout=_VERSION_TIMEOUT)
+    except (NativeInstallError, UnicodeError):
+        return _binary_names()
+    version = _NATIVE_VERSION.fullmatch(result.stdout)
+    if version is None or tuple(map(int, version.groups())) < _MINIMUM_NATIVE_VERSION:
+        return _binary_names()
+    return ()
 
 
 def ensure_native(
@@ -449,6 +468,7 @@ def _run(
     command: list[str],
     *,
     cwd: Path | None = None,
+    timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         if sys.platform == "win32":
@@ -459,6 +479,7 @@ def _run(
                 capture_output=True,
                 text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=timeout,
             )
         else:
             result = subprocess.run(
@@ -467,8 +488,13 @@ def _run(
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                timeout=timeout,
             )
         return result
+    except subprocess.TimeoutExpired as error:
+        raise NativeInstallError(
+            f"native install command timed out: {command[0]}"
+        ) from error
     except (OSError, subprocess.CalledProcessError) as error:
         raise _command_error(command[0], error) from error
 
@@ -508,9 +534,11 @@ def _main() -> int:
     arguments = parser.parse_args()
     try:
         if arguments.check:
-            missing = missing_native(arguments.bin_dir)
-            if missing:
-                print(f"missing native binaries: {', '.join(missing)}")
+            pending = pending_native(arguments.bin_dir)
+            if pending:
+                print(
+                    f"native binaries need installation or update: {', '.join(pending)}"
+                )
                 return 1
             print("ok native binaries")
             return 0
@@ -525,6 +553,12 @@ def _main() -> int:
         changed = ensure_native(
             arguments.bin_dir, source=arguments.source, revision=arguments.revision
         )
+        if pending := pending_native(arguments.bin_dir):
+            raise NativeInstallError(
+                "installed native binaries remain incompatible: "
+                + ", ".join(pending)
+                + "; install a compatible release or build the current CLI source"
+            )
         print(
             f"installed native binaries: {', '.join(changed)}"
             if changed
