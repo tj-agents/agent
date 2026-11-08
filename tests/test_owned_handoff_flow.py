@@ -72,7 +72,7 @@ def test_handoff_runtime_failure_prevents_plugin_checks_and_native_launch(
             "handoff_executable",
             side_effect=RuntimeError("Codex handoff requires native Codex 0.166.0"),
         ),
-        mock.patch.object(binding.launch_check, "prepare_launch_roots") as plugins,
+        mock.patch.object(binding.required_plugins, "check_launch_roots") as plugins,
         mock.patch.object(binding, "run_session") as launch,
         contextlib.redirect_stderr(io.StringIO()) as error,
     ):
@@ -104,10 +104,11 @@ def test_handoff_runtime_is_shared_by_preflight_backend_and_frontend(
     with (
         mock.patch.object(adapter, "handoff_executable", return_value="frozen-native"),
         mock.patch.object(
-            binding.launch_check, "prepare_launch_roots", return_value=(tmp_path, {})
+            binding.required_plugins, "check_launch_roots", return_value=(tmp_path, {})
         ) as plugins,
-        mock.patch.object(binding.launch_check, "check", return_value="current"),
-        mock.patch.object(binding.managed_admission, "ensure_hooks") as hooks,
+        mock.patch.object(
+            binding.host_plugins.PLUGINS[startup.Host.CODEX], "ensure_hooks"
+        ) as hooks,
         mock.patch.object(
             adapter, "prepare_frontend", return_value=([], {}, {})
         ) as prepare,
@@ -134,10 +135,8 @@ def test_handoff_runtime_is_shared_by_preflight_backend_and_frontend(
             )
             == 0
         )
-    assert [call.args[2] for call in plugins.call_args_list] == ["frozen-native"] * 2
-    hooks.assert_called_once_with(
-        tmp_path.resolve(), startup.Host.CODEX, "frozen-native"
-    )
+    assert [call.args[2] for call in plugins.call_args_list] == ["frozen-native"]
+    hooks.assert_called_once_with(tmp_path.resolve(), "frozen-native")
     assert prepare.call_args.kwargs["executable"] == "frozen-native"
     assert spawn.call_args.args[0] == ["frozen-native"]
 
@@ -187,11 +186,11 @@ def test_native_directory_is_resolved_once_through_owned_startup(
 
     with (
         mock.patch.object(
-            binding.launch_check, "prepare_launch_roots", side_effect=roots
+            binding.required_plugins, "check_launch_roots", side_effect=roots
         ),
-        mock.patch.object(binding.launch_check, "check", return_value="current"),
-        mock.patch.object(binding.managed_admission, "ensure_hooks") as hooks,
-        mock.patch.object(binding.managed_admission, "verify") as admission,
+        mock.patch.object(
+            binding.host_plugins.PLUGINS[startup.Host.CODEX], "ensure_hooks"
+        ) as hooks,
         mock.patch.object(backend, "Lease", return_value=lease) as prepare_backend,
         mock.patch.object(adapter.client, "await_backend") as readiness,
         mock.patch.object(adapter, "attach_frontend"),
@@ -224,14 +223,7 @@ def test_native_directory_is_resolved_once_through_owned_startup(
     assert readiness.call_args.args[0]["launch_cwd"] == str(effective.resolve())
     assert frontend.call_args.kwargs["cwd"] == original.resolve()
     assert frontend.call_args.args[0][-len(arguments) :] == arguments
-    hooks.assert_called_once_with(effective.resolve(), startup.Host.CODEX, "native")
-    admission.assert_called_once_with(
-        effective.resolve(),
-        startup.Host.CODEX,
-        "native",
-        native_project=effective.resolve(),
-    )
-    lease.close.assert_called_once()
+    hooks.assert_called_once_with(effective.resolve(), "native")
 
 
 @pytest.mark.parametrize(

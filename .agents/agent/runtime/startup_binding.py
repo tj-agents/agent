@@ -26,8 +26,7 @@ if __name__ == "__main__":
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import launch_check
-import managed_admission
+import host_plugins
 import launch_status
 import native_runtime
 from host import Host
@@ -41,7 +40,12 @@ ACK_DIRECTORY_ENV = "TJ_AGENTS_STARTUP_ACK_DIRECTORY"
 ACK_TOKEN_ENV = "TJ_AGENTS_STARTUP_ACK_TOKEN"
 REQUIRED_HOOKS_ENV = "TJ_AGENTS_STARTUP_REQUIRED_HOOKS"
 STARTUP_TIMEOUT_SECONDS = 20
+BYPASS_FLAG = "--no-tj"
 _HOOK_ROOTS_UNSET = object()
+
+
+def state_directory() -> Path:
+    return Path(os.environ.get("AGENT_STATE_DIRECTORY") or Path.home() / ".agents-state")
 
 
 def _peer_module(name: str):
@@ -209,7 +213,7 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
     inherited = {name for native in Host for name in SESSIONS[native].FRONTEND_STATE}
     environment = {key: value for key, value in environment.items()
                    if (key.upper() if os.name == "nt" else key) not in inherited}
-    interpreter = launch_check.state_directory() / "bin" / "python"
+    interpreter = state_directory() / "bin" / "python"
     if os.name != "nt" and interpreter.is_file():
         environment["PATH"] = os.pathsep.join(
             prepend(environment.get("PATH", "").split(os.pathsep), str(interpreter.parent))
@@ -228,8 +232,6 @@ def run_session(host: Host, target: str, project: Path, arguments: Sequence[str]
                 else:
                     roots = hook_roots
                 environment[REQUIRED_HOOKS_ENV] = json.dumps(startup_participants(host, roots))
-            except managed_admission.AdmissionError:
-                raise
             except (required_plugins.RequiredPluginsError, RuntimeError, OSError, ValueError) as error:
                 if owned_handoff:
                     raise StartupBindingError(f"{host} handoff required hooks could not be verified: {error}") from error
@@ -319,8 +321,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parsed = parser.parse_args(argv)
     adapter = SESSIONS[parsed.host]
     arguments = parsed.arguments[1:] if parsed.arguments[:1] == ["--"] else parsed.arguments
-    if launch_check.BYPASS_FLAG in arguments:
-        native = [argument for argument in arguments if argument != launch_check.BYPASS_FLAG]
+    if BYPASS_FLAG in arguments:
+        native = [argument for argument in arguments if argument != BYPASS_FLAG]
         return subprocess.call(command_for_target(parsed.target, native), cwd=parsed.project)
     status: dict[str, object] = {"pid": os.getpid(), "terminal": register_session.terminal_identity(),
                                  "title": os.environ.get(register_session.TITLE_ENV)}
@@ -371,69 +373,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     phase("checking-plugins")
     try:
-        effective_project, hook_roots = launch_check.prepare_launch_roots(
+        effective_project, hook_roots = required_plugins.check_launch_roots(
             parsed.project.resolve(), parsed.host, parsed.target, arguments,
         )
-    except managed_admission.AdmissionError as error:
-        message = f"launch: managed admission refused: {error}"
-        print(message, file=sys.stderr)
-        report("failed", error=message)
-        return 1
     except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
         degrade(f"launch: {error}")
         effective_project, hook_roots = None, None
-    try:
-        result = launch_check.check(effective_project or parsed.project.resolve(), hosts=(parsed.host,))
-    except Exception as error:
-        print(f"plugins: update check failed: {error}", file=sys.stderr)
-        result = "failed"
-
-    if effective_project is not None:
-        try:
-            launch_check.require_update_check(result)
-        except RuntimeError as error:
-            degrade(f"launch: {error}")
 
     if effective_project is not None and not degraded:
         phase("verifying-required-hooks")
         try:
-            managed_admission.ensure_hooks(effective_project, parsed.host, parsed.target)
-        except managed_admission.AdmissionError as error:
-            message = f"launch: managed admission refused: {error}"
-            print(message, file=sys.stderr)
-            report("failed", error=message)
-            return 1
+            host_plugins.PLUGINS[parsed.host].ensure_hooks(effective_project, parsed.target)
         except Exception as error:
             degrade(f"launch: required hook readiness failed: {error}")
 
-    if parsed.require_session_start and not degraded:
-        try:
-            _fresh_project, hook_roots = launch_check.prepare_launch_roots(
-                parsed.project.resolve(), parsed.host, parsed.target, arguments,
-            )
-        except managed_admission.AdmissionError as error:
-            message = f"launch: managed admission refused: {error}"
-            print(message, file=sys.stderr)
-            report("failed", error=message)
-            return 1
-        except (required_plugins.RequiredPluginsError, RuntimeError, OSError) as error:
-            degrade(f"launch: {error}")
     if adapter.requires_verified_handoff(parsed.require_session_start, arguments) and degraded:
         report("failed", error=f"{parsed.host} handoff requires verified plugins before starting its owned backend")
         return 1
-    if effective_project is not None:
-        try:
-            managed_admission.verify(
-                effective_project,
-                parsed.host,
-                parsed.target,
-                native_project=effective_project,
-            )
-        except managed_admission.AdmissionError as error:
-            message = f"launch: managed admission refused: {error}"
-            print(message, file=sys.stderr)
-            report("failed", error=message)
-            return 1
+
     require_session_start = parsed.require_session_start and not degraded
 
     try:
