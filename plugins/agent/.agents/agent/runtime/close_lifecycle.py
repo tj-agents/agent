@@ -12,12 +12,11 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any
+from typing import IO, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-if TYPE_CHECKING:
-    from host import Host
+from host import Host
 
 
 def state_root() -> Path:
@@ -166,7 +165,7 @@ def current_input(
     native = SESSIONS[host].close_target(
         session_id, supplied or (Path(recorded) if recorded else None)
     )
-    if host.value == "codex" and not _text(state.get("turn_id")):
+    if host is Host.CODEX and not _text(state.get("turn_id")):
         raise ValueError("native input hook receipt has no Codex turn")
     return {**state, **native}
 
@@ -363,8 +362,6 @@ def run(event: str, host: Host, data: dict[str, Any]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        from host import Host
-
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("event", choices=("prompt", "stop", "end"))
         parser.add_argument("--host", type=Host, choices=list(Host), required=True)
