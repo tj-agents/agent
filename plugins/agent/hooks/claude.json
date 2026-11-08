@@ -5,6 +5,23 @@
         "hooks": [
           {
             "type": "command",
+            "timeout": 10,
+            "command": "tj_hook",
+            "args": [
+              "--",
+              "python",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/latest_plugins.py",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "async": true,
             "timeout": 10,
             "command": "tj_hook",
@@ -23,6 +40,23 @@
       }
     ],
     "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "tj_hook",
+            "args": [
+              "--",
+              "python",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/latest_plugins.py",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      },
       {
         "hooks": [
           {
