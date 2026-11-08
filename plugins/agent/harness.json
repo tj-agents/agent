@@ -26,21 +26,7 @@
         ]
       },
       {
-        "path": ".agents/agent-store/runtime/session_hook.py",
-        "hosts": [
-          "claude",
-          "codex"
-        ]
-      },
-      {
-        "path": ".agents/agent/runtime/close_lifecycle.py",
-        "hosts": [
-          "claude",
-          "codex"
-        ]
-      },
-      {
-        "path": ".agents/agent/utility/peer/scripts/register_session.py",
+        "path": ".agents/agent/runtime/session_hook.py",
         "hosts": [
           "claude",
           "codex"

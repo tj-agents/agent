@@ -1,12 +1,12 @@
 ---
 name: search
-description: Search local Codex or Claude conversation text using the packaged history reader. Use when the user asks where a past conversation discussed a subject.
+description: Search local Claude or Codex conversation text. Use when the user asks where a past conversation discussed a subject or worked in a checkout.
 kind: utility
 domain: agent
 profile: core
 applicability: agent sessions
-requires: python
 provenance: house
+requires: python
 ---
 
 # Search conversation history

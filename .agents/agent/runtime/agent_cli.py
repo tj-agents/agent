@@ -315,3 +315,26 @@ def launch(host, directory, title, arguments, item=None, parent=None, want_sessi
                *(['--parent', parent] if parent else []), '--', adapter.executable(), *arguments]
     open_tab(directory, title, command, cleared, forced, environ, run)
     return await_launch(launch_id, want_session=want_session)
+
+
+def parent_session(value):
+    """The parent's `host:id`: as given, the calling session for `current`, or None without a parent."""
+    if value != 'current':
+        return value
+    for host in Host:
+        if session_id := os.environ.get(host.session_variable):
+            return f'{host}:{session_id}'
+    raise LaunchError('bare --parent names the calling session, but this is not a Claude or Codex session.')
+
+
+def parent_rule(parent):
+    """The standing instruction a child gets to report back to the session that started it."""
+    if not parent:
+        return ''
+    try:
+        title = agent_store.run('show', parent)['session'].get('title')
+    except agent_store.AgentStoreError:
+        title = None
+    name = f'"{title}" ({parent})' if title else parent
+    return (f' Standing rule: the session {name} started you. Message it with agent:message when you finish, '
+            "when you are blocked, and whenever Tommy's approval is needed, without waiting to be asked.")

@@ -49,6 +49,9 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'))
     parser.add_argument('--frontier', action='store_true')
     parser.add_argument('--dangerously-skip-permissions', action='store_true')
+    parser.add_argument('--item', help='work item the child is linked to')
+    parser.add_argument('--parent', nargs='?', const='current',
+                        help='parent session (host:id); bare --parent means the calling session')
     args = parser.parse_args(argv)
     if not args.title.strip():
         raise agent_cli.LaunchError('--title must name the session; it becomes the tab title.')
@@ -114,49 +117,32 @@ def resolve_model(args, agent_cli):
     return model, effort, tier
 
 
-def build_arguments(args, model, effort, prompt_sentence):
-    arguments = []
-    if args.dangerously_skip_permissions:
-        arguments.append('--dangerously-skip-permissions')
-    if model:
-        arguments += ['--model', model]
-    if effort:
-        arguments += ['--effort', effort]
-
-    arguments.append(prompt_sentence)
-    return arguments
 
 
 def main(argv=None):
     agent_cli = _load_agent_cli()
     agent_cli.make_stdio_encoding_lossy()
-    status_path = None
     try:
         args = parse_args(argv, agent_cli)
-
-        # parse_args already rejected any argparse-level contradiction (a --frontier beside --lane or
-        # --model, an --effort without an explicit --model). What happens here is the first filesystem or
-        # lane-table work, so the directory is checked before any of it -- whichever of it is also wrong,
-        # the directory's error is never shadowed by a later check that only looked irrelevant.
         working_directory = agent_cli.resolve_tab_directory(args.working_directory)
-
         prompt_sentence, prompt_path = agent_cli.prompt_file_argument(args.prompt_path)
         model, effort, tier = resolve_model(args, agent_cli)
-        arguments = build_arguments(args, model, effort, prompt_sentence)
-
-        status_path = agent_cli.handoff_status_path()
-        agent_cli.host_launch('claude').open_tab(agent_cli, working_directory, args.title, arguments, status_file=status_path, require_session_start=True)
-        agent_cli.await_handoff_startup(status_path)
+        parent = agent_cli.parent_session(args.parent)
+        prompt_sentence += agent_cli.parent_rule(parent)
+        adapter = agent_cli.host_launch('claude')
+        arguments = adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort)
+        if args.dangerously_skip_permissions:
+            arguments.insert(0, '--dangerously-skip-permissions')
+        shown = agent_cli.launch('claude', working_directory, args.title, arguments, item=args.item, parent=parent)
 
         selection = f'{tier}{model}' if model else 'the CLI default model'
         if effort:
             selection += f' at {effort}'
         print(f"Launched claude handoff tab '{args.title}' in {working_directory} on {selection} with prompt {prompt_path}")
-        print(json.dumps({"worktree": str(working_directory), "prompt_path": str(prompt_path), "startup": "verified", "status_path": str(status_path)}))
+        print(json.dumps({"worktree": str(working_directory), "prompt_path": str(prompt_path), "title": args.title,
+                          "parent": parent, "launch_id": shown["launch"]["launch_id"]}))
         return 0
     except agent_cli.LaunchError as exc:
-        if status_path is not None:
-            print(f"Handoff startup receipt: {status_path}", file=sys.stderr)
         return agent_cli.report_launch_failure(exc)
 
 

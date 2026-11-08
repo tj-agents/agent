@@ -17,7 +17,7 @@
     {
       "name": "agent-store",
       "source": "./plugins/agent-store",
-      "description": "Recorded agent executions, sessions, ownership and references.",
+      "description": "Links between tracker work items and the agent sessions working on them.",
       "category": "Productivity",
       "keywords": [
         "agents",

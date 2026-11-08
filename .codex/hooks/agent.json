@@ -38,7 +38,8 @@
           {
             "type": "command",
             "timeout": 10,
-            "command": "tj done --cancel"
+            "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" prompt --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" prompt --host codex"
           }
         ]
       }

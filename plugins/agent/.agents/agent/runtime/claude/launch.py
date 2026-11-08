@@ -1,41 +1,17 @@
-"""Claude executable selection, session environment and native launch settings."""
+"""Claude executable selection, launch arguments and session liveness."""
 
+import json
 import os
 from pathlib import Path
 import shutil
-import sys
-from collections.abc import Callable, Mapping, Sequence
-from types import ModuleType
-from typing import Protocol
+import subprocess
+from collections.abc import Callable
 
-from launch_contract import Launch
-
+from launch_contract import Liveness
 from launch_errors import LaunchError
 from native_executable import is_script
 
-
-class Adapter(Launch, Protocol):
-    def resolve_executable(
-        self,
-        home: str | Path | None = None,
-        which: Callable[[str], str | None] = shutil.which,
-    ) -> str: ...
-
-    def open_tab(
-        self,
-        cli: ModuleType,
-        working_directory: str | Path,
-        title: str,
-        arguments: Sequence[str],
-        status_file: Path | None = None,
-        require_session_start: bool = False,
-        clear: Sequence[str] = (),
-        force: Mapping[str, str] | None = None,
-    ) -> None: ...
-
-
 IS_WINDOWS = os.name == "nt"
-KEEP_TAB_TITLE = {"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"}
 SESSION_ENVIRONMENT: tuple[str, ...] = (
     "NO_COLOR",
     "CLAUDECODE",
@@ -46,9 +22,11 @@ SESSION_ENVIRONMENT: tuple[str, ...] = (
     "CLAUDE_CODE_MESSAGING_TOKEN",
     "CLAUDE_PID",
 )
+TAB_CLEARED: tuple[str, ...] = ()
+TAB_FORCED = {"FORCE_COLOR": "1", "TERM": "xterm-256color"}
 
 
-def resolve_executable(home=None, which=shutil.which):
+def resolve_executable(home=None, which: Callable[[str], str | None] = shutil.which) -> str:
     home = Path(home) if home else Path.home()
     name = "claude.exe" if IS_WINDOWS else "claude"
     local = home / ".local" / "bin" / name
@@ -66,35 +44,51 @@ def resolve_executable(home=None, which=shutil.which):
     )
 
 
-def open_tab(
-    cli,
-    working_directory,
-    title,
-    arguments,
-    status_file=None,
-    require_session_start=False,
-    clear=(),
-    force=None,
-):
-    claude = resolve_executable()
+def executable() -> str:
+    return resolve_executable()
 
-    cli.launch_tab(
-        working_directory,
-        sys.executable,
-        title,
-        arguments=cli.bound_terminal_arguments(
-            "claude",
-            working_directory,
-            claude,
-            list(arguments),
-            status_file,
-            require_session_start,
-        ),
-        clear=clear,
-        force={
-            "FORCE_COLOR": "1",
-            "TERM": "xterm-256color",
-            **KEEP_TAB_TITLE,
-            **(force or {}),
-        },
-    )
+
+def start_arguments(directory, title, prompt, model, effort):
+    arguments = ["--name", title]
+    if model:
+        arguments += ["--model", model]
+    if effort:
+        arguments += ["--effort", effort]
+    return [*arguments, prompt]
+
+
+def resume_arguments(directory, title, session_id):
+    return ["--resume", session_id, "--name", title]
+
+
+def liveness(run=subprocess.run) -> dict[str, Liveness]:
+    """Every Claude session the host lists, by session id: alive while it reports a pid."""
+    try:
+        result = run([executable(), "agents", "--json", "--all"], capture_output=True, text=True,
+                     encoding="utf-8", timeout=30, check=False)
+        rows = json.loads(result.stdout) if result.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError, ValueError, LaunchError):
+        return {}
+    return {
+        row["sessionId"]: Liveness(
+            alive="pid" in row,
+            activity=row.get("status") or row.get("state"),
+            background=row.get("id") if row.get("kind") == "background" else None,
+        )
+        for row in rows if isinstance(row, dict) and isinstance(row.get("sessionId"), str)
+    }
+
+
+def respawn(background, run=subprocess.run):
+    result = run([executable(), "respawn", background], capture_output=True, text=True, encoding="utf-8",
+                 timeout=60, check=False)
+    if result.returncode != 0:
+        raise LaunchError(f"claude respawn {background} failed: {result.stderr.strip() or result.stdout.strip()}")
+
+
+def name_session(session_id, title):
+    return None
+
+
+def deliver(session_id, prompt, model, effort):
+    raise LaunchError("Claude takes its first prompt on the command line")
