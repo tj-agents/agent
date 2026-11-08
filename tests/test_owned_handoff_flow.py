@@ -107,7 +107,7 @@ def test_handoff_runtime_is_shared_by_preflight_backend_and_frontend(
             binding.launch_check, "prepare_launch_roots", return_value=(tmp_path, {})
         ) as plugins,
         mock.patch.object(binding.launch_check, "check", return_value="current"),
-        mock.patch.object(binding.PLUGINS[startup.Host.CODEX], "ensure_hooks") as hooks,
+        mock.patch.object(binding.managed_admission, "ensure_hooks") as hooks,
         mock.patch.object(
             adapter, "prepare_frontend", return_value=([], {}, {})
         ) as prepare,
@@ -135,7 +135,9 @@ def test_handoff_runtime_is_shared_by_preflight_backend_and_frontend(
             == 0
         )
     assert [call.args[2] for call in plugins.call_args_list] == ["frozen-native"] * 2
-    hooks.assert_called_once_with(tmp_path.resolve(), "frozen-native")
+    hooks.assert_called_once_with(
+        tmp_path.resolve(), startup.Host.CODEX, "frozen-native"
+    )
     assert prepare.call_args.kwargs["executable"] == "frozen-native"
     assert spawn.call_args.args[0] == ["frozen-native"]
 
@@ -382,6 +384,7 @@ def owned_receipt(caller: Any) -> dict[str, Any]:
 def test_new_followup_resolves_explicit_launch_receipt_once(caller: Any) -> None:
     frozen = owned_receipt(caller)
     runtime = mock.Mock()
+    runtime.recipient_binding.return_value = frozen
     runtime.launch_binding.return_value = frozen
     runtime.frozen_binding.return_value = frozen
     runtime.native_contains.return_value = True
@@ -402,6 +405,7 @@ def test_new_followup_resolves_explicit_launch_receipt_once(caller: Any) -> None
             )
             == 0
         )
+    runtime.recipient_binding.assert_called_once()
     runtime.launch_binding.assert_called_once()
     assert connect.call_args.kwargs["binding"] == frozen
     receipt = json.loads(caller.receipt_path.read_text(encoding="utf-8"))
