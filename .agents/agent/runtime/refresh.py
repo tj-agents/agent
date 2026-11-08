@@ -11,6 +11,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from host import Host
 import native_runtime
 from tj_cli import process
 
@@ -102,18 +103,20 @@ def notice(rows: list[dict]) -> None:
     print("Open Codex sessions pick up skill changes on their own; restart them with `codex resume <id>` for hooks.")
 
 
+REFRESH = {Host.CLAUDE: refresh_claude, Host.CODEX: refresh_codex}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", choices=("claude", "codex", "all"), default="all")
+    parser.add_argument("--host", type=Host, choices=list(Host))
     arguments = parser.parse_args(argv)
+    hosts = [arguments.host] if arguments.host else list(Host)
     report = Report()
-    if arguments.host in ("claude", "all"):
-        refresh_claude(report)
-    if arguments.host in ("codex", "all"):
-        refresh_codex(report)
+    for host in hosts:
+        REFRESH[host](report)
     refresh_native(report)
     rows = sessions()
-    if arguments.host in ("claude", "all"):
+    if Host.CLAUDE in hosts:
         respawn(report, rows)
     notice(rows)
     if report.failures:

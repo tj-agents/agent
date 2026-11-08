@@ -1,0 +1,49 @@
+"""Codex's installed plugin build labels (Python 3.9+)."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+from host import Host
+
+HOST = Host.CODEX
+RELOAD = "restart this Codex session"
+COMMAND_PREFIX = ""
+
+
+def label(root: Path) -> str | None:
+    try:
+        version = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) else None
+
+
+def installed_label(marketplace: str, plugin: str) -> str | None:
+    directory = HOST.configuration_root / "plugins" / "cache" / marketplace / plugin
+    try:
+        builds = [entry.name for entry in directory.iterdir() if entry.is_dir()]
+    except OSError:
+        return None
+    return builds[0] if len(builds) == 1 else None
+
+
+def running_root() -> Path | None:
+    value = os.environ.get("PLUGIN_ROOT")
+    return Path(value) if value else None
+
+
+def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
+    expected, actual = label(install), installed_label(marketplace, plugin)
+    if expected and actual and actual != expected:
+        return f"installed build {actual}, marketplace build {expected}"
+    return None
+
+
+def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
+    expected, loaded = label(install), label(root)
+    if expected and loaded != expected:
+        return f"this session loaded build {loaded or 'that was since replaced'}, current {expected}"
+    return None
