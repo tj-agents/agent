@@ -562,12 +562,12 @@ for line in sys.stdin:
                 patch.object(FOLLOWUP, 'client_runtime', return_value=client), \
                 patch.object(proxy, 'request', wraps=proxy.request) as request, \
                 contextlib.redirect_stdout(output):
-            code = FOLLOWUP.main(['--timeout', '1', 'send', '--thread', THREAD, '--cwd', str(root),
+            code = FOLLOWUP.main(['send', '--thread', THREAD, '--cwd', str(root),
                                   '--codex-home', str(root), '--message-file', str(message),
                                   '--receipt', str(receipt), '--execution-key', 'execution:known',
                                   '--reason', 'Exercise approval handling'])
         self.assertEqual(2, code)
-        self.assertIn(json.loads(output.getvalue())['status'], ('unverified', 'unavailable'))
+        self.assertEqual('unverified', json.loads(output.getvalue())['status'])
         self.assertEqual(1, sum(call.args[0].startswith('turn/') for call in request.call_args_list))
         self.assertIsNotNone(proxy.process.poll())
 
