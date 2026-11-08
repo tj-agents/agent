@@ -12,12 +12,11 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any
+from typing import IO, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-if TYPE_CHECKING:
-    from host import Host
+from host import Host
 
 
 def state_root() -> Path:
@@ -363,8 +362,6 @@ def run(event: str, host: Host, data: dict[str, Any]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     try:
-        from host import Host
-
         parser = argparse.ArgumentParser(description=__doc__)
         parser.add_argument("event", choices=("prompt", "stop", "end"))
         parser.add_argument("--host", type=Host, choices=list(Host), required=True)
