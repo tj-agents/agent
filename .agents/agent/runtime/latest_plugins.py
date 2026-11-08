@@ -7,28 +7,20 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude import installed as claude_installed
 from codex import installed as codex_installed
+from host import Host
 
 MARKETPLACES = ("tj-agents", "agents")
 RUNTIME = Path(__file__).resolve().parent
-CLAUDE_BUILD = re.compile(r"([0-9a-f]{12})-[0-9a-f]+")
+INSTALLED = {Host.CLAUDE: claude_installed, Host.CODEX: codex_installed}
 
 
-def codex_label(install: Path) -> str | None:
-    try:
-        version = json.loads((install / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return version if isinstance(version, str) else None
-
-
-def installed_behind(host: str) -> list[str]:
+def installed_behind(host: Host) -> list[str]:
     found = []
     for marketplace in MARKETPLACES:
         pins = claude_installed.pins(marketplace)
@@ -37,72 +29,60 @@ def installed_behind(host: str) -> list[str]:
             if plugin not in installs:
                 continue
             revision, path = installs[plugin]
-            if revision != pin:
-                found.append(f"{plugin}@{marketplace}: installed {revision[:12]}, marketplace {pin[:12]}")
-                continue
-            expected = codex_label(path)
-            actual = codex_installed.label(marketplace, plugin) if host == "codex" else None
-            if expected and actual and actual != expected:
-                found.append(f"{plugin}@{marketplace}: installed build {actual}, marketplace build {expected}")
+            behind = (f"installed {revision[:12]}, marketplace {pin[:12]}" if revision != pin
+                      else INSTALLED[host].installed_build_behind(marketplace, plugin, path))
+            if behind:
+                found.append(f"{plugin}@{marketplace}: {behind}")
     return found
 
 
-def running_behind(host: str) -> str | None:
+def running_behind(host: Host) -> str | None:
     pin = claude_installed.pins("tj-agents").get("agent")
     install = claude_installed.installs("tj-agents").get("agent")
     if not pin or not install or install[0] != pin:
         return None
-    root = Path(os.environ.get("CLAUDE_PLUGIN_ROOT" if host == "claude" else "PLUGIN_ROOT") or RUNTIME.parents[2])
-    if host == "claude":
-        build = CLAUDE_BUILD.fullmatch(root.name)
-        if build and build.group(1) != pin[:12]:
-            return f"agent@tj-agents: this session loaded {build.group(1)}, current {pin[:12]}"
-        return None
-    expected = codex_label(install[1])
-    loaded = codex_label(root)
-    if expected and loaded != expected:
-        return f"agent@tj-agents: this session loaded build {loaded or 'that was since replaced'}, current {expected}"
-    return None
+    root = INSTALLED[host].running_root() or RUNTIME.parents[2]
+    behind = INSTALLED[host].loaded_build_behind(root, pin, install[1])
+    return f"agent@tj-agents: {behind}" if behind else None
 
 
-def refresh_command(host: str) -> str:
+def refresh_command(host: Host) -> str:
     agent = claude_installed.installs("tj-agents").get("agent")
     script = agent[1] / ".agents" / "agent" / "runtime" / "refresh.py" if agent else RUNTIME / "refresh.py"
     if not script.is_file():
         script = RUNTIME / "refresh.py"
     python = "python" if os.name == "nt" else "python3"
-    prefix = "! " if host == "claude" else ""
-    return f'{prefix}{python} -B "{script.as_posix()}"'
+    return f'{INSTALLED[host].COMMAND_PREFIX}{python} -B "{script.as_posix()}"'
 
 
-def message(host: str) -> str | None:
+def reason(host: Host) -> str | None:
     behind = installed_behind(host)
     if behind:
         return ("tj-agents plugins are behind the marketplace: " + "; ".join(behind)
                 + f". Do no other work. Refresh with `{refresh_command(host)}`, then start a new session.")
     loaded = running_behind(host)
     if loaded:
-        action = "type /reload-plugins" if host == "claude" else "restart this Codex session"
-        return f"This session runs older plugins than are installed ({loaded}). Do no other work; {action}."
+        return (f"This session runs older plugins than are installed ({loaded}). "
+                f"Do no other work; {INSTALLED[host].RELOAD}.")
     return None
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", choices=("claude", "codex"), required=True)
+    parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     arguments = parser.parse_args(argv)
     try:
         event = json.load(sys.stdin).get("hook_event_name", "")
     except (ValueError, AttributeError):
         event = ""
-    reason = message(arguments.host)
-    if reason is None:
+    refusal = reason(arguments.host)
+    if refusal is None:
         return 0
     if event == "UserPromptSubmit":
-        print(json.dumps({"decision": "block", "reason": reason}))
+        print(json.dumps({"decision": "block", "reason": refusal}))
     else:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "SessionStart",
-                                                 "additionalContext": reason}}))
+                                                 "additionalContext": refusal}}))
     return 0
 
 

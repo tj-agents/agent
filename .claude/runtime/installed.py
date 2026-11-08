@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import re
 
 from host import Host
 
 HOST = Host.CLAUDE
+RELOAD = "type /reload-plugins"
+COMMAND_PREFIX = "! "
+BUILD = re.compile(r"([0-9a-f]{12})-[0-9a-f]+")
 
 
 def read(path: Path) -> object:
@@ -38,3 +43,19 @@ def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
             if isinstance(row, dict) and row.get("scope") == "user" and isinstance(row.get("gitCommitSha"), str):
                 found[name] = (row["gitCommitSha"], Path(row.get("installPath", "")))
     return found
+
+
+def running_root() -> Path | None:
+    value = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    return Path(value) if value else None
+
+
+def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
+    return None
+
+
+def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
+    build = BUILD.fullmatch(root.name)
+    if build and build.group(1) != pin[:12]:
+        return f"this session loaded {build.group(1)}, current {pin[:12]}"
+    return None
