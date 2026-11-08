@@ -122,7 +122,7 @@ class ProfileTests(Machine):
 
     def block(self, newline="\r\n", loader=None):
         loader = loader or install.profile_loader(self.context())
-        return install.powershell_block(install.plugin_autoupdate.console_python(), self.script(), loader, newline)
+        return install.powershell_block(install.console_python(), self.script(), loader, newline)
 
     def test_missing_profiles_are_created_with_the_block(self):
         self.converge(step("shell profiles"), self.context())
@@ -217,7 +217,7 @@ class ProfileTests(Machine):
         powershell = self.home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1"
         powershell.parent.mkdir(parents=True)
         powershell.write_bytes(("keep\n" + install.PROFILE_START + "\nold\n" + install.PROFILE_END + "\n").encode("utf-8"))
-        python = install.plugin_autoupdate.console_python()
+        python = install.console_python()
 
         self.converge(step("shell profiles"), self.context(windows=False))
 
@@ -229,9 +229,9 @@ class ProfileTests(Machine):
         self.assertNotIn("profile.ps1", powershell.read_text(encoding="utf-8"))
 
     def test_posix_block_escapes_single_quotes_in_paths(self):
-        block = install.posix_block("/opt/it's/python3", PurePosixPath("/home/o'neil/launch_check.py"))
+        block = install.posix_block("/opt/it's/python3", PurePosixPath("/home/o'neil/startup_binding.py"))
         self.assertIn("'/opt/it'\\''s/python3'", block)
-        self.assertIn("'/home/o'\\''neil/launch_check.py'", block)
+        self.assertIn("'/home/o'\\''neil/startup_binding.py'", block)
 
     def native_fixture(self, name):
         directory = Path(tempfile.mkdtemp(prefix="bypass "))
@@ -680,37 +680,6 @@ class RuntimeTests(Machine):
         delivery.is_reparse.assert_called_once_with(alias)
 
 
-class CatchUpTests(Machine):
-    rows = [
-        {"nameWithOwner": "tj-agents/core", "defaultBranchRef": {"target": {"oid": "a" * 40}}},
-        {"nameWithOwner": "tj-agents/old", "isArchived": True, "defaultBranchRef": {"target": {"oid": "b" * 40}}},
-        {"nameWithOwner": "tj-agents/empty", "defaultBranchRef": None},
-    ]
-
-    def test_catch_up_runs_only_when_a_default_branch_moved(self):
-        state = self.home / ".agents-state" / "machine-events-state.json"
-
-        def catch_up(argv):
-            install.plugin_autoupdate.write_json(state, {"tj-agents/core": {"revision": "a" * 40}})
-            return 0
-
-        with mock.patch.object(install.machine_events, "catch_up_states", lambda api: iter(self.rows)), \
-                mock.patch.object(install.machine_events, "main", side_effect=catch_up) as main, \
-                mock.patch.object(install.launch_check, "mark_current", return_value=True) as mark:
-            self.converge(step("plugin catch-up"), self.context(windows=False))
-        main.assert_called_once_with([])
-        mark.assert_called_once_with()
-
-    def test_catch_up_failures_fail_the_step(self):
-        err = io.StringIO()
-        with mock.patch.object(install.machine_events, "catch_up_states", lambda api: iter(self.rows)), \
-                mock.patch.object(install.machine_events, "main", return_value=1), \
-                mock.patch.object(install.launch_check, "mark_current", side_effect=OSError("offline")):
-            self.assertEqual(2, install.run_steps([step("plugin catch-up")], self.context(windows=False),
-                                                False, io.StringIO(), err))
-        self.assertIn("machine-events.log", err.getvalue())
-
-
 class AutoUpdateTests(Machine):
     def test_claude_marketplace_auto_update_converges(self):
         claude = self.home / ".claude"
@@ -721,47 +690,16 @@ class AutoUpdateTests(Machine):
         self.converge(step("Claude marketplace auto-update"), self.context(windows=False))
 
 
-class ChannelTests(Machine):
-    def test_the_channel_converges_and_a_rerun_writes_nothing_to_github(self):
-        variables = {"tj-agents/core": "a" * 48}
-        stored = set()
-        writes = []
-
-        def gh(arguments, payload=None):
-            if arguments[0] == "--method":
-                writes.append(arguments)
-                repository = arguments[2].split("/actions/")[0].removeprefix("repos/")
-                variables[repository] = payload["value"]
-                return None
-            repository = arguments[0].split("/actions/")[0].removeprefix("repos/")
-            if "/actions/variables" in arguments[0]:
-                return {"variables": [{"name": "UPDATE_TOPIC", "value": variables[repository]}]
-                        if repository in variables else []}
-            return {"secrets": [{"name": "UPDATE_TOPIC"}] if repository in stored else []}
-
-        def secret(repository, topic):
-            writes.append(repository)
-            stored.add(repository)
-
-        rows = [{"nameWithOwner": "tj-agents/core"}, {"nameWithOwner": "tj-agents/other"}]
-        with mock.patch.object(install.machine_events, "gh", gh), \
-                mock.patch.object(install.machine_events, "catch_up_states", lambda api: iter(rows)), \
-                mock.patch.object(install, "set_topic_secret", secret):
-            self.converge(step("event channel and publishers"), self.context(windows=False))
-        self.assertEqual("a" * 48, variables["tj-agents/other"])
-        self.assertEqual(3, len(writes))
-
-
 class RunStepsTests(Machine):
-    def test_cli_step_selection_preserves_defaults_preconditions_and_declared_order(self):
+    def test_cli_step_selection_preserves_defaults_and_declared_order(self):
         cases = (
             ([], [item.name for item in install.STEPS]),
             (["--step", "shell profiles"],
-             ["native CLI", "preconditions", "launch-check runtime", "shell profiles"]),
+             ["native CLI", "launch-check runtime", "shell profiles"]),
             (["--check", "--step", "shell profiles", "--step", "launch-check runtime"],
-             ["native CLI", "preconditions", "launch-check runtime", "shell profiles"]),
+             ["native CLI", "launch-check runtime", "shell profiles"]),
             (["--step", "plugin setup"],
-             ["native CLI", "preconditions", "plugin catch-up", "harness permissions", "plugin setup"]),
+             ["native CLI", "harness permissions", "plugin setup"]),
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
@@ -769,24 +707,6 @@ class RunStepsTests(Machine):
                 self.assertEqual(0, install.main(arguments))
                 self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
                 self.assertEqual("--check" in arguments, run.call_args.args[2])
-
-    def test_scoped_install_never_checks_or_applies_unselected_publisher_settings(self):
-        prerequisite = mock.Mock(return_value=[])
-        installed = mock.Mock(return_value=["runtime installed"])
-        unrelated = mock.Mock(side_effect=AssertionError("unselected remote operation"))
-        steps = (
-            install.Step("preconditions", prerequisite, unrelated, required=True),
-            install.Step("event channel and publishers", unrelated, unrelated),
-            install.Step("launch-check runtime", lambda context: ["runtime missing"], installed),
-        )
-        context = self.context()
-        with mock.patch.object(install, "STEPS", steps), \
-                mock.patch.object(install, "machine_context", return_value=context), \
-                contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(0, install.main(["--step", "launch-check runtime"]))
-        prerequisite.assert_called_once_with(context)
-        installed.assert_called_once_with(context)
-        unrelated.assert_not_called()
 
     def test_unknown_step_fails_before_any_machine_operation(self):
         with mock.patch.object(install, "machine_context") as context, \
@@ -831,12 +751,11 @@ class RunStepsTests(Machine):
                                             io.StringIO(), io.StringIO()))
         later.assert_not_called()
 
-    def test_failed_catchup_skips_plugin_setup_even_when_scoped(self):
-        catchup = install.Step("plugin catch-up", mock.Mock(side_effect=RuntimeError("offline")), mock.Mock())
-        permissions = install.Step("harness permissions", mock.Mock(return_value=[]), mock.Mock())
+    def test_failed_prerequisite_skips_plugin_setup_even_when_scoped(self):
+        permissions = install.Step("harness permissions", mock.Mock(side_effect=RuntimeError("offline")), mock.Mock())
         plugin = install.Step("plugin setup", mock.Mock(return_value=["needed"]), mock.Mock())
         out, err = io.StringIO(), io.StringIO()
-        self.assertEqual(2, install.run_steps([catchup, permissions, plugin], self.context(), False, out, err))
+        self.assertEqual(2, install.run_steps([permissions, plugin], self.context(), False, out, err))
         plugin.check.assert_not_called()
         plugin.apply.assert_not_called()
         self.assertIn("prerequisite install step failed", out.getvalue())
@@ -848,10 +767,9 @@ class RunStepsTests(Machine):
 
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
-            "native CLI", "preconditions", "native permission defaults", "event channel and publishers",
+            "native CLI", "native permission defaults",
             "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
-            "Codex profile agents", "plugin catch-up", "harness permissions",
-            "plugin setup", "background machine events",
+            "Codex profile agents", "harness permissions", "plugin setup",
         ], [item.name for item in install.STEPS])
 
 

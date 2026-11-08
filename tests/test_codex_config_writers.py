@@ -17,7 +17,6 @@ sys.path.insert(0, str(RUNTIME))
 
 HOST_PERMISSIONS = importlib.import_module("host_permissions")
 INSTALL = importlib.import_module("install")
-AUTOUPDATE = importlib.import_module("plugin_autoupdate")
 CONFIG = """model = "gpt-6.1-sol"
 approval_policy = "on-request"
 model_reasoning_effort = "high"
@@ -77,9 +76,6 @@ class CodexConfigWriterTests(unittest.TestCase):
         if updated != text:
             INSTALL.write_profile(self.path, updated, "utf-8", False)
 
-    def remove_retired(self):
-        AUTOUPDATE.remove_user_plugins(self.path, {"kit@tj-agents", "machine@tj-agents"})
-
     def assert_converges(self, writer):
         writer()
         first = self.path.read_bytes()
@@ -92,21 +88,6 @@ class CodexConfigWriterTests(unittest.TestCase):
         config = self.assert_converges(self.native_permissions)
         self.assertEqual(("never", ":danger-full-access"), (config["approval_policy"], config["default_permissions"]))
         self.assertNotIn("sandbox_mode", config)
-
-    def test_retired_plugin_removal_converges_and_preserves_unrelated_tables(self):
-        config = self.assert_converges(self.remove_retired)
-        self.assertEqual({"browser@openai-bundled", "engineering@tj-agents", "template@tj-agents"},
-                         set(config["plugins"]))
-        self.assertIn("machine@tj-agents:hooks/codex.json:stop:0:0", config["hooks"]["state"])
-
-    def test_every_install_writer_in_sequence_converges(self):
-        def install_pass():
-            self.native_permissions()
-            self.remove_retired()
-
-        config = self.assert_converges(install_pass)
-        self.assertEqual("gpt-6.1-sol", config["model"])
-        self.assertNotIn("kit@tj-agents", config["plugins"])
 
 
 if __name__ == "__main__":

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 
-import plugin_autoupdate
 from tj_cli import native_install
 from tj_cli.git_environment import native_plugin_environment
 from tj_cli.paths import prepend
@@ -44,24 +43,14 @@ def prepare(*, revision: str | None = None) -> tuple[str, ...]:
     prepare_git_environment()
     changed: tuple[str, ...] = ()
     if revision is not None or pending():
-        directory = plugin_autoupdate.state_directory()
-        directory.mkdir(parents=True, exist_ok=True)
-        lock = plugin_autoupdate.acquire_lock(directory / "native-cli.lock")
-        if lock is None:
+        changed = native_install.ensure_native(
+            native_install.default_bin_dir(), revision=revision
+        )
+        if remaining := pending():
             raise RuntimeError(
-                "Native CLI installation is already running; retry after it finishes"
+                "Native CLI installation is not compatible: "
+                + ", ".join(remaining)
+                + "; wait for a compatible published CLI release, then retry"
             )
-        try:
-            changed = native_install.ensure_native(
-                native_install.default_bin_dir(), revision=revision
-            )
-            if remaining := pending():
-                raise RuntimeError(
-                    "Native CLI installation is not compatible: "
-                    + ", ".join(remaining)
-                    + "; wait for a compatible published CLI release, then retry"
-                )
-        finally:
-            lock.close()
     expose()
     return changed
