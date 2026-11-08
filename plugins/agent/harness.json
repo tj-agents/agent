@@ -19,6 +19,13 @@
     ],
     "hooks": [
       {
+        "path": ".agents/agent/runtime/latest_plugins.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
         "path": ".agents/agent-store/runtime/session_hook.py",
         "hosts": [
           "claude",
