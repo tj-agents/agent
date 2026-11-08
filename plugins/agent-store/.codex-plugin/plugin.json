@@ -19,5 +19,6 @@
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": "Inspect recorded agent state."
-  }
+  },
+  "version": "b2fc3afbe75f"
 }

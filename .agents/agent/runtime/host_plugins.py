@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -13,7 +13,6 @@ from host import Host
 
 class Plugins(Protocol):
     HOST: Host
-    CATALOG: str
     VALUE_OPTIONS: frozenset[str]
     CONFIGURATION_OPTIONS: frozenset[str]
     FLAG_OPTIONS: frozenset[str]
@@ -22,12 +21,7 @@ class Plugins(Protocol):
     MAINTENANCE_COMMANDS: frozenset[str]
     NODE_SHIM_BYPASSED: bool
 
-    @property
-    def reconcile(self) -> Callable[[Path], list[str]] | None: ...
-
     def resolve_executable(self) -> str: ...
-
-    def selection(self, executable: str, project: Path) -> tuple[dict[str, str | None], list[str]]: ...
 
     def installations(self, project: Path, entries: list) -> list: ...
 
@@ -39,27 +33,9 @@ class Plugins(Protocol):
 
     def inventory_entries(self, data: object) -> object: ...
 
-    def entry_errors(self, entries: list, project: Path) -> list[str]: ...
-
-    def marketplace_location(self, executable: str, project: Path, name: str) -> str | None: ...
-
-    def install_path(self, entry: dict, marketplace: str, plugin: str) -> Path: ...
-
-    def refresh_marketplaces(self, executable: str, project: Path, marketplaces: dict) -> None: ...
-
-    def refresh_plugins(self, executable: str, project: Path, marketplaces: dict, plugins: list[str]) -> list[str]: ...
-
-    def install_missing(self, executable: str, project: Path, missing) -> None: ...
-
-    def update(self, repositories: set[str] | None, project: Path, updated: set[str] | None = None) -> bool: ...
-
     def ensure_hooks(self, project: Path, executable: str | None = None, *,
                      running_session: bool = False,
                      required_roots: Mapping[str, Path] | None = None) -> str | None: ...
-
-    def configuration_paths(self, project: Path) -> list[Path]: ...
-
-    def adopt(self, project: Path, updated: set[str], reason: str | None, allowed: bool) -> dict | None: ...
 
 
 PLUGINS: Mapping[Host, Plugins] = {Host.CLAUDE: claude_plugins, Host.CODEX: codex_plugins}

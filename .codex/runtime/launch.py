@@ -33,12 +33,6 @@ class Adapter(Launch, Protocol):
 IS_WINDOWS = os.name == "nt"
 KEEP_TAB_TITLE: tuple[str, ...] = ("--config", "tui.terminal_title=[]")
 SESSION_ENVIRONMENT: tuple[str, ...] = ()
-RELAUNCH_ENVIRONMENT: tuple[str, ...] = (
-    "CODEX_THREAD_ID",
-    "CODEX_SESSION_ID",
-    "CODEX_TUI_RECORD_SESSION",
-    "CODEX_TUI_SESSION_LOG_PATH",
-)
 _CODEX_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?")
 
 

@@ -46,12 +46,6 @@ SESSION_ENVIRONMENT: tuple[str, ...] = (
     "CLAUDE_CODE_MESSAGING_TOKEN",
     "CLAUDE_PID",
 )
-RELAUNCH_ENVIRONMENT: tuple[str, ...] = (
-    "CLAUDECODE",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_PID",
-    "CLAUDE_CODE_ENTRYPOINT",
-)
 
 
 def resolve_executable(home=None, which=shutil.which):

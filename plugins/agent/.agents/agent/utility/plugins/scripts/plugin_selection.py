@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 import re
 
@@ -18,12 +19,13 @@ def runtime_module(name):
         if candidate.is_file() and any(marker.exists() for marker in markers):
             spec = importlib.util.spec_from_file_location(f"selection_{name}", candidate)
             module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
             spec.loader.exec_module(module)
             return module
     raise RuntimeError(f"The shipped {name}.py runtime was not found")
 
 
-IDENTITY_RULES = runtime_module("plugin_autoupdate")
+IDENTITY_RULES = runtime_module("required_plugins")
 MARKETPLACE_NAME = IDENTITY_RULES.MARKETPLACE_NAME
 MARKETPLACE_REPOSITORY = IDENTITY_RULES.MARKETPLACE_REPOSITORY
 
