@@ -1,8 +1,10 @@
 import importlib.util
 import json
 from pathlib import Path
+import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -31,6 +33,32 @@ class RefreshPluginsTests(unittest.TestCase):
         prepare = mock.patch.object(REFRESH.native_runtime, "prepare", return_value=())
         prepare.start()
         self.addCleanup(prepare.stop)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.claude_home = Path(temporary.name) / "claude"
+        self.codex_home = Path(temporary.name) / "codex"
+        homes = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.claude_home),
+                                             "CODEX_HOME": str(self.codex_home)})
+        homes.start()
+        self.addCleanup(homes.stop)
+
+    def install(self, plugin, revision, pin, label=None, codex_label=None):
+        marketplace = self.claude_home / "plugins" / "marketplaces" / "tj-agents" / ".claude-plugin"
+        marketplace.mkdir(parents=True, exist_ok=True)
+        catalog = marketplace / "marketplace.json"
+        entries = json.loads(catalog.read_text(encoding="utf-8"))["plugins"] if catalog.exists() else []
+        catalog.write_text(json.dumps({"plugins": [*entries, {"name": plugin, "source": {"sha": pin}}]}),
+                           encoding="utf-8")
+        root = self.claude_home / "plugins" / "cache" / "tj-agents" / plugin / revision[:12]
+        (root / ".codex-plugin").mkdir(parents=True)
+        if label:
+            (root / ".codex-plugin" / "plugin.json").write_text(json.dumps({"version": label}), encoding="utf-8")
+        registry = self.claude_home / "plugins" / "installed_plugins.json"
+        rows = json.loads(registry.read_text(encoding="utf-8"))["plugins"] if registry.exists() else {}
+        rows[f"{plugin}@tj-agents"] = [{"scope": "user", "gitCommitSha": revision, "installPath": str(root)}]
+        registry.write_text(json.dumps({"plugins": rows}), encoding="utf-8")
+        if codex_label:
+            (self.codex_home / "plugins" / "cache" / "tj-agents" / plugin / codex_label).mkdir(parents=True)
 
     def test_one_failing_update_is_reported_and_the_rest_still_run(self):
         listing = json.dumps([
@@ -104,6 +132,35 @@ class RefreshPluginsTests(unittest.TestCase):
             ["codex", "plugin", "add", "base@agents"],
         ], [command for command in commands if command[:3] == ["codex", "plugin", "add"]])
 
+
+    def test_claude_skips_plugins_already_at_their_pin(self):
+        self.install("agent", "a" * 40, "a" * 40)
+        self.install("base", "b" * 40, "c" * 40)
+        listing = json.dumps([{"id": "agent@tj-agents", "scope": "user"}, {"id": "base@tj-agents", "scope": "user"}])
+
+        def run(command, **_kwargs):
+            return completed(0, listing) if command[:3] == ["claude", "plugin", "list"] else completed(0, "[]")
+
+        with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
+            self.assertEqual(0, REFRESH.main(["--host", "claude"]))
+        updates = [call.args[0] for call in spawned.call_args_list if call.args[0][:3] == ["claude", "plugin", "update"]]
+        self.assertEqual([["claude", "plugin", "update", "base@tj-agents", "--scope", "user", "--json", "-y"]], updates)
+
+    def test_codex_skips_only_plugins_whose_installed_build_matches_the_current_label(self):
+        self.install("agent", "a" * 40, "a" * 40, label="label1", codex_label="label1")
+        self.install("base", "b" * 40, "b" * 40, label="label2", codex_label="old")
+        self.install("cli", "c" * 40, "c" * 40)
+        listing = json.dumps({"installed": [
+            {"pluginId": f"{name}@tj-agents", "marketplaceName": "tj-agents"} for name in ("agent", "base", "cli")
+        ]})
+
+        def run(command, **_kwargs):
+            return completed(0, listing) if command[:3] == ["codex", "plugin", "list"] else completed(0)
+
+        with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
+            self.assertEqual(0, REFRESH.main(["--host", "codex"]))
+        adds = [call.args[0] for call in spawned.call_args_list if call.args[0][:3] == ["codex", "plugin", "add"]]
+        self.assertEqual([["codex", "plugin", "add", "base@tj-agents"], ["codex", "plugin", "add", "cli@tj-agents"]], adds)
 
 if __name__ == "__main__":
     unittest.main()

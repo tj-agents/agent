@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from tj_agent.host import Host
 
@@ -37,6 +37,11 @@ def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str 
     return None
 
 
+def build_current(marketplace: str, plugin: str, install: Path) -> bool:
+    expected = label(install)
+    return expected is not None and installed_label(marketplace, plugin) == expected
+
+
 def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
     expected, loaded = label(install), label(root)
     if expected and loaded != expected:
@@ -44,14 +49,17 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
     return None
 
 
-def refresh(report: Any, marketplaces: tuple[str, ...]) -> None:
+def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]) -> None:
     listing = report.step(HOST, "list", ["codex", "plugin", "list", "--json"])
     if listing is None:
         return
     installed = [row for row in json.loads(listing.stdout)["installed"] if row["marketplaceName"] in marketplaces]
     for marketplace in sorted({row["marketplaceName"] for row in installed}):
         report.step(HOST, f"marketplace {marketplace}", ["codex", "plugin", "marketplace", "upgrade", marketplace])
-    for row in installed:
+    stale = [row for row in installed if not current(row["marketplaceName"], row["pluginId"].rpartition("@")[0])]
+    if len(stale) < len(installed):
+        print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
+    for row in stale:
         report.step(HOST, row["pluginId"], ["codex", "plugin", "add", row["pluginId"]])
 
 
