@@ -7,6 +7,6 @@ permissions:
   contents: read
 jobs:
   publish:
-    uses: tj-agents/github-actions/.github/workflows/publish-update.yml@2e8b5afabfe67e7d2bd18c835ddeac6ef06bfb12 # main
+    uses: tj-agents/github-actions/.github/workflows/publish-update.yml@635a67c635d892b4d4ce072126918bfee77152d0 # main
     secrets:
       UPDATE_TOPIC: ${{ secrets.UPDATE_TOPIC }}
