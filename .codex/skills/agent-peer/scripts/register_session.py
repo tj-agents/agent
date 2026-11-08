@@ -14,6 +14,7 @@ Contract: exit 0 always. Bookkeeping must never stop a session starting.
 import collections
 import functools
 import hashlib
+import importlib
 import importlib.util
 import json
 import ntpath
@@ -23,6 +24,31 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+
+def process_runtime() -> Path:
+    if (HERE / "tj_cli" / "process" / "__init__.py").is_file():
+        return HERE
+    for root in HERE.parents:
+        if (root / ".agents" / "plugins" / "payloads.json").is_file():
+            runtime = root / "plugins" / "agent" / ".agents" / "agent" / "runtime"
+        elif any((root / marker).exists() for marker in (
+            ".git", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json", "source.json",
+        )):
+            runtime = root / ".agents" / "agent" / "runtime"
+        else:
+            continue
+        if (runtime / "tj_cli" / "process" / "__init__.py").is_file():
+            return runtime
+        raise RuntimeError(f"The shipped Agent process runtime is unavailable at {runtime}")
+    raise RuntimeError("the packaged Agent process runtime is unavailable")
+
+
+def shared_process():
+    runtime = process_runtime()
+    if str(runtime) not in sys.path:
+        sys.path.insert(0, str(runtime))
+    return importlib.import_module("tj_cli.process")
 
 
 STATE_DIRECTORY_ENV = "AGENT_STATE_DIRECTORY"
@@ -318,7 +344,7 @@ def _ps_lookup(pid):
     import subprocess
 
     try:
-        result = subprocess.run(
+        result = shared_process().run(
             ["ps", "-o", "ppid=,comm=,lstart=", "-p", str(pid)],
             capture_output=True, text=True, timeout=2, check=False,
         )

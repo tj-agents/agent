@@ -386,7 +386,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             degrade(f"launch: {error}")
     if effective_project is not None:
         try:
-            managed_admission.verify(effective_project, parsed.host, parsed.target, hook_roots)
+            managed_admission.verify(
+                effective_project,
+                parsed.host,
+                parsed.target,
+                native_project=effective_project,
+            )
         except managed_admission.AdmissionError as error:
             message = f"launch: managed admission refused: {error}"
             print(message, file=sys.stderr)

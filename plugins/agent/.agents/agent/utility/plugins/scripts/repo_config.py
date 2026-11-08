@@ -17,6 +17,7 @@ import config_conflicts
 import lock_io
 import machine_paths
 import plugin_selection
+from plugin_runtime import process
 
 if sys.version_info < (3, 11):
     raise SystemExit("Repository settings generation requires Python 3.11 or newer")
@@ -43,7 +44,7 @@ def repo_owners() -> frozenset[str]:
     return frozenset()
 
 
-def remote_owners(root: Path, run=subprocess.run) -> set[str]:
+def remote_owners(root: Path, run=process.run) -> set[str]:
     owners = set()
     for name in lock_io.git(run, ["remote"], root).split():
         for url in lock_io.git(run, ["remote", "get-url", "--all", name], root).splitlines():
@@ -52,7 +53,7 @@ def remote_owners(root: Path, run=subprocess.run) -> set[str]:
     return owners
 
 
-def resolve_scope(root: Path, scope: str | None, run=subprocess.run) -> str:
+def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
     if scope not in {None, "project", "local"}:
         raise lock_io.LockError(f"Unknown repository scope: {scope}")
     if not (root / ".git").exists():
@@ -210,7 +211,7 @@ def validate_aliases(targets: list[Path], read_paths: list[Path]) -> None:
             identities.add(identity)
 
 
-def preflight_paths(root: Path, paths: list[Path], *, scope: str = "local", read_paths: list[Path] = (), run=subprocess.run) -> Path | None:
+def preflight_paths(root: Path, paths: list[Path], *, scope: str = "local", read_paths: list[Path] = (), run=process.run) -> Path | None:
     if scope not in {"project", "local"}:
         raise lock_io.LockError(f"Unknown repository scope: {scope}")
     root = root.expanduser().resolve()
@@ -383,7 +384,7 @@ def plan(
     prospective_paths: list[Path] = (),
     lock_document: dict | None = None,
     read_paths: list[Path] = (),
-    execute=subprocess.run,
+    execute=process.run,
     exclusions: dict[Path, str] | None = None,
 ) -> dict[Path, str | None]:
     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()

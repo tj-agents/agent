@@ -13,7 +13,7 @@ lane: L7
 # Inspect the agent store
 
 Read the existing execution and session registry without claiming work, repairing records or launching a
-host. Requires Python 3.9 or newer. Records describe persisted metadata; an unended owner is not evidence
+host. Requires Python 3.12 or newer. Records describe persisted metadata; an unended owner is not evidence
 that its native process is alive. Use the recorded handle when a separately authorized task needs Machine's
 native observation or recovery.
 
