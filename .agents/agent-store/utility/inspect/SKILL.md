@@ -15,11 +15,12 @@ allowed-tools: Bash(agent-store items:*), Bash(agent-store sessions:*), Bash(age
 
 ```text
 agent-store items
-agent-store sessions --item github:github.com/tj-agents/agent:98
+agent-store sessions --item 98
+agent-store sessions --item https://github.com/tj-agents/agent/issues/98
 agent-store sessions --title "agent#98"
 agent-store show claude:0f3c2a…
 agent-store launches --item 98
 ```
 
-Each command prints one JSON document. The store holds links only. Whether a session is alive comes from
+A bare id resolves against the current repository's `origin`. Each command prints one JSON document. The store holds links only. Whether a session is alive comes from
 the host, so use `tj status` for liveness.
