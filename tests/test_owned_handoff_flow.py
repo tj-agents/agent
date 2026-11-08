@@ -371,9 +371,7 @@ def test_owned_frontend_attach_failure_stops_child_and_releases_lease(
             "attach_frontend",
             side_effect=OSError("attach failed"),
         ),
-        mock.patch.object(
-            startup.SESSIONS[Host.CODEX], "release_frontend"
-        ) as release,
+        mock.patch.object(startup.SESSIONS[Host.CODEX], "release_frontend") as release,
         pytest.raises(binding.StartupBindingError, match="could not be attached"),
     ):
         binding.run_session(
