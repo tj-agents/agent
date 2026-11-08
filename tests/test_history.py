@@ -60,7 +60,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_packaged_cli_missing_root_and_invalid_pattern_are_clear(self):
         package = self.root / 'isolated package'
-        shutil.copytree(ROOT / 'plugins/agent/.agents/agent/runtime', package / '.agents/agent/runtime')
+        shutil.copytree(ROOT / 'plugins/agent', package)
         script = package / '.agents/agent/runtime/history.py'
         result = subprocess.run([sys.executable, '-B', str(script), 'recent', '--host', 'codex',
                                  '--history-root', str(self.root / 'missing')], cwd=self.cwd,
