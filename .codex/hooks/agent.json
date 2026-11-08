@@ -5,6 +5,16 @@
         "hooks": [
           {
             "type": "command",
+            "timeout": 10,
+            "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/latest_plugins.py\" --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/latest_plugins.py\" --host codex"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "python3 -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
             "commandWindows": "python -B \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
             "timeout": 10
@@ -13,6 +23,16 @@
       }
     ],
     "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/latest_plugins.py\" --host codex",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/latest_plugins.py\" --host codex"
+          }
+        ]
+      },
       {
         "hooks": [
           {

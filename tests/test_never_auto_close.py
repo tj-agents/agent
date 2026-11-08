@@ -110,7 +110,7 @@ class NeverAutoCloseTests(unittest.TestCase):
             with self.subTest(host=host):
                 scripts = {path.rsplit("/", 1)[-1] for path in re.findall(r"[A-Za-z0-9_./-]+\.py(?![A-Za-z0-9_])", json.dumps(manifest(host)))}
                 self.assertTrue(scripts)
-                allowed = LIFECYCLE_SCRIPTS | ({"capacity.py"} if host == "codex" else set())
+                allowed = LIFECYCLE_SCRIPTS | {"latest_plugins.py"} | ({"capacity.py"} if host == "codex" else set())
                 self.assertLessEqual(scripts, allowed)
                 if host == "codex":
                     self.assertRegex(json.dumps(manifest(host).get("UserPromptSubmit", [])),
