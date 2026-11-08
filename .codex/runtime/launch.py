@@ -1,4 +1,4 @@
-"""Codex executable selection and native launch settings."""
+"""Codex executable selection, daemon-attached launch arguments and thread liveness."""
 
 import glob
 import os
@@ -6,33 +6,18 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from typing import Protocol
 
 from tj_cli import process
 
-from launch_contract import Launch
-
+from launch_contract import Liveness
 from launch_errors import LaunchError
 from native_executable import is_script
 
-
-class Adapter(Launch, Protocol):
-    KEEP_TAB_TITLE: tuple[str, ...]
-
-    def parse_version(self, text: str) -> dict[str, object] | None: ...
-
-    def compare_version(
-        self, left: dict[str, object], right: dict[str, object]
-    ) -> int: ...
-
-    def resolve_executable(
-        self, minimum: str = "0.154.0", candidates: list[str] | None = None
-    ) -> tuple[str, dict[str, object]]: ...
-
-
 IS_WINDOWS = os.name == "nt"
-KEEP_TAB_TITLE: tuple[str, ...] = ("--config", "tui.terminal_title=[]")
 SESSION_ENVIRONMENT: tuple[str, ...] = ()
+TAB_CLEARED: tuple[str, ...] = ("TERM",)
+TAB_FORCED: dict[str, str] = {}
+DAEMON_TIMEOUT_SECONDS = 10
 _CODEX_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?")
 
 
@@ -182,3 +167,62 @@ def resolve_executable(minimum="0.154.0", candidates=None):
             f"Found:\n{inventory}"
         )
     return best
+
+
+def executable() -> str:
+    return resolve_executable()[0]
+
+
+def start_arguments(directory, title, prompt, model, effort):
+    arguments = ["--cd", str(directory)]
+    if model:
+        arguments += ["--model", model]
+    return arguments if effort else [*arguments, prompt]
+
+
+def resume_arguments(directory, title, session_id):
+    return ["--cd", str(directory), "resume", session_id]
+
+
+def _daemon():
+    from codex import hook_trust
+
+    return hook_trust.AppServer(executable(), Path.cwd(), timeout=DAEMON_TIMEOUT_SECONDS, existing=True)
+
+
+def liveness() -> dict[str, Liveness]:
+    """Threads loaded in the shared app-server daemon, by thread id; an absent daemon has none."""
+    try:
+        with _daemon() as server:
+            loaded, cursor = [], None
+            while True:
+                page = server.request("thread/loaded/list", {"cursor": cursor})
+                loaded += page["data"]
+                cursor = page.get("nextCursor")
+                if not cursor:
+                    break
+            statuses = {thread: server.request("thread/read", {"threadId": thread})["thread"]["status"]["type"]
+                        for thread in loaded}
+    except (OSError, RuntimeError, LaunchError, KeyError, TypeError):
+        return {}
+    return {thread: Liveness(alive=status != "notLoaded", activity=status) for thread, status in statuses.items()}
+
+
+def respawn(background):
+    raise LaunchError("Codex has no background sessions")
+
+
+def name_session(session_id, title):
+    with _daemon() as server:
+        server.request("thread/name/set", {"threadId": session_id, "name": title})
+
+
+def deliver(session_id, prompt, model, effort):
+    """Start the thread's first turn through the daemon, the only way to choose its reasoning effort."""
+    with _daemon() as server:
+        server.request("turn/start", {
+            "threadId": session_id,
+            "input": [{"type": "text", "text": prompt}],
+            **({"model": model} if model else {}),
+            **({"effort": effort} if effort else {}),
+        })
