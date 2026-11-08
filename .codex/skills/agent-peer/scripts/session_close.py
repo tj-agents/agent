@@ -103,7 +103,7 @@ def host_sessions(host):
 
 CLIENT_BINDING_FIELDS = ("host", "session_id", "pid", "pid_started_at", "profile", "backend",
                          "recording_path", "client_message_id", "native_turn_id", "native_rollout", "native_cwd",
-                         "client_identity", "launch_cwd")
+                         "client_identity", "launch_cwd", "frontend_message_id", "launch_token")
 
 
 def stop_cli_client(entry, before_signal=lambda: None):

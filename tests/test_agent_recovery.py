@@ -224,6 +224,7 @@ class RecoveryTests(unittest.TestCase):
         with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
                 mock.patch.object(RECOVERY, "_wrapper_identity", return_value=wrapper), \
                 mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
+                mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
                 mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
                 mock.patch.object(cli, "launch_tab"):
             RECOVERY.open_session(Host.CODEX, "exact_id", roots=roots, cli=cli)
@@ -663,6 +664,7 @@ Observed blocker: no send was attempted."""
         cli = RECOVERY._load("agent_cli")
         with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
              mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
+             mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
              mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
              mock.patch.object(cli, "launch_tab") as launch:
             RECOVERY.reopen("exact_id", hosts=(Host.CODEX,), roots={Host.CODEX: self.root / "sessions"},
@@ -675,6 +677,7 @@ Observed blocker: no send was attempted."""
         focus = mock.Mock()
         with mock.patch.object(RECOVERY, "liveness", return_value="closed"), \
              mock.patch.object(CODEX_SESSIONS, "verify_resume"), \
+             mock.patch.object(CODEX_SESSIONS, "recovery_receipt", return_value={"client_binding": {}}), \
              mock.patch.object(cli, "resolve_codex_executable", return_value=("native-codex", {})), \
              mock.patch.object(cli, "launch_tab") as launch:
             result = RECOVERY.reopen("exact_id", hosts=(Host.CODEX,), roots={Host.CODEX: self.root / "sessions"},
@@ -688,7 +691,7 @@ Observed blocker: no send was attempted."""
         self.assertEqual(["--host", "codex", "--project", str(self.cwd), "--target", "native-codex"], arguments[3:9])
         self.assertEqual("--status-file", arguments[9])
         self.assertEqual("codex-", Path(arguments[10]).name[:6])
-        self.assertEqual(["--", "--config", "tui.terminal_title=[]", "resume", "exact_id", "Continue the requested work."],
+        self.assertEqual(["--require-session-start", "--", "--config", "tui.terminal_title=[]", "resume", "exact_id", "Continue the requested work."],
                          arguments[11:])
         focus.assert_not_called()
 

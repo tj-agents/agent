@@ -149,17 +149,14 @@ class LaunchCodexTests(unittest.TestCase):
 
     # --- argument assembly and order ---
 
-    def test_older_windows_codex_keeps_supported_handoff_arguments(self):
+    def test_windows_handoff_leaves_backend_selection_to_the_managed_wrapper(self):
         with mock.patch.object(LAUNCH_CODEX.sys, 'platform', 'win32'):
-            arguments = LAUNCH_CODEX.build_arguments('/work', None, None, False, 'prompt', no_daemon=False)
+            arguments = LAUNCH_CODEX.build_arguments('/work', None, None, False, 'prompt')
         self.assertEqual(arguments, ['--cd', '/work', 'prompt'])
 
     def test_no_model_lane_or_effort_means_only_cd_and_the_prompt_sentence(self):
         self.run_main()
         arguments = self.bound_payload()
-        if sys.platform == 'win32':
-            self.assertEqual(arguments[0], '--no-daemon')
-            arguments = arguments[1:]
         self.assertEqual(arguments[0], '--cd')
         self.assertEqual(arguments[1], os.path.abspath(self.directory))
         self.assertEqual(arguments[2:4], ['--config', 'tui.terminal_title=[]'])
@@ -169,9 +166,6 @@ class LaunchCodexTests(unittest.TestCase):
     def test_argument_order_is_cd_model_config_bypass_then_prompt(self):
         self.run_main('--model', 'explicit-model', '--reasoning-effort', 'high', '--bypass-hook-trust')
         arguments = self.bound_payload()
-        if sys.platform == 'win32':
-            self.assertEqual(arguments[0], '--no-daemon')
-            arguments = arguments[1:]
         self.assertEqual(arguments[0], '--cd')
         self.assertEqual(arguments[2], '--model')
         self.assertEqual(arguments[3], 'explicit-model')
@@ -257,8 +251,6 @@ class LaunchCodexTests(unittest.TestCase):
     def test_binding_receives_resolved_codex_path_and_working_directory(self):
         self.run_main()
         arguments = self.bound_payload()
-        if sys.platform == 'win32':
-            self.assertEqual(arguments.pop(0), '--no-daemon')
         self.assertEqual(arguments[:2], ['--cd', os.path.abspath(self.directory)])
 
     def test_minimum_version_is_threaded_to_executable_resolution(self):
@@ -275,7 +267,7 @@ class LaunchCodexTests(unittest.TestCase):
     def test_success_message_with_no_selection_reports_the_cli_default_model(self):
         code, out, _ = self.run_main('--title', 'Tab Name')
         self.assertEqual(code, 0)
-        self.assertIn('Launched codex-cli 0.160.0 from /bin/codex on the CLI default model', out)
+        self.assertIn('Launched Codex on the CLI default model', out)
 
     def test_success_message_with_a_lane_reports_the_lane_model_and_effort(self):
         code, out, _ = self.run_main('--lane', 'L4')
@@ -408,7 +400,7 @@ class LaunchCodexEndToEndTests(unittest.TestCase):
                 sys.executable, '-I', '-B', str(self.agent_cli.startup_binding_script()), '--host', 'codex',
                 '--project', directory, '--target', '/bin/codex',
                 '--status-file', inner[inner.index('--status-file') + 1], '--require-session-start', '--',
-                *(['--no-daemon'] if sys.platform == 'win32' else []), '--cd', directory, '--model',
+                '--cd', directory, '--model',
                 CODEX_LANES['lanes']['L4']['model'], '--config',
                 f"model_reasoning_effort={CODEX_LANES['lanes']['L4']['reasoning_effort']}",
                 '--config', 'tui.terminal_title=[]', expected_prompt_sentence,

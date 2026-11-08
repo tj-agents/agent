@@ -1,6 +1,7 @@
 """Bind managed Codex launches to their frontend process (Python 3.9+)."""
 
 import errno
+from collections.abc import Mapping
 import json
 import math
 import os
@@ -38,6 +39,10 @@ VIEW_CHANGES = {
     'ResumeSessionByIdOrName', 'RetrySafetyBufferedTurn', 'RevertSessionForPromptEdit',
     'SelectAgentThread', 'SelectAgentsOverviewThread', 'StartManagedWorktree', 'StartSide',
 }
+
+
+class RecipientPending(RuntimeError):
+    pass
 
 
 def command_position(arguments):
@@ -124,7 +129,7 @@ def daemon_identity(environment=None, expected_pid=None):
     return {'pid': record['pid'], 'process_start_time': str(record['processStartTime'])}
 
 
-def prepare(arguments, project, environment, executable=None):
+def prepare(arguments, project, environment, executable=None, handoff=False, hook_roots=None):
     values = dict(environment)
     for key in tuple(values):
         compared = key.upper() if os.name == 'nt' else key
@@ -136,7 +141,8 @@ def prepare(arguments, project, environment, executable=None):
     if not executable:
         raise RuntimeError('Native Codex executable is required for a managed frontend')
     backend = None
-    if '--no-daemon' not in arguments:
+    if not handoff and '--no-daemon' not in arguments and not any(
+            value.split('=')[0] == '--remote' for value in arguments):
         with tempfile.TemporaryFile(mode='w+', encoding='utf-8', errors='replace') as diagnostic:
             result = subprocess.run([executable, 'app-server', 'daemon', 'start'], cwd=project, env=dict(values),
                                     stdin=subprocess.DEVNULL, stdout=diagnostic, stderr=diagnostic, timeout=45)
@@ -151,7 +157,7 @@ def prepare(arguments, project, environment, executable=None):
     values[RECORD_ENV] = '1'
     values[RECORD_PATH_ENV] = str(path.with_name('events.jsonl'))
     ticket = {
-        'schema_version': 1, 'token': token, 'host': HOST.value, 'backend': backend,
+        'schema_version': 2 if handoff else 1, 'token': token, 'host': HOST.value, 'backend': backend,
         'profile': str(profile_directory(values)), 'launch_cwd': str(Path(project).resolve()),
         'created_at': time.time(), 'recording_path': values[RECORD_PATH_ENV],
         'title': values.get('AGENT_CLI_TAB_TITLE'),
@@ -160,6 +166,27 @@ def prepare(arguments, project, environment, executable=None):
             'KONSOLE_DBUS_SESSION', 'KONSOLE_DBUS_WINDOW', 'WT_SESSION', 'AGENT_WINDOWS_TERMINAL_TAB_ID',
         ) if key in values},
     }
+    if handoff:
+        from codex.backend import Lease, identity
+        import required_plugins
+
+        if '--no-daemon' in arguments or any(value.split('=')[0] == '--remote' for value in arguments):
+            raise RuntimeError('A handoff owns its native endpoint; an external backend cannot be selected')
+        effective, configuration = required_plugins.launch_context(Path(project), HOST, arguments)
+        if effective is None:
+            raise RuntimeError('Handoff launch checkout has no verified native configuration')
+        ticket['launch_cwd'] = str(effective.resolve())
+        backend_environment = {key: value for key, value in values.items()
+                               if key not in (RECORD_ENV, RECORD_PATH_ENV)}
+        lease = Lease(executable, effective.resolve(), backend_environment, path.parent, list(configuration))
+        try:
+            ticket.update(backend=lease.backend, supervisor=lease.supervisor, wrapper=identity(os.getpid()),
+                          executable=str(Path(executable).resolve()), _lease=lease)
+            await_backend(ticket, hook_roots or {})
+        except BaseException:
+            lease.close()
+            raise
+        arguments = ['--remote', 'unix://' + lease.backend['socket_path'], *arguments]
     prepared = arguments
     if backend is None or recorder_policy_required(arguments, values):
         prepared = ['--config', 'shell_environment_policy.set.' + RECORD_ENV + '=""',
@@ -171,7 +198,13 @@ def attach(ticket, pid):
     if ticket is None:
         return
     path = binding_path(ticket['token'])
-    value = {**ticket, 'pid': pid, 'recorded_at': time.time()}
+    value = {key: item for key, item in ticket.items() if not key.startswith('_')}
+    value.update(pid=pid, recorded_at=time.time())
+    if (ticket.get('backend') or {}).get('kind') == 'handoff':
+        from codex.backend import identity
+
+        value['frontend'] = identity(pid)
+        ticket['frontend'] = value['frontend']
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     ticket['_attached'] = True
     with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
@@ -183,6 +216,9 @@ def release(ticket):
     if ticket is None:
         return
     path = binding_path(ticket['token'])
+    if ticket.get('_lease') is not None:
+        ticket['_lease'].close()
+        return
     if ticket.get('_attached'):
         path.unlink(missing_ok=True)
         path.with_name('events.jsonl').unlink(missing_ok=True)
@@ -191,6 +227,299 @@ def release(ticket):
         path.parent.rmdir()
     except OSError:
         pass
+
+
+def server_for(record, timeout=15):
+    return hook_trust.AppServer(record['executable'], Path(record['launch_cwd']),
+                               environment={HOST.home_variable: record['profile']}, existing=True,
+                               socket_path=record['backend']['socket_path'], timeout=timeout)
+
+
+def _shared_binding(record):
+    backend = record.get('backend')
+    return (record.get('schema_version') == 1 and record.get('host') == HOST.value
+            and isinstance(backend, dict) and set(backend) == {'pid', 'process_start_time'}
+            and isinstance(backend['pid'], int) and not isinstance(backend['pid'], bool)
+            and isinstance(backend['process_start_time'], str))
+
+
+def _owned_binding(record):
+    return (record.get('schema_version') == 2 and record.get('host') == HOST.value
+            and (record.get('backend') or {}).get('kind') == 'handoff')
+
+
+def observer_binding(ticket):
+    token = ticket.get('token') if isinstance(ticket, dict) else None
+    if not isinstance(token, str) or not TOKEN.fullmatch(token):
+        raise RuntimeError('Managed Codex observer has no valid launch token')
+    try:
+        record = json.loads(binding_path(token).read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise RuntimeError('Managed Codex observer binding is unavailable') from error
+    if not isinstance(record, dict):
+        raise RuntimeError('Managed Codex observer binding is invalid')
+    fields = ('schema_version', 'token', 'host', 'pid', 'created_at', 'profile', 'launch_cwd',
+              'recording_path', 'backend')
+    if _owned_binding(record):
+        fields += ('executable', 'frontend', 'wrapper', 'supervisor')
+    elif not _shared_binding(record):
+        raise RuntimeError('Managed Codex observer backend is unsupported')
+    if any(record.get(key) != ticket.get(key) for key in fields):
+        raise RuntimeError('Managed Codex observer binding changed')
+    if _owned_binding(record):
+        verify_owned_processes(record)
+    elif daemon_identity({HOST.home_variable: record['profile']}, expected_pid=record['backend']['pid']) != record['backend']:
+        raise RuntimeError('Managed Codex shared backend changed')
+    return record
+
+
+def observer_server(ticket, executable, launch_args=(), timeout=15):
+    record = observer_binding(ticket)
+    if _owned_binding(record):
+        return server_for(record, timeout)
+    return hook_trust.AppServer(executable, Path(record['launch_cwd']), launch_args=launch_args,
+                                environment={HOST.home_variable: record['profile']}, timeout=timeout,
+                                existing=True)
+
+
+def verify_endpoint(backend: Mapping[str, object]) -> None:
+    endpoint = backend.get("socket_path")
+    if not isinstance(endpoint, str) or not Path(endpoint).is_absolute():
+        raise RuntimeError("Handoff native endpoint is not an absolute path")
+    socket = Path(endpoint)
+    for path, key in ((socket.parent, "parent_identity"), (socket, "socket_identity")):
+        value = path.lstat()
+        if [value.st_dev, value.st_ino] != backend.get(key):
+            raise RuntimeError("Handoff native endpoint was replaced")
+
+
+def await_backend(ticket, roots):
+    from tj_cli import processes
+
+    processes.require_live(
+        ticket["backend"], "Owned native backend exited before readiness"
+    )
+    verify_endpoint(ticket["backend"])
+    with server_for(ticket, 10) as server:
+        required = {
+            identity: hook_trust.required_definitions(root, identity)
+            for identity, root in roots.items()
+        }
+        hook_trust.require_ready(
+            server.request("hooks/list", {"cwds": [ticket["launch_cwd"]]}),
+            Path(ticket["launch_cwd"]),
+            required,
+        )
+        if server.request("thread/loaded/list", {}).get("data"):
+            raise RuntimeError(
+                "A new handoff backend already contains a loaded conversation"
+            )
+    processes.require_live(
+        ticket["backend"], "Owned native backend exited during readiness"
+    )
+    verify_endpoint(ticket["backend"])
+
+
+def native_contains(server, session_id, identity):
+    cursor, seen = None, set()
+    for _ in range(128):
+        params = {'threadId': session_id, 'limit': 100, 'sortDirection': 'desc'}
+        if cursor is not None:
+            params['cursor'] = cursor
+        page = server.request('thread/items/list', params)
+        for row in page['data']:
+            item = row['item']
+            if item.get('type') == 'userMessage' and item.get('clientId') == identity:
+                return True
+        cursor = page.get('nextCursor')
+        if cursor is None:
+            return False
+        if not isinstance(cursor, str) or cursor in seen:
+            raise RuntimeError('Native frontend attribution pagination did not advance')
+        seen.add(cursor)
+    raise RuntimeError('Native frontend attribution exceeds the history scan limit')
+
+
+def verify_owned_processes(record, *, table=None, peer_state=None):
+    from tj_cli import processes
+
+    if table is None:
+        from startup_binding import register_session
+
+        table = register_session.process_table()
+        lookup = register_session.build_process_lookup()
+        def peer_state(pid):
+            info = lookup(pid)
+            return ('present', info) if info is not None else ('absent', None)
+
+    if (record.get('schema_version') != 2 or record.get('host') != HOST.value
+            or (record.get('backend') or {}).get('kind') != 'handoff'):
+        raise RuntimeError('Unsupported owned handoff binding')
+    path = binding_path(record['token'])
+    event_path = path.with_name('events.jsonl')
+    if comparable_path(Path(record['recording_path'])) != comparable_path(event_path):
+        raise RuntimeError('Handoff recording does not belong to its launch token')
+    frontend = processes.require_live(record['frontend'], 'Handoff frontend identity changed')
+    supervisor = processes.require_live(record['supervisor'], 'Handoff supervisor identity changed')
+    backend = processes.require_live(record['backend'], 'Handoff backend identity changed')
+    wrapper = processes.require_live(record['wrapper'], 'Handoff wrapper identity changed')
+    if (frontend.pid != record['pid'] or frontend.ppid != wrapper.pid or backend.pid == supervisor.pid
+            or not processes.descends_from(record['backend'], record['supervisor'])
+            or not processes.descends_from(record['supervisor'], record['wrapper'])):
+        raise RuntimeError('Handoff process ownership changed')
+    endpoint = record['backend']['socket_path']
+    verify_endpoint(record['backend'])
+    for info, native in ((frontend, True), (backend, False)):
+        arguments = process_arguments(info.pid)
+        context = process_context(info.pid)
+        if (not arguments or comparable_path(Path(arguments[0]).resolve())
+                != comparable_path(Path(record['executable']).resolve())
+                or comparable_path(Path(context['profile'])) != comparable_path(Path(record['profile']))):
+            raise RuntimeError('Handoff native executable or profile changed')
+        option = '--remote' if native else '--listen'
+        positions = [index for index, value in enumerate(arguments) if value == option]
+        if (len(positions) != 1 or arguments[positions[0] + 1:positions[0] + 2] != ['unix://' + endpoint]
+                or (native and (not is_session(arguments[1:]) or '--no-daemon' in arguments))
+                or (not native and command_name(arguments[1:]) != 'app-server')):
+            raise RuntimeError('Handoff native process selected a different endpoint')
+        if native:
+            if (context.get(RECORD_ENV) not in ('1', 'true', 'TRUE', 'yes', 'YES')
+                    or comparable_path(Path(context.get(RECORD_PATH_ENV, ''))) != comparable_path(event_path)):
+                raise RuntimeError('Handoff frontend recording changed')
+        elif context.get(RECORD_ENV) or context.get(RECORD_PATH_ENV):
+            raise RuntimeError('Handoff backend inherited frontend recording state')
+    if table is not None:
+        for other in table.values():
+            if other.pid == frontend.pid or Path(other.name).stem.casefold() != HOST.value:
+                continue
+            other_path = peer_recording_path(other, peer_state)
+            if other_path is not None and comparable_path(Path(other_path)) == comparable_path(event_path):
+                raise RuntimeError('Multiple native processes share a handoff frontend recording')
+
+
+def verify_owned(record, *, table=None, peer_state=None):
+    verify_owned_processes(record, table=table, peer_state=peer_state)
+    event_path = binding_path(record['token']).with_name('events.jsonl')
+    try:
+        anchor = latest_input(event_path)
+    except FileNotFoundError as error:
+        raise RecipientPending('Handoff frontend has not recorded its initial input') from error
+    if not anchor:
+        raise RecipientPending('Handoff frontend has no unswitched native input')
+    return anchor
+
+
+def bind_recipient(ticket, table, peer_state):
+    path = binding_path(ticket['token'])
+    record = json.loads(path.read_text(encoding='utf-8'))
+    anchor = verify_owned(record, table=table, peer_state=peer_state)
+    matches = []
+    with server_for(record) as server:
+        loaded = server.request('thread/loaded/list', {}).get('data', [])
+        if not isinstance(loaded, list) or len(loaded) > 128:
+            raise RuntimeError('Owned handoff loaded-thread inventory is invalid')
+        for session_id in loaded:
+            thread = server.request('thread/read', {'threadId': session_id, 'includeTurns': False})['thread']
+            if (thread.get('id') != session_id or thread.get('ephemeral') is True
+                    or isinstance(thread.get('source'), dict)
+                    or thread.get('threadSource') in ('agent', 'subagent')
+                    or comparable_path(Path(thread.get('cwd', '')).resolve())
+                    != comparable_path(Path(record['launch_cwd']).resolve())):
+                continue
+            if native_contains(server, session_id, anchor):
+                matches.append({'thread_id': session_id, 'cwd': thread['cwd'], 'frontend_message_id': anchor})
+        if not matches:
+            raise RecipientPending('Handoff input has not reached a loaded native conversation')
+        if len(matches) != 1:
+            raise RuntimeError('Handoff input does not identify exactly one loaded native conversation')
+        submitted = current_input(server, matches[0]['thread_id'])
+    if verify_owned(record, table=table, peer_state=peer_state) != anchor:
+        raise RuntimeError('Handoff frontend changed while binding its recipient')
+    record.update(recipient=matches[0], verified_at=time.time())
+    from codex.backend import write_record
+
+    write_record(path, record)
+    ticket['recipient'] = record['recipient']
+    return record, {**submitted, 'frontend_message_id': anchor}
+
+
+def launch_binding(receipt_path, thread_id, cwd, profile):
+    receipt = json.loads(Path(receipt_path).read_text(encoding='utf-8'))
+    reference = receipt.get('client_binding')
+    if receipt.get('state') != 'running' or not isinstance(reference, dict):
+        raise RuntimeError('Launch receipt has no verified running handoff recipient')
+    record = json.loads(binding_path(reference.get('token')).read_text(encoding='utf-8'))
+    recipient = record.get('recipient') or {}
+    if (reference.get('recipient') != recipient or recipient.get('thread_id') != thread_id
+            or comparable_path(Path(recipient.get('cwd', '')).resolve()) != comparable_path(Path(cwd).resolve())
+            or comparable_path(Path(record['profile']).resolve()) != comparable_path(Path(profile).resolve())):
+        raise RuntimeError('Launch receipt recipient, checkout or profile does not match')
+    return freeze_binding(record)
+
+
+def owned_backend_exited(record):
+    try:
+        path = binding_path(record['token']).with_name('backend.json')
+        receipt = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+    if not isinstance(receipt, dict):
+        return False
+    return (receipt.get('state') == 'exited'
+            and receipt.get('token') == record['token']
+            and receipt.get('wrapper') == record.get('wrapper')
+            and receipt.get('supervisor') == record.get('supervisor')
+            and receipt.get('backend') == record.get('backend')
+            and not Path(record['backend']['socket_path']).exists())
+
+
+def recipient_binding(thread_id, cwd, profile):
+    expected_cwd = comparable_path(Path(cwd).resolve())
+    expected_profile = comparable_path(Path(profile).resolve())
+    state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
+    matches = []
+    for path in (state / 'cli-clients').glob('*/client.json'):
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        recipient = record.get('recipient')
+        if (record.get('schema_version') != 2 or record.get('host') != HOST.value
+                or (record.get('backend') or {}).get('kind') != 'handoff'
+                or not isinstance(recipient, dict)
+                or recipient.get('thread_id') != thread_id
+                or comparable_path(Path(recipient.get('cwd', '')).resolve()) != expected_cwd
+                or comparable_path(Path(record.get('profile', '')).resolve()) != expected_profile):
+            continue
+        try:
+            verify_owned_processes(record)
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
+            if owned_backend_exited(record):
+                continue
+            raise RuntimeError('Managed Codex binding process identity is not eligible') from error
+        matches.append((path, record))
+    if len(matches) != 1:
+        raise RuntimeError('Expected exactly one verified managed Codex binding for this recipient')
+    path, record = matches[0]
+    if path != binding_path(record.get('token')):
+        raise RuntimeError('Managed Codex binding is outside its launch token')
+    return freeze_binding(record)
+
+
+def freeze_binding(record):
+    frozen = {key: record[key] for key in ('token', 'host', 'profile', 'launch_cwd', 'recording_path',
+                                         'frontend', 'wrapper', 'supervisor', 'backend', 'recipient', 'executable')}
+    frozen['frontend_message_id'] = verify_owned(record)
+    return frozen
+
+
+def frozen_binding(frozen):
+    record = json.loads(binding_path(frozen.get('token')).read_text(encoding='utf-8'))
+    if freeze_binding(record) != frozen:
+        raise RuntimeError('Frozen handoff endpoint or process identity changed')
+    return record
 
 
 def latest_input(path):
@@ -249,7 +578,7 @@ def peer_recording_path(peer, peer_state):
     except FileNotFoundError as error:
         disappearance = error
     except OSError as error:
-        if error.errno != errno.ESRCH:
+        if error.errno != errno.ESRCH and getattr(error, "winerror", None) not in (6, 87, 299):
             raise
         disappearance = error
     state, current = peer_state(peer.pid)
@@ -266,17 +595,56 @@ def peer_recording_path(peer, peer_state):
 def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_state):
     if sys.version_info < (3, 11):
         raise RuntimeError('Codex frontend attribution requires Python 3.11 or newer')
+    state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
+    owned = []
+    ordinary_frontend = False
+    for path in (state / 'cli-clients').glob('*/client.json'):
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        backend = record.get('backend') if isinstance(record, dict) else None
+        if (isinstance(record, dict) and record.get('schema_version') == 1
+                and record.get('pid') == nearest.pid and path == binding_path(record.get('token'))):
+            ordinary_frontend = True
+        if (isinstance(record, dict) and isinstance(backend, dict)
+                and (backend.get('kind') == 'handoff' or record.get('schema_version') == 2)
+                and nearest.pid in (backend.get('pid'), record.get('pid'))):
+            if path != binding_path(record.get('token')):
+                raise RuntimeError('Owned handoff binding is outside its launch token')
+            owned.append(record)
+    if owned:
+        if len(owned) != 1:
+            raise RuntimeError('Native process belongs to multiple handoff bindings')
+        record = owned[0]
+        if ((record.get('recipient') or {}).get('thread_id') != session_id
+                or comparable_path(Path(record['profile'])) != comparable_path(profile_directory())
+                or (project is not None and comparable_path(Path(project).resolve())
+                    != comparable_path(Path(record['launch_cwd']).resolve()))):
+            raise RuntimeError('Handoff recipient, checkout or profile does not match this native client')
+        anchor = verify_owned(record, table=table, peer_state=peer_state)
+        with server_for(record) as server:
+            if session_id not in server.request('thread/loaded/list', {}).get('data', []):
+                raise RuntimeError('Handoff recipient is no longer loaded in its owned backend')
+            if not native_contains(server, session_id, anchor):
+                raise RuntimeError('Frontend input no longer belongs to the bound handoff conversation')
+            submitted = current_input(server, session_id)
+        if comparable_path(Path(submitted['native_cwd']).resolve()) != comparable_path(Path(record['launch_cwd']).resolve()):
+            raise RuntimeError('Handoff native checkout changed')
+        return lookup(record['pid']), {**record, **submitted, 'frontend_message_id': anchor}
     arguments = process_arguments(nearest.pid)
+    if (not ordinary_frontend and any(value.split('=')[0] == '--remote' for value in arguments)):
+        raise RuntimeError('Remote frontend has no verified owned launch binding')
     private = bool(arguments and is_session(arguments[1:]) and '--no-daemon' in arguments)
     # `nearest` is the actual frontend ancestor. A shared daemon is a
     # separate process, so verify its identity independently and bind the
     # selected recorded frontend to both identities below.
-    backend = None if private else daemon_identity()
+    backend = None if private else daemon_identity(**(
+        {'expected_pid': nearest.pid} if command_name(arguments[1:]) == 'app-server' else {}))
     executable = arguments[0]
     with hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
                              existing=not private, timeout=15) as server:
         submitted = current_input(server, session_id)
-    state = Path(os.environ.get('AGENT_STATE_DIRECTORY') or Path.home() / '.agents-state')
     matches = []
     for path in (state / 'cli-clients').glob('*/client.json'):
         try:
@@ -302,10 +670,16 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
                     or Path(context['profile']) != profile_directory()):
                 continue
             arguments = process_arguments(info.pid)
+            anchor = latest_input(event_path)
             if (not arguments or not is_session(arguments[1:])
                     or ('--no-daemon' in arguments) != private
-                    or latest_input(event_path) != submitted['client_message_id']):
+                    or not anchor):
                 continue
+            if anchor != submitted['client_message_id']:
+                with hook_trust.AppServer(executable, Path(project) if project is not None else Path.cwd(),
+                                         existing=not private, timeout=15) as server:
+                    if not native_contains(server, session_id, anchor):
+                        continue
             for other in table.values():
                 if other.pid == info.pid or Path(other.name).stem.casefold() != HOST.value:
                     continue
@@ -315,7 +689,7 @@ def recorded_client(session_id, nearest, lookup, table, *, project=None, peer_st
             if (info.pid != nearest.pid
                     and (private or nearest.pid != backend['pid'])):
                 continue
-            matches.append((info, record))
+            matches.append((info, {**record, 'frontend_message_id': anchor}))
         except (OSError, ValueError, TypeError, KeyError):
             continue
     if len(matches) != 1:
@@ -369,7 +743,7 @@ class NativeCompletion:
         return {'identity': self.identity, 'minimum_size': self.minimum_size}
 
     def poll(self):
-        if latest_input(self.entry['recording_path']) != self.entry['client_message_id']:
+        if latest_input(self.entry['recording_path']) != self.entry.get('frontend_message_id', self.entry['client_message_id']):
             raise RuntimeError('The frontend input changed after arming')
         stat = self.path.stat()
         if ([stat.st_dev, stat.st_ino] != self.identity or stat.st_size < max(self.offset, self.minimum_size)
@@ -486,6 +860,10 @@ def process_context(pid):
                                                             os.fsencode(Path.home() / HOST.home_directory)))).resolve()),
                 RECORD_ENV: os.fsdecode(values.get(RECORD_ENV.encode(), b'')),
                 RECORD_PATH_ENV: os.fsdecode(values.get(RECORD_PATH_ENV.encode(), b''))}
+    return _windows_process_context(pid)
+
+
+def _windows_process_context(pid, environment=True):
     import ctypes
     from ctypes import wintypes
 
@@ -528,6 +906,13 @@ def process_context(pid):
             return buffer.raw[:done.value]
 
         parameters = int.from_bytes(read(basic.peb + 0x20, 8), "little")
+        command = read(parameters + 0x70, 16)
+        length, address = int.from_bytes(command[:2], 'little'), int.from_bytes(command[8:], 'little')
+        if not address or not length or length % 2:
+            raise RuntimeError('Native client command line is unavailable')
+        command_line = read(address, length).decode('utf-16-le')
+        if not environment:
+            return {'command_line': command_line}
         address = int.from_bytes(read(parameters + 0x80, 8), "little")
         region = Region()
         if not kernel.VirtualQueryEx(handle, address, ctypes.byref(region), ctypes.sizeof(region)):

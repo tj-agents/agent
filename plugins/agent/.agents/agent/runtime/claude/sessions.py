@@ -1,10 +1,10 @@
-"""Claude's native sessions: transcripts, recovery, relaunch and exact close (Python 3.9+)."""
+"""Claude's native sessions: transcripts, recovery and exact close (Python 3.9+)."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 from pathlib import Path
-import re
 
 from host import Host
 import transcripts
@@ -12,11 +12,6 @@ import transcripts
 HOST = Host.CLAUDE
 FRONTEND_FROM_REGISTRATION = True
 FRONTEND_STATE: tuple[str, ...] = ()
-VARIADIC = {"--add-dir", "--mcp-config", "--tools", "--allowedTools", "--allowed-tools",
-            "--disallowedTools", "--disallowed-tools"}
-SINGLE = {"--settings", "--plugin-dir", "--setting-sources", "--permission-mode", "--model"}
-FLAGS = {"--strict-mcp-config", "--restricted", "--dangerously-skip-permissions", "--allow-dangerously-skip-permissions"}
-TOOL_RESTRICTIONS = {"--tools", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools"}
 
 
 def history_roots(root: Path) -> tuple[Path, ...]:
@@ -72,13 +67,38 @@ def resume_command(session_id: str) -> str:
     return f'claude --resume {session_id}'
 
 
+def requires_verified_handoff(require_session_start: bool, arguments=()) -> bool:
+    return False
+
+
+def handoff_executable(target: str, project: Path, environment: Mapping[str, str], *, allow_managed: bool = True) -> str:
+    return target
+
+
+def validate_open(owned_backend: bool) -> None:
+    if owned_backend:
+        raise ValueError('Claude recovery does not use a Codex backend')
+
+
+def recovery_owns_backend(item: dict, requested: bool | None, native_arguments=()) -> bool:
+    if requested:
+        raise ValueError('Claude recovery does not use a Codex backend')
+    return False
+
+
+def recovery_receipt(status_path: Path, item: dict, owned_backend: bool) -> dict:
+    validate_open(owned_backend)
+    return {}
+
+
 def default_profile(profile: str) -> bool:
     return os.path.normcase(str(Path(profile).resolve())) == os.path.normcase(
         str((Path.home() / HOST.home_directory).resolve()))
 
 
 def open_tab(cli, item: dict, directory, label: str, instruction: str, status_path: Path, *, model=None,
-             native_arguments=(), dangerously_skip_permissions=False) -> None:
+             native_arguments=(), dangerously_skip_permissions=False, owned_backend=False) -> None:
+    validate_open(owned_backend)
     # Claude reads ~/.claude.json only without CLAUDE_CONFIG_DIR; set to ~/.claude it starts first-run onboarding.
     if default_profile(item["profile"]):
         profile_environment = {"clear": (HOST.home_variable,)}
@@ -93,7 +113,7 @@ def open_tab(cli, item: dict, directory, label: str, instruction: str, status_pa
     cli.open_claude_tab(directory, label, arguments, status_file=status_path, **profile_environment)
 
 
-def prepare_frontend(arguments, project: Path, environment, executable=None):
+def prepare_frontend(arguments, project: Path, environment, executable=None, *, handoff=False, hook_roots=None):
     return list(arguments), dict(environment), None
 
 
@@ -105,59 +125,15 @@ def release_frontend(ticket) -> None:
     return None
 
 
+def handoff_recipient(ticket, register_session, terminal):
+    return None
+
+
 def debug_arguments(arguments: list[str], directory: Path) -> tuple[list[str], str | None]:
     if any(value == "--debug-file" or value.startswith("--debug-file=") for value in arguments):
         return arguments, None
     debug_log = directory / "native-debug.log"
     return ["--debug-file", str(debug_log), *arguments], str(debug_log)
-
-
-def native_arguments(argv: list[str]) -> list[str]:
-    kept, index = [], 0
-    while index < len(argv):
-        token = argv[index]
-        if token == "--":
-            break
-        name, equals, _ = token.partition("=")
-        index += 1
-        if name in FLAGS and not equals:
-            kept.append(token)
-        elif name in SINGLE | VARIADIC and equals:
-            kept.append(token)
-        elif name in SINGLE and index < len(argv):
-            kept += [token, argv[index]]
-            index += 1
-        elif name in VARIADIC:
-            values = []
-            while index < len(argv) and not argv[index].startswith("-"):
-                values.append(argv[index])
-                index += 1
-            if values:
-                kept += [token, *values]
-            elif name in TOOL_RESTRICTIONS:
-                raise RuntimeError(f"Refusing recovery because {name} did not retain its tool restrictions")
-    return kept
-
-
-def session_identity() -> tuple[str, int] | None:
-    session_id, pid = os.environ.get(HOST.session_variable), os.environ.get("CLAUDE_PID")
-    if not session_id or not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
-        return None
-    return session_id, int(pid) if pid and pid.isdigit() else 0
-
-
-def validate_relaunch(entry: dict, project: Path) -> None:
-    identity = session_identity()
-    if identity is not None and (identity[0] != entry["session_id"] or identity[1] and identity[1] != entry["pid"]):
-        raise RuntimeError("the calling Claude session does not match its registered client")
-    transcript = os.environ.get("CLAUDE_CODE_SESSION_LOG", "")
-    if "subagents" in Path(transcript).parts:
-        raise RuntimeError("a subagent cannot relaunch its parent client")
-
-
-def check_relaunch(project: Path, executable: str, native: list[str], session_id: str, prompt: str) -> None:
-    return None
-
 
 
 def own_entry(nearest, cwd: Path, session_id: str | None, shared) -> dict | None:
