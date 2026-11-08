@@ -18,7 +18,7 @@ from codex import hook_trust
 from tj_cli import processes
 import session_close
 import register_session
-from host import Host
+from tj_agent.host import Host
 
 
 def load(name, relative):
@@ -90,7 +90,8 @@ class CloseFixture:
         self.addCleanup(self.store.close)
         initial_pid = 10 if host == "codex" else 20
         self.handle = self.store.start_session(host, "one", self.root,
-                                               pid=initial_pid, pid_started_at=float(initial_pid))
+                                               pid=initial_pid, pid_started_at=float(initial_pid),
+                                               profile=str(Host(host).configuration_root))
         entry = {"host": host, "session_id": "one", "cwd": str(self.root), "pid": initial_pid,
                  "pid_started_at": float(initial_pid), "started_at": 30.0,
                  "profile": register_session.profile_identity(host)}

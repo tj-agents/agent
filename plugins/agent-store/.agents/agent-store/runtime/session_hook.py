@@ -18,8 +18,7 @@ if _LOADER_KEY not in sys.modules:
     sys.modules[_LOADER_KEY] = _loader
 load_sibling = sys.modules[_LOADER_KEY].load_sibling
 
-EVENTS = ("session-start", "prompt", "stop", "session-end")
-HOSTS = ("claude", "codex")
+EVENTS = ("prompt", "stop", "session-end")
 
 
 def _read_json_stdin():
@@ -38,9 +37,7 @@ def _record(event, host, session_id, cwd, payload):
     store_module = load_sibling(__file__, "session_store")
     handle = store_module.session_handle(host, session_id)
     with store_module.SessionStore() as store:
-        if event == "session-start":
-            store.start_session(host, session_id, cwd, store_module.Checkout.probe(cwd))
-        elif event == "prompt":
+        if event == "prompt":
             store.update_session(handle, lambda session: session.prompted(payload.get("prompt")))
         elif event == "stop":
             checkout = store_module.Checkout.probe(cwd)
@@ -68,7 +65,7 @@ def run_hook(event, host):
 def _build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("event", choices=EVENTS)
-    parser.add_argument("--host", required=True, choices=HOSTS)
+    parser.add_argument("--host", required=True)
     return parser
 
 

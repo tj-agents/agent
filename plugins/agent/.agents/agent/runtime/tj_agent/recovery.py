@@ -14,7 +14,7 @@ import secrets
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-from host import Host
+from tj_agent.host import Host
 from host_sessions import SESSIONS
 
 HERE = Path(__file__).resolve().parents[1]

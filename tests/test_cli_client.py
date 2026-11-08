@@ -352,8 +352,9 @@ class SessionStoreAttachmentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}):
             module = register_session._load_session_store()
             with module.SessionStore() as store:
-                own = store.start_session("codex", "own", directory, pid=10, pid_started_at=1.0)
-                peer = store.start_session("codex", "peer", directory, pid=10, pid_started_at=1.0)
+                profile = str(CLIENT.HOST.configuration_root)
+                own = store.start_session("codex", "own", directory, pid=10, pid_started_at=1.0, profile=profile)
+                peer = store.start_session("codex", "peer", directory, pid=10, pid_started_at=1.0, profile=profile)
                 store.record_stop(own, module.Checkout.probe(directory))
                 before = store.get_session(own)
                 store.update_session(own, lambda session: session.attach_client(20, 2.0, directory))

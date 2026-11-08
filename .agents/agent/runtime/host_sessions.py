@@ -8,7 +8,7 @@ from typing import Protocol
 
 from claude import sessions as claude_sessions
 from codex import sessions as codex_sessions
-from host import Host
+from tj_agent.host import Host
 
 
 class Sessions(Protocol):

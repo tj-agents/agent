@@ -15,7 +15,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from host import Host  # noqa: E402
+from tj_agent.host import Host  # noqa: E402
 from tj_agent import recovery as agent_recovery  # noqa: E402
 from tj_cli import process  # noqa: E402
 
@@ -366,7 +366,7 @@ def cmd_claim(work_item=None, host=None, role=None, predecessor=None, status=Non
             host.value, session_id, cwd, checkout, key, work_item_repo, feature, item, role,
             status=status, branch=item_branch, title=title, plan_path=plan_path, predecessor=predecessor,
             registration=registration,
-            require_existing_binding=kind == "reference",
+            require_existing_binding=kind == "reference", profile=str(host.configuration_root),
         )
         result = _result_item(store.get_work_item(key), reference)
         result["handle"] = handle

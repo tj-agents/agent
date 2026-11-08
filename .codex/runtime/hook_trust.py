@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 
+from tj_agent.host import Host
 from tj_cli import process
 
 
@@ -317,8 +318,7 @@ def required_definitions(root, identity):
         sources = ["hooks/hooks.json"] if (root / "hooks/hooks.json").is_file() else []
     if not isinstance(sources, list):
         sources = [sources]
-    profile = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
-    data = profile / "plugins/data" / identity.replace("@", "-")
+    data = Host.CODEX.configuration_root / "plugins/data" / identity.replace("@", "-")
     result = []
     for source in sources:
         if isinstance(source, str):
@@ -335,7 +335,8 @@ def required_definitions(root, identity):
                     native_kind = parts[0] + "".join(part.title() for part in parts[1:])
                     cmd = handler.get("commandWindows", handler.get("command")) if os.name == "nt" else handler.get("command")
                     if isinstance(cmd, str):
-                        for variable, value in (("PLUGIN_ROOT", root), ("CLAUDE_PLUGIN_ROOT", root),
+                        for variable, value in ((Host.CODEX.plugin_root_variable, root),
+                                                (Host.CLAUDE.plugin_root_variable, root),
                                                 ("PLUGIN_DATA", data), ("CLAUDE_PLUGIN_DATA", data)):
                             cmd = cmd.replace("${" + variable + "}", str(value))
                     result.append((event[0].lower() + event[1:], group.get("matcher"), native_kind, cmd))
@@ -417,7 +418,7 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
 
 
 def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
-    identity = session_id or os.environ.get("CODEX_THREAD_ID")
+    identity = session_id or os.environ.get(Host.CODEX.session_variable)
     if not identity or not required:
         return
     deadline = time.monotonic() + timeout

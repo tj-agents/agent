@@ -43,7 +43,7 @@ normalise_work_item_reference = _work_item.normalise_work_item_reference
 __all__ = [
     "Checkout", "ClientRegistration", "GIT_TIMEOUT", "HOOK_GIT_TIMEOUT", "OWNER", "SCHEMA_VERSION", "Session",
     "SessionStore", "WorkItem", "WorkItemReference", "current_machine", "database_path", "git",
-    "identify_repository", "normalise_work_item_reference", "profile_directory", "prompt_title", "session_handle",
+    "identify_repository", "normalise_work_item_reference", "prompt_title", "session_handle",
     "state_directory", "validate_execution_key", "work_item_key",
 ]
 
@@ -152,14 +152,6 @@ def database_path():
 
 def current_machine():
     return socket.gethostname()
-
-
-def profile_directory(host):
-    if host == "claude":
-        value = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
-    else:
-        value = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
-    return str(Path(value))
 
 
 def _execute_with_lock_retry(connection, statement):
@@ -333,11 +325,12 @@ class SessionStore:
         with self.transaction():
             self._connection.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
 
-    def start_session(self, host, session_id, cwd=None, checkout=None, title=None, pid=None, pid_started_at=None):
+    def start_session(self, host, session_id, cwd=None, checkout=None, title=None, pid=None, pid_started_at=None, *,
+                      profile):
         handle = session_handle(host, session_id)
         with self.transaction():
             session = self.get_session(handle)
-            machine, profile = current_machine(), profile_directory(host)
+            machine = current_machine()
             if session is None:
                 session = Session.start(
                     host, session_id, machine, profile, cwd=cwd, checkout=checkout, title=title,
@@ -479,7 +472,7 @@ class SessionStore:
     def claim_registered_work_item(
         self, host, session_id, cwd, checkout, key, work_item_repo, feature, item, role,
         status=None, branch=None, title=None, plan_path=None, predecessor=None, registration=None,
-        require_existing_binding=False,
+        require_existing_binding=False, *, profile,
     ):
         handle = session_handle(host, session_id)
         with self.transaction():
@@ -488,7 +481,7 @@ class SessionStore:
                 if registration is None:
                     raise ValueError(f"{handle} is not a registered current native session")
                 session = Session.start(
-                    host, session_id, current_machine(), profile_directory(host), cwd=cwd, checkout=checkout,
+                    host, session_id, current_machine(), profile, cwd=cwd, checkout=checkout,
                     title=registration.title, pid=registration.pid, pid_started_at=registration.pid_started_at,
                 )
                 self._save_session(session)

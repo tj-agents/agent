@@ -17,7 +17,7 @@ import config_conflicts
 import lock_io
 import machine_paths
 import plugin_selection
-from plugin_runtime import process
+from plugin_runtime import Host, process
 
 if sys.version_info < (3, 11):
     raise SystemExit("Repository settings generation requires Python 3.11 or newer")
@@ -253,13 +253,13 @@ def text_at(path: Path) -> str | None:
 
 def local_state(path: Path) -> dict:
     if not path.is_file():
-        return {"schema_version": 1, "claude": {}, "codex": None, "rules": None}
+        return {"schema_version": 1, Host.CLAUDE.value: {}, Host.CODEX.value: None, "rules": None}
     state = lock_io.load_json(path)
-    if set(state) != {"schema_version", "claude", "codex", "rules"} or state["schema_version"] != 1:
+    if set(state) != {"schema_version", Host.CLAUDE.value, Host.CODEX.value, "rules"} or state["schema_version"] != 1:
         raise lock_io.LockError(f"{path}: invalid local ownership state")
-    if not isinstance(state["claude"], dict) or any(state[key] is not None and not isinstance(state[key], str) for key in ("codex", "rules")):
+    if not isinstance(state[Host.CLAUDE.value], dict) or any(state[key] is not None and not isinstance(state[key], str) for key in (Host.CODEX.value, "rules")):
         raise lock_io.LockError(f"{path}: invalid local ownership state")
-    for key, value in state["claude"].items():
+    for key, value in state[Host.CLAUDE.value].items():
         if key not in {"extraKnownMarketplaces", "enabledPlugins", "allow"}:
             raise lock_io.LockError(f"{path}: invalid Claude ownership key")
         if key == "allow":
@@ -403,12 +403,12 @@ def plan(
     expected_rules = codex_rules(rules) if rules else None
     if scope == "local":
         state = local_state(state_path)
-        claude_text, claude_owned = local_claude(claude, sources, identities, allow, state["claude"])
-        codex_text, codex_owned = local_codex(codex, sources, identities, state["codex"])
+        claude_text, claude_owned = local_claude(claude, sources, identities, allow, state[Host.CLAUDE.value])
+        codex_text, codex_owned = local_codex(codex, sources, identities, state[Host.CODEX.value])
         actual_rules = text_at(rules_path)
         if actual_rules is not None and actual_rules != state["rules"]:
             raise lock_io.LockError(f"{rules_path}: harness rules are not owned or were changed")
-        updated = {"schema_version": 1, "claude": claude_owned, "codex": codex_owned, "rules": expected_rules}
+        updated = {"schema_version": 1, Host.CLAUDE.value: claude_owned, Host.CODEX.value: codex_owned, "rules": expected_rules}
         targets = {claude: claude_text, codex: codex_text, rules_path: expected_rules, state_path: json.dumps(updated, indent=2, ensure_ascii=False) + "\n"}
         if exclude is not None:
             selection = [lock_path] if lock_path.resolve().is_relative_to(root) else []

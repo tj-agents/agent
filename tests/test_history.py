@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('history', ROOT / 'plugins/agent/.agents/agent/runtime/history.py')
 HISTORY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HISTORY)
-from host import Host  # noqa: E402
+from tj_agent.host import Host  # noqa: E402
 
 
 class HistoryTests(unittest.TestCase):

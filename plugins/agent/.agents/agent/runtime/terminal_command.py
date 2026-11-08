@@ -10,7 +10,7 @@ import sys
 from typing import Mapping
 
 import agent_cli
-from host import Host
+from tj_agent.host import Host
 from host_plugins import PLUGINS
 
 
