@@ -1,4 +1,4 @@
-"""Reconcile merge policy and plugins from GitHub for one repository or every owned one (Python 3.11+)."""
+"""Refresh plugins from GitHub for one repository or every owned one (Python 3.11+)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ TOPIC_VARIABLE = "UPDATE_TOPIC"
 LOG = logging.getLogger("machine-events")
 FIELDS = """nameWithOwner isArchived isFork
 defaultBranchRef { name target { oid } }
-policy: object(expression: "HEAD:.github/merge-policy.json") { oid }
 marketplace: object(expression: "HEAD:.claude-plugin/marketplace.json") { oid }
 catalog: object(expression: "HEAD:.agents/plugins/marketplace.json") { oid }
 plugin: object(expression: "HEAD:.claude-plugin/plugin.json") { oid }
@@ -109,27 +108,6 @@ def catch_up_states(api=gh):
             cursor = page["endCursor"]
 
 
-def policy_script():
-    config = plugins.load_codex_config()
-    roots = [root for _, declaration in plugins.declarations(config)
-             for root in plugins.installed_plugin_roots("github-actions", Host.CLAUDE.configuration_root, declaration)]
-    relative = Path(".agents/github-actions/utility/merge-policy/scripts/merge_policy.py")
-    candidates = [root / relative for root in roots]
-    candidates += [root / "skills/merge-policy/scripts/merge_policy.py" for root in roots]
-    script = plugins.newest_existing(candidates)
-    if script is None:
-        raise RuntimeError("Install the github-actions plugin containing merge-policy reconcile before setup")
-    return script
-
-
-def reconcile_policy(repository, run=subprocess.run):
-    result = run([plugins.console_python(), "-B", str(policy_script()), "reconcile", "--repo", repository],
-                 env=tommy_environment(), capture_output=True, text=True, encoding="utf-8", errors="replace",
-                 timeout=180, check=False, creationflags=plugins.NO_WINDOW)
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip() or "merge-policy reconciliation failed")
-
-
 def refresh_plugins():
     from claude import plugins as claude_plugins
     from codex import plugins as codex_plugins
@@ -151,10 +129,9 @@ def refresh_plugins():
 
 
 class Reconciler:
-    def __init__(self, state=None, refresh=None, policy=reconcile_policy):
+    def __init__(self, state=None, refresh=None):
         self.state = state if state is not None else {}
         self.refresh = refresh or refresh_plugins
-        self.policy = policy
 
     def repository(self, current, refresh_plugins=True):
         if not current or current.get("isArchived") or current.get("isFork"):
@@ -164,7 +141,6 @@ class Reconciler:
             return
         revision = current["defaultBranchRef"]["target"]["oid"]
         old = self.state.get(repository, {})
-        policy = (current.get("policy") or {}).get("oid")
         catalog = sorted(oid for name in ("marketplace", "catalog", "plugin", "codexPlugin")
                         if (oid := (current.get(name) or {}).get("oid")))
         if old.get("revision") == revision:
@@ -173,12 +149,10 @@ class Reconciler:
             # Generic CI may complete before the native release build. Failure
             # leaves this revision unacknowledged so the existing watcher retries.
             native_runtime.prepare(revision=revision)
-        if policy and policy != old.get("policy"):
-            self.policy(repository)
         if catalog and (catalog != old.get("catalog") or repository.lower().startswith("tj-agents/")) and refresh_plugins:
             if self.refresh() != 0:
                 raise RuntimeError("plugin refresh failed")
-        self.state[repository] = {"revision": revision, "policy": policy, "catalog": catalog}
+        self.state[repository] = {"revision": revision, "catalog": catalog}
 
     def catch_up(self, states):
         if self.refresh() != 0:

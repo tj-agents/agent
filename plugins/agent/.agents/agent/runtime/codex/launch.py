@@ -17,6 +17,12 @@ from native_executable import is_script
 class Adapter(Launch, Protocol):
     KEEP_TAB_TITLE: tuple[str, ...]
 
+    def parse_version(self, text: str) -> dict[str, object] | None: ...
+
+    def compare_version(
+        self, left: dict[str, object], right: dict[str, object]
+    ) -> int: ...
+
     def resolve_executable(
         self, minimum: str = "0.154.0", candidates: list[str] | None = None
     ) -> tuple[str, dict[str, object]]: ...
