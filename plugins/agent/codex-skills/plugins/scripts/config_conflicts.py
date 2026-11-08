@@ -11,6 +11,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from plugin_runtime import process
+
 MISSING = object()
 
 
@@ -109,7 +111,7 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
             valid_toml = True
     # A real unmerged index is required. Committed markers or arbitrary invalid
     # configuration are never treated as permission to reconstruct user data.
-    stages = subprocess.run(
+    stages = process.run(
         ["git", "--literal-pathspecs", "ls-files", "-u", "--", relative],
         cwd=root,
         capture_output=True,
@@ -127,7 +129,7 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
         raise ValueError(
             f"{path}: configuration markers have no complete Git merge stages"
         )
-    result = subprocess.run(
+    result: subprocess.CompletedProcess[str] = process.run(
         ["git", "show", ":1:" + relative],
         cwd=root,
         capture_output=True,
@@ -144,7 +146,7 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
         staged = [base]
         for stage in (2, 3):
             staged.append(
-                subprocess.run(
+                process.run(
                     ["git", "show", f":{stage}:" + relative],
                     cwd=root,
                     capture_output=True,
@@ -214,7 +216,7 @@ def read_text(path: Path, unmanaged: Callable[[str], str] | None = None) -> str:
         files = [Path(directory) / name for name in ("base", "ours", "theirs")]
         for file, value in zip(files, prefixes, strict=True):
             file.write_text(value, encoding="utf-8")
-        result = subprocess.run(
+        result = process.run(
             ["git", "merge-file", "-p", str(files[1]), str(files[0]), str(files[2])],
             cwd=root,
             capture_output=True,

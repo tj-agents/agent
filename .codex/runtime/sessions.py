@@ -15,6 +15,7 @@ from codex import handoff_runtime
 from host import Host
 import required_plugins
 import transcripts
+from tj_cli import process
 
 HOST = Host.CODEX
 FRONTEND_FROM_REGISTRATION = False
@@ -136,7 +137,7 @@ def recovery_receipt(status_path: Path, item: dict, owned_backend: bool) -> dict
 
 def verify_resume(executable: str) -> None:
     try:
-        result = subprocess.run([executable, "resume", "--help"], text=True, capture_output=True, timeout=15)
+        result = process.run([executable, "resume", "--help"], text=True, capture_output=True, timeout=15)
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(f"Could not verify native Codex resume support: {exc}") from None
     if result.returncode or "SESSION_ID" not in result.stdout + result.stderr:

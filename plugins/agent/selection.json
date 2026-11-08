@@ -7,7 +7,6 @@
   ],
   "profiles": {
     "core": [
-      "close",
       "handoff",
       "lanes",
       "listen",
@@ -23,20 +22,6 @@
   },
   "compatibilitySkillAliases": {},
   "skills": [
-    {
-      "name": "close",
-      "kind": "utility",
-      "profile": "core",
-      "applicability": [
-        "agent sessions"
-      ],
-      "requires": [
-        "bundled CLI process runtime"
-      ],
-      "provenance": [
-        "house"
-      ]
-    },
     {
       "name": "handoff",
       "kind": "utility",

@@ -1,4 +1,4 @@
-"""An agent session's lifecycle, turn state and work-item claim (Python 3.9+)."""
+"""An agent session's lifecycle, turn state and work-item claim (Python 3.12+)."""
 
 from dataclasses import dataclass
 import time

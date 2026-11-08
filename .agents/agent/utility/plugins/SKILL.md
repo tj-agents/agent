@@ -117,7 +117,7 @@ Both commands pick the scope from repository ownership, and `--scope local` forc
 scope writes `.claude/settings.local.json`, `.codex/config.toml`, optional `.codex/rules/agent-harness.rules`
 and `.agents/repo-capabilities.local.json` ownership state. It git-excludes all of them and the selection,
 preserves unrelated selections and approvals, and refuses tracked targets, changed owned settings and links
-that escape the root. Settings generation requires Python 3.11 or newer.
+that escape the root. Settings generation requires Python 3.12 or newer.
 
 ## Audit a machine
 
@@ -127,7 +127,7 @@ After every repository carries its own settings, audit the machine before removi
 python -B '<skill-directory>\scripts\verify_machine.py' --home C:\Users\name --repository C:\path\to\project
 ```
 
-The verifier is read-only and needs Python 3.11 or newer. Repeat `--repository` for each project; it checks
+The verifier is read-only and needs Python 3.12 or newer. Repeat `--repository` for each project; it checks
 project Codex agents and local marketplace sources in Codex and Claude settings. GitHub marketplace
 declarations are allowed. It reports user-scope plugin selections, marketplaces, hooks, notifications,
 instruction files, agent settings, and loose agents or skills. `--json` gives stable finding codes. Exit

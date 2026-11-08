@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record host session lifecycle hook events in the session store (Python 3.9+)."""
+"""Record host session lifecycle hook events in the session store (Python 3.12+)."""
 
 import argparse
 import hashlib

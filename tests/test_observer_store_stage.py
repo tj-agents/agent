@@ -9,7 +9,6 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest import mock
-import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +26,19 @@ def load_register(path, name):
 
 
 class ObserverStoreStageTests(unittest.TestCase):
+    def test_windows_wrapper_query_uses_the_shared_runner(self):
+        host = SimpleNamespace(pid=20, ppid=10, started_at=101.0, name='codex.exe')
+        wrapper = SimpleNamespace(pid=10, ppid=1, started_at=100.0, name='pwsh.exe')
+        result = SimpleNamespace(returncode=0, stdout='pwsh -Command codex.exe', stderr='')
+        with mock.patch.object(session_close, 'os', SimpleNamespace(name='nt')), \
+                mock.patch.object(session_close, 'valid_entry', return_value=True), \
+                mock.patch.object(session_close, 'process_info', return_value=host), \
+                mock.patch.object(session_close.register_session, '_windows_process_table', return_value={10: wrapper, 20: host}), \
+                mock.patch.object(session_close.process, 'run', return_value=result) as run:
+            self.assertEqual({'pid': 10, 'started_at': 100.0},
+                             session_close.qualified_windows_wrapper({'pid': 20, 'pid_started_at': 101.0}))
+        self.assertEqual('powershell.exe', run.call_args.args[0][0])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='observer store ')
         self.addCleanup(self.temporary.cleanup)
@@ -40,9 +52,7 @@ class ObserverStoreStageTests(unittest.TestCase):
 
     def start_stage(self):
         with mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.state)}), \
-                mock.patch('tj_cli.process.run', side_effect=self.scheduler), \
-                mock.patch.object(session_close, 'windows_observer_command',
-                                  side_effect=lambda command: ['C:/tj/tj_hook.exe', '--', *command]), \
+                mock.patch.object(session_close.process, 'run', side_effect=self.scheduler), \
                 mock.patch.object(session_close.subprocess, 'Popen', return_value=SimpleNamespace(pid=1)):
             session_close.start_observer(['--result', 'unused'])
         return next((self.state / 'merge-cleanup' / 'observers').iterdir())
@@ -55,6 +65,8 @@ class ObserverStoreStageTests(unittest.TestCase):
 
         self.assertIsNotNone(store)
         self.assertTrue(hasattr(store.SessionStore, 'delete_session'))
+        checkout = load_register(staging / 'checkout.py', 'receipted_staged_checkout')
+        self.assertEqual(staging.resolve(), checkout._PROCESS_RUNTIME)
         receipt = (staging / '.tj-agents-observer-store.json').read_text(encoding='utf-8')
         self.assertIn('tj-agents-agent-observer-store', receipt)
 
@@ -82,6 +94,7 @@ class ObserverStoreStageTests(unittest.TestCase):
             'Path(sys.argv[1]).write_text(json.dumps({key: os.environ.get(key) for key in '
             '("AGENT_STATE_DIRECTORY", "CODEX_HOME", "CLAUDE_CONFIG_DIR")}))\n', encoding='utf-8')
         result = subprocess.run([sys.executable, '-I', '-B', str(launcher), '--state-directory', str(state),
+                                 '--search-path', os.environ.get('PATH', os.defpath),
                                  '--codex-home', str(codex), '--claude-config-dir', str(claude), '--',
                                  str(probe), str(output)], capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(0, result.returncode, result.stderr)
@@ -90,14 +103,13 @@ class ObserverStoreStageTests(unittest.TestCase):
 
     def test_scheduler_command_passes_only_owned_detached_context(self):
         with mock.patch.dict(os.environ, {'AGENT_STATE_DIRECTORY': str(self.state), 'CODEX_HOME': str(self.state / 'codex'),
-                                          'CLAUDE_CONFIG_DIR': str(self.state / 'claude'), 'UNRELATED': 'secret'}, clear=True):
+                                          'CLAUDE_CONFIG_DIR': str(self.state / 'claude'), 'UNRELATED': 'secret'}, clear=True), \
+                mock.patch.object(session_close.shutil, 'which', return_value=sys.executable):
             command = session_close.detached_command(self.state / 'watcher.py', ['--request', 'exact'], SCRIPTS / 'detached_launch.py')
         self.assertIn('--state-directory', command)
         self.assertIn('--codex-home', command)
         self.assertIn('--claude-config-dir', command)
         self.assertNotIn('UNRELATED', ' '.join(command))
-
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,4 +1,4 @@
-"""The cli-sessions registry entries the session hooks keep in step with the store (Python 3.9+)."""
+"""The cli-sessions registry entries the session hooks keep in step with the store (Python 3.12+)."""
 
 from dataclasses import dataclass
 import json

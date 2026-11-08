@@ -14,6 +14,7 @@ sys.path.insert(0, str(RUNTIME))
 from host import Host  # noqa: E402
 from host_plugins import PLUGINS  # noqa: E402
 import required_plugins as REQUIRED  # noqa: E402
+import managed_admission  # noqa: E402
 
 
 class RequiredPluginInventoryTests(unittest.TestCase):
@@ -46,7 +47,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
             marketplace = command[command.index("--marketplace") + 1]
             return subprocess.CompletedProcess(command, 0, json.dumps({"installed": [entries[marketplace]]}), "")
 
-        with mock.patch.object(REQUIRED.subprocess, "run", side_effect=response) as run:
+        with mock.patch.object(REQUIRED.process, "run", side_effect=response) as run:
             result = REQUIRED.check(self.project, Host.CODEX, "native-codex", admission=False)
         self.assertEqual({first, second}, set(result))
         self.assertEqual([
@@ -62,7 +63,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
         def run(_command, **options):
             return native_run([sys.executable, str(script)], **options)
 
-        with mock.patch.object(REQUIRED.subprocess, "run", side_effect=run):
+        with mock.patch.object(REQUIRED.process, "run", side_effect=run):
             self.assertEqual([], REQUIRED.inventory("native-claude", PLUGINS[Host.CLAUDE], self.project, ()))
 
     def test_multiple_marketplaces_share_one_inventory_deadline(self):
@@ -76,7 +77,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
 
     def test_explicit_native_inventory_remains_unfiltered_for_cli_capability(self):
         entry = self.entry("cli@tj-agents")
-        with mock.patch.object(REQUIRED.subprocess, "run", return_value=subprocess.CompletedProcess(
+        with mock.patch.object(REQUIRED.process, "run", return_value=subprocess.CompletedProcess(
                 [], 0, json.dumps({"installed": [entry]}), "")) as run:
             roots = REQUIRED.inventory_roots(self.project, Host.CODEX, "native-codex")
         self.assertIn("cli@tj-agents", roots)
@@ -91,7 +92,7 @@ class RequiredPluginInventoryTests(unittest.TestCase):
             self.assertEqual("tj-agents", command[command.index("--marketplace") + 1])
             return subprocess.CompletedProcess(command, 0, json.dumps({"installed": [entry]}), "")
 
-        with mock.patch.object(REQUIRED.subprocess, "run", side_effect=query):
+        with mock.patch.object(REQUIRED.process, "run", side_effect=query):
             roots = REQUIRED.inventory_roots(self.project, Host.CODEX, "native-codex",
                                              identities=["agent@tj-agents"])
         self.assertEqual({"agent@tj-agents"}, roots.keys())
@@ -113,6 +114,23 @@ class RequiredPluginInventoryTests(unittest.TestCase):
                 "--settings", "override.json", "--setting-sources", "project,local",
                 "--plugin-dir", "plugins", "--plugin-url", "https://example.test/plugin",
             ),
+        )
+
+    def test_admission_revalidates_from_the_effective_native_directory(self):
+        self.select("agent@tj-agents")
+        nested = self.project / "nested native configuration"
+        nested.mkdir()
+        roots = {"agent@tj-agents": self.root / "agent"}
+        with (
+            mock.patch.object(REQUIRED, "inventory_roots", return_value=roots),
+            mock.patch.object(managed_admission, "verify") as verify,
+        ):
+            self.assertEqual(roots, REQUIRED.check(nested, Host.CODEX, "native-codex"))
+        verify.assert_called_once_with(
+            self.project.resolve(),
+            Host.CODEX,
+            "native-codex",
+            native_project=nested.resolve(),
         )
 
 

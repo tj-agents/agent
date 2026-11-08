@@ -1,4 +1,4 @@
-"""Loads an Agent Store runtime module from beside a given file, once per process (Python 3.9+)."""
+"""Loads an Agent Store runtime module from beside a given file, once per process (Python 3.12+)."""
 
 import hashlib
 import importlib.util
