@@ -312,9 +312,10 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
         script.parent.mkdir(parents=True)
         store.parent.mkdir(parents=True)
         shutil.copy2(SCRIPT, script)
-        runtime = store.parents[2] / "agent" / "runtime"
-        runtime.mkdir(parents=True)
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent/runtime/host.py", runtime / "host.py")
+        package = store.parents[2] / "agent" / "runtime" / "tj_agent"
+        package.mkdir(parents=True)
+        for name in ("__init__.py", "host.py"):
+            shutil.copy2(ROOT / "plugins/agent/.agents/agent/runtime/tj_agent" / name, package / name)
         shutil.copytree(ROOT / "plugins/agent/.agents/agent-store/runtime/tj_cli", store.parent / "tj_cli")
         for name in register_session.OBSERVER_STORE_FILES[1:]:
             shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime" / name, store.with_name(name))

@@ -21,6 +21,7 @@ _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(_TESTS_DIR))
 import launcher_test_support  # noqa: E402  (after the sys.path fix-up above)
+from tj_agent.host import Host  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location('launch_claude', SCRIPT)
 LAUNCH_CLAUDE = importlib.util.module_from_spec(SPEC)
@@ -42,7 +43,7 @@ class LaunchClaudeTests(unittest.TestCase):
 
         # For the call-order assertion (H10): attached to the same three mocks real_agent_cli() installed.
         self.call_order = mock.Mock()
-        self.call_order.attach_mock(self.agent_cli.host_launch('claude').resolve_executable, 'resolve_claude_executable')
+        self.call_order.attach_mock(self.agent_cli.host_launch(Host.CLAUDE).resolve_executable, 'resolve_claude_executable')
         self.call_order.attach_mock(self.agent_cli.sync_claude_standards, 'sync_claude_standards')
         self.call_order.attach_mock(self.agent_cli.launch_tab, 'launch_tab')
 
@@ -304,7 +305,7 @@ class LaunchClaudeTests(unittest.TestCase):
         # what could crash unguarded.
         parent = mock.Mock()
         with mock.patch.object(self.agent_cli, 'make_stdio_encoding_lossy') as hardened, \
-                mock.patch.object(self.agent_cli.host_launch('claude'), 'open_tab', wraps=self.agent_cli.host_launch('claude').open_tab) as tab:
+                mock.patch.object(self.agent_cli.host_launch(Host.CLAUDE), 'open_tab', wraps=self.agent_cli.host_launch(Host.CLAUDE).open_tab) as tab:
             parent.attach_mock(hardened, 'make_stdio_encoding_lossy')
             parent.attach_mock(tab, 'open_claude_tab')
             self.run_main('--model', 'explicit-model')
@@ -353,7 +354,7 @@ class LaunchClaudeTests(unittest.TestCase):
         self.assertNotIn('Launched', out)
 
     def test_a_launch_error_from_resolving_claude_is_reported_and_exits_nonzero(self):
-        self.agent_cli.host_launch('claude').resolve_executable.side_effect = self.agent_cli.LaunchError('no native claude found')
+        self.agent_cli.host_launch(Host.CLAUDE).resolve_executable.side_effect = self.agent_cli.LaunchError('no native claude found')
         code, out, err = self.run_main('--model', 'explicit-model')
         self.assertEqual(code, 1)
         self.assertIn('no native claude found', err)

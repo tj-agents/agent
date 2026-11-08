@@ -14,7 +14,7 @@ import time
 import sys
 
 from codex import frontend_input, hook_trust
-from host import Host
+from tj_agent.host import Host
 
 HOST = Host.CODEX
 RECORD_ENV = "CODEX_TUI_RECORD_SESSION"

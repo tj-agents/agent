@@ -1,12 +1,12 @@
-"""Codex's installed plugin build labels (Python 3.9+)."""
+"""Codex's installed plugin build labels, and their refresh (Python 3.9+)."""
 
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
+from typing import Any
 
-from host import Host
+from tj_agent.host import Host
 
 HOST = Host.CODEX
 RELOAD = "restart this Codex session"
@@ -30,11 +30,6 @@ def installed_label(marketplace: str, plugin: str) -> str | None:
     return builds[0] if len(builds) == 1 else None
 
 
-def running_root() -> Path | None:
-    value = os.environ.get("PLUGIN_ROOT")
-    return Path(value) if value else None
-
-
 def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
     expected, actual = label(install), installed_label(marketplace, plugin)
     if expected and actual and actual != expected:
@@ -47,3 +42,18 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
     if expected and loaded != expected:
         return f"this session loaded build {loaded or 'that was since replaced'}, current {expected}"
     return None
+
+
+def refresh(report: Any, marketplaces: tuple[str, ...]) -> None:
+    listing = report.step(HOST, "list", ["codex", "plugin", "list", "--json"])
+    if listing is None:
+        return
+    installed = [row for row in json.loads(listing.stdout)["installed"] if row["marketplaceName"] in marketplaces]
+    for marketplace in sorted({row["marketplaceName"] for row in installed}):
+        report.step(HOST, f"marketplace {marketplace}", ["codex", "plugin", "marketplace", "upgrade", marketplace])
+    for row in installed:
+        report.step(HOST, row["pluginId"], ["codex", "plugin", "add", row["pluginId"]])
+
+
+def restart(report: Any) -> None:
+    print("Open Codex sessions pick up skill changes on their own; restart them with `codex resume <id>` for hooks.")

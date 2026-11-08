@@ -17,6 +17,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
 CLI = importlib.import_module('agent_cli')
+Host = importlib.import_module('tj_agent.host').Host
 
 
 # A model of what Windows Terminal does to `wt --window 0 new-tab ... --suppressApplicationTitle <exe>
@@ -174,7 +175,7 @@ class LaunchEnvironmentTests(unittest.TestCase):
         self.assertEqual(forced, {'NO_COLOR': '0', 'X': '1'})
 
     def test_machine_configuration_is_not_session_state(self):
-        self.assertNotIn('CLAUDE_CODE_GIT_BASH_PATH', CLI.host_launch('claude').SESSION_ENVIRONMENT)
+        self.assertNotIn('CLAUDE_CODE_GIT_BASH_PATH', CLI.host_launch(Host.CLAUDE).SESSION_ENVIRONMENT)
 
 
 def executable(path, body='#!/bin/sh\nexit 0\n'):
@@ -193,13 +194,13 @@ class ClaudeExecutableTests(unittest.TestCase):
 
     def test_the_native_install_under_home_wins(self):
         native = executable(self.base / 'home' / '.local' / 'bin' / self.name, '\x7fELF')
-        self.assertEqual(CLI.host_launch('claude').resolve_executable(home=self.base / 'home', which=lambda _: None), str(native))
+        self.assertEqual(CLI.host_launch(Host.CLAUDE).resolve_executable(home=self.base / 'home', which=lambda _: None), str(native))
 
     @unittest.skipIf(CLI.IS_WINDOWS, 'the #! shim check is POSIX-only')
     def test_an_npm_shim_on_path_is_refused(self):
         shim = executable(self.base / 'npm' / 'claude', '#!/usr/bin/env node\n')
         with self.assertRaises(CLI.LaunchError):
-            CLI.host_launch('claude').resolve_executable(home=self.base / 'empty', which=lambda _: str(shim))
+            CLI.host_launch(Host.CLAUDE).resolve_executable(home=self.base / 'empty', which=lambda _: str(shim))
 
     @unittest.skipIf(CLI.IS_WINDOWS, 'the #! shim check is POSIX-only')
     def test_an_npm_shim_at_the_native_install_path_is_refused(self):
@@ -208,24 +209,24 @@ class ClaudeExecutableTests(unittest.TestCase):
         local.parent.mkdir(parents=True)
         local.symlink_to(self.base / 'npm' / 'cli.js')
         native = executable(self.base / 'path' / 'claude', '\x7fELF')
-        self.assertEqual(CLI.host_launch('claude').resolve_executable(home=self.base / 'home', which=lambda _: str(native)), str(native))
+        self.assertEqual(CLI.host_launch(Host.CLAUDE).resolve_executable(home=self.base / 'home', which=lambda _: str(native)), str(native))
         with self.assertRaises(CLI.LaunchError):
-            CLI.host_launch('claude').resolve_executable(home=self.base / 'home', which=lambda _: None)
+            CLI.host_launch(Host.CLAUDE).resolve_executable(home=self.base / 'home', which=lambda _: None)
 
     def test_a_native_binary_on_path_is_accepted(self):
         native = executable(self.base / 'path' / self.name, '\x7fELF')
-        self.assertEqual(CLI.host_launch('claude').resolve_executable(home=self.base / 'empty', which=lambda _: str(native)), str(native))
+        self.assertEqual(CLI.host_launch(Host.CLAUDE).resolve_executable(home=self.base / 'empty', which=lambda _: str(native)), str(native))
 
 
 class CodexVersionTests(unittest.TestCase):
     def order(self, left, right):
-        return CLI.host_launch('codex').compare_version(CLI.host_launch('codex').parse_version(left), CLI.host_launch('codex').parse_version(right))
+        return CLI.host_launch(Host.CODEX).compare_version(CLI.host_launch(Host.CODEX).parse_version(left), CLI.host_launch(Host.CODEX).parse_version(right))
 
     def test_parses_the_cli_banner(self):
-        version = CLI.host_launch('codex').parse_version('codex-cli 0.160.0\n')
+        version = CLI.host_launch(Host.CODEX).parse_version('codex-cli 0.160.0\n')
         self.assertEqual(version['core'], (0, 160, 0))
         self.assertEqual(version['text'], '0.160.0')
-        self.assertIsNone(CLI.host_launch('codex').parse_version('no version here'))
+        self.assertIsNone(CLI.host_launch(Host.CODEX).parse_version('no version here'))
 
     def test_a_prerelease_ranks_below_its_release(self):
         self.assertEqual(self.order('0.151.0-alpha.7.1', '0.151.0'), -1)
@@ -255,29 +256,29 @@ class CodexExecutableTests(unittest.TestCase):
 
     def test_finds_the_vendored_binary_behind_a_posix_npm_symlink(self):
         shim, binary = self.vendored(self.base / 'npm global', '0.160.0')
-        self.assertEqual(CLI.host_launch('codex').candidate_paths(which=lambda _: str(shim)), [str(binary)])
+        self.assertEqual(CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: str(shim)), [str(binary)])
 
     def test_a_native_executable_directly_on_path_is_a_candidate_with_no_npm_package(self):
         native = executable(self.base / 'standalone' / 'codex', '\x7fELFnot a script\n')
-        self.assertEqual(CLI.host_launch('codex').candidate_paths(which=lambda _: str(native)), [str(native)])
+        self.assertEqual(CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: str(native)), [str(native)])
 
     def test_an_npm_shim_on_path_is_not_itself_a_candidate(self):
         shim, binary = self.vendored(self.base / 'npm global', '0.160.0')
-        candidates = CLI.host_launch('codex').candidate_paths(which=lambda _: str(shim))
+        candidates = CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: str(shim))
         self.assertNotIn(str(shim), candidates)
         self.assertEqual(candidates, [str(binary)])
 
     def test_skips_the_windows_desktop_cache_elsewhere(self):
         executable(self.base / 'appdata' / 'OpenAI' / 'Codex' / 'bin' / 'h' / 'codex.exe')
         self.assertEqual(
-            CLI.host_launch('codex').candidate_paths(which=lambda _: None, local_app_data=str(self.base / 'appdata'), npm_prefix=lambda: None),
+            CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: None, local_app_data=str(self.base / 'appdata'), npm_prefix=lambda: None),
             [],
         )
 
     def test_falls_back_to_the_npm_prefix_when_the_shim_is_off_path(self):
         shim, binary = self.vendored(self.base / 'npm global', '0.160.0')
         self.assertEqual(
-            CLI.host_launch('codex').candidate_paths(which=lambda _: None, npm_prefix=lambda: str(self.base / 'npm global')),
+            CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: None, npm_prefix=lambda: str(self.base / 'npm global')),
             [str(binary)],
         )
 
@@ -285,13 +286,13 @@ class CodexExecutableTests(unittest.TestCase):
         self.vendored(self.base / 'npm global', '0.160.0')
         other_shim, other_binary = self.vendored(self.base / 'other npm', '0.161.0')
         self.assertEqual(
-            CLI.host_launch('codex').candidate_paths(which=lambda _: str(other_shim), npm_prefix=lambda: str(self.base / 'npm global')),
+            CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: str(other_shim), npm_prefix=lambda: str(self.base / 'npm global')),
             [str(other_binary)],
         )
 
     def test_a_missing_npm_prefix_binary_is_not_fatal(self):
         self.assertEqual(
-            CLI.host_launch('codex').candidate_paths(which=lambda _: None, npm_prefix=lambda: str(self.base / 'no such prefix')),
+            CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: None, npm_prefix=lambda: str(self.base / 'no such prefix')),
             [],
         )
 
@@ -299,7 +300,7 @@ class CodexExecutableTests(unittest.TestCase):
     def test_npm_prefix_is_not_consulted_on_windows(self):
         calls = []
         self.vendored(self.base / 'npm global', '0.160.0')
-        CLI.host_launch('codex').candidate_paths(which=lambda _: None, npm_prefix=lambda: calls.append(1) or str(self.base / 'npm global'))
+        CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: None, npm_prefix=lambda: calls.append(1) or str(self.base / 'npm global'))
         self.assertEqual(calls, [])
 
     def test_picks_the_newest_answering_candidate(self):
@@ -307,44 +308,44 @@ class CodexExecutableTests(unittest.TestCase):
         alpha = executable(self.base / 'alpha', '#!/bin/sh\necho "codex-cli 0.160.0-alpha.3"\n')
         new = executable(self.base / 'new', '#!/bin/sh\necho "codex-cli 0.160.0"\n')
         silent = executable(self.base / 'silent', '#!/bin/sh\nexit 1\n')
-        path, version = CLI.host_launch('codex').resolve_executable(candidates=[str(old), str(silent), str(new), str(alpha)])
+        path, version = CLI.host_launch(Host.CODEX).resolve_executable(candidates=[str(old), str(silent), str(new), str(alpha)])
         self.assertEqual((path, version['text']), (str(new), '0.160.0'))
 
     def test_refuses_a_build_below_the_minimum_and_lists_what_was_found(self):
         old = executable(self.base / 'old', '#!/bin/sh\necho "codex-cli 0.150.0"\n')
         with self.assertRaisesRegex(CLI.LaunchError, r'0\.150\.0.*below the required 0\.154\.0(?s:.*)old'):
-            CLI.host_launch('codex').resolve_executable(candidates=[str(old)])
+            CLI.host_launch(Host.CODEX).resolve_executable(candidates=[str(old)])
 
     def test_refuses_when_nothing_answers(self):
         with self.assertRaises(CLI.LaunchError):
-            CLI.host_launch('codex').resolve_executable(candidates=[str(self.base / 'missing')])
+            CLI.host_launch(Host.CODEX).resolve_executable(candidates=[str(self.base / 'missing')])
 
 
 class LaneModelTests(unittest.TestCase):
-    def table(self, harness):
-        return json.loads((ROOT / 'plugins/agent/.agents/agent/resources/lanes' / f'{harness}.json').read_text(encoding='utf-8-sig'))
+    def table(self, host):
+        return json.loads((ROOT / 'plugins/agent/.agents/agent/resources/lanes' / f'{host}.json').read_text(encoding='utf-8-sig'))
 
     def test_a_lane_resolves_to_its_tables_model_and_effort(self):
-        for harness in ('claude', 'codex'):
-            table = self.table(harness)
+        for host in Host:
+            table = self.table(host)
             effort_key = table.get('effort_key', 'effort')
             for lane, rung in table['lanes'].items():
-                self.assertEqual(CLI.resolve_lane_model(harness, lane=lane), (rung['model'], rung.get(effort_key)))
+                self.assertEqual(CLI.resolve_lane_model(host, lane=lane), (rung['model'], rung.get(effort_key)))
 
     def test_the_frontier_tier_resolves_from_its_own_entry(self):
-        for harness in ('claude', 'codex'):
-            table = self.table(harness)
+        for host in Host:
+            table = self.table(host)
             if 'frontier' in table:
-                self.assertEqual(CLI.resolve_lane_model(harness, frontier=True)[0], table['frontier']['model'])
+                self.assertEqual(CLI.resolve_lane_model(host, frontier=True)[0], table['frontier']['model'])
 
     def test_lane_and_frontier_are_exclusive_and_one_is_required(self):
         for kwargs in ({}, {'lane': 'L1', 'frontier': True}):
             with self.assertRaises(CLI.LaunchError):
-                CLI.resolve_lane_model('claude', **kwargs)
+                CLI.resolve_lane_model(Host.CLAUDE, **kwargs)
 
     def test_an_unknown_lane_is_an_error_not_a_fallback(self):
         with self.assertRaisesRegex(CLI.LaunchError, 'unknown lane'):
-            CLI.resolve_lane_model('codex', lane='L9')
+            CLI.resolve_lane_model(Host.CODEX, lane='L9')
 
 
 class PromptFileArgumentTests(unittest.TestCase):
@@ -814,7 +815,7 @@ class OpenClaudeTabBindingTests(unittest.TestCase):
             ('resolve_executable', self.resolve_claude_executable),
             ('launch_tab', self.launch_tab),
         ):
-            patcher = mock.patch.object(CLI.host_launch('claude') if name == 'resolve_executable' else CLI, name, mocked)
+            patcher = mock.patch.object(CLI.host_launch(Host.CLAUDE) if name == 'resolve_executable' else CLI, name, mocked)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -824,16 +825,16 @@ class OpenClaudeTabBindingTests(unittest.TestCase):
 
     def test_binds_a_session_child_without_revalidating_the_directory(self):
         missing = os.path.join(self.directory, 'missing')
-        CLI.host_launch('claude').open_tab(CLI, missing, 'Tab', [])
+        CLI.host_launch(Host.CLAUDE).open_tab(CLI, missing, 'Tab', [])
         self.resolve_claude_executable.assert_called_once()
         self.launch_tab.assert_called_once_with(
             missing, sys.executable, 'Tab',
-            arguments=CLI.bound_terminal_arguments('claude', missing, '/bin/claude', []),
+            arguments=CLI.bound_terminal_arguments(Host.CLAUDE, missing, '/bin/claude', []),
             clear=(), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1'},
         )
 
     def test_resolves_and_binds_the_typed_target_in_order(self):
-        result = CLI.host_launch('claude').open_tab(CLI, self.directory, 'Tab', ['--flag'])
+        result = CLI.host_launch(Host.CLAUDE).open_tab(CLI, self.directory, 'Tab', ['--flag'])
 
         self.assertIsNone(result)
         self.assertEqual(
@@ -842,16 +843,16 @@ class OpenClaudeTabBindingTests(unittest.TestCase):
         )
         self.launch_tab.assert_called_once_with(
             self.directory, sys.executable, 'Tab',
-            arguments=CLI.bound_terminal_arguments('claude', self.directory, '/bin/claude', ['--flag']),
+            arguments=CLI.bound_terminal_arguments(Host.CLAUDE, self.directory, '/bin/claude', ['--flag']),
             clear=(), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1'},
         )
 
     def test_forwards_profile_environment_to_the_tab(self):
-        CLI.host_launch('claude').open_tab(CLI, self.directory, 'Tab', [], clear=('CLAUDE_CONFIG_DIR',), force={'EXTRA': '1'})
+        CLI.host_launch(Host.CLAUDE).open_tab(CLI, self.directory, 'Tab', [], clear=('CLAUDE_CONFIG_DIR',), force={'EXTRA': '1'})
 
         self.launch_tab.assert_called_once_with(
             self.directory, sys.executable, 'Tab',
-            arguments=CLI.bound_terminal_arguments('claude', self.directory, '/bin/claude', []),
+            arguments=CLI.bound_terminal_arguments(Host.CLAUDE, self.directory, '/bin/claude', []),
             clear=('CLAUDE_CONFIG_DIR',), force={'FORCE_COLOR': '1', 'TERM': 'xterm-256color', 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE': '1', 'EXTRA': '1'},
         )
 

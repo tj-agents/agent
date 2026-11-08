@@ -39,7 +39,7 @@ def require_current(request, path, digest):
     if Path(request["cancel"]).exists():
         raise session_close.Cancelled("close request was cancelled")
     import close_lifecycle
-    from host import Host
+    from tj_agent.host import Host
 
     try:
         close_lifecycle.require_input(Host(request["host"]), request["session_id"], request)

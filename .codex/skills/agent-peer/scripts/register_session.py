@@ -81,11 +81,11 @@ def native_hosts():
         markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
         if any(marker.exists() for marker in markers) or _staged_agent_root(root):
             runtime = root / ".agents" / "agent" / "runtime"
-            if not (runtime / "host.py").is_file():
+            if not (runtime / "tj_agent" / "host.py").is_file():
                 break
             if str(runtime) not in sys.path:
                 sys.path.insert(0, str(runtime))
-            from host import Host
+            from tj_agent.host import Host
             return Host
     raise RuntimeError("the packaged Agent host runtime is unavailable")
 
@@ -536,7 +536,8 @@ def _record_session_start(host, session_id, cwd, title, pid, pid_started_at, pre
                 store.update_session(handle, lambda session: session.attach_client(pid, pid_started_at, cwd))
             else:
                 store.start_session(host, session_id, cwd, module.Checkout.probe(cwd), title=title, pid=pid,
-                                    pid_started_at=pid_started_at)
+                                    pid_started_at=pid_started_at,
+                                    profile=str(native_hosts()(host).configuration_root))
         except Exception:
             pass
 

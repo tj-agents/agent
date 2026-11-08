@@ -123,7 +123,6 @@ def verify_launch(receipt):
 class Proxy:
     def __init__(self, executable, profile, deadline, binding=None):
         self.deadline = deadline
-        env = dict(os.environ, CODEX_HOME=str(profile))
         for root in Path(__file__).resolve().parents:
             markers = (root / '.git', root / '.codex-plugin' / 'plugin.json', root / '.claude-plugin' / 'plugin.json')
             if any(marker.exists() for marker in markers):
@@ -135,6 +134,9 @@ class Proxy:
                 spec = importlib.util.spec_from_file_location('codex_followup_transport', path)
                 transport = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(transport)
+                from tj_agent.host import Host
+
+                env = dict(os.environ, **{Host.CODEX.home_variable: str(profile)})
                 if binding is not None:
                     client_runtime().frozen_binding(binding)
                     executable = binding['executable']
@@ -311,7 +313,7 @@ def main(argv=None):
     submit = sub.add_parser('send')
     submit.add_argument('--thread', required=True, type=uuid.UUID)
     submit.add_argument('--cwd', required=True)
-    submit.add_argument('--codex-home', default=os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
+    submit.add_argument('--codex-home')
     submit.add_argument('--message-file', required=True, type=Path)
     submit.add_argument('--receipt', required=True, type=Path)
     submit.add_argument('--launch-receipt', type=Path)
@@ -332,6 +334,8 @@ def main(argv=None):
         exists = args.receipt.exists()
         reserved = exists
         if args.command == 'send':
+            if args.codex_home is None:
+                args.codex_home = str(client_runtime().HOST.configuration_root)
             message = args.message_file.read_text(encoding='utf-8-sig')
             if not message.strip():
                 raise FollowupError('Message file is empty')

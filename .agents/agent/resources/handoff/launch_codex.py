@@ -82,11 +82,11 @@ def resolve_model(args, agent_cli):
     tier = ''
     if args.frontier:
         tier = 'frontier -> '
-        model, frontier_effort = agent_cli.resolve_lane_model('codex', frontier=True)
+        model, frontier_effort = agent_cli.resolve_lane_model(agent_cli.Host.CODEX, frontier=True)
         if not effort:
             effort = frontier_effort
     elif args.lane and not (model and effort):
-        lane_model, lane_effort = agent_cli.resolve_lane_model('codex', lane=args.lane)
+        lane_model, lane_effort = agent_cli.resolve_lane_model(agent_cli.Host.CODEX, lane=args.lane)
         if not model:
             model = lane_model
             tier = f'lane {args.lane} -> '
@@ -124,10 +124,10 @@ def main(argv=None):
         working_directory = agent_cli.resolve_tab_directory(args.working_directory)
         prompt_sentence, prompt_path = agent_cli.prompt_file_argument(args.prompt_path)
 
-        codex, _version = agent_cli.host_launch('codex').resolve_executable(minimum=args.minimum_version)
+        codex, _version = agent_cli.host_launch(agent_cli.Host.CODEX).resolve_executable(minimum=args.minimum_version)
         model, effort, tier = resolve_model(args, agent_cli)
         arguments = build_arguments(working_directory, model, effort, args.bypass_hook_trust, prompt_sentence,
-                                    agent_cli.host_launch('codex').KEEP_TAB_TITLE)
+                                    agent_cli.host_launch(agent_cli.Host.CODEX).KEEP_TAB_TITLE)
 
         # TERM is CLEARED here, never forced -- the opposite of handoff-claude, and not an oversight.
         # Claude Code exports TERM=xterm-256color; Codex is a Rust/crossterm binary, and on native Windows
@@ -141,7 +141,7 @@ def main(argv=None):
         status_path = agent_cli.handoff_status_path()
         agent_cli.launch_tab(
             working_directory, sys.executable, args.title,
-            arguments=agent_cli.bound_terminal_arguments("codex", working_directory, codex, arguments,
+            arguments=agent_cli.bound_terminal_arguments(agent_cli.Host.CODEX, working_directory, codex, arguments,
                                                         status_path, require_session_start=True),
             clear=('TERM',),
         )

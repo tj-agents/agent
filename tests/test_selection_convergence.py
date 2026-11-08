@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import install
 import required_plugins
-from host import Host
+from tj_agent.host import Host
 
 
 class SelectionConvergenceTests(unittest.TestCase):

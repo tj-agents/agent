@@ -11,7 +11,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
-from host import Host  # noqa: E402
+from tj_agent.host import Host  # noqa: E402
 from host_sessions import SESSIONS  # noqa: E402
 
 

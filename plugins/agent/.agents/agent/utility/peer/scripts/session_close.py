@@ -85,17 +85,22 @@ def _package_root():
         raise Refusal("the packaged Agent root is unavailable") from error
 
 
-def host_sessions(host):
+def host_type():
     runtime = _package_root() / ".agents" / "agent" / "runtime"
     if not (runtime / "host_sessions.py").is_file():
         raise Refusal("the packaged Agent runtime is unavailable")
     if str(runtime) not in sys.path:
         sys.path.insert(0, str(runtime))
-    from host import Host
+    from tj_agent.host import Host
+    return Host
+
+
+def host_sessions(host):
+    hosts = host_type()
     from host_sessions import SESSIONS
 
     try:
-        return SESSIONS[Host(host)]
+        return SESSIONS[hosts(host)]
     except ValueError:
         raise Refusal("unsupported native host") from None
 
@@ -624,10 +629,10 @@ def detached_command(script, arguments, launcher):
             raise Refusal("pythonw.exe is required for an independent detached observer")
     command = [str(interpreter), "-I", "-B", str(launcher), "--state-directory", str(state_directory().resolve()),
                "--search-path", os.environ.get("PATH", os.defpath)]
-    for option, key in (("--codex-home", "CODEX_HOME"), ("--claude-config-dir", "CLAUDE_CONFIG_DIR")):
-        value = os.environ.get(key)
+    for host in host_type():
+        value = os.environ.get(host.home_variable)
         if value:
-            command += [option, str(Path(value).resolve())]
+            command += ["--profile", f"{host.home_variable}={Path(value).resolve()}"]
     command += ["--", str(Path(script).resolve()), *arguments]
     return command
 
