@@ -22,17 +22,20 @@ def remove(state_directory: Path, *, windows: bool = os.name == "nt", home: Path
     name = "tj-agents-machine-events-" + hashlib.sha256((state.casefold() if windows else state).encode()).hexdigest()[:16]
     removed = []
     options = {"capture_output": True, "text": True, "timeout": 30, "check": False}
-    if windows:
-        result = run(["schtasks", "/Delete", "/TN", name, "/F"], **options)
-        if result.returncode == 0:
-            removed.append(f"scheduled task {name}")
-    else:
-        unit = (home or Path.home()) / ".config" / "systemd" / "user" / f"{name}.service"
-        if unit.exists():
-            run(["systemctl", "--user", "disable", "--now", unit.name], **options)
-            unit.unlink(missing_ok=True)
-            run(["systemctl", "--user", "daemon-reload"], **options)
-            removed.append(f"systemd user unit {unit.name}")
+    try:
+        if windows:
+            result = run(["schtasks", "/Delete", "/TN", name, "/F"], **options)
+            if result.returncode == 0:
+                removed.append(f"scheduled task {name}")
+        else:
+            unit = (home or Path.home()) / ".config" / "systemd" / "user" / f"{name}.service"
+            if unit.exists():
+                run(["systemctl", "--user", "disable", "--now", unit.name], **options)
+                unit.unlink(missing_ok=True)
+                run(["systemctl", "--user", "daemon-reload"], **options)
+                removed.append(f"systemd user unit {unit.name}")
+    except OSError:
+        pass
     runtime = state_directory / "bin" / ".agents" / "agent" / "runtime"
     for file in RUNTIME_FILES:
         path = runtime / file
