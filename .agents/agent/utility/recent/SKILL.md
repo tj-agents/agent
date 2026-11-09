@@ -1,39 +1,20 @@
 ---
 name: recent
-description: List recent conversations for the selected Codex or Claude profile and return exact native resume commands. Use when asked which conversation to resume or what the last session covered.
+description: List recent Claude or Codex conversations with their exact resume commands. Use when asked which conversation to resume, what the last session covered, or which conversation owns a worktree.
 kind: utility
 domain: agent
 profile: core
 applicability: agent sessions
-requires: python
 provenance: house
+requires: python
 ---
 
 # Recent conversations
 
-Requires Python 3.9+ and local transcript data for the selected harness. The packaged helper supports
-Codex session metadata/response records and Claude project message records. It reads data only; it
-never modifies profiles, launches a resume, or uploads history. Data in CODEX_HOME or CLAUDE_CONFIG_DIR
-is an external input, not an unshipped helper dependency. Unsupported/empty records are not invented.
-
-For Codex in the current directory, run the helper with `python` on Windows or `python3` on Linux/macOS:
+Run with `python` on Windows or `python3` on Linux, for the current host unless another is named:
 
 ```text
-python -B "<package-root>/.agents/agent/runtime/history.py" recent --host codex
+python -B "<package-root>/.agents/agent/runtime/history.py" recent --host codex --count 5
 ```
 
-Use `--host claude` for Claude. Respect the requested harness; otherwise use the current host. Options
-are `--count N`, `--cwd <directory>`, `--project <substring>`, `--all-projects`, `--worktree <directory>`,
-and an explicit transcript `--history-root <directory>` for a non-default data store. Quote paths and
-arguments for the calling shell.
-
-`--worktree <directory>` finds the conversations that worked in a checkout even when they started
-elsewhere (a `git -C`/tool call naming it from the main checkout or another directory), searching all
-projects; prefer it when asked which conversation owns a worktree. Results add `matched_by` (`cwd` or
-`tool`) and sort by `last_activity`, newest first.
-
-Report the relevant session and its returned `resume` command. The newest session may be the current
-one; distinguish it using the preview. Never guess an ID or use Claude's resume syntax for Codex.
-An absent history directory fails clearly; an empty result means no supported matching conversations.
-Only inspect history when the user requested it or authorized conversation enrichment. Never publish
-raw history as a test fixture, report attachment or source file.
+Options: `--cwd <dir>`, `--project <substring>`, `--all-projects`, `--worktree <dir>` (conversations that worked in that checkout, from any directory), `--history-root <dir>`. Report the session and its returned `resume` command. The read is read-only.

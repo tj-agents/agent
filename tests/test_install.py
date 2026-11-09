@@ -3,6 +3,7 @@ import io
 import json
 import os
 from pathlib import Path, PurePosixPath
+import shlex
 import shutil
 import subprocess
 import sys
@@ -53,7 +54,7 @@ class Machine(unittest.TestCase):
         self.converge(step('launch-check runtime'), context)
         alias = context.state_directory / 'bin' / 'python'
         self.assertEqual(install.python_alias(), alias.read_text(encoding='utf-8'))
-        self.assertIn(str(alias.parent), install.posix_block(sys.executable, install.launch_script(context)))
+        self.assertIn(str(alias.parent), install.posix_block(install.runtime_bin(context)))
         if os.name != 'nt':
             result = subprocess.run([str(alias), '-c', 'print("hook-interpreter-ready")'],
                                     capture_output=True, text=True, timeout=10, check=True)
@@ -116,12 +117,9 @@ class ProfileTests(Machine):
     def profiles(self):
         return [self.documents / name / "Microsoft.PowerShell_profile.ps1" for name in install.PROFILE_NAMES]
 
-    def script(self):
-        return self.home / ".agents-state" / "bin" / ".agents" / "agent" / "runtime" / "startup_binding.py"
-
     def block(self, newline="\r\n", loader=None):
         loader = loader or install.profile_loader(self.context())
-        return install.powershell_block(install.console_python(), self.script(), loader, newline)
+        return install.powershell_block(loader, newline)
 
     def test_missing_profiles_are_created_with_the_block(self):
         self.converge(step("shell profiles"), self.context())
@@ -129,16 +127,12 @@ class ProfileTests(Machine):
             self.assertEqual(BOM + (self.block() + "\r\n").encode("utf-8"), path.read_bytes())
             self.assertEqual([], list(path.parent.glob("*.bak")))
 
-    def test_host_launchers_bind_the_current_project_and_native_target_without_a_legacy_flag(self):
-        powershell = self.block()
-        posix = install.posix_block(sys.executable, self.script())
-        for block in (powershell, posix):
-            self.assertIn("startup_binding.py", block)
-            self.assertIn("--target", block)
-            self.assertIn("--require-session-start", block)
-            self.assertNotIn("--launch", block)
-        self.assertIn("--project (Get-Location).Path", powershell)
-        self.assertIn('--project "$PWD"', posix)
+    def test_profiles_put_the_runtime_bin_on_path_and_wrap_no_host(self):
+        posix = install.posix_block(install.runtime_bin(self.context(windows=False)))
+        self.assertIn(shlex.quote(str(self.home / ".agents-state" / "bin")), posix)
+        for block in (self.block(), posix):
+            self.assertNotIn("startup_binding", block)
+            self.assertNotIn("claude", block)
 
     def test_an_existing_block_for_another_checkout_is_rewired(self):
         path = self.profiles()[1]
@@ -216,60 +210,18 @@ class ProfileTests(Machine):
         powershell = self.home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1"
         powershell.parent.mkdir(parents=True)
         powershell.write_bytes(("keep\n" + install.PROFILE_START + "\nold\n" + install.PROFILE_END + "\n").encode("utf-8"))
-        python = install.console_python()
-
         self.converge(step("shell profiles"), self.context(windows=False))
 
         self.assertFalse((self.home / ".bashrc").exists())
-        self.assertEqual("export A=1\n\n" + install.posix_block(python, self.script()) + "\n",
+        self.assertEqual("export A=1\n\n" + install.posix_block(install.runtime_bin(self.context(windows=False))) + "\n",
                          zshrc.read_text(encoding="utf-8"))
-        self.assertEqual(("keep\n" + install.powershell_block(python, self.script(), None, "\n") + "\n").encode("utf-8"),
+        self.assertEqual(("keep\n" + install.powershell_block(None, "\n") + "\n").encode("utf-8"),
                          powershell.read_bytes())
         self.assertNotIn("profile.ps1", powershell.read_text(encoding="utf-8"))
 
     def test_posix_block_escapes_single_quotes_in_paths(self):
-        block = install.posix_block("/opt/it's/python3", PurePosixPath("/home/o'neil/startup_binding.py"))
-        self.assertIn("'/opt/it'\\''s/python3'", block)
-        self.assertIn("'/home/o'\\''neil/startup_binding.py'", block)
-
-    def native_fixture(self, name):
-        directory = Path(tempfile.mkdtemp(prefix="bypass "))
-        self.addCleanup(shutil.rmtree, directory, True)
-        if os.name == "nt":
-            (directory / f"{name}.cmd").write_text("@echo native %*\r\n", encoding="utf-8")
-        else:
-            native = directory / name
-            native.write_text('#!/bin/sh\necho native "$@"\n', encoding="utf-8")
-            native.chmod(0o755)
-        return directory
-
-    def test_powershell_bypass_flag_and_missing_python_start_the_native_host_directly(self):
-        shell = shutil.which("pwsh")
-        if shell is None:
-            self.skipTest("pwsh is unavailable")
-        directory = self.native_fixture("codex")
-        for python, arguments in ((sys.executable, "--no-tj a b"), (str(directory / "missing-python"), "a b")):
-            with self.subTest(python=python):
-                block = install.powershell_block(python, directory / "missing-launcher.py", None, "\n")
-                result = subprocess.run(
-                    [shell, "-NoProfile", "-NonInteractive", "-Command",
-                     f"$env:PATH = '{directory}' + [IO.Path]::PathSeparator + $env:PATH\n{block}\ncodex {arguments}"],
-                    capture_output=True, text=True, timeout=60, check=False)
-                self.assertIn("native a b", result.stdout, result.stderr)
-                self.assertNotIn("--no-tj", result.stdout)
-
-    def test_posix_bypass_flag_and_missing_python_start_the_native_host_directly(self):
-        shell = shutil.which("bash")
-        if shell is None or os.name == "nt":
-            self.skipTest("POSIX bash is unavailable")
-        directory = self.native_fixture("codex")
-        for python, arguments in ((sys.executable, "--no-tj a b"), (str(directory / "missing-python"), "a b")):
-            with self.subTest(python=python):
-                block = install.posix_block(python, directory / "missing-launcher.py")
-                result = subprocess.run(
-                    [shell, "-c", f"PATH='{directory}':\"$PATH\"\n{block}\ncodex {arguments}"],
-                    capture_output=True, text=True, timeout=60, check=False)
-                self.assertIn("native a b", result.stdout, result.stderr)
+        block = install.posix_block(PurePosixPath("/home/o'neil/.agents-state/bin"))
+        self.assertIn(shlex.quote("/home/o'neil/.agents-state/bin"), block)
 
     def test_linux_creates_bashrc_when_no_profile_exists(self):
         self.converge(step("shell profiles"), self.context(windows=False))
@@ -515,15 +467,13 @@ class RuntimeTests(Machine):
         if context.windows:
             profile = install.profile_paths(context)[0]
             quoted = str(profile).replace("'", "''")
-            command = ["powershell.exe", "-NoProfile", "-Command",
-                       f". '{quoted}'; (Get-Command codex).Definition"]
+            command = ["powershell.exe", "-NoProfile", "-Command", f". '{quoted}'; 'loaded'"]
         else:
-            command = ["bash", "--noprofile", "--norc", "-c", 'source "$1"; declare -f codex',
+            command = ["bash", "--noprofile", "--norc", "-c", 'source "$1"; echo "$PATH"',
                        "fixture", str(context.home / ".bashrc")]
         result = subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=30)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("startup_binding.py", result.stdout)
-        self.assertNotIn(str(source), result.stdout)
+        self.assertNotIn(str(source), result.stdout + result.stderr)
         self.assertEqual([], install.check_profile(context))
 
     def test_native_permission_defaults_do_not_require_an_installer_checkout(self):
@@ -540,18 +490,13 @@ class RuntimeTests(Machine):
         self.converge(step("launch-check runtime"), context)
         installed = self.home / ".agents-state/bin"
         self.assertEqual(install.runtime_receipt(install.ROOT), self.installed_receipt(context))
-        for relative in (Path('.agents/agent/runtime/startup_binding.py'),
+        for relative in (Path('.agents/agent/runtime/tj_start.py'),
                          Path('.agents/agent/runtime/install.py'),
                          Path('.agents/agent/runtime/tj_agent/content.py'),
                          Path('.agents/agent/runtime/tj_agent/plugins/sources.py'),
                          Path('.agents/agent/resources/lanes/resolve.py'),
-                         Path('.agents/agent/utility/peer/scripts/register_session.py'),
-                         Path('.agents/agent-store/runtime/session_store.py')):
+                         Path('.agents/agent/runtime/agent_store.py')):
             self.assertTrue((installed / relative).is_file(), relative)
-        result = subprocess.run([sys.executable, "-I", "-B", str(install.launch_script(context)), "--help"],
-                                cwd=self.root, capture_output=True, text=True, timeout=15)
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn('--require-session-start', result.stdout)
 
     def test_the_agent_runtime_receipt_and_exports_are_installed_once(self):
         context = self.context(windows=False)
@@ -570,13 +515,15 @@ class RuntimeTests(Machine):
             install.check_runtime(context)
         self.assertEqual(before, snapshot(self.root))
 
-    def test_installed_shell_entry_point_resolves_its_complete_dependency_closure(self):
+    def test_installed_lifecycle_commands_resolve_their_complete_dependency_closure(self):
         context = self.context(windows=os.name == 'nt')
         install.apply_runtime(context)
-        result = subprocess.run([sys.executable, '-I', '-B', str(install.launch_script(context)), '--help'],
-                                cwd=self.root, capture_output=True, text=True, timeout=15)
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn('--require-session-start', result.stdout)
+        runtime = context.state_directory / 'bin' / '.agents' / 'agent' / 'runtime'
+        for script in install.LIFECYCLE_COMMANDS.values():
+            result = subprocess.run([sys.executable, '-I', '-B', str(runtime / script), '--help'],
+                                    cwd=self.root, capture_output=True, text=True, timeout=15)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn('usage: tj ', result.stdout)
 
     def test_runtime_check_detects_export_drift_without_writing_and_preserves_unrelated_files(self):
         context = self.context(windows=False)
@@ -587,14 +534,14 @@ class RuntimeTests(Machine):
         bot_identity = installed / 'bot-identity' / 'identity.json'
         bot_identity.parent.mkdir()
         bot_identity.write_text('keep', encoding='utf-8')
-        target = install.launch_script(context)
+        target = install.runtime_bin(context) / '.agents/agent/runtime/tj_start.py'
         target.write_text('changed', encoding='utf-8')
         before = snapshot(self.root)
         changes = install.check_runtime(context)
         self.assertIn('install Agent runtime: managed runtime file differs: '
-                      '.agents/agent/runtime/startup_binding.py', changes)
+                      '.agents/agent/runtime/tj_start.py', changes)
         self.assertEqual({'install Agent runtime: managed runtime file differs: '
-                          '.agents/agent/runtime/startup_binding.py'}, set(changes))
+                          '.agents/agent/runtime/tj_start.py'}, set(changes))
         self.assertEqual(before, snapshot(self.root))
         install.apply_runtime(context)
         self.assertTrue(unrelated.is_file())
@@ -719,6 +666,8 @@ class RunStepsTests(Machine):
              ["native CLI", "launch-check runtime", "shell profiles"]),
             (["--step", "plugin setup"],
              ["native CLI", "harness permissions", "plugin setup"]),
+            (["--step", "tj lifecycle commands"],
+             ["native CLI", "launch-check runtime", "tj lifecycle commands"]),
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
@@ -787,7 +736,8 @@ class RunStepsTests(Machine):
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
             "Git long paths", "native CLI", "native permission defaults",
-            "Claude marketplace auto-update", "launch-check runtime", "shell profiles", "hidden Git Bash for Claude",
+            "Claude marketplace auto-update", "agent-store CLI", "launch-check runtime", "tj lifecycle commands",
+            "shell profiles", "hidden Git Bash for Claude",
             "Codex profile agents", "harness permissions", "plugin setup",
         ], [item.name for item in install.STEPS])
 

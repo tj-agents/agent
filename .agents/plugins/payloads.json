@@ -10,15 +10,10 @@
   },
   "resources": [
     {"plugin": "agent", "distribution": "tj-cli", "destination": ".agents/agent/runtime"},
-    {"plugin": "agent", "distribution": "tj-cli", "destination": ".agents/agent-store/runtime"},
-    {"plugin": "agent-store", "distribution": "tj-cli", "destination": ".agents/agent-store/runtime"},
-    {"plugin": "agent-store", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
-    {"plugin": "agent", "source": ".agents/agent-store/runtime", "destination": ".agents/agent-store/runtime"},
     {"plugin": "agent", "source": ".agents/agent/runtime", "destination": ".agents/agent/runtime"},
     {"plugin": "agent", "source": ".claude/runtime", "destination": ".agents/agent/runtime/claude"},
     {"plugin": "agent", "source": ".codex/runtime", "destination": ".agents/agent/runtime/codex"},
     {"plugin": "agent", "source": ".agents/agent/resources", "destination": ".agents/agent/resources"},
-    {"plugin": "agent", "source": ".agents/hooks/hook_dispatch.py", "destination": "hooks/hook_dispatch.py"},
     {"plugin": "agent", "source": ".claude/hooks/agent.json", "destination": "hooks/claude.json"},
     {"plugin": "agent", "source": ".codex/hooks/agent.json", "destination": "hooks/codex.json"}
   ],

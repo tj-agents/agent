@@ -1,6 +1,6 @@
 {
   "name": "agent-store",
-  "description": "Recorded agent executions, sessions, ownership and references.",
+  "description": "Links between tracker work items and the agent sessions working on them.",
   "author": {
     "name": "Tommy Seery"
   },
@@ -13,12 +13,12 @@
   ],
   "interface": {
     "displayName": "Agent Store",
-    "shortDescription": "Recorded agent executions, sessions, ownership and references.",
-    "longDescription": "Recorded agent executions, sessions, ownership and references.",
+    "shortDescription": "Links between tracker work items and the agent sessions working on them.",
+    "longDescription": "Links between tracker work items and the agent sessions working on them.",
     "developerName": "Tommy Seery",
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": "Inspect recorded agent state."
   },
-  "version": "83090b5a519b"
+  "version": "7e19846a8d3b"
 }

@@ -1,15 +1,16 @@
 ---
 name: message
-description: Send a follow-up or correction to an existing Codex session and verify recipient delivery. Use when asked to message another Codex session, check whether it received a follow-up, or recover from a queued message that did not arrive.
+description: Send a message to another Codex session, addressed by its thread id or tab title. Use when asked to message, tell, correct or follow up with another Codex session.
 kind: utility
 domain: agent
 profile: core
 applicability: agent sessions
-requires: python, codex app-server
 provenance: house
+requires: codex
+allowed-tools: Bash(codex queue:*)
 ---
 
-# Verified Codex follow-up
+# Message a Codex session
 
 Read and follow the [canonical definition](../../../.agents/agent/utility/message/SKILL.md) in full.
 This discovery entry is generated; edit the referenced `.agents/` definition.

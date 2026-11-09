@@ -35,19 +35,18 @@ import host_permissions
 import required_plugins
 import runtime_delivery
 import native_runtime
+import agent_store
 from tj_agent import content
 from tj_cli import process
 
 COMMAND_TIMEOUT_SECONDS = 60
 INSTALLER_TIMEOUT_SECONDS = 600
-BYPASS_FLAG = "--no-tj"
 RUNTIME_EXPORTS = (
     ".agents/agent/runtime",
     ".agents/agent/resources",
     ".agents/agent/utility/plugins/scripts",
-    ".agents/agent/utility/peer/scripts",
-    ".agents/agent-store/runtime",
 )
+LIFECYCLE_COMMANDS = {"start": "tj_start.py", "status": "tj_status.py", "reload": "tj_reload.py"}
 PROFILE_START = "# >>> tj-agents >>>"
 PROFILE_END = "# <<< tj-agents <<<"
 PROFILE_BACKUP = ".pre-tj-agents.bak"
@@ -292,7 +291,7 @@ def profile_paths(context: Context) -> list[Path]:
             context.home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1"]
 
 
-def powershell_block(python: str, script: Path, loader: Path | None, newline: str) -> str:
+def powershell_block(loader: Path | None, newline: str) -> str:
     def quoted(value: object) -> str:
         return "'" + str(value).replace("'", "''") + "'"
 
@@ -308,33 +307,11 @@ def powershell_block(python: str, script: Path, loader: Path | None, newline: st
             "if (Test-Path -LiteralPath $tjAgentsShell) { . $tjAgentsShell }",
             'else { Write-Host "profile: tj-agents missing at $tjAgentsShell" -ForegroundColor Red }',
         ]
-    for name in map(str, Host):
-        lines += [
-            f"function global:{name} {{",
-            f"    $tjAgentsTarget = Get-Command {name} -CommandType Application, ExternalScript"
-            " -ErrorAction SilentlyContinue | Select-Object -First 1",
-            f"    if (-not $tjAgentsTarget) {{ Write-Error '{name} was not found on PATH'; return }}",
-            f"    $tjAgentsBypass = $args -contains '{BYPASS_FLAG}'",
-            f"    if (-not $tjAgentsBypass -and -not (Test-Path -LiteralPath {quoted(python)})) {{ Write-Warning 'tj-agents Python is unavailable; starting {name} without tj-agents'; $tjAgentsBypass = $true }}",
-            f"    if ($tjAgentsBypass) {{ & $tjAgentsTarget.Source @($args | Where-Object {{ $_ -ne '{BYPASS_FLAG}' }}); return }}",
-            f"    & {quoted(python)} -I -B {quoted(script)} --host {name} --project (Get-Location).Path"
-            " --target $tjAgentsTarget.Source --require-session-start -- @args",
-            "}",
-        ]
     return newline.join([*lines, PROFILE_END])
 
 
-def posix_block(python: str, script: Path) -> str:
-    def quoted(value: object) -> str:
-        return "'" + str(value).replace("'", "'\\''") + "'"
-
-    runtime_bin = script.parents[3] if len(script.parents) > 3 else script.parent
-    return "\n".join([PROFILE_START, f'export PATH={quoted(runtime_bin)}:"$PATH"', *(
-        f'{name}() {{ _tj_bypass=; for _tj_arg in "$@"; do shift; if [ "$_tj_arg" = {BYPASS_FLAG} ]; then _tj_bypass=1; else set -- "$@" "$_tj_arg"; fi; done; '
-        f'if [ -z "$_tj_bypass" ] && [ ! -x {quoted(python)} ]; then printf "%s\\n" "tj-agents Python is unavailable; starting {name} without tj-agents" >&2; _tj_bypass=1; fi; '
-        f'if [ -n "$_tj_bypass" ]; then command {name} "$@"; return; fi; '
-        f'{quoted(python)} -I -B {quoted(script)} --host {name} --project "$PWD" --target "$(command -v {name})" --require-session-start -- "$@"; }}'
-        for name in map(str, Host)), PROFILE_END])
+def posix_block(runtime_bin: Path) -> str:
+    return "\n".join([PROFILE_START, f'export PATH={shlex.quote(str(runtime_bin))}:"$PATH"', PROFILE_END])
 
 
 def wired_profile(text: str, block: str, newline: str) -> str:
@@ -353,7 +330,7 @@ def wired_profile(text: str, block: str, newline: str) -> str:
     return result + text[cursor:]
 
 
-def shell_profile_updates(paths: list[Path], python: str, script: Path, loader: Path | None,
+def shell_profile_updates(paths: list[Path], runtime_bin: Path, loader: Path | None,
                           windows: bool) -> tuple[list[tuple[Path, str, str, bool]], list[str]]:
     targets = paths if windows else [path for path in paths if path.is_file()] or paths[:1]
     updates = []
@@ -368,10 +345,10 @@ def shell_profile_updates(paths: list[Path], python: str, script: Path, loader: 
         text, encoding, bom = current if current is not None else ("", "utf-8", windows and powershell)
         if powershell:
             newline = "\r\n" if "\r\n" in text or ("\n" not in text and windows) else "\n"
-            block = powershell_block(python, script, loader, newline)
+            block = powershell_block(loader, newline)
         else:
             newline = "\n"
-            block = posix_block(python, script)
+            block = posix_block(runtime_bin)
         wired = wired_profile(text, block, newline)
         if wired != text:
             updates.append((path, wired, encoding, bom))
@@ -384,13 +361,13 @@ def profile_loader(context: Context) -> Path | None:
     return context.state_directory / "bin" / ".agents/agent/resources/shell/profile.ps1"
 
 
-def launch_script(context: Context) -> Path:
-    return context.state_directory / "bin" / ".agents" / "agent" / "runtime" / "startup_binding.py"
+def runtime_bin(context: Context) -> Path:
+    return context.state_directory / "bin"
 
 
 def profile_updates(context: Context) -> tuple[list[tuple[Path, str, str, bool]], list[str]]:
-    return shell_profile_updates(profile_paths(context), console_python(), launch_script(context),
-                                 profile_loader(context), context.windows)
+    return shell_profile_updates(profile_paths(context), runtime_bin(context), profile_loader(context),
+                                 context.windows)
 
 
 def check_profile(context: Context) -> list[str]:
@@ -646,11 +623,10 @@ def runtime_receipt(root: Path) -> dict:
             "sha256": digest, "files": {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}}
 
 
-def install_runtime(directory: Path, root: Path) -> Path:
+def install_runtime(directory: Path, root: Path) -> None:
     errors = runtime_delivery.apply(directory, root, runtime_receipt(root))
     if errors:
         raise InstallError("; ".join(errors))
-    return directory / ".agents" / "agent" / "runtime" / "startup_binding.py"
 
 
 def check_runtime(context: Context) -> list[str]:
@@ -760,6 +736,47 @@ def apply_runtime(context: Context) -> list[str]:
     return [f"installed the Agent runtime in {directory}"]
 
 
+def check_agent_store(context: Context) -> list[str]:
+    pending = agent_store.pending()
+    return [pending] if pending else []
+
+
+def apply_agent_store(context: Context) -> list[str]:
+    return [f"installed agent-store {agent_store.install()} into {agent_store.executable().parent}"]
+
+
+def command_shim(command: str, script: Path, windows: bool) -> tuple[str, str]:
+    python = console_python()
+    if windows:
+        return f"tj-{command}.cmd", f'@"{python}" -B "{script}" %*\r\n'
+    return f"tj-{command}", f'#!/bin/sh\nexec {shlex.quote(python)} -B {shlex.quote(str(script))} "$@"\n'
+
+
+def lifecycle_shims(context: Context) -> dict[Path, str]:
+    directory = agent_store.executable().parent
+    scripts = runtime_bin(context) / ".agents" / "agent" / "runtime"
+    shims = (command_shim(command, scripts / script, context.windows)
+             for command, script in LIFECYCLE_COMMANDS.items())
+    return {directory / name: text for name, text in shims}
+
+
+def check_lifecycle_commands(context: Context) -> list[str]:
+    return [f"write {path}" for path, text in lifecycle_shims(context).items()
+            if not path.is_file() or path.read_text(encoding="utf-8") != text]
+
+
+def apply_lifecycle_commands(context: Context) -> list[str]:
+    changes = []
+    for path, text in lifecycle_shims(context).items():
+        if path.is_file() and path.read_text(encoding="utf-8") == text:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="")
+        path.chmod(0o755)
+        changes.append(f"wrote {path}")
+    return changes
+
+
 def windows_only(context: Context) -> str | None:
     return None if context.windows else WINDOWS_ONLY
 
@@ -829,7 +846,9 @@ STEPS = (
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
+    Step("agent-store CLI", check_agent_store, apply_agent_store),
     Step("launch-check runtime", check_runtime, apply_runtime),
+    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands),
     Step("shell profiles", check_profile, apply_profile),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
@@ -882,7 +901,7 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
 
 def selected_steps(names: set[str]) -> tuple[Step, ...]:
     selected = set(names)
-    if "shell profiles" in selected:
+    if selected & {"shell profiles", "tj lifecycle commands"}:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
         selected.add("harness permissions")

@@ -44,7 +44,9 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'))
     parser.add_argument('--frontier', action='store_true')
     parser.add_argument('--minimum-version', default='0.154.0')
-    parser.add_argument('--bypass-hook-trust', action='store_true')
+    parser.add_argument('--item', help='work item the child is linked to')
+    parser.add_argument('--parent', nargs='?', const='current',
+                        help='parent session (host:id); bare --parent means the calling session')
     args = parser.parse_args(argv)
     if not args.title.strip():
         raise agent_cli.LaunchError('--title must name the session; it becomes the tab title.')
@@ -96,67 +98,32 @@ def resolve_model(args, agent_cli):
     return model, effort, tier
 
 
-def build_arguments(working_directory, model, effort, bypass_hook_trust, prompt_sentence, keep_title=()):
-    arguments = ['--cd', str(working_directory)]
-    if model:
-        arguments += ['--model', model]
-    if effort:
-        arguments += ['--config', f'model_reasoning_effort={effort}']
-    if bypass_hook_trust:
-        arguments.append('--dangerously-bypass-hook-trust')
-    arguments += keep_title
-
-    arguments.append(prompt_sentence)
-    return arguments
-
-
 def main(argv=None):
     agent_cli = _load_agent_cli()
     agent_cli.make_stdio_encoding_lossy()
-    status_path = None
     try:
         args = parse_args(argv, agent_cli)
-
-        # parse_args already rejected the one argparse-level contradiction (--frontier beside --lane or
-        # --model). What happens here is the first filesystem or lane-table work, so the directory is
-        # checked before any of it -- whichever of it is also wrong, the directory's error is never
-        # shadowed by a later check that only looked irrelevant.
         working_directory = agent_cli.resolve_tab_directory(args.working_directory)
         prompt_sentence, prompt_path = agent_cli.prompt_file_argument(args.prompt_path)
-
-        codex, _version = agent_cli.host_launch(agent_cli.Host.CODEX).resolve_executable(minimum=args.minimum_version)
+        adapter = agent_cli.host_launch(agent_cli.Host.CODEX)
+        adapter.resolve_executable(minimum=args.minimum_version)
         model, effort, tier = resolve_model(args, agent_cli)
-        arguments = build_arguments(working_directory, model, effort, args.bypass_hook_trust, prompt_sentence,
-                                    agent_cli.host_launch(agent_cli.Host.CODEX).KEEP_TAB_TITLE)
-
-        # TERM is CLEARED here, never forced -- the opposite of handoff-claude, and not an oversight.
-        # Claude Code exports TERM=xterm-256color; Codex is a Rust/crossterm binary, and on native Windows
-        # an unset TERM is what selects the console's truecolor path. Handing it a POSIX terminfo name
-        # instead caps the palette at 256 colours and visibly wrecks the theme. Do not "align" this with
-        # the Claude launcher. Nothing is forced on: every capability variable this launcher could set is
-        # one Windows Terminal and the console already negotiate correctly for a native child, and the one
-        # that was set -- TERM -- is what broke it. On POSIX this clearing has no effect either way:
-        # launch_tab never forces or clears TERM there, because the terminal that actually starts the tab
-        # sets TERM for that session itself.
-        status_path = agent_cli.handoff_status_path()
-        agent_cli.launch_tab(
-            working_directory, sys.executable, args.title,
-            arguments=agent_cli.bound_terminal_arguments(agent_cli.Host.CODEX, working_directory, codex, arguments,
-                                                        status_path, require_session_start=True),
-            clear=('TERM',),
-        )
-
-        agent_cli.await_handoff_startup(status_path)
+        parent = agent_cli.parent_session(args.parent)
+        prompt_sentence += agent_cli.parent_rule(parent)
+        shown = agent_cli.launch(agent_cli.Host.CODEX, working_directory, args.title,
+                                 adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort),
+                                 item=args.item, parent=parent, want_session=bool(effort))
+        if effort:
+            adapter.deliver(shown['session']['native_id'], prompt_sentence, model, effort)
 
         selection = f'{tier}{model}' if model else 'the CLI default model'
         if effort:
             selection += f' at {effort}'
-        print(f"Launched Codex on {selection}")
-        print(json.dumps({"worktree": str(working_directory), "prompt_path": str(prompt_path), "startup": "verified", "status_path": str(status_path)}))
+        print(f"Launched Codex handoff tab '{args.title}' in {working_directory} on {selection} with prompt {prompt_path}")
+        print(json.dumps({"worktree": str(working_directory), "prompt_path": str(prompt_path), "title": args.title,
+                          "parent": parent, "launch_id": shown["launch"]["launch_id"]}))
         return 0
     except agent_cli.LaunchError as exc:
-        if status_path is not None:
-            print(f"Handoff startup receipt: {status_path}", file=sys.stderr)
         return agent_cli.report_launch_failure(exc)
 
 
