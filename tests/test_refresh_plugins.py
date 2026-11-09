@@ -209,8 +209,7 @@ class RefreshPluginsTests(unittest.TestCase):
             self.assertEqual(0, REFRESH.main(["--host", "claude"]))
         commands = [call.args[0] for call in spawned.call_args_list]
         install = [sys.executable, "-B", str(REFRESH.RUNTIME / "install.py")]
-        steps = ["tj lifecycle commands", "shell profiles", "tj item CLI", "worktrunk",
-                 "Handy"]
+        steps = ["tj lifecycle commands", "shell profiles", "tj item CLI", "worktrunk"]
         expected = [*install, *(item for step in steps for item in ("--step", step))]
         self.assertIn(expected, commands)
 
@@ -364,10 +363,12 @@ def test_converge_is_skipped_for_an_install_behind_its_pin(tmp_path: Path) -> No
     assert converges == []
 
 
-def test_refresh_runs_every_managed_tool_install_step() -> None:
+def test_refresh_runs_the_managed_tool_steps_but_never_installs_handy() -> None:
     install = importlib.import_module("install")
     names = {step.name for step in install.STEPS}
-    assert {"tj item CLI", "worktrunk", "Handy"} <= set(REFRESH.MACHINE_STEPS)
+    assert {"tj item CLI", "worktrunk"} <= set(REFRESH.MACHINE_STEPS)
+    assert "Handy" not in REFRESH.MACHINE_STEPS
+    assert "Handy" in names
     assert set(REFRESH.MACHINE_STEPS) <= names
 
 

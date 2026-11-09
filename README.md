@@ -52,7 +52,7 @@ drift without writing and `--step <name>` runs one step with its prerequisites.
 profile package of each employer profile plugin installed on this machine, such as `infonetica@tj-agents`.
 Their revisions are pinned in `.agents/agent/runtime/work-items.json`, which Renovate bumps; the step is a
 no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned `tj-cli`'s own installers.
-Refresh runs these steps too, and the stale check refuses prompts while the `tj item` receipt differs from the
+Refresh runs these steps too, except Handy, which only an interactive install installs, and the stale check refuses prompts while the `tj item` receipt differs from the
 pins, naming the drift, until the refresh it starts has fixed it.
 
 Managed launches and refresh repair only the failing install step and retry readiness once: a failed

@@ -27,7 +27,6 @@ MACHINE_STEPS = (
     "shell profiles",
     "tj item CLI",
     "worktrunk",
-    "Handy",
 )
 
 
