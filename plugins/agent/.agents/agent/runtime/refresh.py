@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 import native_runtime
+import refresh_lock
 import retired_machine_events
 from tj_agent.host import Host
 from tj_cli import process
@@ -70,19 +71,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", type=Host, choices=list(Host))
     arguments = parser.parse_args(argv)
     hosts = [arguments.host] if arguments.host else list(Host)
-    report = Report()
-    for removed in retired_machine_events.remove(retired_machine_events.state_directory()):
-        print(f"tj: removed retired {removed}")
-    for host in hosts:
-        INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host))
-    refresh_native(report)
-    for host in hosts:
-        INSTALLED[host].restart(report)
+    with refresh_lock.held() as acquired:
+        if not acquired:
+            print("tj: another plugin refresh is running")
+            return 0
+        report = Report()
+        for removed in retired_machine_events.remove(retired_machine_events.state_directory()):
+            print(f"tj: removed retired {removed}")
+        for host in hosts:
+            INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host))
+        refresh_native(report)
+        for host in hosts:
+            INSTALLED[host].restart(report)
+        refresh_lock.record(report.failures)
     if report.failures:
         print(f"{len(report.failures)} step(s) failed; every other step completed:", file=sys.stderr)
         for failure in report.failures:
             print(f"  {failure}", file=sys.stderr)
         return 1
+    print("tj: plugin refresh done")
     return 0
 
 

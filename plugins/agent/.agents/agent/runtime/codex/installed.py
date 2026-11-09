@@ -9,8 +9,7 @@ from typing import Any, Callable
 from tj_agent.host import Host
 
 HOST = Host.CODEX
-RELOAD = "restart this Codex session"
-COMMAND_PREFIX = ""
+RELOAD = "restart this session"
 
 
 def label(root: Path) -> str | None:
