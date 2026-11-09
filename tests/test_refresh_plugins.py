@@ -30,12 +30,6 @@ def completed(returncode=0, stdout="", stderr=""):
 
 class RefreshPluginsTests(unittest.TestCase):
     def setUp(self):
-        prepare = mock.patch.object(REFRESH.native_runtime, "prepare", return_value=())
-        prepare.start()
-        self.addCleanup(prepare.stop)
-        retired = mock.patch.object(REFRESH.retired_machine_events, "remove", return_value=[])
-        retired.start()
-        self.addCleanup(retired.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.claude_home = Path(temporary.name) / "claude"
@@ -182,6 +176,13 @@ class RefreshPluginsTests(unittest.TestCase):
             self.assertEqual(1, REFRESH.main(["--host", "claude"]))
         self.assertEqual("claude: list: boom", REFRESH.refresh_lock.recent_failure())
         self.assertFalse(REFRESH.refresh_lock.running())
+
+    def test_refresh_converges_the_native_cli_runtime_and_lifecycle_commands_through_the_installer(self):
+        with mock.patch.object(REFRESH.process, "run", return_value=completed(0, "[]")) as spawned:
+            self.assertEqual(0, REFRESH.main(["--host", "claude"]))
+        commands = [call.args[0] for call in spawned.call_args_list]
+        self.assertIn([sys.executable, "-B", str(REFRESH.RUNTIME / "install.py"), "--step", "tj lifecycle commands"],
+                      commands)
 
 if __name__ == "__main__":
     unittest.main()
