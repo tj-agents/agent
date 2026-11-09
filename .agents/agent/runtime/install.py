@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 from types import ModuleType
-from typing import Callable
+from typing import Callable, Sequence
 
 RUNTIME = Path(__file__).resolve().parent
 ROOT = RUNTIME.parents[2]
@@ -34,6 +34,9 @@ sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
 import host_permissions
+import jobs
+import machine_state
+import plugin_copies
 import required_plugins
 import retired_state
 import runtime_delivery
@@ -43,7 +46,6 @@ import work_items_install
 from tj_agent import content
 from tj_cli import handy_install, process, worktrunk_install
 
-COMMAND_TIMEOUT_SECONDS = 60
 INSTALLER_TIMEOUT_SECONDS = 600
 RUNTIME_EXPORTS = (
     ".agents/agent/runtime",
@@ -161,6 +163,7 @@ class Context:
     project: Path | None = None
     cache: dict = field(default_factory=dict)
     onboard: bool = False
+    failures: list[str] = field(default_factory=list)
 
     def path_from(self, variable: str, default: Path) -> Path:
         configured = self.environ.get(variable)
@@ -185,6 +188,7 @@ class Step:
     apply: Callable[[Context], list[str]]
     skip: Callable[[Context], str | None] = lambda context: None
     required: bool = False
+    watch: Callable[[Context], Sequence[Path]] | None = None
 
 
 def documents_directory(home: Path) -> Path:
@@ -633,6 +637,11 @@ def install_runtime(directory: Path, root: Path) -> None:
         raise InstallError("; ".join(errors))
 
 
+def watch_runtime(context: Context) -> list[Path]:
+    directory = runtime_bin(context)
+    return [directory / "source.json"] + ([] if context.windows else [directory / "python"])
+
+
 def check_runtime(context: Context) -> list[str]:
     directory = context.state_directory / "bin"
     changes = [f"install Agent runtime: {error}"
@@ -740,6 +749,10 @@ def apply_runtime(context: Context) -> list[str]:
     return [f"installed the Agent runtime in {directory}"]
 
 
+def watch_agent_store(context: Context) -> list[Path]:
+    return [agent_store.receipt_path(), agent_store.executable()]
+
+
 def check_agent_store(context: Context) -> list[str]:
     pending = agent_store.pending()
     return [pending] if pending else []
@@ -759,32 +772,25 @@ def uv_executable(context: Context) -> str:
     return uv
 
 
-def uv_tool_directory(context: Context, uv: str) -> Path:
-    result = context.run(
-        [uv, "tool", "dir"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=COMMAND_TIMEOUT_SECONDS,
-        check=False,
-    )
-    if result.returncode or not result.stdout.strip():
-        detail = (result.stderr or result.stdout).strip()
-        raise InstallError(f"uv tool dir failed: {detail}")
-    return Path(result.stdout.strip())
-
-
-def tj_item_drift(context: Context, uv: str) -> list[str]:
+def tj_item_drift(context: Context) -> list[str]:
     return work_items_install.drift(
-        uv_tool_directory(context, uv),
+        work_items_install.default_tool_directory(context.environ, context.windows),
         work_items_install.Pins.load(),
         work_items_install.installed_plugins(),
     )
 
 
+def watch_tj_item(context: Context) -> list[Path]:
+    tools = work_items_install.default_tool_directory(context.environ, context.windows)
+    receipt = tools / work_items_install.Pins.load().tool.package / work_items_install.RECEIPT
+    cache = context.codex_home / "plugins" / "cache"
+    marketplaces = sorted(cache.iterdir()) if cache.is_dir() else []
+    return [receipt, context.claude_home / "plugins" / "installed_plugins.json", cache, *marketplaces]
+
+
 def check_tj_item(context: Context) -> list[str]:
-    return tj_item_drift(context, uv_executable(context))
+    uv_executable(context)
+    return tj_item_drift(context)
 
 
 def apply_tj_item(context: Context) -> list[str]:
@@ -796,7 +802,7 @@ def apply_tj_item(context: Context) -> list[str]:
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
         raise InstallError(f"uv tool install {pins.tool.package} failed: {detail}")
-    remaining = tj_item_drift(context, uv)
+    remaining = tj_item_drift(context)
     if remaining:
         raise InstallError("; ".join(remaining))
     installed = (pins.tool, *profiles)
@@ -840,15 +846,18 @@ def lifecycle_shims(context: Context) -> dict[Path, str]:
     return {directory / name: text for name, text in shims}
 
 
+def shim_current(path: Path, text: str) -> bool:
+    return path.is_file() and path.read_bytes() == text.encode("utf-8")
+
+
 def check_lifecycle_commands(context: Context) -> list[str]:
-    return [f"write {path}" for path, text in lifecycle_shims(context).items()
-            if not path.is_file() or path.read_text(encoding="utf-8") != text]
+    return [f"write {path}" for path, text in lifecycle_shims(context).items() if not shim_current(path, text)]
 
 
 def apply_lifecycle_commands(context: Context) -> list[str]:
     changes = []
     for path, text in lifecycle_shims(context).items():
-        if path.is_file() and path.read_text(encoding="utf-8") == text:
+        if shim_current(path, text):
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8", newline="")
@@ -908,6 +917,73 @@ def apply_plugin_setup(context: Context) -> list[str]:
     return []
 
 
+def watch_plugin_copies(context: Context) -> list[Path]:
+    return [context.state_directory / plugin_copies.MARKER]
+
+
+def check_plugin_copies(context: Context) -> list[str]:
+    return plugin_copies.drift(context.state_directory)
+
+
+def apply_plugin_copies(context: Context) -> list[str]:
+    converged, changes, errors = [], [], []
+    for source in plugin_copies.sources():
+        try:
+            target = required_plugins.declaration(source.root, source.identity)
+            result = context.run(
+                [sys.executable, "-B", str(target.script), "converge"],
+                cwd=source.root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=INSTALLER_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (
+            required_plugins.PluginSetupError,
+            OSError,
+            subprocess.SubprocessError,
+        ) as error:
+            errors.append(f"{source.identity}: {error}")
+            continue
+        if result.returncode:
+            detail = required_plugins.bounded(result)
+            errors.append(f"{source.identity}: converge failed: {detail}")
+            continue
+        converged.append(source)
+        changes.append(f"converged {source.identity} copies from {source.revision[:12]}")
+    plugin_copies.record(context.state_directory, converged)
+    if errors:
+        raise InstallError("; ".join(errors))
+    return changes
+
+
+def retired_state_options(context: Context) -> dict:
+    return {
+        "windows": context.windows,
+        "home": context.home,
+        "run": context.run,
+        "environ": context.environ,
+    }
+
+
+def check_retired_state(context: Context) -> list[str]:
+    return [
+        f"remove {item}"
+        for item in retired_state.present(
+            context.state_directory, **retired_state_options(context)
+        )
+    ]
+
+
+def apply_retired_state(context: Context) -> list[str]:
+    removal = retired_state.remove(context.state_directory, **retired_state_options(context))
+    if removal.failures:
+        raise InstallError("; ".join(removal.failures))
+    return [f"removed {item}" for item in removal.removed]
+
+
 def check_native_cli(context: Context) -> list[str]:
     pending = native_runtime.pending()
     if pending:
@@ -922,22 +998,25 @@ def apply_native_cli(context: Context) -> list[str]:
 
 
 STEPS = (
+    Step("retired state", check_retired_state, apply_retired_state),
     Step("Git long paths", check_git_longpaths, apply_git_longpaths, windows_only),
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
-    Step("agent-store CLI", check_agent_store, apply_agent_store),
-    Step("tj item CLI", check_tj_item, apply_tj_item),
+    Step("agent-store CLI", check_agent_store, apply_agent_store, watch=watch_agent_store),
+    Step("tj item CLI", check_tj_item, apply_tj_item, watch=watch_tj_item),
     cli_tool_step("worktrunk", worktrunk_install),
     cli_tool_step("Handy", handy_install),
-    Step("launch-check runtime", check_runtime, apply_runtime),
-    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands),
-    Step("shell profiles", check_profile, apply_profile),
+    Step("launch-check runtime", check_runtime, apply_runtime, watch=watch_runtime),
+    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands,
+         watch=lambda context: list(lifecycle_shims(context))),
+    Step("shell profiles", check_profile, apply_profile, watch=profile_paths),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
+    Step("plugin copies", check_plugin_copies, apply_plugin_copies, watch=watch_plugin_copies),
 )
 
 
@@ -973,6 +1052,7 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
                 print(f"apply  {step.name}: {change}", file=out)
         except Exception as error:  # noqa: BLE001
             print(f"failed {step.name}: {error}", file=err)
+            context.failures.append(f"{step.name}: {error}")
             failed = True
             failed_steps.add(step.name)
             if step.required:
@@ -1032,11 +1112,17 @@ def main(argv: list[str] | None = None) -> int:
     context.onboard = parsed.onboard
     native_runtime.expose()
     context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
-    if not parsed.check:
-        for removed in retired_state.remove(context.state_directory, windows=context.windows,
-                                            home=context.home):
-            print(f"apply  retired state: removed {removed}")
-    return run_steps(selected_steps(set(parsed.step or ())), context, parsed.check)
+    steps = selected_steps(set(parsed.step or ()))
+    if parsed.check:
+        return run_steps(steps, context, True)
+    with jobs.held(context.state_directory, jobs.Job.INSTALL) as acquired:
+        if not acquired:
+            print("install: another machine install is running", file=sys.stderr)
+            return 2
+        code = run_steps(steps, context, False)
+        jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
+    machine_state.drift(context.state_directory)
+    return code
 
 
 if __name__ == "__main__":

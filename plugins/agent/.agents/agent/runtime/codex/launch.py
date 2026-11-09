@@ -184,16 +184,16 @@ def resume_arguments(directory, title, session_id):
     return ["--cd", str(directory), "resume", session_id]
 
 
-def _daemon():
+def daemon(timeout=DAEMON_TIMEOUT_SECONDS):
     from codex import hook_trust
 
-    return hook_trust.AppServer(executable(), Path.cwd(), timeout=DAEMON_TIMEOUT_SECONDS, existing=True)
+    return hook_trust.AppServer(executable(), Path.cwd(), timeout=timeout, existing=True)
 
 
 def liveness() -> dict[str, Liveness]:
     """Threads loaded in the shared app-server daemon, by thread id; an absent daemon has none."""
     try:
-        with _daemon() as server:
+        with daemon() as server:
             loaded, cursor = [], None
             while True:
                 page = server.request("thread/loaded/list", {"cursor": cursor})
@@ -213,13 +213,13 @@ def respawn(background):
 
 
 def name_session(session_id, title):
-    with _daemon() as server:
+    with daemon() as server:
         server.request("thread/name/set", {"threadId": session_id, "name": title})
 
 
 def deliver(session_id, prompt, model, effort):
     """Start the thread's first turn through the daemon, the only way to choose its reasoning effort."""
-    with _daemon() as server:
+    with daemon() as server:
         server.request("turn/start", {
             "threadId": session_id,
             "input": [{"type": "text", "text": prompt}],
