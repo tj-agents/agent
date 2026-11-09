@@ -1,16 +1,16 @@
 ---
 name: recover
-description: Inventory local Codex and Claude sessions for relevant work, then reopen only explicitly selected sessions.
+description: Bring back the agents of open work items after a crash, reboot or closed terminal. Use when asked to recover, restore, reload or bring back agents, sessions or tabs, or to see which agents are dead.
 kind: utility
 domain: agent
 profile: core
 applicability: agent sessions
-requires: python, native host
 provenance: house
-route: infer
+requires: tj
+allowed-tools: Bash(tj status:*), Bash(tj reload:*)
 ---
 
-# Recover agent work
+# Recover agents
 
 Read and follow the [canonical definition](../../.agents/agent/utility/recover/SKILL.md) in full.
 This discovery entry is generated; edit the referenced `.agents/` definition.

@@ -1,7 +1,7 @@
 # agent
 
-Agent owns behavior that acts on an agent session: session registration, recovery, handoff, refresh, peers,
-lanes, the session store and machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS
+Agent owns behavior that acts on an agent session: session registration, the lifecycle commands, handoff,
+refresh, lanes and machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS
 mechanics with no agent judgement, such as closing a terminal or the clipboard, belong in `tj-agents/cli`;
 common behavior and the engineering and workflow process belong in `tj-agents/core`.
 
@@ -43,7 +43,8 @@ This profile applies in projects that explicitly select it. Policies live under 
 
 Agent Store is the leaf package. Agent may depend on Base, Agent Store and CLI; Codex may depend on
 Agent. Keep this graph acyclic. Resolve packaged runtime only from the nearest repository or plugin root,
-using the package-local `.agents/agent/runtime` or `.agents/agent-store/runtime` path; never fall back to
+using the package-local `.agents/agent/runtime` path, and reach the link store only through the pinned
+`agent-store` CLI; never fall back to
 an author checkout, a global cache, or a sibling installation.
 
 <!-- BEGIN personal:rules sha256:eee7a719bb90e67aaa81ac101a45836dd099bc745fee61216c99ec7d6075f12d -->
