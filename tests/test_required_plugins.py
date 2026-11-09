@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
@@ -114,6 +115,44 @@ class RequiredPluginInventoryTests(unittest.TestCase):
                 "--plugin-dir", "plugins", "--plugin-url", "https://example.test/plugin",
             ),
         )
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        {"script": "setup.py"},
+        {"script": "setup.py", "converge": True},
+        {"script": "setup.py", "converge": False},
+    ],
+)
+def test_setup_declaration_accepts_script_alone_or_with_a_bool_converge(
+    tmp_path: Path,
+    setup: dict[str, object],
+) -> None:
+    (tmp_path / "setup.py").write_text("", encoding="utf-8")
+    document = {"requires": {"setup": setup}}
+    target = REQUIRED.declaration(tmp_path, "agent@tj-agents", document)
+    assert target is not None
+    assert target.converge is setup.get("converge", False)
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        {"script": "setup.py", "converge": "yes"},
+        {"script": "setup.py", "extra": True},
+        {"converge": True},
+        {"script": "setup.py", "converge": True, "extra": 1},
+    ],
+)
+def test_setup_declaration_rejects_a_non_bool_converge_or_an_unknown_key(
+    tmp_path: Path,
+    setup: dict[str, object],
+) -> None:
+    (tmp_path / "setup.py").write_text("", encoding="utf-8")
+    document = {"requires": {"setup": setup}}
+    with pytest.raises(REQUIRED.PluginSetupError):
+        REQUIRED.declaration(tmp_path, "agent@tj-agents", document)
 
 
 if __name__ == "__main__":

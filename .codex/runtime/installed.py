@@ -6,10 +6,25 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+import required_plugins
 from tj_agent.host import Host
 
 HOST = Host.CODEX
 RELOAD = "restart this session"
+MARKETPLACE_OVERRIDES = (
+    "-c",
+    f'marketplaces.{required_plugins.MARKETPLACE_NAME}.source_type="git"',
+    "-c",
+    f"marketplaces.{required_plugins.MARKETPLACE_NAME}.source="
+    f'"https://github.com/{required_plugins.MARKETPLACE_REPOSITORY}.git"',
+    "-c",
+    f"marketplaces.{required_plugins.MARKETPLACE_NAME}.sparse_paths="
+    f"{json.dumps(list(required_plugins.MARKETPLACE_SPARSE_PATHS))}",
+)
+
+
+def codex_command(*arguments: str) -> list[str]:
+    return ["codex", *arguments, *MARKETPLACE_OVERRIDES]
 
 
 def label(root: Path) -> str | None:
@@ -49,17 +64,30 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
 
 
 def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]) -> None:
-    listing = report.step(HOST, "list", ["codex", "plugin", "list", "--json"])
+    listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
     if listing is None:
         return
     installed = [row for row in json.loads(listing.stdout)["installed"] if row["marketplaceName"] in marketplaces]
+    if required_plugins.MARKETPLACE_NAME in marketplaces and not any(
+        row["marketplaceName"] == required_plugins.MARKETPLACE_NAME for row in installed
+    ):
+        report.fail(
+            HOST, "list", f"no {required_plugins.MARKETPLACE_NAME} plugins installed"
+        )
+        return
     for marketplace in sorted({row["marketplaceName"] for row in installed}):
-        report.step(HOST, f"marketplace {marketplace}", ["codex", "plugin", "marketplace", "upgrade", marketplace])
+        report.step(
+            HOST,
+            f"marketplace {marketplace}",
+            codex_command("plugin", "marketplace", "upgrade", marketplace),
+        )
     stale = [row for row in installed if not current(row["marketplaceName"], row["pluginId"].rpartition("@")[0])]
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
     for row in stale:
-        report.step(HOST, row["pluginId"], ["codex", "plugin", "add", row["pluginId"]])
+        report.step(
+            HOST, row["pluginId"], codex_command("plugin", "add", row["pluginId"])
+        )
 
 
 def restart(report: Any) -> None:
