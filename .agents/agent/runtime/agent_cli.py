@@ -25,7 +25,6 @@ from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout
 from package_root import find_package_root
 import agent_store
-from tj_cli import process
 
 if TYPE_CHECKING:
     from claude import launch as claude_launch
@@ -265,9 +264,9 @@ def _launch_windows_terminal(directory, title, command, cleared, forced, environ
             env=_environment_for(environ, cleared, forced))
 
 
-def open_tab(directory, title, command, cleared=(), forced=None, environ=os.environ, run=process.run):
+def open_tab(directory, title, command, cleared=(), forced=None, environ=os.environ, run=subprocess.run):
     """Open `command` as a new tab titled `title`, in Windows Terminal or the current tmux server."""
-    if run is process.run and 'PYTEST_CURRENT_TEST' in os.environ:
+    if run is subprocess.run and 'PYTEST_CURRENT_TEST' in os.environ:
         raise LaunchError('Refusing to open a real terminal tab under pytest; inject a fake run.')
     forced = dict(forced or {})
     if IS_WINDOWS:
@@ -302,7 +301,7 @@ def await_launch(launch_id, want_session=False, timeout=TJ_RUN_TIMEOUT_SECONDS,
 
 
 def launch(host, directory, title, arguments, item=None, parent=None, want_session=False,
-           environ=os.environ, run=process.run):
+           environ=os.environ, run=subprocess.run):
     """Open a `tj run` tab for one agent and return its confirmed launch."""
     adapter = host_launch(host)
     tj = shutil.which('tj')

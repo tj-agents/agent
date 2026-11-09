@@ -1,6 +1,7 @@
 """agent_cli.py: synthetic homes, PATHs and plugin registries only; the real profile is never read."""
 import contextlib
 import importlib
+import inspect
 import io
 import json
 import os
@@ -471,6 +472,10 @@ class OpenTabTests(unittest.TestCase):
         self.assertEqual(['wt.exe', '--window', '0', 'new-tab', '--startingDirectory', r'C:\work', '--title',
                           'agent#98', '--suppressApplicationTitle', 'tj', 'run', '--', 'claude', 'a\\; b'], command)
         self.assertEqual({'KEPT': 'y', 'FORCE_COLOR': '1'}, kwargs['env'])
+
+    def test_the_terminal_is_started_directly_and_never_through_the_hidden_launcher(self):
+        for function in (CLI.open_tab, CLI.launch):
+            self.assertIs(subprocess.run, inspect.signature(function).parameters['run'].default)
 
     def test_tmux_opens_a_named_window_that_keeps_its_name(self):
         run = fake_run([('@7', '', 0)])
