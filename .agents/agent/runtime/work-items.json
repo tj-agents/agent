@@ -1,0 +1,6 @@
+{
+  "tool": {"package": "tj-work-items", "repository": "tj-agents/work-items", "subdirectory": "packages/tj-work-items", "revision": "d01958325388b6198d2eacb4b49e763ad39664f3"},
+  "profiles": {
+    "infonetica@tj-agents": {"package": "tj-infonetica-profile", "repository": "tj-agents/infonetica", "subdirectory": "packages/tj-infonetica-profile", "revision": "adb477923d807df635673044d4ffe81916e86582"}
+  }
+}

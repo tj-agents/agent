@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,15 @@ LIVE_ENTRIES = (
     "plugin-refresh.json",
     "github-access/profile.json",
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_machine(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine = tmp_path_factory.mktemp("machine")
+    monkeypatch.setenv("APPDATA", str(machine / "roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(machine / "local"))
 
 
 class Recorder:
@@ -173,3 +183,86 @@ def test_no_authored_code_references_a_retired_name_as_a_path() -> None:
                 if entry in text:
                     offenders.append(f"{path.relative_to(ROOT)}: {entry}")
     assert offenders == []
+
+
+class FakeProcesses:
+    def __init__(self, running: list[retired_state.RunningProcess]) -> None:
+        self.running = running
+        self.terminated: list[retired_state.RunningProcess] = []
+
+    def listing(self) -> list[retired_state.RunningProcess]:
+        return list(self.running)
+
+    def terminate(self, running: retired_state.RunningProcess) -> bool:
+        self.terminated.append(running)
+        return True
+
+
+def seed_tj_watch(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
+    environ = {
+        "APPDATA": str(tmp_path / "roaming"),
+        "LOCALAPPDATA": str(tmp_path / "local"),
+    }
+    shortcut = tmp_path / "roaming" / retired_state.TJ_WATCH_SHORTCUT
+    binary = tmp_path / "local" / retired_state.TJ_WATCH_EXECUTABLE
+    for path in (shortcut, binary):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"tj-watch")
+    return environ, shortcut, binary
+
+
+def test_windows_retires_the_tj_watch_shortcut_binary_and_process(
+    tmp_path: Path,
+) -> None:
+    environ, shortcut, binary = seed_tj_watch(tmp_path)
+    running = retired_state.RunningProcess(41, str(binary))
+    processes = FakeProcesses([running])
+    removed = retired_state.remove(
+        tmp_path / "state",
+        windows=True,
+        run=Recorder(),
+        environ=environ,
+        processes=processes,
+    )
+    assert processes.terminated == [running]
+    assert not shortcut.exists()
+    assert not binary.exists()
+    assert [str(shortcut), "tj-watch process 41", str(binary)] == removed[-3:]
+
+
+def test_tj_watch_retirement_never_stops_a_process_by_name(tmp_path: Path) -> None:
+    environ, _shortcut, binary = seed_tj_watch(tmp_path)
+    exact = retired_state.RunningProcess(41, str(binary))
+    elsewhere = retired_state.RunningProcess(
+        42, str(tmp_path / "elsewhere" / "tj-watch.exe")
+    )
+    named = retired_state.RunningProcess(43, "tj-watch.exe")
+    processes = FakeProcesses([elsewhere, named, exact])
+    retired_state.remove(
+        tmp_path / "state",
+        windows=True,
+        run=Recorder(),
+        environ=environ,
+        processes=processes,
+    )
+    assert processes.terminated == [exact]
+    source = inspect.getsource(retired_state)
+    assert "QueryFullProcessImageNameW" in source
+    for by_name in ("szExeFile", "taskkill", "/IM", "Get-Process", "Win32_Process"):
+        assert by_name not in source
+
+
+def test_tj_watch_is_left_alone_off_windows(tmp_path: Path) -> None:
+    environ, shortcut, binary = seed_tj_watch(tmp_path)
+    processes = FakeProcesses([retired_state.RunningProcess(41, str(binary))])
+    retired_state.remove(
+        tmp_path / "state",
+        windows=False,
+        home=tmp_path / "home",
+        run=Recorder(),
+        environ=environ,
+        processes=processes,
+    )
+    assert processes.terminated == []
+    assert shortcut.exists()
+    assert binary.exists()

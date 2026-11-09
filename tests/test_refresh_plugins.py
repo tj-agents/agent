@@ -204,12 +204,15 @@ class RefreshPluginsTests(unittest.TestCase):
         self.assertEqual("claude: list: boom", REFRESH.refresh_lock.recent_failure())
         self.assertFalse(REFRESH.refresh_lock.running())
 
-    def test_refresh_converges_the_runtime_lifecycle_commands_and_shell_profiles_through_the_installer(self):
+    def test_refresh_converges_the_machine_and_tools_through_the_installer(self) -> None:
         with mock.patch.object(REFRESH.process, "run", return_value=completed(0, "[]")) as spawned:
             self.assertEqual(0, REFRESH.main(["--host", "claude"]))
         commands = [call.args[0] for call in spawned.call_args_list]
-        self.assertIn([sys.executable, "-B", str(REFRESH.RUNTIME / "install.py"), "--step", "tj lifecycle commands",
-                       "--step", "shell profiles"], commands)
+        install = [sys.executable, "-B", str(REFRESH.RUNTIME / "install.py")]
+        steps = ["tj lifecycle commands", "shell profiles", "tj item CLI", "worktrunk",
+                 "Handy"]
+        expected = [*install, *(item for step in steps for item in ("--step", step))]
+        self.assertIn(expected, commands)
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -359,6 +362,13 @@ def test_converge_is_skipped_for_an_install_behind_its_pin(tmp_path: Path) -> No
         call for call in spawned.call_args_list if call.args[0][-1:] == ["converge"]
     ]
     assert converges == []
+
+
+def test_refresh_runs_every_managed_tool_install_step() -> None:
+    install = importlib.import_module("install")
+    names = {step.name for step in install.STEPS}
+    assert {"tj item CLI", "worktrunk", "Handy"} <= set(REFRESH.MACHINE_STEPS)
+    assert set(REFRESH.MACHINE_STEPS) <= names
 
 
 if __name__ == "__main__":

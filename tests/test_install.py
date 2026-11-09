@@ -747,7 +747,9 @@ class RunStepsTests(Machine):
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
             "Git long paths", "native CLI", "native permission defaults",
-            "Claude marketplace auto-update", "agent-store CLI", "launch-check runtime", "tj lifecycle commands",
+            "Claude marketplace auto-update", "agent-store CLI",
+            "tj item CLI", "worktrunk", "Handy",
+            "launch-check runtime", "tj lifecycle commands",
             "shell profiles", "hidden Git Bash for Claude",
             "Codex profile agents", "harness permissions", "plugin setup",
         ], [item.name for item in install.STEPS])
