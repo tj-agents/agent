@@ -59,7 +59,7 @@ class RefreshPluginsTests(unittest.TestCase):
         starts = mock.patch.object(REFRESH.jobs.process, "start", self.started)
         starts.start()
         self.addCleanup(starts.stop)
-        machine = mock.patch.object(REFRESH.latest_plugins, "machine_drift", return_value={})
+        machine = mock.patch.object(REFRESH.latest_plugins.machine_state, "drift", return_value={})
         machine.start()
         self.addCleanup(machine.stop)
 
@@ -235,7 +235,7 @@ def _current_machine(home: Path) -> Any:
     pin_plugin(claude, "agent", AGENT_PIN)
     agent_root(install_plugin(claude, "agent", AGENT_PIN), "agent build")
     context = machine_context(home)
-    converge(context, REFRESH.latest_plugins.packaged("install.py").parents[3])
+    converge(context, REFRESH.latest_plugins.machine_state.packaged("install.py").parents[3])
     return mock.patch.object(install, "machine_context", return_value=context)
 
 
@@ -253,7 +253,7 @@ def test_codex_commands_carry_marketplace_overrides_and_no_cwd(tmp_path: Path) -
         _patched_homes(tmp_path),
         mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned,
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
-        mock.patch.object(REFRESH.latest_plugins, "machine_drift", return_value={}),
+        mock.patch.object(REFRESH.latest_plugins.machine_state, "drift", return_value={}),
     ):
         assert REFRESH.main(["--host", "codex"]) == 0
     overrides = REFRESH.codex_installed.MARKETPLACE_OVERRIDES
@@ -282,7 +282,7 @@ def test_codex_refresh_fails_with_no_tj_agents_rows_after_listing(
         _patched_homes(tmp_path),
         mock.patch.object(REFRESH.process, "run", side_effect=run),
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
-        mock.patch.object(REFRESH.latest_plugins, "machine_drift", return_value={}),
+        mock.patch.object(REFRESH.latest_plugins.machine_state, "drift", return_value={}),
     ):
         assert REFRESH.main(["--host", "codex"]) == 1
         failure = REFRESH.jobs.recent_failure(
@@ -360,17 +360,17 @@ def test_a_pin_moved_by_refresh_is_converged_before_the_next_prompt(
     ) as spawned, mock.patch.object(REFRESH.jobs.process, "start", started):
         context = current.return_value
         context.run = converge_copies
-        script = REFRESH.latest_plugins.packaged("install.py")
+        script = REFRESH.latest_plugins.machine_state.packaged("install.py")
         copies = [sys.executable, "-B", str(script), "--step", "plugin copies"]
         plugin_copies.record(state, plugin_copies.sources())
-        assert REFRESH.latest_plugins.reason(Host.CLAUDE, state) is None
+        assert REFRESH.latest_plugins.reason(Host.CLAUDE, state, full=True) is None
 
         assert REFRESH.main(["--host", "claude"]) == 0
         assert {call.args[0][0] for call in spawned.call_args_list} == {"claude"}
         assert started.commands == [copies]
 
         with REFRESH.jobs.held(state, REFRESH.jobs.Job.INSTALL):
-            refusal = REFRESH.latest_plugins.reason(Host.CLAUDE, state)
+            refusal = REFRESH.latest_plugins.reason(Host.CLAUDE, state, full=True)
         assert refusal is not None
         assert refusal.startswith("Updating tj-agents plugin copies")
         assert started.commands == [copies]
@@ -378,7 +378,7 @@ def test_a_pin_moved_by_refresh_is_converged_before_the_next_prompt(
         assert (
             install.run_steps([step], context, False, io.StringIO(), io.StringIO()) == 0
         )
-        assert REFRESH.latest_plugins.reason(Host.CLAUDE, state) is None
+        assert REFRESH.latest_plugins.reason(Host.CLAUDE, state, full=True) is None
     root = (claude / "plugins/cache/tj-agents/personal" / NEW_PIN[:12]).resolve()
     script = [sys.executable, "-B", str(root / "scripts/setup.py"), "converge"]
     assert [(command, cwd.resolve()) for command, cwd in converged] == [(script, root)]

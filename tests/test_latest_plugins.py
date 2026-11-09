@@ -12,6 +12,7 @@ from typing import Any
 import install
 import jobs
 import latest_plugins
+import machine_state
 import plugin_copies
 import pytest
 import retired_state
@@ -89,7 +90,7 @@ class Machine:
         (self.home / "codex/plugins/cache/tj-agents/agent" / label).mkdir(parents=True)
 
     def converge(self) -> None:
-        converge(self.context, latest_plugins.packaged("install.py").parents[3])
+        converge(self.context, machine_state.packaged("install.py").parents[3])
 
     def hook(self, host: str, event: str, root: Path | None = None) -> Any:
         running = str(root or self.install)
@@ -103,7 +104,7 @@ class Machine:
         return json.loads(output) if output.strip() else None
 
     def reason(self) -> str | None:
-        return latest_plugins.reason(Host.CLAUDE, self.state)
+        return latest_plugins.reason(Host.CLAUDE, self.state, full=True)
 
 
 @pytest.fixture
@@ -141,8 +142,12 @@ def machine(
 
 
 def install_step(name: str) -> list[str]:
-    script = latest_plugins.packaged("install.py")
+    script = machine_state.packaged("install.py")
     return [sys.executable, "-B", str(script), "--step", name]
+
+
+def no_files(_context: object) -> list[Path]:
+    return []
 
 
 def missing_tj_hook(_command: list[str], **_options: object) -> None:
@@ -324,16 +329,17 @@ def test_an_agent_update_starts_only_the_launch_runtime_step(machine: Machine) -
     pin_plugin(claude, "agent", old)
     agent_root(install_plugin(claude, "agent", old), "first build")
     machine.converge()
-    assert latest_plugins.machine_drift() == {}
+    assert machine_state.drift(machine.state) == {}
     pin_plugin(claude, "agent", new)
     updated = agent_root(install_plugin(claude, "agent", new), "second build")
     assert machine.reason() is not None
-    assert latest_plugins.packaged("install.py").parents[3] == updated
+    assert machine_state.packaged("install.py").parents[3] == updated
     assert machine.started.commands == [install_step("launch-check runtime")]
 
 
 def test_only_cheap_steps_take_part_in_the_stale_check() -> None:
-    assert [step.name for step in install.STEPS if step.drift] == DRIFT_STEPS
+    watched = [step.name for step in install.STEPS if step.watch is not None]
+    assert watched == DRIFT_STEPS
 
 
 def test_the_stale_check_never_runs_a_subprocess(machine: Machine) -> None:
@@ -348,7 +354,7 @@ def test_the_stale_check_never_runs_a_subprocess(machine: Machine) -> None:
     machine.monkeypatch.setattr(install.agent_store.process, "run", forbidden)
     copies_drifted(machine.home)
     tj_item_drifted(machine.home)
-    assert set(latest_plugins.machine_drift()) == {"tj item CLI", "plugin copies"}
+    assert set(machine_state.drift(machine.state)) == {"tj item CLI", "plugin copies"}
 
 
 def test_a_slow_step_never_runs_from_the_hook(
@@ -359,10 +365,10 @@ def test_a_slow_step_never_runs_from_the_hook(
 
     steps = (
         install.Step("slow", slow, slow),
-        install.Step("cheap", lambda _context: ["drifted"], slow, drift=True),
+        install.Step("cheap", lambda _context: ["drifted"], slow, watch=no_files),
     )
     monkeypatch.setattr(install, "STEPS", steps)
-    assert latest_plugins.machine_drift() == {"cheap": ["drifted"]}
+    assert machine_state.drift(machine.state) == {"cheap": ["drifted"]}
 
 
 def test_plugin_copies_drift_names_the_converged_and_pinned_builds(
@@ -427,3 +433,55 @@ def test_jobs_report_a_missing_tj_hook_instead_of_raising(
 ) -> None:
     monkeypatch.setattr(process, "start", missing_tj_hook)
     assert not jobs.start(tmp_path, jobs.Job.INSTALL, INSTALL)
+
+
+def clean_session(machine: Machine) -> None:
+    machine.registry(PIN)
+    machine.converge()
+    assert machine.hook("claude", "SessionStart") is None
+    assert (machine.state / machine_state.FINGERPRINT).is_file()
+
+
+def test_a_prompt_with_an_unchanged_fingerprint_skips_install_and_its_checks(
+    machine: Machine,
+) -> None:
+    clean_session(machine)
+    machine.monkeypatch.setitem(sys.modules, "install", None)
+    assert machine.hook("claude", "UserPromptSubmit") is None
+    assert machine.started.commands == []
+
+
+def test_a_plugin_update_makes_the_next_prompt_run_the_machine_check(
+    machine: Machine,
+) -> None:
+    clean_session(machine)
+    new = "e" * 40
+    pin_plugin(machine.claude, "agent", new)
+    agent_root(install_plugin(machine.claude, "agent", new), "updated build")
+    assert machine.hook("claude", "UserPromptSubmit") is not None
+    assert machine.started.commands == [install_step("launch-check runtime")]
+
+
+def test_a_touched_receipt_makes_the_next_prompt_run_the_machine_check(
+    machine: Machine,
+) -> None:
+    clean_session(machine)
+    receipt = machine.home / "uv-tools/tj-work-items/uv-receipt.toml"
+    before = receipt.stat().st_mtime_ns
+    write_tool_receipt(machine.home / "uv-tools", [{**PINS["tool"], "revision": OLD}])
+    later = before + 2_000_000_000
+    os.utime(receipt, ns=(later, later))
+    assert machine.hook("claude", "UserPromptSubmit") is not None
+    assert machine.started.commands == [install_step("tj item CLI")]
+
+
+def test_session_start_always_runs_the_machine_check(machine: Machine) -> None:
+    clean_session(machine)
+    probe = install.Step(
+        "probe", lambda _context: ["drifted"], lambda _context: [], watch=no_files
+    )
+    machine.monkeypatch.setattr(install, "STEPS", (probe,))
+    assert machine.hook("claude", "UserPromptSubmit") is None
+    assert machine.started.commands == []
+    assert machine.hook("claude", "SessionStart") is not None
+    assert machine.started.commands == [install_step("probe")]

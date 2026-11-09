@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         report = Report()
         for host in hosts:
             INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host))
-        machine = latest_plugins.repair_machine(state)
+        machine = latest_plugins.repair_machine(state, full=True)
         if machine:
             print(f"tj: {machine}")
         for host in hosts:

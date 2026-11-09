@@ -26,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 from types import ModuleType
-from typing import Callable
+from typing import Callable, Sequence
 
 RUNTIME = Path(__file__).resolve().parent
 ROOT = RUNTIME.parents[2]
@@ -35,6 +35,7 @@ sys.path.insert(0, str(RUNTIME))
 from tj_agent.host import Host
 import host_permissions
 import jobs
+import machine_state
 import plugin_copies
 import required_plugins
 import retired_state
@@ -187,7 +188,7 @@ class Step:
     apply: Callable[[Context], list[str]]
     skip: Callable[[Context], str | None] = lambda context: None
     required: bool = False
-    drift: bool = False
+    watch: Callable[[Context], Sequence[Path]] | None = None
 
 
 def documents_directory(home: Path) -> Path:
@@ -636,6 +637,11 @@ def install_runtime(directory: Path, root: Path) -> None:
         raise InstallError("; ".join(errors))
 
 
+def watch_runtime(context: Context) -> list[Path]:
+    directory = runtime_bin(context)
+    return [directory / "source.json"] + ([] if context.windows else [directory / "python"])
+
+
 def check_runtime(context: Context) -> list[str]:
     directory = context.state_directory / "bin"
     changes = [f"install Agent runtime: {error}"
@@ -743,6 +749,10 @@ def apply_runtime(context: Context) -> list[str]:
     return [f"installed the Agent runtime in {directory}"]
 
 
+def watch_agent_store(context: Context) -> list[Path]:
+    return [agent_store.receipt_path(), agent_store.executable()]
+
+
 def check_agent_store(context: Context) -> list[str]:
     pending = agent_store.pending()
     return [pending] if pending else []
@@ -768,6 +778,14 @@ def tj_item_drift(context: Context) -> list[str]:
         work_items_install.Pins.load(),
         work_items_install.installed_plugins(),
     )
+
+
+def watch_tj_item(context: Context) -> list[Path]:
+    tools = work_items_install.default_tool_directory(context.environ, context.windows)
+    receipt = tools / work_items_install.Pins.load().tool.package / work_items_install.RECEIPT
+    cache = context.codex_home / "plugins" / "cache"
+    marketplaces = sorted(cache.iterdir()) if cache.is_dir() else []
+    return [receipt, context.claude_home / "plugins" / "installed_plugins.json", cache, *marketplaces]
 
 
 def check_tj_item(context: Context) -> list[str]:
@@ -899,6 +917,10 @@ def apply_plugin_setup(context: Context) -> list[str]:
     return []
 
 
+def watch_plugin_copies(context: Context) -> list[Path]:
+    return [context.state_directory / plugin_copies.MARKER]
+
+
 def check_plugin_copies(context: Context) -> list[str]:
     return plugin_copies.drift(context.state_directory)
 
@@ -981,19 +1003,20 @@ STEPS = (
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
-    Step("agent-store CLI", check_agent_store, apply_agent_store, drift=True),
-    Step("tj item CLI", check_tj_item, apply_tj_item, drift=True),
+    Step("agent-store CLI", check_agent_store, apply_agent_store, watch=watch_agent_store),
+    Step("tj item CLI", check_tj_item, apply_tj_item, watch=watch_tj_item),
     cli_tool_step("worktrunk", worktrunk_install),
     cli_tool_step("Handy", handy_install),
-    Step("launch-check runtime", check_runtime, apply_runtime, drift=True),
-    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands, drift=True),
-    Step("shell profiles", check_profile, apply_profile, drift=True),
+    Step("launch-check runtime", check_runtime, apply_runtime, watch=watch_runtime),
+    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands,
+         watch=lambda context: list(lifecycle_shims(context))),
+    Step("shell profiles", check_profile, apply_profile, watch=profile_paths),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
-    Step("plugin copies", check_plugin_copies, apply_plugin_copies, drift=True),
+    Step("plugin copies", check_plugin_copies, apply_plugin_copies, watch=watch_plugin_copies),
 )
 
 
@@ -1098,6 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         code = run_steps(steps, context, False)
         jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
+    machine_state.drift(context.state_directory)
     return code
 
 

@@ -689,6 +689,7 @@ class RunStepsTests(Machine):
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
+                    mock.patch.object(install.machine_state, "drift", return_value={}), \
                     mock.patch.object(install, "run_steps", return_value=0) as run:
                 self.assertEqual(0, install.main(arguments))
                 self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
@@ -864,6 +865,7 @@ def test_install_records_its_failures_for_the_stale_check(tmp_path: Path) -> Non
     with (
         mock.patch.object(install, "machine_context", return_value=context),
         mock.patch.object(install, "STEPS", (failing,)),
+        mock.patch.object(install.machine_state, "drift", return_value={}) as drift,
         contextlib.redirect_stdout(io.StringIO()),
         contextlib.redirect_stderr(io.StringIO()),
     ):
@@ -874,6 +876,7 @@ def test_install_records_its_failures_for_the_stale_check(tmp_path: Path) -> Non
         == "plugin copies: boom"
     )
     assert not install.jobs.running(state, install.jobs.Job.INSTALL)
+    drift.assert_called_once_with(state)
 
 
 def test_a_running_install_makes_a_second_install_exit_without_running(

@@ -18,8 +18,8 @@ from typing import Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import install
 import jobs
+import machine_state
 import retired_state
 from claude import installed as claude_installed
 from codex import installed as codex_installed
@@ -80,35 +80,13 @@ def running_behind(host: Host) -> str | None:
     return f"agent@tj-agents: {behind}" if behind else None
 
 
-def packaged(relative: str) -> Path:
-    agent = claude_installed.installs("tj-agents").get("agent")
-    script = agent[1] / ".agents" / "agent" / "runtime" / relative if agent else None
-    return script if script is not None and script.is_file() else RUNTIME / relative
-
-
 def refresh_command() -> list[str]:
-    return [sys.executable, "-B", str(packaged("plugins/refresh.py"))]
+    return [sys.executable, "-B", str(machine_state.packaged("plugins/refresh.py"))]
 
 
 def install_command(steps: Iterable[str]) -> list[str]:
     selected = [argument for step in steps for argument in ("--step", step)]
-    return [sys.executable, "-B", str(packaged("install.py")), *selected]
-
-
-def machine_drift() -> dict[str, list[str]]:
-    context = install.machine_context()
-    context.root = packaged("install.py").parents[3]
-    found = {}
-    for step in install.STEPS:
-        if not step.drift or step.skip(context):
-            continue
-        try:
-            pending = step.check(context)
-        except Exception as error:  # noqa: BLE001
-            pending = [str(error)]
-        if pending:
-            found[step.name] = pending
-    return found
+    return [sys.executable, "-B", str(machine_state.packaged("install.py")), *selected]
 
 
 def fixing(
@@ -128,8 +106,10 @@ def fixing(
     return f"Updating tj-agents {behind}… {then} when this says done."
 
 
-def repair_machine(state: Path) -> str | None:
-    drift = machine_drift()
+def repair_machine(state: Path, *, full: bool) -> str | None:
+    if not full and machine_state.current(state):
+        return None
+    drift = machine_state.drift(state)
     if not drift:
         return None
     command = install_command(drift)
@@ -140,8 +120,8 @@ def repair_machine(state: Path) -> str | None:
     )
 
 
-def reason(host: Host, state: Path) -> str | None:
-    machine = repair_machine(state)
+def reason(host: Host, state: Path, *, full: bool) -> str | None:
+    machine = repair_machine(state, full=full)
     if installed_behind(host):
         return fixing(
             state,
@@ -167,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     state = jobs.state_directory()
     if event in ("", "SessionStart"):
         retired_state.remove(state)
-    refusal = reason(arguments.host, state)
+    refusal = reason(arguments.host, state, full=event != "UserPromptSubmit")
     if refusal is None:
         return 0
     if event == "UserPromptSubmit":
