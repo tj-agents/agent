@@ -151,7 +151,8 @@ def codex_block(sources: dict, identities: dict) -> str:
         lines += [f"[marketplaces.{marketplace}]", 'source_type = "git"',
                   f'source = "https://github.com/{release["owner_repository"]}.git"']
         if marketplace == plugin_selection.MARKETPLACE_NAME:
-            lines.append(f'sparse_paths = {json.dumps([".agents/plugins", ".claude-plugin", "plugins"])}')
+            sparse_paths = json.dumps(list(plugin_selection.MARKETPLACE_SPARSE_PATHS))
+            lines.append(f"sparse_paths = {sparse_paths}")
         lines.append("")
     for identity, enabled in identities.items():
         lines += [f'[plugins."{identity}"]', f"enabled = {str(enabled).lower()}", ""]
