@@ -6,6 +6,7 @@ Every agent tab runs under `tj run`, opened in Windows Terminal or tmux; a launc
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import os
 from pathlib import Path
@@ -25,6 +26,9 @@ from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout
 from package_root import find_package_root
 import agent_store
+import work_item
+
+LAUNCH_ID_ENVIRONMENT = 'TJ_RUN_LAUNCH_ID'
 
 if TYPE_CHECKING:
     from claude import launch as claude_launch
@@ -319,13 +323,42 @@ def launch(host, directory, title, arguments, item=None, parent=None, want_sessi
 
 
 def parent_session(value):
-    """The parent's `host:id`: as given, the calling session for `current`, or None without a parent."""
-    if value != 'current':
+    """The parent's `host:id`: as given, else the calling session as `tj approve` resolves it, else None."""
+    if value is not None:
         return value
+    launch_id = os.environ.get(LAUNCH_ID_ENVIRONMENT)
+    if launch_id:
+        try:
+            shown = agent_store.run('show', '--launch-id', launch_id)
+        except agent_store.AgentStoreError as error:
+            if error.code != 'not-found':
+                raise LaunchError(f'agent-store could not read launch {launch_id}: {error}') from error
+        else:
+            session = shown.get('session')
+            if session:
+                return session['session']
     for host in Host:
         if session_id := os.environ.get(host.session_variable):
             return f'{host}:{session_id}'
-    raise LaunchError('bare --parent names the calling session, but this is not a Claude or Codex session.')
+    return None
+
+
+def resolve_item(item, title, cwd, parent, fields):
+    """The handoff's work item ref: `item` as given, or a new item titled `title` under `cwd`."""
+    if item:
+        if fields:
+            raise LaunchError('--item-field applies only to the work item created when --item is omitted.')
+        return item
+    parent_ref = work_item.parent_item_ref(parent) if parent else None
+    return work_item.create(cwd, title, parent_ref, dict(fields))
+
+
+def item_field(value):
+    """One `NAME=VALUE` create field for the handoff's new work item."""
+    name, separator, field_value = value.partition('=')
+    if not separator or not name or not field_value:
+        raise argparse.ArgumentTypeError(f'expected NAME=VALUE, got {value!r}')
+    return name, field_value
 
 
 def parent_rule(parent):

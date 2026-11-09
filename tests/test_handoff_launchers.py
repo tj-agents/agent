@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -32,6 +33,12 @@ class LauncherCase(unittest.TestCase):
         self.cli = load(PACKAGE / 'runtime/agent_cli.py', f'agent_cli_{self.id()}')
         self.launch = mock.Mock(return_value=SHOWN)
         self.cli.launch = self.launch
+        self.cli.resolve_item = mock.Mock(side_effect=lambda item, title, cwd, parent, fields: item or 'auto-item')
+        session = {name: value for name, value in os.environ.items()
+                   if name not in ('TJ_RUN_LAUNCH_ID', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID')}
+        patcher = mock.patch.dict(os.environ, session, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.launcher = load(PACKAGE / f'resources/handoff/{self.script}', f'{self.script}_{self.id()}')
         self.launcher._load_agent_cli = lambda: self.cli
 
@@ -61,6 +68,20 @@ class ClaudeLauncherTests(LauncherCase):
         self.run_launcher('--model', 'claude-opus-5-5')
         self.assertNotIn('Standing rule', self.launch.call_args.args[3][-1])
         self.assertIsNone(self.launch.call_args.kwargs['parent'])
+
+    def test_omitting_item_uses_what_resolve_item_creates(self):
+        self.run_launcher('--model', 'claude-opus-5-5')
+        self.cli.resolve_item.assert_called_once_with(None, 'agent#98 review', self.directory, None, [])
+        self.assertEqual('auto-item', self.launch.call_args.kwargs['item'])
+
+    def test_item_fields_reach_the_created_work_item(self):
+        self.run_launcher('--model', 'claude-opus-5-5', '--item-field', 'attribution=TechPlatform')
+        self.assertEqual([('attribution', 'TechPlatform')], self.cli.resolve_item.call_args.args[4])
+
+    def test_the_calling_session_becomes_the_parent_by_default(self):
+        os.environ['CLAUDE_CODE_SESSION_ID'] = 'caller'
+        self.run_launcher('--model', 'claude-opus-5-5')
+        self.assertEqual('claude:caller', self.launch.call_args.kwargs['parent'])
 
     def test_skipping_permissions_leads_the_arguments(self):
         self.run_launcher('--model', 'claude-opus-5-5', '--dangerously-skip-permissions')
