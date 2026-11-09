@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -7,9 +8,13 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
+
+import pytest
 
 from git_isolation import isolate_git_config
 
@@ -678,10 +683,13 @@ class RunStepsTests(Machine):
              ["native CLI", "harness permissions", "plugin setup"]),
             (["--step", "tj lifecycle commands"],
              ["native CLI", "launch-check runtime", "tj lifecycle commands"]),
+            (["--step", "tj item CLI"], ["native CLI", "tj item CLI"]),
+            (["--step", "plugin copies"], ["native CLI", "plugin copies"]),
+            (["--step", "retired state"], ["retired state", "native CLI"]),
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
-                    mock.patch.object(install.retired_state, "remove", return_value=[]), \
+                    mock.patch.object(install.machine_state, "drift", return_value={}), \
                     mock.patch.object(install, "run_steps", return_value=0) as run:
                 self.assertEqual(0, install.main(arguments))
                 self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
@@ -746,12 +754,12 @@ class RunStepsTests(Machine):
 
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
-            "Git long paths", "native CLI", "native permission defaults",
+            "retired state", "Git long paths", "native CLI", "native permission defaults",
             "Claude marketplace auto-update", "agent-store CLI",
             "tj item CLI", "worktrunk", "Handy",
             "launch-check runtime", "tj lifecycle commands",
             "shell profiles", "hidden Git Bash for Claude",
-            "Codex profile agents", "harness permissions", "plugin setup",
+            "Codex profile agents", "harness permissions", "plugin setup", "plugin copies",
         ], [item.name for item in install.STEPS])
 
 
@@ -843,6 +851,93 @@ class NativePermissionsTests(Machine):
         with mock.patch.object(install.host_permissions, "desktop_running", side_effect=closed):
             install.apply_native_permissions(context)
         self.assertTrue(json.loads(app.read_text(encoding="utf-8"))["saved-during-shutdown"])
+
+
+def machine_context(home: Path) -> install.Context:
+    return install.Context(home=home, environ={}, windows=False)
+
+
+def test_install_records_its_failures_for_the_stale_check(tmp_path: Path) -> None:
+    context = machine_context(tmp_path)
+    failing = install.Step(
+        "plugin copies", mock.Mock(side_effect=RuntimeError("boom")), mock.Mock()
+    )
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install, "STEPS", (failing,)),
+        mock.patch.object(install.machine_state, "drift", return_value={}) as drift,
+        contextlib.redirect_stdout(io.StringIO()),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        assert install.main(["--step", "plugin copies"]) == 2
+    state = context.state_directory
+    assert (
+        install.jobs.recent_failure(state, install.jobs.Job.INSTALL)
+        == "plugin copies: boom"
+    )
+    assert not install.jobs.running(state, install.jobs.Job.INSTALL)
+    drift.assert_called_once_with(state)
+
+
+def test_a_running_install_makes_a_second_install_exit_without_running(
+    tmp_path: Path,
+) -> None:
+    context = machine_context(tmp_path)
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install, "run_steps") as run,
+        install.jobs.held(context.state_directory, install.jobs.Job.INSTALL),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        assert install.main(["--step", "plugin copies"]) == 2
+    run.assert_not_called()
+
+
+def test_install_check_runs_without_the_install_lock(tmp_path: Path) -> None:
+    context = machine_context(tmp_path)
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install, "run_steps", return_value=0) as run,
+        install.jobs.held(context.state_directory, install.jobs.Job.INSTALL),
+    ):
+        assert install.main(["--check", "--step", "plugin copies"]) == 0
+    run.assert_called_once()
+
+
+def agent_store_archive(binary: bytes) -> bytes:
+    store = install.agent_store
+    archive = io.BytesIO()
+    if os.name == "nt":
+        with zipfile.ZipFile(archive, "w") as contents:
+            contents.writestr(store.executable_name(), binary)
+    else:
+        with tarfile.open(fileobj=archive, mode="w:gz") as contents:
+            member = tarfile.TarInfo(store.executable_name())
+            member.size = len(binary)
+            contents.addfile(member, io.BytesIO(binary))
+    return archive.getvalue()
+
+
+def test_the_agent_store_check_reads_its_install_receipt_without_running_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = install.agent_store
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path))
+    monkeypatch.setattr(store.process, "run", mock.Mock(side_effect=AssertionError))
+    archive = agent_store_archive(b"agent-store binary")
+
+    def download(url: str) -> bytes:
+        if url.endswith(".sha256"):
+            return hashlib.sha256(archive).hexdigest().encode()
+        return archive
+
+    assert store.pending() is not None
+    assert store.install(download) == store.pinned_version()
+    assert store.pending() is None
+    store.executable().write_bytes(b"replaced")
+    assert store.pending() is not None
+    store.write_receipt("v0.0.0", b"replaced")
+    assert store.pending() is not None
 
 
 if __name__ == "__main__":

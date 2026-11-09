@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve()
 def target():
     for root in HERE.parents:
         markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        candidate = root / ".agents" / "agent" / "runtime" / "refresh.py"
+        candidate = root / ".agents" / "agent" / "runtime" / "plugins" / "refresh.py"
         if candidate.is_file() and any(marker.exists() for marker in markers):
             return candidate
     raise RuntimeError("The packaged refresh.py helper was not found")

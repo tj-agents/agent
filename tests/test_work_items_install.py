@@ -43,8 +43,6 @@ class FakeUv:
     def __call__(
         self, command: list[str], **_options: object
     ) -> subprocess.CompletedProcess[str]:
-        if command == [UV, "tool", "dir"]:
-            return subprocess.CompletedProcess(command, 0, f"{self.tools}\n", "")
         assert command[:3] == [UV, "tool", "install"], command
         self.installs.append(command)
         pins = [PINS["tool"], *PINS["profiles"].values()]
@@ -71,7 +69,7 @@ def install_claude_plugins(machine: Path, *identities: str) -> None:
 def tj_item_step(machine: Path, uv: FakeUv) -> int:
     context = install.Context(
         home=machine,
-        environ={},
+        environ={"UV_TOOL_DIR": str(uv.tools)},
         windows=False,
         run=uv,
         which=lambda name: UV if name == "uv" else None,

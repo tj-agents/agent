@@ -361,6 +361,16 @@ def declaration(root: Path, identity: str, document: dict | None = None) -> Targ
     )
 
 
+def converges(root: Path) -> bool:
+    try:
+        document, _ = harness_document(root)
+    except PluginSetupError:
+        return False
+    requires = document.get("requires")
+    setup = requires.get("setup") if isinstance(requires, dict) else None
+    return isinstance(setup, dict) and setup.get("converge") is True
+
+
 def targets(project: Path, host: Host, executable: str | None) -> list[Target]:
     roots = check(project, host, executable)
     if roots is None:

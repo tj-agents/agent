@@ -59,17 +59,23 @@ def run(*arguments: str, stdin: str | None = None) -> dict:
     return document["data"]
 
 
-def installed_version() -> str | None:
-    path = executable()
-    if not path.is_file():
-        return None
+def receipt_path() -> Path:
+    return executable().with_name(".agent-store.json")
+
+
+def write_receipt(version: str, binary: bytes) -> None:
+    receipt = {"version": version, "sha256": hashlib.sha256(binary).hexdigest()}
+    receipt_path().write_text(json.dumps(receipt), encoding="utf-8")
+
+
+def installed(version: str) -> bool:
     try:
-        result = process.run([str(path), "--version"], capture_output=True, text=True, timeout=10,
-                                check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    words = result.stdout.split()
-    return f"v{words[1]}" if len(words) == 2 and words[0] == "agent-store" else None
+        receipt = json.loads(receipt_path().read_text(encoding="utf-8"))
+        binary = executable().read_bytes()
+    except (OSError, ValueError):
+        return False
+    return (isinstance(receipt, dict) and receipt.get("version") == version
+            and receipt.get("sha256") == hashlib.sha256(binary).hexdigest())
 
 
 def asset_name(version: str) -> str:
@@ -123,10 +129,11 @@ def install(download=_download) -> str:
         os.replace(staged, target)
     finally:
         staged.unlink(missing_ok=True)
+    write_receipt(version, binary)
     return version
 
 
 def pending() -> str | None:
     version = pinned_version()
-    return None if installed_version() == version else f"install agent-store {version} into {executable().parent}"
+    return None if installed(version) else f"install agent-store {version} into {executable().parent}"
 
