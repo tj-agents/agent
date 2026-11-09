@@ -421,7 +421,7 @@ def test_jobs_start_detached_and_hidden_through_the_shared_process_boundary(
     (call,) = calls
     assert call["command"] == REFRESH
     assert call["stdin"] == subprocess.DEVNULL
-    if os.name == "nt":
+    if sys.platform == "win32":
         assert call["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         assert call["start_new_session"] is True
