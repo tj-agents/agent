@@ -45,7 +45,6 @@ import work_items_install
 from tj_agent import content
 from tj_cli import handy_install, process, worktrunk_install
 
-COMMAND_TIMEOUT_SECONDS = 60
 INSTALLER_TIMEOUT_SECONDS = 600
 RUNTIME_EXPORTS = (
     ".agents/agent/runtime",
@@ -188,6 +187,7 @@ class Step:
     apply: Callable[[Context], list[str]]
     skip: Callable[[Context], str | None] = lambda context: None
     required: bool = False
+    drift: bool = False
 
 
 def documents_directory(home: Path) -> Path:
@@ -762,32 +762,17 @@ def uv_executable(context: Context) -> str:
     return uv
 
 
-def uv_tool_directory(context: Context, uv: str) -> Path:
-    result = context.run(
-        [uv, "tool", "dir"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=COMMAND_TIMEOUT_SECONDS,
-        check=False,
-    )
-    if result.returncode or not result.stdout.strip():
-        detail = (result.stderr or result.stdout).strip()
-        raise InstallError(f"uv tool dir failed: {detail}")
-    return Path(result.stdout.strip())
-
-
-def tj_item_drift(context: Context, uv: str) -> list[str]:
+def tj_item_drift(context: Context) -> list[str]:
     return work_items_install.drift(
-        uv_tool_directory(context, uv),
+        work_items_install.default_tool_directory(context.environ, context.windows),
         work_items_install.Pins.load(),
         work_items_install.installed_plugins(),
     )
 
 
 def check_tj_item(context: Context) -> list[str]:
-    return tj_item_drift(context, uv_executable(context))
+    uv_executable(context)
+    return tj_item_drift(context)
 
 
 def apply_tj_item(context: Context) -> list[str]:
@@ -799,7 +784,7 @@ def apply_tj_item(context: Context) -> list[str]:
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
         raise InstallError(f"uv tool install {pins.tool.package} failed: {detail}")
-    remaining = tj_item_drift(context, uv)
+    remaining = tj_item_drift(context)
     if remaining:
         raise InstallError("; ".join(remaining))
     installed = (pins.tool, *profiles)
@@ -843,15 +828,18 @@ def lifecycle_shims(context: Context) -> dict[Path, str]:
     return {directory / name: text for name, text in shims}
 
 
+def shim_current(path: Path, text: str) -> bool:
+    return path.is_file() and path.read_bytes() == text.encode("utf-8")
+
+
 def check_lifecycle_commands(context: Context) -> list[str]:
-    return [f"write {path}" for path, text in lifecycle_shims(context).items()
-            if not path.is_file() or path.read_text(encoding="utf-8") != text]
+    return [f"write {path}" for path, text in lifecycle_shims(context).items() if not shim_current(path, text)]
 
 
 def apply_lifecycle_commands(context: Context) -> list[str]:
     changes = []
     for path, text in lifecycle_shims(context).items():
-        if path.is_file() and path.read_text(encoding="utf-8") == text:
+        if shim_current(path, text):
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8", newline="")
@@ -993,19 +981,19 @@ STEPS = (
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
-    Step("agent-store CLI", check_agent_store, apply_agent_store),
-    Step("tj item CLI", check_tj_item, apply_tj_item),
+    Step("agent-store CLI", check_agent_store, apply_agent_store, drift=True),
+    Step("tj item CLI", check_tj_item, apply_tj_item, drift=True),
     cli_tool_step("worktrunk", worktrunk_install),
     cli_tool_step("Handy", handy_install),
-    Step("launch-check runtime", check_runtime, apply_runtime),
-    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands),
-    Step("shell profiles", check_profile, apply_profile),
+    Step("launch-check runtime", check_runtime, apply_runtime, drift=True),
+    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands, drift=True),
+    Step("shell profiles", check_profile, apply_profile, drift=True),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
-    Step("plugin copies", check_plugin_copies, apply_plugin_copies),
+    Step("plugin copies", check_plugin_copies, apply_plugin_copies, drift=True),
 )
 
 
