@@ -7,14 +7,17 @@ import argparse
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude import installed as claude_installed
 from codex import installed as codex_installed
+import refresh_lock
 import retired_machine_events
 from tj_agent.host import Host
+from tj_cli import process
 
 MARKETPLACES = ("tj-agents", "agents")
 RUNTIME = Path(__file__).resolve().parent
@@ -51,24 +54,36 @@ def running_behind(host: Host) -> str | None:
     return f"agent@tj-agents: {behind}" if behind else None
 
 
-def refresh_command(host: Host) -> str:
+def refresh_script() -> Path:
     agent = claude_installed.installs("tj-agents").get("agent")
-    script = agent[1] / ".agents" / "agent" / "runtime" / "refresh.py" if agent else RUNTIME / "refresh.py"
-    if not script.is_file():
-        script = RUNTIME / "refresh.py"
-    python = "python" if os.name == "nt" else "python3"
-    return f'{INSTALLED[host].COMMAND_PREFIX}{python} -B "{script.as_posix()}"'
+    script = agent[1] / ".agents" / "agent" / "runtime" / "refresh.py" if agent else None
+    return script if script and script.is_file() else RUNTIME / "refresh.py"
+
+
+def start_refresh() -> bool:
+    log = refresh_lock.state_directory() / "plugin-refresh.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    detached = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                else {"start_new_session": True})
+    try:
+        with log.open("ab") as output:
+            process.start([sys.executable, "-B", str(refresh_script())], stdin=subprocess.DEVNULL, stdout=output,
+                          stderr=subprocess.STDOUT, close_fds=True, **detached)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def reason(host: Host) -> str | None:
-    behind = installed_behind(host)
-    if behind:
-        return ("tj-agents plugins are behind the marketplace: " + "; ".join(behind)
-                + f". Do no other work. Refresh with `{refresh_command(host)}`, then start a new session.")
-    loaded = running_behind(host)
-    if loaded:
-        return (f"This session runs older plugins than are installed ({loaded}). "
-                f"Do no other work; {INSTALLED[host].RELOAD}.")
+    if installed_behind(host):
+        failure = None if refresh_lock.running() else refresh_lock.recent_failure()
+        if failure:
+            return f"tj-agents plugin refresh failed ({failure}); run agent:refresh-plugins."
+        if not refresh_lock.running() and not start_refresh():
+            return "tj-agents plugins are behind and tj_hook is missing; run agent:refresh-plugins."
+        return f"Updating tj-agents plugins… {INSTALLED[host].RELOAD} when this says done."
+    if running_behind(host):
+        return f"Plugins updated: {INSTALLED[host].RELOAD}."
     return None
 
 

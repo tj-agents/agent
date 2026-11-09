@@ -12,7 +12,6 @@ from tj_agent.host import Host
 
 HOST = Host.CLAUDE
 RELOAD = "type /reload-plugins"
-COMMAND_PREFIX = "! "
 BUILD = re.compile(r"([0-9a-f]{12})-[0-9a-f]+")
 
 
