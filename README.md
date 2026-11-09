@@ -1,9 +1,12 @@
 # agent
 
-Agent owns behavior that acts on an agent session: session registration, the lifecycle commands, handoff,
-refresh, lanes and machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS
-mechanics with no agent judgement, such as closing a terminal or the clipboard, belong in `tj-agents/cli`;
-common behavior and the engineering and workflow process belong in `tj-agents/core`.
+Part of [TJ Agents](https://github.com/tj-agents), Tommy's agentic engineering standards and tooling for
+Claude Code and Codex with harness parity. Agent owns behavior that acts on an agent session: session
+registration, the lifecycle commands (`tj start`, `tj status`, `tj reload`), handoff, refresh, lanes and
+machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS mechanics with no agent
+judgement, such as closing a terminal or the clipboard, belong in `tj-agents/cli`; common behavior and the
+engineering and workflow process belong in `tj-agents/core`; the session↔work-item link store is
+`tj-agents/agent-store`.
 
 Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 
@@ -74,7 +77,8 @@ Windows and Linux, including paths with spaces and Unicode.
 The retired machine-event watcher (a scheduled task on Windows, a systemd user unit on Linux) is removed by
 install, refresh and SessionStart whenever an older cached build re-creates it.
 
-Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`.
+Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`;
+install and refresh rewrite the managed block. A plain `claude` or `codex` runs the native CLI.
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
 managed directory rather than modifying the repository or an installed plugin cache.
 

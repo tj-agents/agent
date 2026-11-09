@@ -131,8 +131,18 @@ class ProfileTests(Machine):
         posix = install.posix_block(install.runtime_bin(self.context(windows=False)))
         self.assertIn(shlex.quote(str(self.home / ".agents-state" / "bin")), posix)
         for block in (self.block(), posix):
-            self.assertNotIn("startup_binding", block)
             self.assertNotIn("claude", block)
+            self.assertNotIn("codex", block)
+
+    def test_a_stale_block_wrapping_the_hosts_is_rewritten_without_the_wrappers(self):
+        path = self.profiles()[0]
+        path.parent.mkdir(parents=True)
+        stale = "\r\n".join([install.PROFILE_START, *(
+            f"function global:{host} {{ & 'python' -B 'C:/state/bin/retired_launcher.py' --host {host} -- @args }}"
+            for host in ("claude", "codex")), install.PROFILE_END])
+        path.write_text("# mine\r\n" + stale + "\r\n", encoding="utf-8", newline="")
+        self.converge(step("shell profiles"), self.context())
+        self.assertEqual("# mine\r\n" + self.block() + "\r\n", path.read_bytes().decode("utf-8"))
 
     def test_an_existing_block_for_another_checkout_is_rewired(self):
         path = self.profiles()[1]
