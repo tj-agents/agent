@@ -9,10 +9,12 @@ import os
 from pathlib import Path
 import time
 
-from retired_machine_events import state_directory
-
 STALE_SECONDS = 1800
 FAILURE_SECONDS = 600
+
+
+def state_directory() -> Path:
+    return Path(os.environ.get("AGENT_STATE_DIRECTORY") or Path.home() / ".agents-state")
 
 
 def lock_path() -> Path:

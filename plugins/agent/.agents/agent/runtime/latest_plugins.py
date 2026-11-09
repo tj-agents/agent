@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 import refresh_lock
-import retired_machine_events
+import retired_state
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, AttributeError):
         event = ""
     if event in ("", "SessionStart"):
-        retired_machine_events.remove(retired_machine_events.state_directory())
+        retired_state.remove(refresh_lock.state_directory())
     refusal = reason(arguments.host)
     if refusal is None:
         return 0
