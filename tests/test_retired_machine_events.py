@@ -69,6 +69,16 @@ def test_nothing_is_reported_once_the_watcher_is_gone(tmp_path: Path, windows: b
     assert run.commands == ([["schtasks", "/Delete", "/TN", task_name(tmp_path, True), "/F"]] if windows else [])
 
 
+def test_a_missing_process_launcher_never_breaks_the_caller(tmp_path: Path) -> None:
+    runtime = stale_runtime(tmp_path)
+
+    def missing(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("tj_hook is not installed on PATH")
+
+    assert retired_machine_events.remove(tmp_path, windows=True, run=missing) == [
+        str(runtime / name) for name in retired_machine_events.RUNTIME_FILES]
+
+
 def test_no_authored_code_can_create_the_watcher_again() -> None:
     allowed = {ROOT / ".agents" / "agent" / "runtime" / "retired_machine_events.py"}
     offenders = []
