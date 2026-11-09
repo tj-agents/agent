@@ -43,24 +43,29 @@ Install [TJ CLI](https://github.com/tj-agents/cli#install) first and keep `tj_ho
 Generated Claude and Codex command hooks run through this native launcher. Template's generator owns
 the wrapping; authored hook manifests keep the payload executable and arguments.
 
-`./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
+`./install.ps1` on Windows or `./install.sh` on Linux converges this machine: retired state, native permission defaults,
 the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
-profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
+profile agents, plugin catch-up, harness permissions, plugin setup and plugin copies. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
 `tj item` is `tj-work-items`, installed with `uv tool install` (uv is required) together with the work-item
 profile package of each employer profile plugin installed on this machine, such as `infonetica@tj-agents`.
 Their revisions are pinned in `.agents/agent/runtime/work-items.json`, which Renovate bumps; the step is a
 no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned `tj-cli`'s own installers.
-Refresh runs these steps too, except Handy, which only an interactive install installs, and the stale check refuses prompts while the `tj item` receipt differs from the
-pins, naming the drift, until the refresh it starts has fixed it.
 
-Managed launches and refresh repair only the failing install step and retry readiness once: a failed
+Refresh (`.agents/agent/runtime/plugins/refresh.py`) updates only the plugins on both hosts and restarts
+background sessions; install owns every machine step. The stale check refuses prompts, naming the drift, and
+starts only the fix for each cause: plugins behind their pin start refresh, a `tj item` receipt that differs
+from the pins starts `install --step "tj item CLI"`, and plugin copies converged from an older pinned build
+start `install --step "plugin copies"`. Refresh ends by running that machine check, so a pin it moves is
+converged before the next prompt is admitted.
+
+Managed launches repair only the failing install step and retry readiness once: a failed
 plugin update (catch-up) or missing required plugins (plugin setup).
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
 
-Before checking native installations, launch, refresh and installer plugin setup reconcile an existing
+Before checking native installations, launch and installer plugin setup reconcile an existing
 repository selection and regenerate both hosts' settings through the same scope and ownership checks
 as explicit adoption. The current Marketplace `main` dependency graph adds missing dependencies and
 removes retired TJ Agents packages, including retirements after the bundled offline snapshot.
@@ -82,12 +87,12 @@ repository's normal Git resolution workflow. The regression suite creates real s
 Windows and Linux, including paths with spaces and Unicode.
 
 The retired machine-event watcher (a scheduled task on Windows, a systemd user unit on Linux) is removed by
-install, refresh and SessionStart whenever an older cached build re-creates it. On Windows the same paths
+install and SessionStart whenever an older cached build re-creates it. On Windows the same paths
 retire `tj-watch`: its Startup shortcut, its binary in `%LOCALAPPDATA%\Programs\tj`, and a running copy, which is
 stopped only when its executable path is exactly that binary.
 
 Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`;
-install and refresh rewrite the managed block. A plain `claude` or `codex` runs the native CLI.
+install rewrites the managed block. A plain `claude` or `codex` runs the native CLI.
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
 managed directory rather than modifying the repository or an installed plugin cache.
 
@@ -136,7 +141,7 @@ distribution ships inside Agent's generated runtime and managed installation. La
 a CLI source checkout or a separate package install. The development environment and CI use uv to resolve
 that same dependency and run both the migrated runtime suite and packaging checks.
 
-The installer, managed launches and refresh make the native `tj`/`tj_hook` pair available
+The installer and managed launches make the native `tj`/`tj_hook` pair available
 before native plugin operations. Missing binaries are downloaded through CLI's verified release installer,
 without a source checkout or Cargo. The installation directory is prepended to the current process PATH,
 including the environment inherited by the launched host. Routine launches with an existing pair do not

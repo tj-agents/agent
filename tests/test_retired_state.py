@@ -1,5 +1,6 @@
 import hashlib
 import inspect
+import io
 import subprocess
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 
+import install  # noqa: E402
 import retired_state  # noqa: E402
 
 AUTHORED = [ROOT / ".agents", ROOT / ".claude" / "runtime", ROOT / ".codex" / "runtime"]
@@ -266,3 +268,45 @@ def test_tj_watch_is_left_alone_off_windows(tmp_path: Path) -> None:
     assert processes.terminated == []
     assert shortcut.exists()
     assert binary.exists()
+
+
+def test_present_names_what_remove_retires_without_removing_it(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    seed(state)
+    environ, shortcut, binary = seed_tj_watch(tmp_path)
+    run = Recorder()
+    found = retired_state.present(state, windows=True, run=run, environ=environ)
+    assert found == [
+        f"scheduled task {task_name(state, True)}",
+        str(shortcut),
+        str(binary),
+        *(str(state / entry) for entry in retired_state.RETIRED_ENTRIES),
+    ]
+    assert run.commands == [["schtasks", "/Query", "/TN", task_name(state, True)]]
+    assert all((state / entry).exists() for entry in retired_state.RETIRED_ENTRIES)
+    retired_state.remove(
+        state,
+        windows=True,
+        run=Recorder(),
+        environ=environ,
+        processes=FakeProcesses([]),
+    )
+    gone = Recorder(returncode=1)
+    assert retired_state.present(state, windows=True, run=gone, environ=environ) == []
+
+
+def test_the_retired_state_install_step_runs_alone_and_converges(
+    tmp_path: Path,
+) -> None:
+    context = install.Context(home=tmp_path, environ={}, windows=False, run=Recorder())
+    seed(context.state_directory)
+    step = next(item for item in install.STEPS if item.name == "retired state")
+    output = io.StringIO()
+    assert install.run_steps([step], context, True, output, io.StringIO()) == 1
+    assert "drift  retired state: remove " in output.getvalue()
+    assert install.run_steps([step], context, False, io.StringIO(), io.StringIO()) == 0
+    assert step.check(context) == []
+    for entry in LIVE_ENTRIES:
+        assert (context.state_directory / entry).is_file(), entry
