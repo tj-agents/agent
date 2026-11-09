@@ -11,6 +11,7 @@ from tj_agent.host import Host
 
 HOST = Host.CODEX
 RELOAD = "restart this session"
+INSTALL_TIMEOUT_SECONDS = 600
 MARKETPLACE_OVERRIDES = (
     "-c",
     f'marketplaces.{required_plugins.MARKETPLACE_NAME}.source_type="git"',
@@ -78,6 +79,8 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
 
 
 def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]) -> None:
+    from codex import launch
+
     listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
     if listing is None:
         return
@@ -98,11 +101,51 @@ def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, 
     stale = [row for row in installed if not current(row["marketplaceName"], row["pluginId"].rpartition("@")[0])]
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
+    if stale and launch.liveness():
+        reload_open_sessions(report, [row["pluginId"] for row in stale])
+        return
     for row in stale:
         report.step(
             HOST, row["pluginId"], codex_command("plugin", "add", row["pluginId"])
         )
 
 
+def marketplace_roots(report: Any) -> dict[str, Path] | None:
+    listing = report.step(HOST, "marketplace roots", codex_command("plugin", "marketplace", "list", "--json"))
+    if listing is None:
+        return None
+    return {entry["name"]: Path(entry["root"]) for entry in json.loads(listing.stdout)["marketplaces"]}
+
+
+def reload_open_sessions(report: Any, identities: list[str]) -> None:
+    """Install through the shared daemon, which reloads every loaded thread's plugins, hooks and skills."""
+    from codex import hook_trust, launch
+
+    roots = marketplace_roots(report)
+    if roots is None:
+        return
+    required = {}
+    try:
+        with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
+            for identity in identities:
+                plugin, _, marketplace = identity.rpartition("@")
+                manifest = roots[marketplace] / ".agents" / "plugins" / "marketplace.json"
+                try:
+                    server.request("plugin/install", {"marketplacePath": str(manifest), "pluginName": plugin})
+                except RuntimeError as error:
+                    report.fail(HOST, identity, str(error))
+                    continue
+                print(f"{HOST}: {identity} ok")
+                build = installed_label(marketplace, plugin)
+                root = HOST.configuration_root / "plugins" / "cache" / marketplace / plugin / (build or "")
+                definitions = hook_trust.required_definitions(root, identity) if build else None
+                if definitions:
+                    required[identity] = definitions
+            hook_trust.apply_trust(launch.executable(), Path.home(), required=required)
+            server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
+    except (OSError, RuntimeError, KeyError) as error:
+        report.fail(HOST, "open sessions", str(error))
+
+
 def restart(report: Any) -> None:
-    print("Open Codex sessions pick up skill changes on their own; restart them with `codex resume <id>` for hooks.")
+    print("Open Codex sessions in the shared app-server reload updated plugins in place.")
