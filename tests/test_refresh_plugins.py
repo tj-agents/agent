@@ -40,8 +40,10 @@ class RefreshPluginsTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.claude_home = Path(temporary.name) / "claude"
         self.codex_home = Path(temporary.name) / "codex"
+        self.state = Path(temporary.name) / "state"
         homes = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.claude_home),
-                                             "CODEX_HOME": str(self.codex_home)})
+                                             "CODEX_HOME": str(self.codex_home),
+                                             "AGENT_STATE_DIRECTORY": str(self.state)})
         homes.start()
         self.addCleanup(homes.stop)
 
@@ -164,6 +166,22 @@ class RefreshPluginsTests(unittest.TestCase):
             self.assertEqual(0, REFRESH.main(["--host", "codex"]))
         adds = [call.args[0] for call in spawned.call_args_list if call.args[0][:3] == ["codex", "plugin", "add"]]
         self.assertEqual([["codex", "plugin", "add", "base@tj-agents"], ["codex", "plugin", "add", "cli@tj-agents"]], adds)
+
+    def test_a_held_refresh_lock_makes_a_second_refresh_exit_without_running(self):
+        with REFRESH.refresh_lock.held() as first, mock.patch.object(REFRESH.process, "run") as spawned:
+            self.assertTrue(first)
+            self.assertEqual(0, REFRESH.main(["--host", "claude"]))
+        spawned.assert_not_called()
+        self.assertFalse(REFRESH.refresh_lock.lock_path().exists())
+
+    def test_a_refresh_records_its_failures_for_the_stale_check(self):
+        def run(command, **_kwargs):
+            return completed(1, "", "boom") if command[:3] == ["claude", "plugin", "list"] else completed(0, "[]")
+
+        with mock.patch.object(REFRESH.process, "run", side_effect=run):
+            self.assertEqual(1, REFRESH.main(["--host", "claude"]))
+        self.assertEqual("claude: list: boom", REFRESH.refresh_lock.recent_failure())
+        self.assertFalse(REFRESH.refresh_lock.running())
 
 if __name__ == "__main__":
     unittest.main()
