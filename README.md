@@ -55,10 +55,11 @@ no-op while uv's receipt matches the pins. worktrunk and Handy come from the pin
 
 Refresh (`.agents/agent/runtime/plugins/refresh.py`) updates only the plugins on both hosts and restarts
 background sessions; install owns every machine step. The stale check refuses prompts, naming the drift, and
-starts only the fix for each cause: plugins behind their pin start refresh, a `tj item` receipt that differs
-from the pins starts `install --step "tj item CLI"`, and plugin copies converged from an older pinned build
-start `install --step "plugin copies"`. Refresh ends by running that machine check, so a pin it moves is
-converged before the next prompt is admitted.
+starts only the fix for each cause: plugins behind their pin start refresh, and each install step whose check
+only reads files (agent-store CLI, tj item CLI, launch-check runtime, tj lifecycle commands, shell profiles and
+plugin copies) runs that check against the installed Agent plugin, starting `install --step` for the drifted
+steps alone. Refresh ends by running that machine check, so a pin it moves is converged before the next prompt
+is admitted.
 
 Managed launches repair only the failing install step and retry readiness once: a failed
 plugin update (catch-up) or missing required plugins (plugin setup).

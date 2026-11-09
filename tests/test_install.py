@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -7,9 +8,13 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
+
+import pytest
 
 from git_isolation import isolate_git_config
 
@@ -894,6 +899,42 @@ def test_install_check_runs_without_the_install_lock(tmp_path: Path) -> None:
     ):
         assert install.main(["--check", "--step", "plugin copies"]) == 0
     run.assert_called_once()
+
+
+def agent_store_archive(binary: bytes) -> bytes:
+    store = install.agent_store
+    archive = io.BytesIO()
+    if os.name == "nt":
+        with zipfile.ZipFile(archive, "w") as contents:
+            contents.writestr(store.executable_name(), binary)
+    else:
+        with tarfile.open(fileobj=archive, mode="w:gz") as contents:
+            member = tarfile.TarInfo(store.executable_name())
+            member.size = len(binary)
+            contents.addfile(member, io.BytesIO(binary))
+    return archive.getvalue()
+
+
+def test_the_agent_store_check_reads_its_install_receipt_without_running_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = install.agent_store
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path))
+    monkeypatch.setattr(store.process, "run", mock.Mock(side_effect=AssertionError))
+    archive = agent_store_archive(b"agent-store binary")
+
+    def download(url: str) -> bytes:
+        if url.endswith(".sha256"):
+            return hashlib.sha256(archive).hexdigest().encode()
+        return archive
+
+    assert store.pending() is not None
+    assert store.install(download) == store.pinned_version()
+    assert store.pending() is None
+    store.executable().write_bytes(b"replaced")
+    assert store.pending() is not None
+    store.write_receipt("v0.0.0", b"replaced")
+    assert store.pending() is not None
 
 
 if __name__ == "__main__":

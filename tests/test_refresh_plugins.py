@@ -10,7 +10,15 @@ from typing import Any
 import unittest
 from unittest import mock
 
-from fake_machine import Started, install_plugin, pin_plugin
+from fake_machine import (
+    Started,
+    agent_root,
+    converge,
+    environment,
+    install_plugin,
+    machine_context,
+    pin_plugin,
+)
 import install
 import plugin_copies
 from tj_agent.host import Host
@@ -29,7 +37,6 @@ def load(name):
 
 
 REFRESH = load("refresh")
-PINS = json.loads((RUNTIME / "work-items.json").read_text(encoding="utf-8"))
 
 
 def completed(
@@ -52,6 +59,9 @@ class RefreshPluginsTests(unittest.TestCase):
         starts = mock.patch.object(REFRESH.jobs.process, "start", self.started)
         starts.start()
         self.addCleanup(starts.stop)
+        machine = mock.patch.object(REFRESH.latest_plugins, "machine_drift", return_value={})
+        machine.start()
+        self.addCleanup(machine.stop)
 
     def install(self, plugin, revision, pin, label=None, codex_label=None):
         marketplace = self.claude_home / "plugins" / "marketplaces" / "tj-agents" / ".claude-plugin"
@@ -217,26 +227,16 @@ class RefreshPluginsTests(unittest.TestCase):
 
 
 def _patched_homes(home: Path) -> Any:
-    tools = home / "uv-tools" / PINS["tool"]["package"]
-    tools.mkdir(parents=True, exist_ok=True)
-    tool = PINS["tool"]
-    source = (
-        f"https://github.com/{tool['repository']}"
-        f"?subdirectory={tool['subdirectory'].replace('/', '%2F')}&rev={tool['revision']}"
-    )
-    (tools / "uv-receipt.toml").write_text(
-        f'[tool]\nrequirements = [{{ name = "{tool["package"]}", git = "{source}" }}]\n',
-        encoding="utf-8",
-    )
-    return mock.patch.dict(
-        os.environ,
-        {
-            "CLAUDE_CONFIG_DIR": str(home / "claude"),
-            "CODEX_HOME": str(home / "codex"),
-            "AGENT_STATE_DIRECTORY": str(home / "state"),
-            "UV_TOOL_DIR": str(home / "uv-tools"),
-        },
-    )
+    return mock.patch.dict(os.environ, environment(home))
+
+
+def _current_machine(home: Path) -> Any:
+    claude = home / "claude"
+    pin_plugin(claude, "agent", AGENT_PIN)
+    agent_root(install_plugin(claude, "agent", AGENT_PIN), "agent build")
+    context = machine_context(home)
+    converge(context, REFRESH.latest_plugins.packaged("install.py").parents[3])
+    return mock.patch.object(install, "machine_context", return_value=context)
 
 
 def test_codex_commands_carry_marketplace_overrides_and_no_cwd(tmp_path: Path) -> None:
@@ -253,6 +253,7 @@ def test_codex_commands_carry_marketplace_overrides_and_no_cwd(tmp_path: Path) -
         _patched_homes(tmp_path),
         mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned,
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
+        mock.patch.object(REFRESH.latest_plugins, "machine_drift", return_value={}),
     ):
         assert REFRESH.main(["--host", "codex"]) == 0
     overrides = REFRESH.codex_installed.MARKETPLACE_OVERRIDES
@@ -281,6 +282,7 @@ def test_codex_refresh_fails_with_no_tj_agents_rows_after_listing(
         _patched_homes(tmp_path),
         mock.patch.object(REFRESH.process, "run", side_effect=run),
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
+        mock.patch.object(REFRESH.latest_plugins, "machine_drift", return_value={}),
     ):
         assert REFRESH.main(["--host", "codex"]) == 1
         failure = REFRESH.jobs.recent_failure(
@@ -291,6 +293,7 @@ def test_codex_refresh_fails_with_no_tj_agents_rows_after_listing(
 
 OLD_PIN = "a" * 40
 NEW_PIN = "b" * 40
+AGENT_PIN = "c" * 40
 
 
 def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None:
@@ -314,11 +317,9 @@ def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None
         return completed(0, "[]")
 
     started = Started()
-    with (
-        _patched_homes(tmp_path),
-        mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned,
-        mock.patch.object(REFRESH.jobs.process, "start", started),
-    ):
+    with _patched_homes(tmp_path), _current_machine(tmp_path), (
+        mock.patch.object(REFRESH.process, "run", side_effect=run)
+    ) as spawned, mock.patch.object(REFRESH.jobs.process, "start", started):
         assert REFRESH.main([]) == 0
     commands = [call.args[0] for call in spawned.call_args_list]
     assert {command[0] for command in commands} == {"claude", "codex"}
@@ -346,32 +347,21 @@ def test_a_pin_moved_by_refresh_is_converged_before_the_next_prompt(
 
     converged: list[tuple[list[str], Path]] = []
 
-    def converge(
+    def converge_copies(
         command: list[str], **options: Any
     ) -> subprocess.CompletedProcess[str]:
         converged.append((command, options["cwd"]))
         return completed(0)
 
     started = Started()
-    copies = [
-        sys.executable,
-        "-B",
-        str(RUNTIME / "install.py"),
-        "--step",
-        "plugin copies",
-    ]
     step = next(item for item in install.STEPS if item.name == "plugin copies")
-    context = install.Context(
-        home=tmp_path,
-        environ={"AGENT_STATE_DIRECTORY": str(state)},
-        windows=False,
-        run=converge,
-    )
-    with (
-        _patched_homes(tmp_path),
-        mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned,
-        mock.patch.object(REFRESH.jobs.process, "start", started),
-    ):
+    with _patched_homes(tmp_path), _current_machine(tmp_path) as current, (
+        mock.patch.object(REFRESH.process, "run", side_effect=run)
+    ) as spawned, mock.patch.object(REFRESH.jobs.process, "start", started):
+        context = current.return_value
+        context.run = converge_copies
+        script = REFRESH.latest_plugins.packaged("install.py")
+        copies = [sys.executable, "-B", str(script), "--step", "plugin copies"]
         plugin_copies.record(state, plugin_copies.sources())
         assert REFRESH.latest_plugins.reason(Host.CLAUDE, state) is None
 

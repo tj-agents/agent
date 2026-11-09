@@ -18,19 +18,15 @@ from typing import Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import install
 import jobs
-import plugin_copies
 import retired_state
-import work_items_install
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from tj_agent.host import Host
 
 MARKETPLACES = ("tj-agents", "agents")
 RUNTIME = Path(__file__).resolve().parent
-TJ_ITEM = "tj item CLI"
-PLUGIN_COPIES = "plugin copies"
-DRIFT_NOUNS = {TJ_ITEM: "tools", PLUGIN_COPIES: "plugin copies"}
 
 
 class Installed(Protocol):
@@ -99,17 +95,20 @@ def install_command(steps: Iterable[str]) -> list[str]:
     return [sys.executable, "-B", str(packaged("install.py")), *selected]
 
 
-def tools_behind() -> list[str]:
-    pins = work_items_install.Pins.load()
-    directory = work_items_install.default_tool_directory(os.environ, os.name == "nt")
-    return work_items_install.drift(
-        directory, pins, work_items_install.installed_plugins()
-    )
-
-
-def machine_drift(state: Path) -> dict[str, list[str]]:
-    drift = {TJ_ITEM: tools_behind(), PLUGIN_COPIES: plugin_copies.drift(state)}
-    return {step: found for step, found in drift.items() if found}
+def machine_drift() -> dict[str, list[str]]:
+    context = install.machine_context()
+    context.root = packaged("install.py").parents[3]
+    found = {}
+    for step in install.STEPS:
+        if not step.drift or step.skip(context):
+            continue
+        try:
+            pending = step.check(context)
+        except Exception as error:  # noqa: BLE001
+            pending = [str(error)]
+        if pending:
+            found[step.name] = pending
+    return found
 
 
 def fixing(
@@ -130,13 +129,11 @@ def fixing(
 
 
 def repair_machine(state: Path) -> str | None:
-    drift = machine_drift(state)
+    drift = machine_drift()
     if not drift:
         return None
     command = install_command(drift)
-    behind = "; ".join(
-        f"{DRIFT_NOUNS[step]} ({'; '.join(found)})" for step, found in drift.items()
-    )
+    behind = "; ".join(f"{step} ({'; '.join(found)})" for step, found in drift.items())
     rerun = f"run {shlex.join(command)}"
     return fixing(
         state, jobs.Job.INSTALL, command, behind, "send the prompt again", rerun
