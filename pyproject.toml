@@ -8,7 +8,7 @@ dependencies = ["tj-cli"]
 package = false
 
 [tool.uv.sources]
-tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "76b85cc6543002611396f18384de37a8fb9c9fad", subdirectory = "packages/tj-cli" }
+tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "ba8308382b080c5031ee06f63223d147300400f1", subdirectory = "packages/tj-cli" }
 
 [dependency-groups]
 dev = ["mypy>=2.4.0", "pytest>=9.1.1", "ruff>=0.17.1"]
