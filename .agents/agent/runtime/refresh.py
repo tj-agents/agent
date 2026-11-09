@@ -57,8 +57,9 @@ def current(host: Host, marketplace: str, plugin: str) -> bool:
 
 
 def refresh_machine(report: Report) -> None:
-    report.step("tj", "native CLI, launch runtime and lifecycle commands",
-                [sys.executable, "-B", str(RUNTIME / "install.py"), "--step", "tj lifecycle commands"])
+    report.step("tj", "native CLI, launch runtime, lifecycle commands and shell profiles",
+                [sys.executable, "-B", str(RUNTIME / "install.py"), "--step", "tj lifecycle commands",
+                 "--step", "shell profiles"])
 
 
 def main(argv: list[str] | None = None) -> int:

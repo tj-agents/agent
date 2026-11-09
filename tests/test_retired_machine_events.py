@@ -35,7 +35,7 @@ def task_name(state: Path, windows: bool) -> str:
 def stale_runtime(state: Path) -> Path:
     runtime = state / "bin" / ".agents" / "agent" / "runtime"
     runtime.mkdir(parents=True)
-    for name in (*retired_machine_events.RUNTIME_FILES, "startup_binding.py"):
+    for name in (*retired_machine_events.RUNTIME_FILES, "install.py"):
         (runtime / name).write_text("", encoding="utf-8")
     return runtime
 
@@ -46,7 +46,7 @@ def test_windows_deletes_the_task_and_the_stale_runtime_files(tmp_path: Path) ->
     removed = retired_machine_events.remove(tmp_path, windows=True, run=run)
     assert run.commands == [["schtasks", "/Delete", "/TN", task_name(tmp_path, True), "/F"]]
     assert f"scheduled task {task_name(tmp_path, True)}" in removed
-    assert sorted(path.name for path in runtime.iterdir()) == ["startup_binding.py"]
+    assert sorted(path.name for path in runtime.iterdir()) == ["install.py"]
 
 
 def test_linux_disables_and_deletes_the_user_unit(tmp_path: Path) -> None:
