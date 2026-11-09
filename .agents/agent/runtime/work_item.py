@@ -10,6 +10,7 @@ from pathlib import Path
 
 import agent_store
 from launch_errors import LaunchError
+from tj_cli import process
 
 COMMAND_TIMEOUT_SECONDS = 30
 
@@ -33,7 +34,7 @@ def create(
     title: str,
     parent: str | None,
     fields: Mapping[str, str],
-    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    run: Callable[..., subprocess.CompletedProcess[str]] = process.run,
 ) -> str:
     """Create a work item titled `title` for `cwd`, under `parent` if given."""
     tj = shutil.which("tj")
