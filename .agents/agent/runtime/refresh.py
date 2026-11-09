@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 import native_runtime
+import retired_machine_events
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -70,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     hosts = [arguments.host] if arguments.host else list(Host)
     report = Report()
+    for removed in retired_machine_events.remove(retired_machine_events.state_directory()):
+        print(f"tj: removed retired {removed}")
     for host in hosts:
         INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host))
     refresh_native(report)

@@ -42,7 +42,8 @@ class LatestPluginsTests(unittest.TestCase):
     def run_hook(self, host, event, root=None):
         root = root or self.install
         environment = {**os.environ, "CLAUDE_CONFIG_DIR": str(self.claude), "CODEX_HOME": str(self.codex),
-                       "CLAUDE_PLUGIN_ROOT": str(root), "PLUGIN_ROOT": str(root)}
+                       "CLAUDE_PLUGIN_ROOT": str(root), "PLUGIN_ROOT": str(root),
+                       "AGENT_STATE_DIRECTORY": str(self.home / "state")}
         result = subprocess.run([sys.executable, "-B", str(SCRIPT), "--host", host],
                                 input=json.dumps({"hook_event_name": event}), capture_output=True, text=True,
                                 env=environment, timeout=30, check=True)

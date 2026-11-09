@@ -671,6 +671,7 @@ class RunStepsTests(Machine):
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
+                    mock.patch.object(install.retired_machine_events, "remove", return_value=[]), \
                     mock.patch.object(install, "run_steps", return_value=0) as run:
                 self.assertEqual(0, install.main(arguments))
                 self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
