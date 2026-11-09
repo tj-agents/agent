@@ -1,0 +1,5 @@
+{
+  "tool": {"package": "tj-work-items", "repository": "tj-agents/work-items", "subdirectory": "packages/tj-work-items", "revision": "d01958325388b6198d2eacb4b49e763ad39664f3"},
+  "profiles": {
+  }
+}
