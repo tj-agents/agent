@@ -11,9 +11,10 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import refresh_lock
+import required_plugins
 from claude import installed as claude_installed
 from codex import installed as codex_installed
-import refresh_lock
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -27,13 +28,30 @@ class Report:
     def __init__(self) -> None:
         self.failures: list[str] = []
 
-    def run(self, command: list[str]) -> subprocess.CompletedProcess[str]:
-        return process.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=TIMEOUT_SECONDS, check=False)
+    def run(
+        self, command: list[str], *, cwd: Path | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        return process.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=TIMEOUT_SECONDS,
+            check=False,
+            cwd=cwd,
+        )
 
-    def step(self, host: Host | str, label: str, command: list[str]) -> subprocess.CompletedProcess[str] | None:
+    def step(
+        self,
+        host: Host | str,
+        label: str,
+        command: list[str],
+        *,
+        cwd: Path | None = None,
+    ) -> subprocess.CompletedProcess[str] | None:
         try:
-            result = self.run(command)
+            result = self.run(command, cwd=cwd)
         except (OSError, subprocess.TimeoutExpired) as error:
             self.fail(host, label, str(error))
             return None
@@ -62,6 +80,28 @@ def refresh_machine(report: Report) -> None:
                  "--step", "shell profiles"])
 
 
+def converge_plugins(report: Report) -> None:
+    for marketplace in MARKETPLACES:
+        installs = sorted(claude_installed.installs(marketplace).items())
+        for plugin, (_revision, root) in installs:
+            if not current(Host.CLAUDE, marketplace, plugin):
+                continue
+            identity = f"{plugin}@{marketplace}"
+            try:
+                target = required_plugins.declaration(root, identity)
+            except required_plugins.PluginSetupError as error:
+                report.fail("tj", f"{identity} converge", str(error))
+                continue
+            if target is None or not target.converge:
+                continue
+            report.step(
+                "tj",
+                f"{identity} converge",
+                [sys.executable, "-B", str(target.script), "converge"],
+                cwd=root,
+            )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", type=Host, choices=list(Host))
@@ -75,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         for host in hosts:
             INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host))
         refresh_machine(report)
+        converge_plugins(report)
         for host in hosts:
             INSTALLED[host].restart(report)
         refresh_lock.record(report.failures)
