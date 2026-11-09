@@ -41,12 +41,12 @@ Generated Claude and Codex command hooks run through this native launcher. Templ
 the wrapping; authored hook manifests keep the payload executable and arguments.
 
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
-the machine event channel, a supervised background subscriber, the pinned `agent-store` binary, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
+the pinned `agent-store` binary, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
-Managed launches and refresh repair only the failing install step and retry readiness once: an
-unconfigured event channel, a failed plugin update (catch-up) or missing required plugins (plugin setup).
+Managed launches and refresh repair only the failing install step and retry readiness once: a failed
+plugin update (catch-up) or missing required plugins (plugin setup).
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
 
@@ -71,14 +71,8 @@ conflict markers. Check mode writes nothing, and recovery leaves the index and s
 repository's normal Git resolution workflow. The regression suite creates real stash conflicts on
 Windows and Linux, including paths with spaces and Unicode.
 
-The subscriber runs as a hidden current-user scheduled task on Windows or a systemd user service on
-Linux. Watcher lock contention exits as a failure so the supervisor retries after the previous watcher
-releases ownership, including during runtime upgrades. It reads the existing event channel, verifies repository hints against GitHub, and updates every
-registered repository while sessions remain open. Repository registrations share a Git common directory
-across linked worktrees and retain project/local scope. Successful revisions are recorded once; failed
-updates retry without acknowledging the event. After a long disconnection, an authoritative catch-up
-restores convergence. Managed launches install the subscriber on existing machines after the runtime
-updates; unavailable supervision leaves foreground update checks working and retries setup later.
+The retired machine-event watcher (a scheduled task on Windows, a systemd user unit on Linux) is removed by
+install, refresh and SessionStart whenever an older cached build re-creates it.
 
 Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`.
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
@@ -129,12 +123,11 @@ distribution ships inside Agent's generated runtime and managed installation. La
 a CLI source checkout or a separate package install. The development environment and CI use uv to resolve
 that same dependency and run both the migrated runtime suite and packaging checks.
 
-The installer, managed launches and machine-event refresh make the native `tj`/`tj_hook` pair available
+The installer, managed launches and refresh make the native `tj`/`tj_hook` pair available
 before native plugin operations. Missing binaries are downloaded through CLI's verified release installer,
 without a source checkout or Cargo. The installation directory is prepended to the current process PATH,
 including the environment inherited by the launched host. Routine launches with an existing pair do not
-query releases. CLI update events install their exact published revision before acknowledging the event;
-an unpublished release or an in-use Windows executable leaves the event pending for retry.
+query releases.
 
 The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).
 

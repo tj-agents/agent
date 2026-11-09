@@ -33,6 +33,7 @@ sys.path.insert(0, str(RUNTIME))
 from tj_agent.host import Host
 import host_permissions
 import required_plugins
+import retired_machine_events
 import runtime_delivery
 import native_runtime
 import agent_store
@@ -949,6 +950,10 @@ def main(argv: list[str] | None = None) -> int:
     context.onboard = parsed.onboard
     native_runtime.expose()
     context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
+    if not parsed.check:
+        for removed in retired_machine_events.remove(context.state_directory, windows=context.windows,
+                                                     home=context.home):
+            print(f"apply  retired machine events: removed {removed}")
     return run_steps(selected_steps(set(parsed.step or ())), context, parsed.check)
 
 
