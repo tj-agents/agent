@@ -1,4 +1,4 @@
-"""Remove state that retired Agent machinery left in the agents-state directory."""
+"""Remove state that retired Agent machinery and tools left on this machine."""
 
 from __future__ import annotations
 
@@ -6,12 +6,114 @@ import hashlib
 import os
 import shutil
 import subprocess
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from tj_cli import process
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+TJ_WATCH_SHORTCUT = Path("Microsoft/Windows/Start Menu/Programs/Startup/tj-watch.lnk")
+TJ_WATCH_EXECUTABLE = Path("Programs/tj/tj-watch.exe")
+_QUERY_LIMITED_INFORMATION = 0x1000
+_TERMINATE = 0x0001
+_SYNCHRONIZE = 0x00100000
+
+
+@dataclass(frozen=True, slots=True)
+class RunningProcess:
+    pid: int
+    executable: str
+
+
+class ProcessTable(Protocol):
+    def listing(self) -> list[RunningProcess]: ...
+
+    def terminate(self, running: RunningProcess) -> bool: ...
+
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+
+    def _kernel32() -> ctypes.WinDLL:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.K32EnumProcesses.argtypes = [
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.K32EnumProcesses.restype = wintypes.BOOL
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+        kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        return kernel32
+
+    def _image(kernel32: ctypes.WinDLL, handle: int) -> str | None:
+        size = wintypes.DWORD(32768)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(
+            handle, 0, buffer, ctypes.byref(size)
+        ):
+            return None
+        return buffer.value
+
+
+class WindowsProcessTable:
+    def listing(self) -> list[RunningProcess]:
+        found: list[RunningProcess] = []
+        if sys.platform == "win32":
+            kernel32 = _kernel32()
+            pids = (wintypes.DWORD * 16384)()
+            returned = wintypes.DWORD()
+            if not kernel32.K32EnumProcesses(
+                pids, ctypes.sizeof(pids), ctypes.byref(returned)
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            for pid in pids[: returned.value // ctypes.sizeof(wintypes.DWORD)]:
+                handle = kernel32.OpenProcess(_QUERY_LIMITED_INFORMATION, False, pid)
+                if not handle:
+                    continue
+                try:
+                    image = _image(kernel32, handle)
+                finally:
+                    kernel32.CloseHandle(handle)
+                if image:
+                    found.append(RunningProcess(int(pid), image))
+        return found
+
+    def terminate(self, running: RunningProcess) -> bool:
+        stopped = False
+        if sys.platform == "win32":
+            kernel32 = _kernel32()
+            access = _TERMINATE | _QUERY_LIMITED_INFORMATION | _SYNCHRONIZE
+            handle = kernel32.OpenProcess(access, False, running.pid)
+            if handle:
+                try:
+                    stopped = (
+                        _image(kernel32, handle) == running.executable
+                        and bool(kernel32.TerminateProcess(handle, 1))
+                        and kernel32.WaitForSingleObject(handle, 5000) == 0
+                    )
+                finally:
+                    kernel32.CloseHandle(handle)
+        return stopped
+
 
 RETIRED_ENTRIES = (
     "backups",
@@ -104,16 +206,49 @@ def _remove_watcher(
         return []
 
 
+def _retire_tj_watch(
+    environ: Mapping[str, str], processes: ProcessTable | None
+) -> list[str]:
+    removed = []
+    if appdata := environ.get("APPDATA"):
+        shortcut = Path(appdata) / TJ_WATCH_SHORTCUT
+        if shortcut.is_file():
+            shortcut.unlink()
+            removed.append(str(shortcut))
+    local = environ.get("LOCALAPPDATA")
+    binary = Path(local) / TJ_WATCH_EXECUTABLE if local else None
+    if binary is None or not binary.is_file():
+        return removed
+    table = processes or WindowsProcessTable()
+    for running in table.listing():
+        if running.executable.casefold() != str(binary).casefold():
+            continue
+        if table.terminate(running):
+            removed.append(f"tj-watch process {running.pid}")
+    try:
+        binary.unlink()
+    except PermissionError:
+        return removed
+    removed.append(str(binary))
+    return removed
+
+
 def remove(
     state_directory: Path,
     *,
     windows: bool = os.name == "nt",
     home: Path | None = None,
     run: Runner = process.run,
+    environ: Mapping[str, str] | None = None,
+    processes: ProcessTable | None = None,
 ) -> list[str]:
     """Repeats on purpose: older cached Agent builds re-create some entries until
     they age out."""
     removed = _remove_watcher(state_directory, windows, home, run)
+    if windows:
+        removed += _retire_tj_watch(
+            os.environ if environ is None else environ, processes
+        )
     for entry in RETIRED_ENTRIES:
         path = state_directory / entry
         if path.is_symlink():

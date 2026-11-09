@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse work while this session or its installed plugins are behind their marketplace pins (Python 3.9+)."""
+"""Refuse work while this session, its plugins or tools are behind their pins."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from claude import installed as claude_installed
 from codex import installed as codex_installed
 import refresh_lock
 import retired_state
+import work_items_install
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -74,16 +75,36 @@ def start_refresh() -> bool:
     return True
 
 
+def tools_behind() -> list[str]:
+    pins = work_items_install.Pins.load()
+    directory = work_items_install.default_tool_directory(os.environ, os.name == "nt")
+    return work_items_install.drift(
+        directory, pins, work_items_install.installed_plugins()
+    )
+
+
+def refreshing(behind: str, then: str) -> str:
+    failure = None if refresh_lock.running() else refresh_lock.recent_failure()
+    if failure:
+        return (
+            f"tj-agents plugin refresh failed ({failure}); run agent:refresh-plugins."
+        )
+    if not refresh_lock.running() and not start_refresh():
+        return (
+            f"tj-agents {behind} are behind and tj_hook is missing; "
+            "run agent:refresh-plugins."
+        )
+    return f"Updating tj-agents {behind}… {then} when this says done."
+
+
 def reason(host: Host) -> str | None:
     if installed_behind(host):
-        failure = None if refresh_lock.running() else refresh_lock.recent_failure()
-        if failure:
-            return f"tj-agents plugin refresh failed ({failure}); run agent:refresh-plugins."
-        if not refresh_lock.running() and not start_refresh():
-            return "tj-agents plugins are behind and tj_hook is missing; run agent:refresh-plugins."
-        return f"Updating tj-agents plugins… {INSTALLED[host].RELOAD} when this says done."
+        return refreshing("plugins", INSTALLED[host].RELOAD)
     if running_behind(host):
         return f"Plugins updated: {INSTALLED[host].RELOAD}."
+    tools = tools_behind()
+    if tools:
+        return refreshing(f"tools ({'; '.join(tools)})", "send the prompt again")
     return None
 
 

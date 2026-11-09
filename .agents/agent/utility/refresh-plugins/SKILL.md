@@ -13,7 +13,7 @@ route: infer
 # Refresh plugins
 
 Every plugin is installed once per machine and shared by every project. This updates those installs on both hosts
-from the marketplaces, updates the native `tj` binaries and shell profiles, restarts background Claude sessions, and names the open
+from the marketplaces, updates the native `tj` binaries, `tj item`, `git-wt`, Handy and shell profiles, restarts background Claude sessions, and names the open
 sessions still on the old plugins. Run it on your own judgement; never ask first.
 
 ```text

@@ -45,6 +45,16 @@ def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
     return found
 
 
+def identities() -> set[str]:
+    registry = read(HOST.configuration_root / "plugins" / "installed_plugins.json")
+    plugins = registry.get("plugins", {}) if isinstance(registry, dict) else {}
+    return {
+        plugin_id
+        for plugin_id, rows in plugins.items()
+        if isinstance(rows, list) and rows
+    }
+
+
 def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
     return None
 

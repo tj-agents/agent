@@ -22,6 +22,13 @@ MARKETPLACES = ("tj-agents", "agents")
 TIMEOUT_SECONDS = 600
 INSTALLED = {Host.CLAUDE: claude_installed, Host.CODEX: codex_installed}
 RUNTIME = Path(__file__).resolve().parent
+MACHINE_STEPS = (
+    "tj lifecycle commands",
+    "shell profiles",
+    "tj item CLI",
+    "worktrunk",
+    "Handy",
+)
 
 
 class Report:
@@ -75,9 +82,12 @@ def current(host: Host, marketplace: str, plugin: str) -> bool:
 
 
 def refresh_machine(report: Report) -> None:
-    report.step("tj", "native CLI, launch runtime, lifecycle commands and shell profiles",
-                [sys.executable, "-B", str(RUNTIME / "install.py"), "--step", "tj lifecycle commands",
-                 "--step", "shell profiles"])
+    steps = [argument for step in MACHINE_STEPS for argument in ("--step", step)]
+    report.step(
+        "tj",
+        "native CLI, launch runtime, lifecycle commands, shell profiles and tools",
+        [sys.executable, "-B", str(RUNTIME / "install.py"), *steps],
+    )
 
 
 def converge_plugins(report: Report) -> None:

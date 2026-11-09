@@ -12,6 +12,19 @@
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "tj-agents/agent-store"
+    },
+    {
+      "customType": "regex",
+      "description": "The tj-work-items CLI and work-item profile packages Agent installs",
+      "managerFilePatterns": [
+        "/^\\.agents/agent/runtime/work-items\\.json$/"
+      ],
+      "matchStrings": [
+        "\"repository\":\\s*\"(?<depName>[^\"]+)\",\\s*\"subdirectory\":\\s*\"[^\"]+\",\\s*\"revision\":\\s*\"(?<currentDigest>[0-9a-f]{40})\""
+      ],
+      "datasourceTemplate": "git-refs",
+      "packageNameTemplate": "https://github.com/{{{depName}}}",
+      "currentValueTemplate": "main"
     }
   ]
 }
