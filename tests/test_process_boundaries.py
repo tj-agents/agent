@@ -15,7 +15,10 @@ SOURCE_ROOTS = (
     ".claude/runtime",
 )
 LAUNCHERS = {"run", "Popen", "call", "check_call", "check_output"}
-FOREGROUND: set[tuple[str, str]] = set()
+FOREGROUND = {
+    (".agents/agent/runtime/agent_cli.py", "open_tab"),
+    (".agents/agent/runtime/agent_cli.py", "launch"),
+}
 
 
 class ProcessBoundaries(ast.NodeVisitor):
