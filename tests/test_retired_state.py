@@ -1,9 +1,12 @@
 import hashlib
 import inspect
 import io
+import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -72,7 +75,7 @@ def seed(state: Path) -> None:
 
 def test_every_retired_entry_is_removed(tmp_path: Path) -> None:
     seed(tmp_path)
-    removed = retired_state.remove(tmp_path, windows=True, run=Recorder())
+    removed = retired_state.remove(tmp_path, windows=True, run=Recorder()).removed
     for entry in retired_state.RETIRED_ENTRIES:
         assert not (tmp_path / entry).exists(), entry
     assert len(removed) >= len(retired_state.RETIRED_ENTRIES)
@@ -117,7 +120,7 @@ def test_a_link_pointing_outside_the_state_directory_is_not_followed(
 
 def test_windows_deletes_the_scheduled_task(tmp_path: Path) -> None:
     run = Recorder()
-    removed = retired_state.remove(tmp_path, windows=True, run=run)
+    removed = retired_state.remove(tmp_path, windows=True, run=run).removed
     assert [task_name(tmp_path, True)] == [
         cmd[3] for cmd in run.commands if cmd[0] == "schtasks"
     ]
@@ -132,7 +135,7 @@ def test_linux_disables_and_deletes_the_user_unit(tmp_path: Path) -> None:
     unit.parent.mkdir(parents=True)
     unit.write_text("[Service]\n", encoding="utf-8")
     run = Recorder()
-    removed = retired_state.remove(tmp_path, windows=False, home=home, run=run)
+    removed = retired_state.remove(tmp_path, windows=False, home=home, run=run).removed
     assert run.commands == [
         ["systemctl", "--user", "disable", "--now", unit.name],
         ["systemctl", "--user", "daemon-reload"],
@@ -148,7 +151,7 @@ def test_nothing_is_reported_once_the_watcher_is_gone(
     run = Recorder(returncode=1)
     removed = retired_state.remove(
         tmp_path, windows=windows, home=tmp_path / "home", run=run
-    )
+    ).removed
     assert removed == []
 
 
@@ -160,7 +163,7 @@ def test_a_missing_process_launcher_never_breaks_the_caller(tmp_path: Path) -> N
     ) -> subprocess.CompletedProcess[str]:
         raise FileNotFoundError("tj_hook is not installed on PATH")
 
-    removed = retired_state.remove(tmp_path, windows=True, run=missing)
+    removed = retired_state.remove(tmp_path, windows=True, run=missing).removed
     for entry in retired_state.RETIRED_ENTRIES:
         assert not (tmp_path / entry).exists(), entry
     assert removed == [str(tmp_path / entry) for entry in retired_state.RETIRED_ENTRIES]
@@ -225,7 +228,7 @@ def test_windows_retires_the_tj_watch_shortcut_binary_and_process(
         run=Recorder(),
         environ=environ,
         processes=processes,
-    )
+    ).removed
     assert processes.terminated == [running]
     assert not shortcut.exists()
     assert not binary.exists()
@@ -310,3 +313,51 @@ def test_the_retired_state_install_step_runs_alone_and_converges(
     assert step.check(context) == []
     for entry in LIVE_ENTRIES:
         assert (context.state_directory / entry).is_file(), entry
+
+
+def test_a_read_only_file_inside_a_retired_directory_is_removed(
+    tmp_path: Path,
+) -> None:
+    objects = tmp_path / "published-repository.git" / "objects" / "00"
+    objects.mkdir(parents=True)
+    packed = objects / "8e3d"
+    packed.write_bytes(b"blob")
+    packed.chmod(stat.S_IREAD)
+    loose = tmp_path / "plugin-heads.json"
+    loose.write_text("{}", encoding="utf-8")
+    loose.chmod(stat.S_IREAD)
+    removal = retired_state.remove(tmp_path, windows=True, run=Recorder())
+    assert removal.failures == []
+    assert not (tmp_path / "published-repository.git").exists()
+    assert not loose.exists()
+
+
+def test_a_removal_that_still_fails_is_reported_and_the_rest_still_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed(tmp_path)
+    stuck = tmp_path / "published-repository.git"
+    rmtree = shutil.rmtree
+
+    def refuse(path: Path, **options: Any) -> None:
+        if Path(path).name == stuck.name:
+            raise PermissionError(13, "Access is denied", str(path))
+        rmtree(path, **options)
+
+    monkeypatch.setattr(shutil, "rmtree", refuse)
+    removal = retired_state.remove(tmp_path, windows=True, run=Recorder())
+    assert len(removal.failures) == 1
+    assert removal.failures[0].startswith(f"could not remove {stuck}: ")
+    assert stuck.exists()
+    for entry in retired_state.RETIRED_ENTRIES:
+        if entry != stuck.name:
+            assert not (tmp_path / entry).exists(), entry
+
+    context = install.Context(home=tmp_path, environ={}, windows=False, run=Recorder())
+    seed(context.state_directory)
+    later = install.Step("later", lambda _context: ["pending"], lambda _context: [])
+    retired = next(item for item in install.STEPS if item.name == "retired state")
+    output, errors = io.StringIO(), io.StringIO()
+    assert install.run_steps([retired, later], context, False, output, errors) == 2
+    assert "failed retired state: could not remove " in errors.getvalue()
+    assert "apply  later: pending" in output.getvalue()

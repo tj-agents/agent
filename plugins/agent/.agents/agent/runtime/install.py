@@ -968,12 +968,10 @@ def check_retired_state(context: Context) -> list[str]:
 
 
 def apply_retired_state(context: Context) -> list[str]:
-    return [
-        f"removed {item}"
-        for item in retired_state.remove(
-            context.state_directory, **retired_state_options(context)
-        )
-    ]
+    removal = retired_state.remove(context.state_directory, **retired_state_options(context))
+    if removal.failures:
+        raise InstallError("; ".join(removal.failures))
+    return [f"removed {item}" for item in removal.removed]
 
 
 def check_native_cli(context: Context) -> list[str]:

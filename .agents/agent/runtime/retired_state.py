@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -21,6 +22,12 @@ TJ_WATCH_EXECUTABLE = Path("Programs/tj/tj-watch.exe")
 _QUERY_LIMITED_INFORMATION = 0x1000
 _TERMINATE = 0x0001
 _SYNCHRONIZE = 0x00100000
+
+
+@dataclass(frozen=True, slots=True)
+class Removal:
+    removed: list[str]
+    failures: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,6 +270,32 @@ def _retire_tj_watch(
     return removed
 
 
+def _retry_writable(
+    function: Callable[[str], object], path: str, error: BaseException
+) -> None:
+    target = Path(path)
+    if (
+        not isinstance(error, PermissionError)
+        or target.is_symlink()
+        or target.is_junction()
+    ):
+        raise error
+    target.chmod(target.lstat().st_mode | stat.S_IWRITE)
+    function(path)
+
+
+def _remove_entry(path: Path) -> None:
+    if path.is_symlink():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path, onexc=_retry_writable)
+    else:
+        try:
+            path.unlink()
+        except PermissionError as error:
+            _retry_writable(os.unlink, str(path), error)
+
+
 def remove(
     state_directory: Path,
     *,
@@ -271,7 +304,7 @@ def remove(
     run: Runner = process.run,
     environ: Mapping[str, str] | None = None,
     processes: ProcessTable | None = None,
-) -> list[str]:
+) -> Removal:
     """Repeats on purpose: older cached Agent builds re-create some entries until
     they age out."""
     removed = _remove_watcher(state_directory, windows, home, run)
@@ -279,18 +312,18 @@ def remove(
         removed += _retire_tj_watch(
             os.environ if environ is None else environ, processes
         )
+    failures = []
     for entry in RETIRED_ENTRIES:
         path = state_directory / entry
-        if path.is_symlink():
-            path.unlink()
+        if not (path.is_symlink() or path.exists()):
+            continue
+        try:
+            _remove_entry(path)
+        except OSError as error:
+            failures.append(f"could not remove {path}: {error}")
+        else:
             removed.append(str(path))
-        elif path.is_dir():
-            shutil.rmtree(path)
-            removed.append(str(path))
-        elif path.is_file():
-            path.unlink()
-            removed.append(str(path))
-    return removed
+    return Removal(removed, failures)
 
 
 def present(
