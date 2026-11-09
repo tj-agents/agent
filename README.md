@@ -58,8 +58,9 @@ background sessions; install owns every machine step. The stale check refuses pr
 starts only the fix for each cause: plugins behind their pin start refresh, and each install step whose check
 only reads files (agent-store CLI, tj item CLI, launch-check runtime, tj lifecycle commands, shell profiles and
 plugin copies) runs that check against the installed Agent plugin, starting `install --step` for the drifted
-steps alone. Refresh ends by running that machine check, so a pin it moves is converged before the next prompt
-is admitted.
+steps alone. SessionStart, refresh and install always run this machine check; a prompt reruns it only when the
+installed plugin builds or a file those checks read changed since the last clean check, so a pin refresh moves
+is converged before the next prompt is admitted.
 
 Managed launches repair only the failing install step and retry readiness once: a failed
 plugin update (catch-up) or missing required plugins (plugin setup).
