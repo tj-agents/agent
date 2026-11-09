@@ -485,3 +485,18 @@ def test_session_start_always_runs_the_machine_check(machine: Machine) -> None:
     assert machine.started.commands == []
     assert machine.hook("claude", "SessionStart") is not None
     assert machine.started.commands == [install_step("probe")]
+
+
+def test_a_step_whose_watch_fails_is_reported_as_drift(machine: Machine) -> None:
+    clean_session(machine)
+
+    def broken(_context: install.Context) -> list[Path]:
+        raise OSError("pins unreadable")
+
+    probe = install.Step(
+        "probe", lambda _context: [], lambda _context: [], watch=broken
+    )
+    machine.monkeypatch.setattr(install, "STEPS", (probe,))
+    assert machine.hook("claude", "SessionStart") is not None
+    assert machine.started.commands == [install_step("probe")]
+    assert not (machine.state / machine_state.FINGERPRINT).exists()

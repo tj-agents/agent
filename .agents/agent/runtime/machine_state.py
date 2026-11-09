@@ -63,13 +63,21 @@ def drift(state: Path) -> dict[str, list[str]]:
     context = install.machine_context()
     context.root = packaged("install.py").parents[3]
     steps = [
-        step
+        (step, step.watch)
         for step in install.STEPS
         if step.watch is not None and not step.skip(context)
     ]
-    seen = fingerprint(path for step in steps for path in step.watch(context))
+    watched: list[Path] = []
     found = {}
-    for step in steps:
+    for step, watch in steps:
+        try:
+            watched += watch(context)
+        except Exception as error:  # noqa: BLE001
+            found[step.name] = [str(error)]
+    seen = fingerprint(watched)
+    for step, _ in steps:
+        if step.name in found:
+            continue
         try:
             pending = step.check(context)
         except Exception as error:  # noqa: BLE001
