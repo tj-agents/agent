@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from claude import installed as claude_installed
 from codex import installed as codex_installed
+import retired_machine_events
 from tj_agent.host import Host
 
 MARKETPLACES = ("tj-agents", "agents")
@@ -79,6 +80,8 @@ def main(argv: list[str] | None = None) -> int:
         event = json.load(sys.stdin).get("hook_event_name", "")
     except (ValueError, AttributeError):
         event = ""
+    if event in ("", "SessionStart"):
+        retired_machine_events.remove(retired_machine_events.state_directory())
     refusal = reason(arguments.host)
     if refusal is None:
         return 0

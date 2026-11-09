@@ -33,6 +33,9 @@ class RefreshPluginsTests(unittest.TestCase):
         prepare = mock.patch.object(REFRESH.native_runtime, "prepare", return_value=())
         prepare.start()
         self.addCleanup(prepare.stop)
+        retired = mock.patch.object(REFRESH.retired_machine_events, "remove", return_value=[])
+        retired.start()
+        self.addCleanup(retired.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.claude_home = Path(temporary.name) / "claude"
