@@ -1,15 +1,33 @@
 """session_hook.py: what each host event records in agent-store, with the store and hosts faked."""
 import importlib
 import io
+import os
 from pathlib import Path
 import sys
 import unittest
 from unittest import mock
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
 hook = importlib.import_module('session_hook')
 Host = hook.Host
+
+
+class AgentStoreCalls:
+    """A fake `agent_store.run` answering each registered outcome in turn and recording every call."""
+
+    def __init__(self, *outcomes):
+        self.queue = list(outcomes)
+        self.calls = []
+
+    def __call__(self, *arguments):
+        self.calls.append(arguments)
+        outcome = self.queue.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 class StartTests(unittest.TestCase):
@@ -59,6 +77,61 @@ class EventTests(unittest.TestCase):
         with mock.patch.object(hook.agent_store, 'run') as run:
             self.assertEqual(0, self.main('start', '--host', 'claude', stdin='{}'))
         run.assert_not_called()
+
+
+def test_an_unrecorded_launch_registers_by_title_and_reports_it_on_stderr(monkeypatch, capsys):
+    calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no launch'), {'session': {'title': None}})
+    monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook, 'worktree', lambda cwd: '/repo')
+    monkeypatch.setattr(hook, 'terminal', lambda environ: ['--terminal-kind', 'windows-terminal', '--terminal-id', 'w'])
+    environ = {hook.LAUNCH_ENV: 'L1', hook.TITLE_ENV: 'agent#98'}
+    hook.start(Host.CLAUDE, 'n1', '/repo/sub', environ)
+    assert calls.calls == [
+        ('register', '--session', 'claude:n1', '--cwd', '/repo/sub', '--worktree', '/repo', '--launch-id', 'L1'),
+        ('register', '--session', 'claude:n1', '--cwd', '/repo/sub', '--worktree', '/repo',
+         '--terminal-kind', 'windows-terminal', '--terminal-id', 'w', '--title', 'agent#98'),
+    ]
+    assert 'L1' in capsys.readouterr().err
+
+
+def test_the_fallback_registration_carries_the_wrapper_pid_and_started_at(monkeypatch):
+    calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no launch'), {'session': {'title': None}})
+    monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook, 'worktree', lambda cwd: None)
+    monkeypatch.setattr(hook, 'terminal', lambda environ: [])
+    environ = {hook.LAUNCH_ENV: 'L1', hook.WRAPPER_PID_ENV: '4242', hook.WRAPPER_STARTED_AT_ENV: '2026-11-09T00:00:00Z'}
+    hook.start(Host.CODEX, 'n1', '/repo/sub', environ)
+    assert calls.calls[1][-4:] == ('--wrapper-pid', '4242', '--wrapper-started-at', '2026-11-09T00:00:00Z')
+
+
+def test_a_session_not_started_by_tj_run_never_carries_wrapper_arguments(monkeypatch):
+    calls = AgentStoreCalls({'session': {'title': None}})
+    monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook, 'worktree', lambda cwd: None)
+    monkeypatch.setattr(hook, 'terminal', lambda environ: [])
+    environ = {hook.WRAPPER_PID_ENV: '4242', hook.WRAPPER_STARTED_AT_ENV: '2026-11-09T00:00:00Z'}
+    hook.start(Host.CLAUDE, 'n1', '/repo/sub', environ)
+    assert calls.calls == [('register', '--session', 'claude:n1', '--cwd', '/repo/sub')]
+
+
+def test_a_launch_lookup_failure_other_than_not_found_propagates(monkeypatch):
+    calls = AgentStoreCalls(hook.agent_store.AgentStoreError('unexpected', 'boom'))
+    monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook, 'worktree', lambda cwd: None)
+    with pytest.raises(hook.agent_store.AgentStoreError):
+        hook.start(Host.CLAUDE, 'n1', '/repo/sub', {hook.LAUNCH_ENV: 'L1'})
+
+
+def test_main_reads_the_process_environment_and_passes_it_to_start(monkeypatch):
+    captured = {}
+
+    def fake_start(host, session_id, cwd, environ):
+        captured['environ'] = environ
+
+    monkeypatch.setattr(hook, 'start', fake_start)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{"session_id": "n1"}'))
+    hook.main(['start', '--host', 'claude'])
+    assert captured['environ'] is os.environ
 
 
 if __name__ == '__main__':

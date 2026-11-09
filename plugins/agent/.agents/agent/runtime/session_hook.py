@@ -9,6 +9,7 @@ addressable by name. Exit 0 always: bookkeeping never stops a session.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,8 @@ from tj_cli import process
 
 LAUNCH_ENV = "TJ_RUN_LAUNCH_ID"
 TITLE_ENV = "AGENT_CLI_TAB_TITLE"
+WRAPPER_PID_ENV = "TJ_RUN_PID"
+WRAPPER_STARTED_AT_ENV = "TJ_RUN_STARTED_AT"
 
 
 def payload() -> dict:
@@ -52,17 +55,39 @@ def terminal(environ) -> list[str]:
     return []
 
 
-def start(host: Host, session_id: str, cwd: str, environ=os.environ) -> dict:
-    arguments = ["register", "--session", f"{host}:{session_id}", "--cwd", cwd]
-    if root := worktree(cwd):
-        arguments += ["--worktree", root]
-    if launch := environ.get(LAUNCH_ENV):
-        arguments += ["--launch-id", launch]
+def title_arguments(environ: Mapping[str, str]) -> list[str]:
+    if title := environ.get(TITLE_ENV, "").strip():
+        return ["--title", title]
+    return []
+
+
+def wrapper_arguments(environ: Mapping[str, str]) -> list[str]:
+    pid, started_at = environ.get(WRAPPER_PID_ENV), environ.get(WRAPPER_STARTED_AT_ENV)
+    return ["--wrapper-pid", pid, "--wrapper-started-at", started_at] if pid and started_at else []
+
+
+def register(host: Host, session_id: str, cwd: str, root: str | None, arguments: list[str]) -> dict:
+    base = ["register", "--session", f"{host}:{session_id}", "--cwd", cwd]
+    if root:
+        base += ["--worktree", root]
+    return agent_store.run(*base, *arguments)["session"]
+
+
+def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> dict:
+    root = worktree(cwd)
+    launch = environ.get(LAUNCH_ENV)
+    if launch:
+        try:
+            session = register(host, session_id, cwd, root, ["--launch-id", launch])
+        except agent_store.AgentStoreError as error:
+            if error.code != "not-found":
+                raise
+            print(f"agent-store: launch {launch} was not recorded; registering {host}:{session_id} by title "
+                  "instead", file=sys.stderr)
+            session = register(host, session_id, cwd, root,
+                                [*terminal(environ), *title_arguments(environ), *wrapper_arguments(environ)])
     else:
-        arguments += terminal(environ)
-        if title := environ.get(TITLE_ENV, "").strip():
-            arguments += ["--title", title]
-    session = agent_store.run(*arguments)["session"]
+        session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
     if host is Host.CODEX and session.get("title"):
         import agent_cli
 
@@ -101,7 +126,7 @@ def main(argv=None) -> int:
         return 0
     try:
         if args.event == "start":
-            start(args.host, session_id, data.get("cwd") or os.getcwd())
+            start(args.host, session_id, data.get("cwd") or os.getcwd(), os.environ)
         else:
             end(args.host, session_id)
     except Exception as error:  # noqa: BLE001 - bookkeeping never stops a session
