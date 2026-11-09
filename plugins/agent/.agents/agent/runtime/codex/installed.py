@@ -44,6 +44,20 @@ def installed_label(marketplace: str, plugin: str) -> str | None:
     return builds[0] if len(builds) == 1 else None
 
 
+def identities() -> set[str]:
+    cache = HOST.configuration_root / "plugins" / "cache"
+    try:
+        return {
+            f"{plugin.name}@{marketplace.name}"
+            for marketplace in cache.iterdir()
+            if marketplace.is_dir()
+            for plugin in marketplace.iterdir()
+            if plugin.is_dir() and any(build.is_dir() for build in plugin.iterdir())
+        }
+    except OSError:
+        return set()
+
+
 def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
     expected, actual = label(install), installed_label(marketplace, plugin)
     if expected and actual and actual != expected:

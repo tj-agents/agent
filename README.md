@@ -44,9 +44,16 @@ Generated Claude and Codex command hooks run through this native launcher. Templ
 the wrapping; authored hook manifests keep the payload executable and arguments.
 
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
-the pinned `agent-store` binary, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
+the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
+
+`tj item` is `tj-work-items`, installed with `uv tool install` (uv is required) together with the work-item
+profile package of each employer profile plugin installed on this machine, such as `infonetica@tj-agents`.
+Their revisions are pinned in `.agents/agent/runtime/work-items.json`, which Renovate bumps; the step is a
+no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned `tj-cli`'s own installers.
+Refresh runs these steps too, except Handy, which only an interactive install installs, and the stale check refuses prompts while the `tj item` receipt differs from the
+pins, naming the drift, until the refresh it starts has fixed it.
 
 Managed launches and refresh repair only the failing install step and retry readiness once: a failed
 plugin update (catch-up) or missing required plugins (plugin setup).
@@ -75,7 +82,9 @@ repository's normal Git resolution workflow. The regression suite creates real s
 Windows and Linux, including paths with spaces and Unicode.
 
 The retired machine-event watcher (a scheduled task on Windows, a systemd user unit on Linux) is removed by
-install, refresh and SessionStart whenever an older cached build re-creates it.
+install, refresh and SessionStart whenever an older cached build re-creates it. On Windows the same paths
+retire `tj-watch`: its Startup shortcut, its binary in `%LOCALAPPDATA%\Programs\tj`, and a running copy, which is
+stopped only when its executable path is exactly that binary.
 
 Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`;
 install and refresh rewrite the managed block. A plain `claude` or `codex` runs the native CLI.

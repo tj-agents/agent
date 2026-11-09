@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import contextlib
 from dataclasses import dataclass, field
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -37,8 +39,9 @@ import retired_state
 import runtime_delivery
 import native_runtime
 import agent_store
+import work_items_install
 from tj_agent import content
-from tj_cli import process
+from tj_cli import handy_install, process, worktrunk_install
 
 COMMAND_TIMEOUT_SECONDS = 60
 INSTALLER_TIMEOUT_SECONDS = 600
@@ -746,6 +749,82 @@ def apply_agent_store(context: Context) -> list[str]:
     return [f"installed agent-store {agent_store.install()} into {agent_store.executable().parent}"]
 
 
+def uv_executable(context: Context) -> str:
+    uv: str | None = context.which("uv")
+    if not uv:
+        raise InstallError(
+            "uv is required to install the tj item CLI: "
+            "https://docs.astral.sh/uv/getting-started/installation/"
+        )
+    return uv
+
+
+def uv_tool_directory(context: Context, uv: str) -> Path:
+    result = context.run(
+        [uv, "tool", "dir"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=COMMAND_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if result.returncode or not result.stdout.strip():
+        detail = (result.stderr or result.stdout).strip()
+        raise InstallError(f"uv tool dir failed: {detail}")
+    return Path(result.stdout.strip())
+
+
+def tj_item_drift(context: Context, uv: str) -> list[str]:
+    return work_items_install.drift(
+        uv_tool_directory(context, uv),
+        work_items_install.Pins.load(),
+        work_items_install.installed_plugins(),
+    )
+
+
+def check_tj_item(context: Context) -> list[str]:
+    return tj_item_drift(context, uv_executable(context))
+
+
+def apply_tj_item(context: Context) -> list[str]:
+    uv = uv_executable(context)
+    pins = work_items_install.Pins.load()
+    profiles = pins.selected(work_items_install.installed_plugins())
+    command = work_items_install.install_command(uv, pins, profiles)
+    result = run_installer(context, command)
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip()
+        raise InstallError(f"uv tool install {pins.tool.package} failed: {detail}")
+    remaining = tj_item_drift(context, uv)
+    if remaining:
+        raise InstallError("; ".join(remaining))
+    installed = (pins.tool, *profiles)
+    return [f"installed {pin.package} {pin.revision[:12]}" for pin in installed]
+
+
+def cli_installer(module: ModuleType, arguments: list[str]) -> tuple[int, list[str]]:
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        code = module.main(arguments)
+    lines = output.getvalue().splitlines()
+    return code, [line.strip() for line in lines if line.strip()]
+
+
+def cli_tool_step(name: str, module: ModuleType) -> Step:
+    def check(context: Context) -> list[str]:
+        code, lines = cli_installer(module, ["--check"])
+        return [] if code == 0 else lines or [f"install {name}"]
+
+    def apply(context: Context) -> list[str]:
+        code, lines = cli_installer(module, [])
+        if code:
+            raise InstallError("; ".join(lines) or f"the {name} installer failed")
+        return lines
+
+    return Step(name, check, apply)
+
+
 def command_shim(command: str, script: Path, windows: bool) -> tuple[str, str]:
     python = console_python()
     if windows:
@@ -848,6 +927,9 @@ STEPS = (
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
     Step("agent-store CLI", check_agent_store, apply_agent_store),
+    Step("tj item CLI", check_tj_item, apply_tj_item),
+    cli_tool_step("worktrunk", worktrunk_install),
+    cli_tool_step("Handy", handy_install),
     Step("launch-check runtime", check_runtime, apply_runtime),
     Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands),
     Step("shell profiles", check_profile, apply_profile),
