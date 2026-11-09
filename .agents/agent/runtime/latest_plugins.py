@@ -1,28 +1,54 @@
 #!/usr/bin/env python3
-"""Refuse work while this session, its plugins or tools are behind their pins."""
+"""Refuse work while this session, its plugins or the machine are behind their pins.
+
+Each cause starts only its own fix: plugins behind their pin start the plugin refresh,
+and machine drift starts only the install steps that repair it.
+"""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
-import subprocess
+import shlex
 import sys
+from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
+from typing import Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from claude import installed as claude_installed
-from codex import installed as codex_installed
-import refresh_lock
+import jobs
+import plugin_copies
 import retired_state
 import work_items_install
+from claude import installed as claude_installed
+from codex import installed as codex_installed
 from tj_agent.host import Host
-from tj_cli import process
 
 MARKETPLACES = ("tj-agents", "agents")
 RUNTIME = Path(__file__).resolve().parent
-INSTALLED = {Host.CLAUDE: claude_installed, Host.CODEX: codex_installed}
+TJ_ITEM = "tj item CLI"
+PLUGIN_COPIES = "plugin copies"
+DRIFT_NOUNS = {TJ_ITEM: "tools", PLUGIN_COPIES: "plugin copies"}
+
+
+class Installed(Protocol):
+    RELOAD: str
+
+    def installed_build_behind(
+        self, marketplace: str, plugin: str, install: Path
+    ) -> str | None: ...
+
+    def loaded_build_behind(
+        self, root: Path, pin: str, install: Path
+    ) -> str | None: ...
+
+
+INSTALLED: Mapping[Host, Installed] = {
+    Host.CLAUDE: claude_installed,
+    Host.CODEX: codex_installed,
+}
 
 
 def installed_behind(host: Host) -> list[str]:
@@ -34,8 +60,11 @@ def installed_behind(host: Host) -> list[str]:
             if plugin not in installs:
                 continue
             revision, path = installs[plugin]
-            behind = (f"installed {revision[:12]}, marketplace {pin[:12]}" if revision != pin
-                      else INSTALLED[host].installed_build_behind(marketplace, plugin, path))
+            behind = (
+                f"installed {revision[:12]}, marketplace {pin[:12]}"
+                if revision != pin
+                else INSTALLED[host].installed_build_behind(marketplace, plugin, path)
+            )
             if behind:
                 found.append(f"{plugin}@{marketplace}: {behind}")
     return found
@@ -55,24 +84,19 @@ def running_behind(host: Host) -> str | None:
     return f"agent@tj-agents: {behind}" if behind else None
 
 
-def refresh_script() -> Path:
+def packaged(relative: str) -> Path:
     agent = claude_installed.installs("tj-agents").get("agent")
-    script = agent[1] / ".agents" / "agent" / "runtime" / "refresh.py" if agent else None
-    return script if script and script.is_file() else RUNTIME / "refresh.py"
+    script = agent[1] / ".agents" / "agent" / "runtime" / relative if agent else None
+    return script if script is not None and script.is_file() else RUNTIME / relative
 
 
-def start_refresh() -> bool:
-    log = refresh_lock.state_directory() / "plugin-refresh.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    detached = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
-                else {"start_new_session": True})
-    try:
-        with log.open("ab") as output:
-            process.start([sys.executable, "-B", str(refresh_script())], stdin=subprocess.DEVNULL, stdout=output,
-                          stderr=subprocess.STDOUT, close_fds=True, **detached)
-    except FileNotFoundError:
-        return False
-    return True
+def refresh_command() -> list[str]:
+    return [sys.executable, "-B", str(packaged("plugins/refresh.py"))]
+
+
+def install_command(steps: Iterable[str]) -> list[str]:
+    selected = [argument for step in steps for argument in ("--step", step)]
+    return [sys.executable, "-B", str(packaged("install.py")), *selected]
 
 
 def tools_behind() -> list[str]:
@@ -83,29 +107,56 @@ def tools_behind() -> list[str]:
     )
 
 
-def refreshing(behind: str, then: str) -> str:
-    failure = None if refresh_lock.running() else refresh_lock.recent_failure()
+def machine_drift(state: Path) -> dict[str, list[str]]:
+    drift = {TJ_ITEM: tools_behind(), PLUGIN_COPIES: plugin_copies.drift(state)}
+    return {step: found for step, found in drift.items() if found}
+
+
+def fixing(
+    state: Path,
+    job: jobs.Job,
+    command: Sequence[str],
+    behind: str,
+    then: str,
+    rerun: str,
+) -> str:
+    running = jobs.running(state, job)
+    failure = None if running else jobs.recent_failure(state, job)
     if failure:
-        return (
-            f"tj-agents plugin refresh failed ({failure}); run agent:refresh-plugins."
-        )
-    if not refresh_lock.running() and not start_refresh():
-        return (
-            f"tj-agents {behind} are behind and tj_hook is missing; "
-            "run agent:refresh-plugins."
-        )
+        return f"tj-agents {job.label} failed ({failure}); {rerun}."
+    if not running and not jobs.start(state, job, command):
+        return f"tj-agents {behind} are behind and tj_hook is missing; {rerun}."
     return f"Updating tj-agents {behind}… {then} when this says done."
 
 
-def reason(host: Host) -> str | None:
+def repair_machine(state: Path) -> str | None:
+    drift = machine_drift(state)
+    if not drift:
+        return None
+    command = install_command(drift)
+    behind = "; ".join(
+        f"{DRIFT_NOUNS[step]} ({'; '.join(found)})" for step, found in drift.items()
+    )
+    rerun = f"run {shlex.join(command)}"
+    return fixing(
+        state, jobs.Job.INSTALL, command, behind, "send the prompt again", rerun
+    )
+
+
+def reason(host: Host, state: Path) -> str | None:
+    machine = repair_machine(state)
     if installed_behind(host):
-        return refreshing("plugins", INSTALLED[host].RELOAD)
+        return fixing(
+            state,
+            jobs.Job.REFRESH,
+            refresh_command(),
+            "plugins",
+            INSTALLED[host].RELOAD,
+            "run agent:refresh-plugins",
+        )
     if running_behind(host):
         return f"Plugins updated: {INSTALLED[host].RELOAD}."
-    tools = tools_behind()
-    if tools:
-        return refreshing(f"tools ({'; '.join(tools)})", "send the prompt again")
-    return None
+    return machine
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -116,16 +167,20 @@ def main(argv: list[str] | None = None) -> int:
         event = json.load(sys.stdin).get("hook_event_name", "")
     except (ValueError, AttributeError):
         event = ""
+    state = jobs.state_directory()
     if event in ("", "SessionStart"):
-        retired_state.remove(refresh_lock.state_directory())
-    refusal = reason(arguments.host)
+        retired_state.remove(state)
+    refusal = reason(arguments.host, state)
     if refusal is None:
         return 0
     if event == "UserPromptSubmit":
         print(json.dumps({"decision": "block", "reason": refusal}))
     else:
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "SessionStart",
-                                                 "additionalContext": refusal}}))
+        context = {
+            "hookEventName": event or "SessionStart",
+            "additionalContext": refusal,
+        }
+        print(json.dumps({"hookSpecificOutput": context}))
     return 0
 
 

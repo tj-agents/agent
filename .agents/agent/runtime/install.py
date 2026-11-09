@@ -34,6 +34,8 @@ sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
 import host_permissions
+import jobs
+import plugin_copies
 import required_plugins
 import retired_state
 import runtime_delivery
@@ -161,6 +163,7 @@ class Context:
     project: Path | None = None
     cache: dict = field(default_factory=dict)
     onboard: bool = False
+    failures: list[str] = field(default_factory=list)
 
     def path_from(self, variable: str, default: Path) -> Path:
         configured = self.environ.get(variable)
@@ -908,6 +911,71 @@ def apply_plugin_setup(context: Context) -> list[str]:
     return []
 
 
+def check_plugin_copies(context: Context) -> list[str]:
+    return plugin_copies.drift(context.state_directory)
+
+
+def apply_plugin_copies(context: Context) -> list[str]:
+    converged, changes, errors = [], [], []
+    for source in plugin_copies.sources():
+        try:
+            target = required_plugins.declaration(source.root, source.identity)
+            result = context.run(
+                [sys.executable, "-B", str(target.script), "converge"],
+                cwd=source.root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=INSTALLER_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (
+            required_plugins.PluginSetupError,
+            OSError,
+            subprocess.SubprocessError,
+        ) as error:
+            errors.append(f"{source.identity}: {error}")
+            continue
+        if result.returncode:
+            detail = required_plugins.bounded(result)
+            errors.append(f"{source.identity}: converge failed: {detail}")
+            continue
+        converged.append(source)
+        changes.append(f"converged {source.identity} copies from {source.revision[:12]}")
+    plugin_copies.record(context.state_directory, converged)
+    if errors:
+        raise InstallError("; ".join(errors))
+    return changes
+
+
+def retired_state_options(context: Context) -> dict:
+    return {
+        "windows": context.windows,
+        "home": context.home,
+        "run": context.run,
+        "environ": context.environ,
+    }
+
+
+def check_retired_state(context: Context) -> list[str]:
+    return [
+        f"remove {item}"
+        for item in retired_state.present(
+            context.state_directory, **retired_state_options(context)
+        )
+    ]
+
+
+def apply_retired_state(context: Context) -> list[str]:
+    return [
+        f"removed {item}"
+        for item in retired_state.remove(
+            context.state_directory, **retired_state_options(context)
+        )
+    ]
+
+
 def check_native_cli(context: Context) -> list[str]:
     pending = native_runtime.pending()
     if pending:
@@ -922,6 +990,7 @@ def apply_native_cli(context: Context) -> list[str]:
 
 
 STEPS = (
+    Step("retired state", check_retired_state, apply_retired_state),
     Step("Git long paths", check_git_longpaths, apply_git_longpaths, windows_only),
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
@@ -938,6 +1007,7 @@ STEPS = (
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
+    Step("plugin copies", check_plugin_copies, apply_plugin_copies),
 )
 
 
@@ -973,6 +1043,7 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
                 print(f"apply  {step.name}: {change}", file=out)
         except Exception as error:  # noqa: BLE001
             print(f"failed {step.name}: {error}", file=err)
+            context.failures.append(f"{step.name}: {error}")
             failed = True
             failed_steps.add(step.name)
             if step.required:
@@ -1032,11 +1103,16 @@ def main(argv: list[str] | None = None) -> int:
     context.onboard = parsed.onboard
     native_runtime.expose()
     context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
-    if not parsed.check:
-        for removed in retired_state.remove(context.state_directory, windows=context.windows,
-                                            home=context.home):
-            print(f"apply  retired state: removed {removed}")
-    return run_steps(selected_steps(set(parsed.step or ())), context, parsed.check)
+    steps = selected_steps(set(parsed.step or ()))
+    if parsed.check:
+        return run_steps(steps, context, True)
+    with jobs.held(context.state_directory, jobs.Job.INSTALL) as acquired:
+        if not acquired:
+            print("install: another machine install is running", file=sys.stderr)
+            return 2
+        code = run_steps(steps, context, False)
+        jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
+    return code
 
 
 if __name__ == "__main__":

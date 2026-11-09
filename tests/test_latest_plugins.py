@@ -6,7 +6,14 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest import mock
+from collections.abc import Callable
+
+import jobs
+import latest_plugins
+import plugin_copies
+import pytest
+from fake_machine import Started, install_plugin, pin_plugin
+from tj_agent.host import Host
 
 SCRIPT = Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/runtime/latest_plugins.py"
 PINS = json.loads(SCRIPT.with_name("work-items.json").read_text(encoding="utf-8"))
@@ -135,40 +142,10 @@ class LatestPluginsTests(unittest.TestCase):
         self.assertEqual(expected, self.run_hook("codex", "UserPromptSubmit", self.home / "deleted-build")["reason"])
 
 
-
-class StartRefreshTests(unittest.TestCase):
-    def test_the_refresh_starts_detached_and_hidden_through_the_shared_process_boundary(self):
-        sys.path.insert(0, str(SCRIPT.parent))
-        import latest_plugins
-
-        with tempfile.TemporaryDirectory() as state, \
-                mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": state}), \
-                mock.patch.object(latest_plugins.process, "start") as start:
-            self.assertTrue(latest_plugins.start_refresh())
-        command = start.call_args.args[0]
-        self.assertEqual([sys.executable, "-B"], command[:2])
-        self.assertTrue(command[2].endswith("refresh.py"))
-        options = start.call_args.kwargs
-        self.assertEqual(subprocess.DEVNULL, options["stdin"])
-        if os.name == "nt":
-            self.assertEqual(subprocess.CREATE_NEW_PROCESS_GROUP, options["creationflags"])
-        else:
-            self.assertTrue(options["start_new_session"])
-
-    def test_a_missing_tj_hook_is_reported_not_raised(self):
-        sys.path.insert(0, str(SCRIPT.parent))
-        import latest_plugins
-
-        with tempfile.TemporaryDirectory() as state, \
-                mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": state}), \
-                mock.patch.object(latest_plugins.process, "start", side_effect=FileNotFoundError("tj_hook")):
-            self.assertFalse(latest_plugins.start_refresh())
-
-
 def run_tool_check(home: Path) -> str:
     state = home / "state"
     state.mkdir(exist_ok=True)
-    (state / "plugin-refresh.lock").write_text("1", encoding="utf-8")
+    (state / "machine-install.lock").write_text("1", encoding="utf-8")
     environment = {
         **os.environ,
         "CLAUDE_CONFIG_DIR": str(home / "claude"),
@@ -207,6 +184,149 @@ def test_a_selected_profile_missing_from_the_receipt_blocks(tmp_path: Path) -> N
     cache = tmp_path / "codex" / "plugins" / "cache"
     (cache / marketplace / name / "local").mkdir(parents=True)
     assert f"{pin['package']} is not installed" in run_tool_check(tmp_path)
+
+
+@pytest.fixture
+def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    for name, value in {
+        "CLAUDE_CONFIG_DIR": str(tmp_path / "claude"),
+        "CODEX_HOME": str(tmp_path / "codex"),
+        "AGENT_STATE_DIRECTORY": str(tmp_path / "state"),
+        **isolated_machine(tmp_path),
+    }.items():
+        monkeypatch.setenv(name, value)
+    write_receipt(tmp_path / "uv-tools", [PINS["tool"]])
+    return tmp_path
+
+
+@pytest.fixture
+def started(monkeypatch: pytest.MonkeyPatch) -> Started:
+    fake = Started()
+    monkeypatch.setattr(jobs.process, "start", fake)
+    return fake
+
+
+def plugins_behind(home: Path) -> None:
+    pin_plugin(home / "claude", "base", PIN)
+    install_plugin(home / "claude", "base", OLD)
+
+
+def tj_item_drifted(home: Path) -> None:
+    write_receipt(home / "uv-tools", [{**PINS["tool"], "revision": OLD}])
+
+
+def copies_drifted(home: Path) -> None:
+    pin_plugin(home / "claude", "personal", PIN)
+    install_plugin(home / "claude", "personal", PIN, converge=True)
+    plugin_copies.record(
+        home / "state", [plugin_copies.Source("personal@tj-agents", OLD, home)]
+    )
+
+
+def converging_plugin_behind(home: Path) -> None:
+    pin_plugin(home / "claude", "personal", PIN)
+    install_plugin(home / "claude", "personal", OLD, converge=True)
+    plugin_copies.record(
+        home / "state", [plugin_copies.Source("personal@tj-agents", OLD, home)]
+    )
+
+
+def current_machine(home: Path) -> None:
+    pin_plugin(home / "claude", "personal", PIN)
+    install_plugin(home / "claude", "personal", PIN, converge=True)
+    plugin_copies.record(
+        home / "state", [plugin_copies.Source("personal@tj-agents", PIN, home)]
+    )
+
+
+RUNTIME = SCRIPT.parent
+REFRESH = [sys.executable, "-B", str(RUNTIME / "plugins" / "refresh.py")]
+INSTALL = [sys.executable, "-B", str(RUNTIME / "install.py")]
+
+
+@pytest.mark.parametrize(
+    ("cause", "fixes"),
+    [
+        (plugins_behind, [REFRESH]),
+        (tj_item_drifted, [[*INSTALL, "--step", "tj item CLI"]]),
+        (copies_drifted, [[*INSTALL, "--step", "plugin copies"]]),
+        (converging_plugin_behind, [REFRESH]),
+        (current_machine, []),
+    ],
+)
+def test_the_stale_check_starts_only_the_fix_for_its_cause(
+    machine: Path,
+    started: Started,
+    cause: Callable[[Path], None],
+    fixes: list[list[str]],
+) -> None:
+    cause(machine)
+    refusal = latest_plugins.reason(Host.CLAUDE, machine / "state")
+    assert started.commands == fixes
+    assert (refusal is None) == (fixes == [])
+
+
+def test_plugin_copies_drift_names_the_converged_and_pinned_builds(
+    machine: Path, started: Started
+) -> None:
+    copies_drifted(machine)
+    assert latest_plugins.reason(Host.CLAUDE, machine / "state") == (
+        f"Updating tj-agents plugin copies (personal@tj-agents copies are from {OLD[:12]}"
+        f", pinned {PIN[:12]})… send the prompt again when this says done."
+    )
+
+
+def test_a_running_install_is_not_started_again(
+    machine: Path, started: Started
+) -> None:
+    copies_drifted(machine)
+    with jobs.held(machine / "state", jobs.Job.INSTALL):
+        assert latest_plugins.reason(Host.CLAUDE, machine / "state") is not None
+    assert started.commands == []
+
+
+def test_a_recent_failed_install_is_reported_instead_of_retried(
+    machine: Path, started: Started
+) -> None:
+    copies_drifted(machine)
+    jobs.record(machine / "state", jobs.Job.INSTALL, ["plugin copies: boom"])
+    refusal = latest_plugins.reason(Host.CLAUDE, machine / "state")
+    assert started.commands == []
+    assert refusal is not None
+    assert refusal.startswith(
+        "tj-agents machine install failed (plugin copies: boom); run "
+    )
+    assert refusal.endswith("--step 'plugin copies'.")
+
+
+def test_jobs_start_detached_and_hidden_through_the_shared_process_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def start(command: list[str], **options: object) -> None:
+        calls.append({"command": command, **options})
+
+    monkeypatch.setattr(jobs.process, "start", start)
+    assert jobs.start(tmp_path, jobs.Job.REFRESH, REFRESH)
+    (call,) = calls
+    assert call["command"] == REFRESH
+    assert call["stdin"] == subprocess.DEVNULL
+    if os.name == "nt":
+        assert call["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert call["start_new_session"] is True
+    assert (tmp_path / "plugin-refresh.log").is_file()
+
+
+def test_jobs_report_a_missing_tj_hook_instead_of_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def start(_command: list[str], **_options: object) -> None:
+        raise FileNotFoundError("tj_hook")
+
+    monkeypatch.setattr(jobs.process, "start", start)
+    assert not jobs.start(tmp_path, jobs.Job.INSTALL, INSTALL)
 
 
 if __name__ == "__main__":
