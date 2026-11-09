@@ -77,7 +77,8 @@ Windows and Linux, including paths with spaces and Unicode.
 The retired machine-event watcher (a scheduled task on Windows, a systemd user unit on Linux) is removed by
 install, refresh and SessionStart whenever an older cached build re-creates it.
 
-Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`.
+Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`;
+install and refresh rewrite the managed block. A plain `claude` or `codex` runs the native CLI.
 Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
 managed directory rather than modifying the repository or an installed plugin cache.
 

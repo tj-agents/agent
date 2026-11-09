@@ -177,12 +177,12 @@ class RefreshPluginsTests(unittest.TestCase):
         self.assertEqual("claude: list: boom", REFRESH.refresh_lock.recent_failure())
         self.assertFalse(REFRESH.refresh_lock.running())
 
-    def test_refresh_converges_the_native_cli_runtime_and_lifecycle_commands_through_the_installer(self):
+    def test_refresh_converges_the_runtime_lifecycle_commands_and_shell_profiles_through_the_installer(self):
         with mock.patch.object(REFRESH.process, "run", return_value=completed(0, "[]")) as spawned:
             self.assertEqual(0, REFRESH.main(["--host", "claude"]))
         commands = [call.args[0] for call in spawned.call_args_list]
-        self.assertIn([sys.executable, "-B", str(REFRESH.RUNTIME / "install.py"), "--step", "tj lifecycle commands"],
-                      commands)
+        self.assertIn([sys.executable, "-B", str(REFRESH.RUNTIME / "install.py"), "--step", "tj lifecycle commands",
+                       "--step", "shell profiles"], commands)
 
 if __name__ == "__main__":
     unittest.main()
