@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import closing
 from pathlib import Path
+import sqlite3
 
 from tj_agent.host import Host
 import transcripts
@@ -25,6 +27,26 @@ def transcript_files(directory: Path):
 
 def transcript_ids(path: Path) -> tuple[str, ...]:
     return (path.stem, path.stem[-36:]) if len(path.stem) > 36 else (path.stem,)
+
+
+def transcript_modified(session_id: str) -> float:
+    databases = list(HOST.configuration_root.glob('state_*.sqlite'))
+    if not databases:
+        raise FileNotFoundError(f"Codex session index not found for {session_id}")
+    database = max(databases, key=lambda path: int(path.stem.removeprefix("state_")))
+    try:
+        with closing(
+            sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)
+        ) as connection:
+            row = connection.execute(
+                "SELECT rollout_path, updated_at FROM threads WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+    except sqlite3.Error as error:
+        raise RuntimeError(f"Cannot read Codex session index: {error}") from error
+    if row is None:
+        raise FileNotFoundError(f"Codex transcript not found for {session_id}")
+    return max(Path(row[0]).stat().st_mtime, float(row[1]))
 
 
 def tool_strings(payload: dict):

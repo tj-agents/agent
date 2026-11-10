@@ -1,13 +1,13 @@
 ---
 name: recover
-description: Bring back the agents of open work items after a crash, reboot or closed terminal. Use when asked to recover, restore, reload or bring back agents, sessions or tabs, or to see which agents are dead.
+description: Recover dead Claude and Codex sessions with tj recover after a crash, reboot or closed terminal. Use when asked to recover or restore agents, sessions or tabs, or preview which dead sessions would return.
 kind: utility
 domain: agent
 profile: core
 applicability: agent sessions
 provenance: house
 requires: tj
-allowed-tools: Bash(tj status:*), Bash(tj reload:*)
+allowed-tools: Bash(tj status:*), Bash(tj recover:*)
 ---
 
 # Recover agents
