@@ -16,6 +16,12 @@ def test_registry_resolves_all_agent_implementations_and_contracts() -> None:
     )
 
 
+def test_registry_resolves_all_pinned_repositories(tmp_path: Path) -> None:
+    sources = capabilities.fetch_sources(tmp_path)
+    sources["agent"] = capabilities.Source(ROOT)
+    assert capabilities.validate(sources) == []
+
+
 @pytest.mark.parametrize("host", list(Host))
 def test_a_missing_host_contract_is_rejected(host: Host) -> None:
     with pytest.raises(ValueError, match="implementation and contract"):
@@ -95,6 +101,20 @@ def test_duplicate_capability_names_are_rejected() -> None:
 def test_python_method_references_are_qualified() -> None:
     nodes = ast.parse("class Suite:\n def test_case(self): pass\n").body
     assert capabilities.python_symbols(nodes) == {"Suite", "Suite.test_case"}
+
+
+def test_rust_contracts_require_a_test_attribute(tmp_path: Path) -> None:
+    (tmp_path / "code.rs").write_text("fn helper() {}\n", encoding="utf-8")
+    support = capabilities.Support("agent:code.rs::helper", "agent:code.rs::helper")
+    entry = capabilities.Capability("fixture", support, support)
+    errors = capabilities.validate({"agent": capabilities.Source(tmp_path)}, (entry,))
+    assert len(errors) == 2
+    assert all("symbol does not exist" in error for error in errors)
+
+
+def test_rust_test_attributes_allow_platform_guards() -> None:
+    source = "#[cfg(windows)]\n#[test]\nfn contract() {}\nfn helper() {}\n"
+    assert capabilities.rust_tests(source) == {"contract"}
 
 
 @pytest.mark.parametrize("host", list(Host))
