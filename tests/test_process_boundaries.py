@@ -18,6 +18,7 @@ LAUNCHERS = {"run", "Popen", "call", "check_call", "check_output"}
 FOREGROUND = {
     (".agents/agent/runtime/agent_cli.py", "open_tab"),
     (".agents/agent/runtime/agent_cli.py", "launch"),
+    (".agents/agent/runtime/agent_cli.py", "attach_tmux"),
 }
 
 
