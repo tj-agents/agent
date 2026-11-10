@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from types import ModuleType
 from typing import Callable, Sequence
 
@@ -52,6 +53,9 @@ from tj_agent import content
 from tj_cli import handy_install, process, worktrunk_install
 
 INSTALLER_TIMEOUT_SECONDS = 600
+LOCKED = "(os error 5)"
+LOCKED_ATTEMPTS = 3
+LOCKED_RETRY_SECONDS = 2
 RUNTIME_EXPORTS = (
     ".agents/agent/runtime",
     ".agents/agent/resources",
@@ -153,6 +157,7 @@ class Context:
     windows: bool
     run: Callable = process.run
     which: Callable = shutil.which
+    sleep: Callable = time.sleep
     documents: Path | None = None
     user_environment: object = None
     root: Path = ROOT
@@ -541,8 +546,14 @@ def apply_hidden_bash(context: Context) -> list[str]:
 
 
 def run_installer(context: Context, command: list[str]) -> subprocess.CompletedProcess:
-    return context.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
+    for attempt in range(LOCKED_ATTEMPTS):
+        result = context.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
+        if not result.returncode or LOCKED not in f"{result.stdout}{result.stderr}":
+            return result
+        if attempt + 1 < LOCKED_ATTEMPTS:
+            context.sleep(LOCKED_RETRY_SECONDS)
+    return result
 
 
 def output_lines(result: subprocess.CompletedProcess) -> list[str]:

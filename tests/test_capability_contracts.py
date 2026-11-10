@@ -222,10 +222,11 @@ def test_a_stale_prompt_is_reported_and_never_blocked(
     output = json.loads(capsys.readouterr().out)
     assert "decision" not in output
     assert output == {
+        "systemMessage": "Updating plugins",
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": "Updating plugins",
-        }
+        },
     }
 
 
