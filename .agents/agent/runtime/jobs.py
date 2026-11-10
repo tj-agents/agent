@@ -95,6 +95,7 @@ def held(state: Path, job: Job) -> Iterator[bool]:
 
 def record(state: Path, job: Job, failures: Sequence[str]) -> None:
     status = {"finished": time.time(), "failures": list(failures)}
+    state.mkdir(parents=True, exist_ok=True)
     status_path(state, job).write_text(json.dumps(status), encoding="utf-8")
 
 
