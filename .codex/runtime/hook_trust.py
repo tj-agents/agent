@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections import Counter
 import importlib.util
 import io
@@ -17,6 +18,8 @@ import tempfile
 import threading
 import time
 
+import required_plugins
+from codex import projects
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -27,6 +30,7 @@ GITHUB_SOURCE = re.compile(
     re.IGNORECASE,
 )
 TRUSTED_OWNER = "tj-agents"
+RECEIPT = "codex-hook-trust.json"
 TIMEOUT = 45
 
 
@@ -258,7 +262,7 @@ def installed_package(hook):
     raise RuntimeError(f"Cannot identify installed plugin package: {hook['pluginId']}")
 
 
-def trust_updates(inventory, entries, cwd, verified_roots=None):
+def trust_updates(inventory, entries, cwds, verified_roots=None):
     verified_roots = {root.identity: root for root in verified_roots or ()}
     candidates = {}
     for plugin in inventory.get("installed", []):
@@ -275,7 +279,8 @@ def trust_updates(inventory, entries, cwd, verified_roots=None):
     verified = set()
     published = {}
     for entry in entries:
-        if Path(entry["cwd"]).resolve() != cwd:
+        cwd = Path(entry["cwd"]).resolve()
+        if cwd not in cwds:
             continue
         if entry.get("errors"):
             raise RuntimeError("Codex could not load all hook definitions")
@@ -405,7 +410,7 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
                 text=True, encoding="utf-8", timeout=limit,
             )
             inventory = json.loads(completed.stdout)
-        updates = trust_updates(inventory, listing["data"], cwd, verified_roots)
+        updates = trust_updates(inventory, listing["data"], {cwd}, verified_roots)
         if updates and not preview:
             server.request("config/batchWrite", {
                 "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
@@ -415,6 +420,82 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
         if not preview:
             require_ready(listing, cwd, required, expected=updates)
         return updates
+
+
+def published_hooks():
+    marketplace = required_plugins.MARKETPLACE_NAME
+    cache = Host.CODEX.configuration_root / "plugins" / "cache" / marketplace
+    hooks = {}
+    for plugin in sorted(cache.iterdir()) if cache.is_dir() else ():
+        builds = [entry for entry in plugin.iterdir() if entry.is_dir()] if plugin.is_dir() else []
+        if len(builds) != 1:
+            continue
+        identity = f"{plugin.name}@{marketplace}"
+        manifest_path = builds[0] / ".codex-plugin/plugin.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            definitions = required_definitions(builds[0], identity) if manifest.get("name") == plugin.name else []
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+            definitions = [("unreadable", str(builds[0]))]
+        if definitions:
+            hooks[identity] = hashlib.sha256(json.dumps(definitions).encode()).hexdigest()
+    return hooks
+
+
+def recorded_hooks(state):
+    try:
+        recorded = json.loads((state / RECEIPT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return recorded if isinstance(recorded, dict) else {}
+
+
+def pending(state):
+    recorded = recorded_hooks(state)
+    return [f"trust {identity} hooks" for identity, digest in published_hooks().items()
+            if recorded.get(identity) != digest]
+
+
+def untrusted(listing):
+    suffix = "@" + required_plugins.MARKETPLACE_NAME
+    return [(Path(entry["cwd"]).resolve(), hook) for entry in listing.get("data", [])
+            for hook in entry.get("hooks", [])
+            if hook.get("source") == "plugin" and hook.get("enabled") and not hook.get("isManaged")
+            and hook.get("trustStatus") in {"untrusted", "modified"}
+            and str(hook.get("pluginId", "")).endswith(suffix)]
+
+
+def trust_installed(executable, state, launch_args=(), timeout=TIMEOUT):
+    """Trust the hooks of every installed tj-agents plugin, in every project Codex trusts."""
+    hooks = published_hooks()
+    cwds = [Path.home().resolve(), *projects.trusted(projects.user_config())]
+    request = {"cwds": [str(cwd) for cwd in cwds]}
+    updates = {}
+    with AppServer(executable, cwds[0], launch_args, timeout=timeout) as server:
+        listing = server.request("hooks/list", request)
+        rows = {}
+        for cwd, hook in untrusted(listing):
+            if hook["pluginId"] not in rows:
+                found = json.loads(run([*command(executable), *launch_args, "plugin", "list", "--json"],
+                                       cwd, timeout)).get("installed", [])
+                rows.update({row["pluginId"]: row for row in found
+                             if isinstance(row, dict) and row.get("pluginId") not in rows})
+        if rows:
+            updates = trust_updates({"installed": list(rows.values())}, listing["data"], set(cwds))
+        if updates:
+            server.request("config/batchWrite", {
+                "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
+                "reloadUserConfig": True,
+            })
+            listing = server.request("hooks/list", request)
+        remaining = sorted({hook["key"] for _, hook in untrusted(listing)})
+        if remaining:
+            raise RuntimeError("tj-agents hooks are still not trusted: " + ", ".join(remaining))
+    state.mkdir(parents=True, exist_ok=True)
+    (state / RECEIPT).write_text(json.dumps(hooks), encoding="utf-8")
+    return updates
 
 
 def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
