@@ -108,26 +108,24 @@ class CodexLauncherTests(LauncherCase):
         patcher = mock.patch.object(self.adapter, 'resolve_executable', return_value=('/bin/codex', {}))
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.deliver = mock.patch.object(self.adapter, 'deliver').start()
-        self.addCleanup(mock.patch.stopall)
 
-    def test_without_an_effort_the_prompt_rides_the_daemon_attached_command_line(self):
+    def test_without_an_effort_the_prompt_rides_the_command_line(self):
         code, _, _ = self.run_launcher('--model', 'gpt-6', '--item', '98')
         self.assertEqual(0, code)
         arguments = self.launch.call_args.args[3]
         self.assertEqual(['--cd', str(self.directory), '--model', 'gpt-6'], arguments[:4])
         self.assertNotIn('-c', arguments)
-        self.assertFalse(self.launch.call_args.kwargs['want_session'])
-        self.deliver.assert_not_called()
+        self.assertNotIn('want_session', self.launch.call_args.kwargs)
 
-    def test_an_effort_is_delivered_as_the_first_turn_through_the_daemon(self):
-        self.run_launcher('--model', 'gpt-6', '--reasoning-effort', 'high', '--parent', 'claude:p')
+    def test_an_effort_and_the_prompt_both_ride_the_command_line(self):
+        code, _, _ = self.run_launcher('--model', 'gpt-6', '--reasoning-effort', 'high', '--parent', 'claude:p')
+        self.assertEqual(0, code)
         arguments = self.launch.call_args.args[3]
-        self.assertEqual(['--cd', str(self.directory), '--model', 'gpt-6'], arguments)
-        self.assertTrue(self.launch.call_args.kwargs['want_session'])
-        session, prompt, model, effort = self.deliver.call_args.args
-        self.assertEqual(('thread-1', 'gpt-6', 'high'), (session, model, effort))
-        self.assertIn('"parent tab" (claude:p)', prompt)
+        self.assertEqual(['--cd', str(self.directory), '--model', 'gpt-6', '-c', 'model_reasoning_effort=high'],
+                         arguments[:6])
+        self.assertIn('"parent tab" (claude:p)', arguments[6])
+        self.assertEqual(7, len(arguments))
+        self.assertNotIn('want_session', self.launch.call_args.kwargs)
 
     def test_lane_l7_is_refused(self):
         code, _, _ = self.run_launcher('--lane', 'L7')
