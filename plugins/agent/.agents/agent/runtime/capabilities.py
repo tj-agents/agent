@@ -89,7 +89,7 @@ REVISIONS = {
     "cli": "a661c0e0349ad34f936868dfcce20ef20a29708b",
     "personal": "7e0b2a962df9ba1b90284990360cdbd9c49cbe3d",
     "core": "03f99b363e11943cf8918a99b6a7654f5b770edb",
-    "work-items": "d01958325388b6198d2eacb4b49e763ad39664f3",
+    "work-items": "0d107309e04bedd77d2b1b3834ad92db0a777d0c",
 }
 
 CAPABILITIES = (
