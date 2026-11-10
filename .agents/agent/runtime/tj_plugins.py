@@ -99,6 +99,13 @@ def current(host: Host, digests: Digests, marketplace: str, plugin: str) -> bool
     )
 
 
+def host_argument(value: str) -> Host:
+    try:
+        return {host.value: host for host in Host}[value]
+    except KeyError as error:
+        raise argparse.ArgumentTypeError("Choose claude or codex") from error
+
+
 def selected_host(explicit: Host | None, environ: Mapping[str, str]) -> Host:
     if explicit is not None:
         return explicit
@@ -128,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     update = commands.add_parser(
         "update", help="Update and activate this host's plugins"
     )
-    update.add_argument("--host", type=Host, choices=list(Host))
+    update.add_argument("--host", type=host_argument, choices=list(Host))
     arguments = parser.parse_args(argv)
     try:
         host = selected_host(arguments.host, os.environ)

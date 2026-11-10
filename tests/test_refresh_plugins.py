@@ -951,3 +951,8 @@ def test_a_missing_claude_install_cannot_be_current(tmp_path: Path) -> None:
         assert not REFRESH.already_current(
             Host.CLAUDE, REFRESH.Digests(tmp_path / "state")
         )
+
+
+def test_an_unknown_host_is_an_argument_error() -> None:
+    with pytest.raises(SystemExit, match="2"):
+        REFRESH.main(["update", "--host", "other"])
