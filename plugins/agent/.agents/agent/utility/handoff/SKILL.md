@@ -12,11 +12,13 @@ route: infer
 
 # Handoff an agent session
 
-Write the complete prompt to a UTF-8 file, then run with `python` on Windows or `python3` on Linux:
+Owns launching an independent Claude or Codex session from a prepared prompt.
 
 ```text
 python -B "<package-root>/.agents/agent/utility/handoff/scripts/handoff.py" --host codex -- --working-directory "<absolute-checkout>" --prompt-path "<absolute-prompt-file>" --title "agent#461 review" --lane L4 --item 461
 ```
+
+Write the complete prompt to a UTF-8 file, then run with `python` on Windows or `python3` on Linux.
 
 - `--title` is required, short and unique: it becomes the tab title and the session's native name, so other sessions address the child by it.
 - `--parent` defaults to the calling session; pass `--parent <host:id>` to override it. The child's prompt then gains a standing rule to message the parent when it finishes, when it is blocked, and when Tommy's approval is needed.

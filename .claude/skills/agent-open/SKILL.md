@@ -7,7 +7,7 @@ profile: core
 applicability: agent sessions
 provenance: house
 requires: tj
-allowed-tools: Bash(tj reload:*), Bash(tj status:*)
+allowed-tools: Bash(tj recover:*), Bash(tj status:*)
 ---
 
 # Open a session

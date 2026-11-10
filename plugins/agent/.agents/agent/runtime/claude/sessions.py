@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from tj_agent.host import Host
@@ -14,12 +15,23 @@ def history_roots(root: Path) -> tuple[Path, ...]:
     return (root,)
 
 
-def transcript_files(directory: Path):
+def transcript_files(directory: Path) -> Iterator[Path]:
     return directory.glob('*/*.jsonl')
 
 
 def transcript_ids(path: Path) -> tuple[str, ...]:
     return (path.stem,)
+
+
+def transcript_modified(session_id: str) -> float:
+    paths = [
+        path
+        for path in transcript_files(HOST.history_root)
+        if session_id in transcript_ids(path)
+    ]
+    if not paths:
+        raise FileNotFoundError(f"Claude transcript not found for {session_id}")
+    return max(path.stat().st_mtime for path in paths)
 
 
 def read_session(path: Path) -> dict | None:
