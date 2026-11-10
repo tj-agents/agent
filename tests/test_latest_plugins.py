@@ -132,7 +132,7 @@ def machine(
 ) -> Machine:
     for name, value in environment(tmp_path).items():
         monkeypatch.setenv(name, value)
-    for name in ("CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"):
+    for name in ("CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT", "TJ_RUN_LAUNCH_ID"):
         monkeypatch.delenv(name, raising=False)
     context = machine_context(tmp_path)
     monkeypatch.setattr(install, "machine_context", lambda: context)
@@ -187,14 +187,14 @@ def test_a_stale_install_without_tj_hook_says_how_to_refresh(machine: Machine) -
     machine.monkeypatch.setattr(process, "start", missing_tj_hook)
     assert machine.hook("claude", "UserPromptSubmit") == (
         "tj-agents plugins are behind and tj_hook is missing; "
-        f"run {shlex.join(latest_plugins.refresh_command(Host.CLAUDE))}."
+        f"run {shlex.join(latest_plugins.update_command(Host.CLAUDE))}."
     )
 
 
 def test_a_running_refresh_is_not_started_again(machine: Machine) -> None:
     machine.registry(OLD)
     machine.converge()
-    with jobs.held(machine.state, jobs.Job.REFRESH):
+    with jobs.held(machine.state, jobs.Job.UPDATE):
         assert machine.hook("claude", "UserPromptSubmit") == UPDATING_CLAUDE
     assert machine.started.commands == []
 
@@ -205,12 +205,12 @@ def test_a_recent_failed_refresh_is_reported_instead_of_retried(
     machine.registry(OLD)
     machine.converge()
     write_json(
-        machine.state / "plugin-refresh.json",
+        machine.state / "plugin-update.json",
         {"finished": time.time(), "failures": ["claude: list: boom"]},
     )
     assert machine.hook("claude", "UserPromptSubmit") == (
-        "tj-agents plugin refresh failed (claude: list: boom); "
-        f"run {shlex.join(latest_plugins.refresh_command(Host.CLAUDE))}."
+        "tj-agents plugin update failed (claude: list: boom); "
+        f"run {shlex.join(latest_plugins.update_command(Host.CLAUDE))}."
     )
     assert machine.started.commands == []
 
@@ -221,7 +221,7 @@ def test_a_stale_codex_build_is_reported_at_prompt_and_session_start(
     machine.registry(PIN)
     machine.codex_build("bbbbbbbbbbbb")
     machine.converge()
-    with jobs.held(machine.state, jobs.Job.REFRESH):
+    with jobs.held(machine.state, jobs.Job.UPDATE):
         assert machine.hook("codex", "UserPromptSubmit") == UPDATING_CODEX
         assert machine.hook("codex", "SessionStart") == UPDATING_CODEX
 
@@ -334,7 +334,7 @@ def test_the_stale_check_starts_only_the_fix_for_its_cause(
     machine.converge()
     refusal = machine.reason()
     expected = [
-        latest_plugins.refresh_command(Host.CLAUDE)
+        latest_plugins.update_command(Host.CLAUDE)
         if fix == "refresh"
         else install_step(fix)
         for fix in fixes
@@ -437,7 +437,7 @@ def test_jobs_start_detached_and_hidden_through_the_shared_process_boundary(
         calls.append({"command": command, **options})
 
     monkeypatch.setattr(process, "start", start)
-    assert jobs.start(tmp_path, jobs.Job.REFRESH, REFRESH)
+    assert jobs.start(tmp_path, jobs.Job.UPDATE, REFRESH)
     (call,) = calls
     assert call["command"] == REFRESH
     assert call["stdin"] == subprocess.DEVNULL
@@ -445,7 +445,7 @@ def test_jobs_start_detached_and_hidden_through_the_shared_process_boundary(
         assert call["creationflags"] == subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         assert call["start_new_session"] is True
-    assert (tmp_path / "plugin-refresh.log").is_file()
+    assert (tmp_path / "plugin-update.log").is_file()
 
 
 def test_jobs_report_a_missing_tj_hook_instead_of_raising(
@@ -538,3 +538,15 @@ def test_a_session_on_an_older_build_leaves_machine_repair_to_the_installed_buil
     assert not machine_state.installed_build()
     assert machine.reason() is None
     assert machine.started.commands == []
+
+
+def test_managed_claude_adopts_downloaded_plugins_without_a_manual_reload(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine.registry(PIN)
+    machine.converge()
+    running = machine.home / "older-agent"
+    monkeypatch.setenv("TJ_RUN_LAUNCH_ID", "fixture")
+    notice = machine.hook("claude", "UserPromptSubmit", running)
+    assert "resumes when idle" in notice
+    assert machine.started.commands == [latest_plugins.update_command(Host.CLAUDE)]

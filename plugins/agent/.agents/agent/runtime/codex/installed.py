@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -85,6 +86,9 @@ def build_current(marketplace: str, plugin: str, install: Path, digests: Any) ->
         return False
     if len(builds) != 1:
         return False
+    expected = label(install)
+    if expected and re.fullmatch(r"[0-9a-f]{12}", expected):
+        return builds[0].name == expected and label(builds[0]) == expected
     installed = digests.tree(builds[0])
     return installed is not None and installed == digests.tree(install)
 

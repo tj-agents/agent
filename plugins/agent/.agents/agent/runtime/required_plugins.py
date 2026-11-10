@@ -186,7 +186,7 @@ def check(project: Path, host: Host, executable: str | None = None,
     if missing:
         raise MissingRequiredPluginsError(
             f"Required standards unavailable for {host} in {project}: {', '.join(missing)}. "
-            f"Invoke agent:refresh-plugins for {host} in this project; it installs and adopts required plugins automatically. "
+            "Run tj install --step 'plugin setup' in this project to install the required plugins. "
             "Cached files from another host do not establish activation.", project, missing,
         )
     return {identity: roots[identity] for identity in required}

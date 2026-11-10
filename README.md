@@ -56,14 +56,17 @@ profile package of each employer profile plugin installed on this machine, such 
 Their revisions are pinned in `.agents/agent/runtime/work-items.json`, which Renovate bumps; the step is a
 no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned `tj-cli`'s own installers.
 
-Refresh (`.agents/agent/runtime/plugins/refresh.py`) updates only the plugins on both hosts and restarts
-background sessions; install owns every machine step. The stale check refuses prompts, naming the drift, and
-starts only the fix for each cause: plugins behind their pin start refresh, and each install step whose check
-only reads files (agent-store CLI, tj item CLI, launch-check runtime, tj lifecycle commands, shell profiles and
-plugin copies) runs that check against the installed Agent plugin, starting `install --step` for the drifted
-steps alone. SessionStart, refresh and install always run this machine check; a prompt reruns it only when the
-installed plugin builds or a file those checks read changed since the last clean check, so a pin refresh moves
-is converged before the next prompt is admitted.
+`tj plugins update` checks only the calling host's plugins against locally cached marketplace pins.
+It detects Claude or Codex from the session; use `--host claude` or `--host codex` outside a session.
+An unchanged installation needs no native CLI process or network request. Changed plugins use the host's
+native update commands. Codex's shared server reloads open threads; Claude requests the current `tj run`
+wrapper to resume the same conversation after an idle grace with no background work or scheduled wakeups.
+An unmanaged Claude session receives a `/reload-plugins` notice.
+
+`tj install` owns machine setup and repair, including Handy, profiles, agent settings and command bindings.
+The stale hook reports drift and starts the appropriate update or install step in the background.
+It always allows the prompt, including when an update fails. Machine checks run at SessionStart and
+when their installed builds or checked files change; plugin updates do not run machine repair.
 
 Managed launches repair only the failing install step and retry readiness once: a failed
 plugin update (catch-up) or missing required plugins (plugin setup).
@@ -134,7 +137,7 @@ in the systemd journal and opens tmux windows, creating and attaching to `tj-rec
 ## Skills
 
 - `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:plugins`,
-  `agent:recent`, `agent:recover`, `agent:refresh-plugins`, `agent:search`
+  `agent:recent`, `agent:recover`, `agent:search`
 - `agent-store:inspect`
 - `codex:hooks`, `codex:memory`
 

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any, Callable
 
 from tj_agent.host import Host
@@ -85,9 +85,9 @@ def build_current(marketplace: str, plugin: str, install: Path, digests: Any) ->
 
 def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
     build = BUILD.fullmatch(root.name)
-    if build and build.group(1) != pin[:12]:
-        return f"this session loaded {build.group(1)}, current {pin[:12]}"
-    return None
+    if root.resolve() == install.resolve() or (build and build.group(1) == pin[:12]):
+        return None
+    return f"this session loaded {root.name}, current {install.name}"
 
 
 def refresh(
