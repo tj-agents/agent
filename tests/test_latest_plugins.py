@@ -47,6 +47,7 @@ DRIFT_STEPS = [
     "launch-check runtime",
     "tj lifecycle commands",
     "shell profiles",
+    "Codex hook trust",
     "plugin copies",
 ]
 
