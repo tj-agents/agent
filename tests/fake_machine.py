@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import install
+from codex import hook_trust
 
 CONVERGE = {"setup": {"script": "scripts/setup.py", "converge": True}}
 FILE_STEPS = ("launch-check runtime", "tj lifecycle commands", "shell profiles")
@@ -111,6 +112,9 @@ def converge(context: Any, root: Path) -> None:
     errors = io.StringIO()
     code = install.run_steps(steps, context, False, io.StringIO(), errors)
     assert code == 0, errors.getvalue()
+    write_json(
+        context.state_directory / hook_trust.RECEIPT, hook_trust.published_builds()
+    )
 
 
 def agent_root(root: Path, runtime: str) -> Path:

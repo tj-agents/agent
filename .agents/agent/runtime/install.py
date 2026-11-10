@@ -34,6 +34,10 @@ sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
 from codex import daemon as codex_daemon
+from codex import hook_trust as codex_hook_trust
+from codex import installed as codex_installed
+from codex import launch as codex_launch
+from codex import projects as codex_projects
 import host_permissions
 import jobs
 import machine_state
@@ -98,21 +102,10 @@ def load_toml(path: Path) -> dict:
         return {}
 
 
-def project_directories(config: dict, temporary: Path | None = None) -> list[Path]:
-    projects = config.get("projects", {})
-    if not isinstance(projects, dict):
-        return []
-    temporary = (temporary or Path(tempfile.gettempdir())).resolve()
-    return sorted({Path(path).resolve() for path, settings in projects.items()
-                   if isinstance(settings, dict) and settings.get("trust_level") == "trusted"
-                   and (Path(path) / ".codex/config.toml").is_file()
-                   and not Path(path).resolve().is_relative_to(temporary)})
-
-
 def declarations(config: dict) -> list[tuple[Path, dict]]:
     found = [(Path.home(), config)]
     user_file = (Host.CODEX.configuration_root / "config.toml").resolve()
-    for project in project_directories(config):
+    for project in codex_projects.trusted(config):
         path = project / ".codex" / "config.toml"
         if path.resolve() != user_file:
             found.append((project, load_toml(path)))
@@ -896,6 +889,26 @@ def apply_codex_daemon(context: Context) -> list[str]:
     return [f"removed {codex_daemon.FEATURE} = false from {codex_config_path(context)}"]
 
 
+def skip_codex_hook_trust(context: Context) -> str | None:
+    return None if context.codex_home.is_dir() else f"Codex is not set up ({context.codex_home} is missing)"
+
+
+def watch_codex_hook_trust(context: Context) -> list[Path]:
+    cache = context.codex_home / "plugins" / "cache" / required_plugins.MARKETPLACE_NAME
+    plugins = sorted(cache.iterdir()) if cache.is_dir() else []
+    return [context.state_directory / codex_hook_trust.RECEIPT, cache, *plugins]
+
+
+def check_codex_hook_trust(context: Context) -> list[str]:
+    return codex_hook_trust.pending(context.state_directory)
+
+
+def apply_codex_hook_trust(context: Context) -> list[str]:
+    trusted = codex_hook_trust.trust_installed(
+        codex_launch.executable(), context.state_directory, codex_installed.MARKETPLACE_OVERRIDES)
+    return [f"trusted {len(trusted)} tj-agents Codex hook(s)"]
+
+
 def native_permissions_plan(context: Context) -> dict[Path, str]:
     mode = host_permissions.permissions(plugin_setup_project(context))
     return host_permissions.plan(context.claude_home / "settings.json", codex_config_path(context), mode)
@@ -1040,6 +1053,8 @@ STEPS = (
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
+    Step("Codex hook trust", check_codex_hook_trust, apply_codex_hook_trust, skip_codex_hook_trust,
+         watch=watch_codex_hook_trust),
     Step("plugin copies", check_plugin_copies, apply_plugin_copies, watch=watch_plugin_copies),
 )
 

@@ -759,7 +759,7 @@ class RunStepsTests(Machine):
             "tj item CLI", "worktrunk", "Handy",
             "launch-check runtime", "tj lifecycle commands",
             "shell profiles", "hidden Git Bash for Claude",
-            "Codex profile agents", "harness permissions", "plugin setup", "plugin copies",
+            "Codex profile agents", "harness permissions", "plugin setup", "Codex hook trust", "plugin copies",
         ], [item.name for item in install.STEPS])
 
 

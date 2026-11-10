@@ -47,7 +47,8 @@ the wrapping; authored hook manifests keep the payload executable and arguments.
 Codex's shared daemon auto-start (a `daemon_auto_start = false` override is removed so refresh can reload open
 Codex sessions in place),
 the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
-profile agents, plugin catch-up, harness permissions, plugin setup and plugin copies. It is idempotent; `--check` reports
+profile agents, plugin catch-up, harness permissions, plugin setup, Codex trust for tj-agents plugin hooks (verified against their published
+source, so no Codex launch asks to trust them) and plugin copies. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
 `tj item` is `tj-work-items`, installed with `uv tool install` (uv is required) together with the work-item

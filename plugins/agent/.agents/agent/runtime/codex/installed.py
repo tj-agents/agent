@@ -108,6 +108,23 @@ def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, 
         report.step(
             HOST, row["pluginId"], codex_command("plugin", "add", row["pluginId"])
         )
+    trust_hooks(report)
+
+
+def trust_hooks(report: Any) -> None:
+    """Trust installed tj-agents hooks so no Codex launch asks to trust them."""
+    import jobs
+    from codex import hook_trust, launch
+
+    state = jobs.state_directory()
+    if not hook_trust.pending(state):
+        return
+    try:
+        trusted = hook_trust.trust_installed(launch.executable(), state, MARKETPLACE_OVERRIDES)
+    except (OSError, RuntimeError, ValueError) as error:
+        report.fail(HOST, "hook trust", str(error))
+        return
+    print(f"{HOST}: hook trust ok ({len(trusted)} hook(s) newly trusted)")
 
 
 def marketplace_roots(report: Any) -> dict[str, Path] | None:
@@ -119,12 +136,11 @@ def marketplace_roots(report: Any) -> dict[str, Path] | None:
 
 def reload_open_sessions(report: Any, identities: list[str]) -> None:
     """Install through the shared daemon, which reloads every loaded thread's plugins, hooks and skills."""
-    from codex import hook_trust, launch
+    from codex import launch
 
     roots = marketplace_roots(report)
     if roots is None:
         return
-    required = {}
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
             for identity in identities:
@@ -136,12 +152,7 @@ def reload_open_sessions(report: Any, identities: list[str]) -> None:
                     report.fail(HOST, identity, str(error))
                     continue
                 print(f"{HOST}: {identity} ok")
-                build = installed_label(marketplace, plugin)
-                root = HOST.configuration_root / "plugins" / "cache" / marketplace / plugin / (build or "")
-                definitions = hook_trust.required_definitions(root, identity) if build else None
-                if definitions:
-                    required[identity] = definitions
-            hook_trust.apply_trust(launch.executable(), Path.home(), required=required)
+            trust_hooks(report)
             server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
     except (OSError, RuntimeError, KeyError) as error:
         report.fail(HOST, "open sessions", str(error))
