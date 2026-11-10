@@ -535,7 +535,7 @@ class RuntimeTests(Machine):
         install.apply_runtime(context)
         runtime = context.state_directory / 'bin' / '.agents' / 'agent' / 'runtime'
         for script in install.LIFECYCLE_COMMANDS.values():
-            result = subprocess.run([sys.executable, '-I', '-B', str(runtime / script), '--help'],
+            result = subprocess.run([sys.executable, '-E', '-s', '-B', str(runtime / script), '--help'],
                                     cwd=self.root, capture_output=True, text=True, timeout=15)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertIn('usage: tj ', result.stdout)
