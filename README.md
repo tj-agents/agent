@@ -113,9 +113,10 @@ tj start 461 [--codex] [--lane L4]   worktree via worktrunk, card In Progress, a
 tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
 tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
 tj recover --dry-run                 preview restores and stale sessions to end without changing anything
+tj prepare --host claude|codex       prepare this repository's selected plugins and standards index
 ```
 
-`tj` dispatches these to the `tj-start`, `tj-status` and `tj-recover` shims the installer writes beside it.
+`tj` dispatches these to the lifecycle shims the installer writes beside it.
 Every agent tab is a Windows Terminal or tmux tab whose root process is `tj run`, from
 [TJ CLI](https://github.com/tj-agents/cli). `tj run` records the launch in agent-store. The SessionStart
 hook then binds the native session to that launch, so the session inherits its title, work item and parent,
@@ -124,6 +125,20 @@ and a Codex thread is named after its title. Liveness always comes from the host
 attach to that daemon, so they carry no `-c` overrides; a requested reasoning effort is applied to the first
 turn through the daemon. The store holds links only. Its release is pinned in
 `.agents/agent/runtime/agent-store.json`, which Renovate bumps.
+
+Before starting or resuming a host, `tj run` calls `tj prepare`. It derives native project settings
+from `.agents/plugins.json`, installs missing selected plugins, and updates a small marked standards
+index in `AGENTS.md`. The index requires applicable skill bodies to be read before relevant edits;
+ordinary skills remain loaded on demand. Claude imports the shared instructions through `CLAUDE.md`.
+Preparation preserves authored guidance and reports a nonempty Codex override that would hide it.
+Run `tj prepare --host codex --cwd PATH` directly when starting the native host outside `tj run`.
+
+Claude installations use project scope, or local scope for local adoption. Codex uses its native
+shared package cache while enablement remains in project config; installation removes the user
+activation written by `codex plugin add`. Shared cache storage does not enable a plugin everywhere.
+Existing user-scoped activation must be removed when adopting this model. Native configuration in a
+local-only adoption is reconciled, but its owner's instruction files remain untouched and preparation
+warns that the owner must provide routing. Other preparation failures also warn; `tj run` still starts.
 
 Recovery considers every registered session, including those without a work item. It leaves live sessions
 alone and restores dead sessions whose host transcript changed after the previous boot. Older dead sessions

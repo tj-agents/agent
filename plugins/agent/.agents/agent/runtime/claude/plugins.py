@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 
 import agent_cli
+from claude.project_plugins import install as install, prepare_instructions as prepare_instructions
 from tj_agent.host import Host
 import required_plugins
 from tj_cli import process
