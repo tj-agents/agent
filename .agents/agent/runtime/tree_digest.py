@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 CACHE = "plugin-digests.json"
@@ -23,11 +24,14 @@ class Digests:
     def file(self, path: Path) -> str:
         status = path.stat()
         known = self.files.get(str(path))
-        if isinstance(known, list) and known[:2] == [
-            status.st_size,
-            status.st_mtime_ns,
-        ]:
-            return str(known[2])
+        if (
+            isinstance(known, list)
+            and len(known) == 3
+            and known[:2] == [status.st_size, status.st_mtime_ns]
+            and isinstance(known[2], str)
+            and re.fullmatch("[0-9a-f]{64}", known[2]) is not None
+        ):
+            return known[2]
         digest = hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
         self.files[str(path)] = [status.st_size, status.st_mtime_ns, digest]
         self.changed = True
