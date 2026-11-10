@@ -220,22 +220,23 @@ def keep_project_scope(report: Any, identities: list[str]) -> None:
         user_plugins.path().write_text(scoped, encoding="utf-8")
 
 
-def trust_hooks(report: Any) -> None:
+def trust_hooks(report: Any) -> bool:
     """Trust installed tj-agents hooks so no Codex launch asks to trust them."""
     import jobs
     from codex import hook_trust, launch
 
     state = jobs.state_directory()
     if not hook_trust.pending(state):
-        return
+        return False
     try:
         trusted = hook_trust.trust_installed(
             launch.executable(), state, MARKETPLACE_OVERRIDES
         )
     except (OSError, RuntimeError, ValueError) as error:
         report.fail(HOST, "hook trust", str(error))
-        return
+        return False
     print(f"{HOST}: hook trust ok ({len(trusted)} hook(s) newly trusted)")
+    return True
 
 
 def marketplace_roots(report: Any) -> dict[str, Path] | None:
@@ -291,6 +292,13 @@ def reload_open_sessions(report: Any) -> None:
             server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
     except (OSError, RuntimeError) as error:
         report.fail(HOST, "open sessions", str(error))
+
+
+def repair_hooks(report: Any) -> None:
+    from codex import launch
+
+    if trust_hooks(report) and launch.liveness():
+        reload_open_sessions(report)
 
 
 def restart(report: Any, managed: bool) -> None:

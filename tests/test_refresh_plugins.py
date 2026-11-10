@@ -881,6 +881,30 @@ def test_current_plugins_spawn_no_subprocess(host: Host, tmp_path: Path) -> None
     spawned.assert_not_called()
 
 
+@pytest.mark.parametrize("failed", [False, True])
+def test_current_codex_plugins_repair_pending_hook_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
+    monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
+    monkeypatch.setattr(codex_launch, "liveness", lambda: {"session": {}})
+    with (
+        _patched_homes(tmp_path),
+        mock.patch.object(REFRESH, "already_current", return_value=True),
+        mock.patch.object(
+            codex_hook_trust,
+            "trust_installed",
+            side_effect=RuntimeError("source differs") if failed else None,
+            return_value={},
+        ) as trust,
+        mock.patch.object(REFRESH.codex_installed, "reload_open_sessions") as reload,
+        mock.patch.object(REFRESH.process, "run") as spawned,
+    ):
+        assert REFRESH.main(["update", "--host", "codex"]) == int(failed)
+    trust.assert_called_once()
+    assert reload.call_count == int(not failed)
+    spawned.assert_not_called()
+
+
 def test_immutable_codex_builds_need_only_published_version_metadata(
     tmp_path: Path,
 ) -> None:

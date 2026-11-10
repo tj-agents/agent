@@ -151,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         if already_current(host, digests):
             digests.save()
             print(f"tj: {host} plugins already match their local pins")
+            if host is Host.CODEX:
+                codex_installed.repair_hooks(report)
             if os.environ.get(
                 host.plugin_root_variable
             ) and latest_plugins.running_behind(host):
