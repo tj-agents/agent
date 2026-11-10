@@ -353,6 +353,18 @@ def python_symbols(nodes: list[ast.stmt], prefix: str = "") -> set[str]:
     return found
 
 
+def rust_tests(text: str) -> set[str]:
+    functions = re.finditer(
+        r"((?:\s*#\[[^\]]+\])*)\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*\(",
+        text,
+    )
+    return {
+        function[2]
+        for function in functions
+        if re.search(r"#\[\s*test\s*\]", function[1])
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class Source:
     root: Path
@@ -389,10 +401,11 @@ def validate(
         or len(set(names)) != len(names)
     ):
         errors.append("Capability names must be nonempty and unique")
-    symbols: dict[tuple[str, PurePosixPath], set[str]] = {}
+    symbols: dict[tuple[str, PurePosixPath, bool], set[str]] = {}
     for capability in capabilities:
         for host in Host:
-            for reference in capability.support(host).references():
+            for index, reference in enumerate(capability.support(host).references()):
+                contract = index == 1
                 label = (
                     f"{capability.name}/{host}: {reference.repository}:"
                     f"{reference.path}::{reference.symbol}"
@@ -415,7 +428,7 @@ def validate(
                 ):
                     errors.append(f"{label}: source does not match its pinned revision")
                     continue
-                key = reference.repository, reference.path
+                key = reference.repository, reference.path, contract
                 if key not in symbols:
                     try:
                         text = source.read(reference.path)
@@ -424,7 +437,11 @@ def validate(
                         elif reference.path.suffix == ".json":
                             symbols[key] = set(json.loads(text))
                         elif reference.path.suffix == ".rs":
-                            symbols[key] = set(re.findall(r"\bfn\s+(\w+)\s*\(", text))
+                            symbols[key] = (
+                                rust_tests(text)
+                                if contract
+                                else set(re.findall(r"\bfn\s+(\w+)\s*\(", text))
+                            )
                         else:
                             raise ValueError("Unsupported capability source format")
                     except (
