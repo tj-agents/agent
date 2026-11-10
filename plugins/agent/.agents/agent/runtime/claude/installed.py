@@ -8,6 +8,7 @@ import re
 import subprocess
 from typing import Any, Callable
 
+from claude import project_plugins
 from tj_agent.host import Host
 
 HOST = Host.CLAUDE
@@ -40,7 +41,8 @@ def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
         if source != marketplace or not isinstance(rows, list):
             continue
         for row in rows:
-            if isinstance(row, dict) and row.get("scope") == "user" and isinstance(row.get("gitCommitSha"), str):
+            if (isinstance(row, dict) and isinstance(row.get("gitCommitSha"), str)
+                    and project_plugins.applies(Path.cwd(), row.get("scope"), row.get("projectPath"))):
                 found[name] = (row["gitCommitSha"], Path(row.get("installPath", "")))
     return found
 
@@ -76,13 +78,15 @@ def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, 
     listing = report.step(HOST, "list", ["claude", "plugin", "list", "--json"])
     if listing is None:
         return
-    plugins = sorted({row["id"] for row in json.loads(listing.stdout)
-                      if row["scope"] == "user" and row["id"].rpartition("@")[2] in marketplaces})
-    stale = [plugin for plugin in plugins if not current(plugin.rpartition("@")[2], plugin.rpartition("@")[0])]
+    plugins = sorted({(row["id"], row["scope"]) for row in json.loads(listing.stdout)
+                      if row["id"].rpartition("@")[2] in marketplaces
+                      and project_plugins.applies(Path.cwd(), row["scope"], row.get("projectPath"))})
+    stale = [(plugin, scope) for plugin, scope in plugins
+             if scope != "user" or not current(plugin.rpartition("@")[2], plugin.rpartition("@")[0])]
     if len(stale) < len(plugins):
         print(f"{HOST}: {len(plugins) - len(stale)} plugin(s) already at their pin")
-    for plugin in stale:
-        report.step(HOST, plugin, ["claude", "plugin", "update", plugin, "--scope", "user", "--json", "-y"])
+    for plugin, scope in stale:
+        report.step(HOST, plugin, ["claude", "plugin", "update", plugin, "--scope", scope, "--json", "-y"])
 
 
 def sessions(report: Any) -> list[dict]:
