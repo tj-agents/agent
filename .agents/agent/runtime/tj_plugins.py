@@ -16,6 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jobs
 import latest_plugins
+import plugin_activation
+import required_plugins
+import standards
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from tj_agent.host import Host
@@ -119,6 +122,24 @@ def already_current(host: Host, digests: Digests) -> bool:
     )
 
 
+def update_standards(report: Report, host: Host) -> None:
+    directory = Path.cwd()
+    project = required_plugins.project_root(directory)
+    if (project / ".agents/repo-capabilities.local.json").is_file():
+        return
+    try:
+        roots = required_plugins.check(directory, host)
+        if roots is not None:
+            standards.update(project, roots)
+    except (
+        OSError,
+        ValueError,
+        required_plugins.RequiredPluginsError,
+        standards.StandardsError,
+    ) as error:
+        report.fail(host, "repository standards", str(error))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tj plugins", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -132,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as error:
         parser.error(str(error))
     state = jobs.state_directory()
+    project = required_plugins.project_root(Path.cwd())
     with jobs.held(state, jobs.Job.UPDATE) as acquired:
         if not acquired:
             print("tj: another plugin update is running")
@@ -143,18 +165,31 @@ def main(argv: list[str] | None = None) -> int:
             print(f"tj: {host} plugins already match their local pins")
             if host is Host.CODEX:
                 codex_installed.repair_hooks(report)
-            if os.environ.get(
-                host.plugin_root_variable
-            ) and latest_plugins.running_behind(host):
-                INSTALLED[host].restart(
-                    report, bool(os.environ.get("TJ_RUN_LAUNCH_ID"))
-                )
+            if plugin_activation.pending(state, host, project) or (
+                os.environ.get(host.plugin_root_variable)
+                and latest_plugins.running_behind(host)
+            ):
+                plugin_activation.begin(state, host, project)
+                update_standards(report, host)
+                if not report.failures:
+                    INSTALLED[host].restart(
+                        report, bool(os.environ.get("TJ_RUN_LAUNCH_ID"))
+                    )
+            if report.failures:
+                plugin_activation.begin(state, host, project)
+            else:
+                plugin_activation.complete(state, host, project)
             jobs.record(state, jobs.Job.UPDATE, report.failures)
             return int(bool(report.failures))
+        plugin_activation.begin(state, host, project)
         INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host, digests))
         digests.save()
         if not report.failures:
+            update_standards(report, host)
+        if not report.failures:
             INSTALLED[host].restart(report, bool(os.environ.get("TJ_RUN_LAUNCH_ID")))
+        if not report.failures:
+            plugin_activation.complete(state, host, project)
         jobs.record(state, jobs.Job.UPDATE, report.failures)
     if report.failures:
         print(

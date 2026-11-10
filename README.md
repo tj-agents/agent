@@ -62,6 +62,10 @@ An unchanged installation needs no native CLI process or network request. Change
 native update commands. Codex's shared server reloads open threads; Claude requests the current `tj run`
 wrapper to resume the same conversation after an idle grace with no background work or scheduled wakeups.
 An unmanaged Claude session receives a `/reload-plugins` notice.
+Updates regenerate the calling repository's standards index before activation. Codex also reconciles
+the adopted repositories of loaded threads from verified installed builds before its shared reload.
+Local-only adoption preserves owner-supplied instruction files. Failed verification retains existing
+instructions and reports the update failure.
 
 `tj install` owns machine setup and repair, including Handy, profiles, agent settings and command bindings.
 The stale hook reports drift and starts the appropriate update or install step in the background.
