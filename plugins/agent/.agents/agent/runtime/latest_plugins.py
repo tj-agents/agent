@@ -80,8 +80,14 @@ def running_behind(host: Host) -> str | None:
     return f"agent@tj-agents: {behind}" if behind else None
 
 
-def refresh_command() -> list[str]:
-    return [sys.executable, "-B", str(machine_state.packaged("plugins/refresh.py"))]
+def refresh_command(host: Host) -> list[str]:
+    return [
+        sys.executable,
+        "-B",
+        str(machine_state.packaged("plugins/refresh.py")),
+        "--host",
+        host.value,
+    ]
 
 
 def install_command(steps: Iterable[str]) -> list[str]:
@@ -125,7 +131,7 @@ def reason(host: Host, state: Path, *, full: bool) -> str | None:
         return fixing(
             state,
             jobs.Job.REFRESH,
-            refresh_command(),
+            refresh_command(host),
             "plugins",
             INSTALLED[host].RELOAD,
         )
