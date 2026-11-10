@@ -98,7 +98,3 @@ def respawn(background, run=process.run):
 
 def name_session(session_id, title):
     return None
-
-
-def deliver(session_id, prompt, model, effort):
-    raise LaunchError("Claude takes its first prompt on the command line")

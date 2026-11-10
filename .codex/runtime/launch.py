@@ -178,7 +178,9 @@ def start_arguments(directory, title, prompt, model, effort):
     arguments = ["--cd", str(directory)]
     if model:
         arguments += ["--model", model]
-    return arguments if effort else [*arguments, prompt]
+    if effort:
+        arguments += ["-c", f"model_reasoning_effort={effort}"]
+    return [*arguments, prompt]
 
 
 def resume_arguments(directory, title, session_id):
@@ -236,14 +238,3 @@ def respawn(background):
 def name_session(session_id, title):
     with daemon() as server:
         server.request("thread/name/set", {"threadId": session_id, "name": title})
-
-
-def deliver(session_id, prompt, model, effort):
-    """Start the thread's first turn through the daemon, the only way to choose its reasoning effort."""
-    with daemon() as server:
-        server.request("turn/start", {
-            "threadId": session_id,
-            "input": [{"type": "text", "text": prompt}],
-            **({"model": model} if model else {}),
-            **({"effort": effort} if effort else {}),
-        })

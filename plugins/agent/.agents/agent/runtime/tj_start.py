@@ -76,12 +76,9 @@ def start(item_reference: str, host: Host, cwd: Path, lane: str | None = None, m
     title = unique_title(f"{lifecycle.repository_name(cwd)}#{card['ref'].rsplit(':', 1)[1]}")
     adapter = agent_cli.host_launch(host)
     directory = Path(worktree)
-    deliver = bool(effort) and host is Host.CODEX
     shown = agent_cli.launch(host, directory, title,
                              adapter.start_arguments(directory, title, prompt(card), model, effort),
-                             item=card["ref"], want_session=deliver)
-    if deliver:
-        adapter.deliver(shown["session"]["native_id"], prompt(card), model, effort)
+                             item=card["ref"])
     return {"item": card["ref"], "worktree": worktree, "title": title, "host": str(host),
             "launch_id": shown["launch"]["launch_id"]}
 
