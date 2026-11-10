@@ -64,13 +64,20 @@ def resume_arguments(directory, title, session_id):
     return ["--resume", session_id, "--name", title]
 
 
-def liveness(run=process.run) -> dict[str, Liveness]:
+def liveness(run=process.run, *, strict: bool = False) -> dict[str, Liveness]:
     """Every Claude session the host lists, by session id: alive while it reports a pid."""
     try:
         result = run([executable(), "agents", "--json", "--all"], capture_output=True, text=True,
                      encoding="utf-8", timeout=30, check=False)
-        rows = json.loads(result.stdout) if result.returncode == 0 else []
-    except (OSError, subprocess.SubprocessError, ValueError, LaunchError):
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise LaunchError(f"Claude liveness failed: {detail}")
+        rows = json.loads(result.stdout)
+        if not isinstance(rows, list):
+            raise LaunchError("Claude liveness returned an invalid session list")
+    except (OSError, subprocess.SubprocessError, ValueError, LaunchError) as error:
+        if strict:
+            raise LaunchError(f"Cannot determine Claude liveness: {error}") from error
         return {}
     return {
         row["sessionId"]: Liveness(

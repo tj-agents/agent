@@ -2,10 +2,15 @@ import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from claude import launch as claude_launch
 from claude import sessions as claude_sessions
+from codex import launch as codex_launch
 from codex import sessions as codex_sessions
+from launch_errors import LaunchError
 
 
 def test_claude_transcript_lookup_uses_session_identity_and_configured_home(
@@ -62,3 +67,73 @@ def test_codex_missing_index_never_guesses_a_transcript_path(
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     with pytest.raises(FileNotFoundError, match="index not found"):
         codex_sessions.transcript_modified("missing")
+
+
+def test_claude_failed_probe_is_distinct_from_empty_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(claude_launch, "executable", lambda: "fake-agent")
+
+    def failed(*arguments: Any, **options: Any) -> SimpleNamespace:
+        return SimpleNamespace(returncode=1, stdout="", stderr="probe failed")
+
+    with pytest.raises(LaunchError, match="probe failed"):
+        claude_launch.liveness(run=failed, strict=True)
+    assert (
+        claude_launch.liveness(
+            run=lambda *a, **k: SimpleNamespace(returncode=0, stdout="[]"), strict=True
+        )
+        == {}
+    )
+
+
+@pytest.mark.parametrize("code", [2, 111, 10061])
+def test_codex_absent_daemon_is_dead_without_opening_server(
+    monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    monkeypatch.setattr(codex_launch, "executable", lambda: "fake-agent")
+
+    def run(*arguments: Any, **options: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr=f"failed to connect to native control socket (os error {code})",
+        )
+
+    def daemon() -> None:
+        raise AssertionError("absent daemon must not be opened")
+
+    monkeypatch.setattr(codex_launch.process, "run", run)
+    monkeypatch.setattr(codex_launch, "daemon", daemon)
+    assert codex_launch.liveness(strict=True) == {}
+
+
+@pytest.mark.parametrize("probe_failure", [True, False])
+def test_codex_failed_daemon_probe_or_thread_read_is_not_absence(
+    monkeypatch: pytest.MonkeyPatch, probe_failure: bool
+) -> None:
+    monkeypatch.setattr(codex_launch, "executable", lambda: "fake-agent")
+
+    def run(*arguments: Any, **options: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=1 if probe_failure else 0,
+            stdout="{}",
+            stderr="permission denied",
+        )
+
+    class Server:
+        def __enter__(self) -> "Server":
+            return self
+
+        def __exit__(self, *arguments: Any) -> None:
+            pass
+
+        def request(self, method: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            if method == "thread/loaded/list":
+                return {"data": ["thread"]}
+            raise RuntimeError("thread read failed")
+
+    monkeypatch.setattr(codex_launch.process, "run", run)
+    monkeypatch.setattr(codex_launch, "daemon", Server)
+    with pytest.raises(LaunchError, match=r"permission denied|thread read failed"):
+        codex_launch.liveness(strict=True)
