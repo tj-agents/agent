@@ -17,6 +17,8 @@ import tempfile
 import threading
 import time
 
+import required_plugins
+from codex import projects
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -27,6 +29,7 @@ GITHUB_SOURCE = re.compile(
     re.IGNORECASE,
 )
 TRUSTED_OWNER = "tj-agents"
+RECEIPT = "codex-hook-trust.json"
 TIMEOUT = 45
 
 
@@ -258,7 +261,7 @@ def installed_package(hook):
     raise RuntimeError(f"Cannot identify installed plugin package: {hook['pluginId']}")
 
 
-def trust_updates(inventory, entries, cwd, verified_roots=None):
+def trust_updates(inventory, entries, cwds, verified_roots=None):
     verified_roots = {root.identity: root for root in verified_roots or ()}
     candidates = {}
     for plugin in inventory.get("installed", []):
@@ -275,7 +278,8 @@ def trust_updates(inventory, entries, cwd, verified_roots=None):
     verified = set()
     published = {}
     for entry in entries:
-        if Path(entry["cwd"]).resolve() != cwd:
+        cwd = Path(entry["cwd"]).resolve()
+        if cwd not in cwds:
             continue
         if entry.get("errors"):
             raise RuntimeError("Codex could not load all hook definitions")
@@ -405,7 +409,7 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
                 text=True, encoding="utf-8", timeout=limit,
             )
             inventory = json.loads(completed.stdout)
-        updates = trust_updates(inventory, listing["data"], cwd, verified_roots)
+        updates = trust_updates(inventory, listing["data"], {cwd}, verified_roots)
         if updates and not preview:
             server.request("config/batchWrite", {
                 "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
@@ -415,6 +419,49 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
         if not preview:
             require_ready(listing, cwd, required, expected=updates)
         return updates
+
+
+def published_builds():
+    cache = Host.CODEX.configuration_root / "plugins" / "cache" / required_plugins.MARKETPLACE_NAME
+    builds = {}
+    for plugin in sorted(cache.iterdir()) if cache.is_dir() else ():
+        found = [entry.name for entry in plugin.iterdir() if entry.is_dir()] if plugin.is_dir() else []
+        if len(found) == 1:
+            builds[f"{plugin.name}@{required_plugins.MARKETPLACE_NAME}"] = found[0]
+    return builds
+
+
+def recorded_builds(state):
+    try:
+        recorded = json.loads((state / RECEIPT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return recorded if isinstance(recorded, dict) else {}
+
+
+def pending(state):
+    recorded = recorded_builds(state)
+    return [f"trust {identity} build {build} hooks" for identity, build in published_builds().items()
+            if recorded.get(identity) != build]
+
+
+def trust_installed(executable, state, launch_args=(), timeout=TIMEOUT):
+    """Trust the hooks of every installed tj-agents plugin, in every project Codex trusts."""
+    builds = published_builds()
+    cwds = [Path.home().resolve(), *projects.trusted(projects.user_config())]
+    with AppServer(executable, cwds[0], launch_args, timeout=timeout) as server:
+        listing = server.request("hooks/list", {"cwds": [str(cwd) for cwd in cwds]})
+        inventory = json.loads(run([*command(executable), *launch_args, "plugin", "list", "--json"],
+                                   cwds[0], timeout))
+        updates = trust_updates(inventory, listing["data"], set(cwds))
+        if updates:
+            server.request("config/batchWrite", {
+                "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
+                "reloadUserConfig": True,
+            })
+    state.mkdir(parents=True, exist_ok=True)
+    (state / RECEIPT).write_text(json.dumps(builds), encoding="utf-8")
+    return updates
 
 
 def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):

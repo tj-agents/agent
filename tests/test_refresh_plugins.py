@@ -46,8 +46,16 @@ from codex import launch as codex_launch  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def no_codex_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+def no_codex_daemon(monkeypatch: pytest.MonkeyPatch) -> list[tuple[object, ...]]:
+    trusted: list[tuple[object, ...]] = []
     monkeypatch.setattr(codex_launch, "liveness", dict)
+    monkeypatch.setattr(codex_launch, "executable", lambda: "codex")
+    monkeypatch.setattr(
+        codex_hook_trust,
+        "trust_installed",
+        lambda *arguments: trusted.append(arguments) or {},
+    )
+    return trusted
 
 
 def completed(
@@ -590,7 +598,7 @@ class FakeDaemon:
 
 def daemon_refresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, daemon: FakeDaemon
-) -> tuple[int, list[list[str]], list[dict[str, object]]]:
+) -> tuple[int, list[list[str]], list[tuple[object, ...]]]:
     listing = json.dumps(
         {
             "installed": [
@@ -610,14 +618,14 @@ def daemon_refresh(
             return completed(0, roots)
         return completed(0)
 
-    trusted: list[dict[str, object]] = []
+    trusted: list[tuple[object, ...]] = []
     monkeypatch.setattr(codex_launch, "liveness", lambda: {"thread": object()})
     monkeypatch.setattr(codex_launch, "daemon", lambda _timeout: daemon)
-    monkeypatch.setattr(codex_launch, "executable", lambda: "codex")
+    monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
     monkeypatch.setattr(
         codex_hook_trust,
-        "apply_trust",
-        lambda _executable, _cwd, required: trusted.append(required) or {},
+        "trust_installed",
+        lambda *arguments: trusted.append(arguments) or {},
     )
     with (
         _patched_homes(tmp_path),
@@ -646,7 +654,9 @@ def test_open_codex_sessions_reload_through_the_daemon_instead_of_a_cli_add(
         ("plugin/install", {"marketplacePath": manifest, "pluginName": "base"}),
         ("config/batchWrite", {"edits": [], "reloadUserConfig": True}),
     ]
-    assert trusted == [{}]
+    assert trusted == [
+        ("codex", tmp_path / "state", REFRESH.codex_installed.MARKETPLACE_OVERRIDES)
+    ]
 
 
 def test_a_failed_daemon_install_is_reported_and_the_rest_still_reload(
@@ -671,3 +681,77 @@ def test_a_failed_daemon_install_is_reported_and_the_rest_still_reload(
     assert failure is not None and failure.startswith(
         "codex: agent@tj-agents: Codex plugin/install failed"
     )
+
+
+def test_the_cli_path_trusts_new_hooks_once_after_adding_plugins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    no_codex_daemon: list[tuple[object, ...]],
+) -> None:
+    listing = json.dumps(
+        {"installed": [{"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"}]}
+    )
+    order: list[str] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        order.append(" ".join(command[:3]))
+        if command[:3] == ["codex", "plugin", "list"]:
+            return completed(0, listing)
+        return completed(0)
+
+    monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
+    monkeypatch.setattr(
+        codex_hook_trust,
+        "trust_installed",
+        lambda *arguments: order.append("trust") or no_codex_daemon.append(arguments) or {},
+    )
+    with (
+        _patched_homes(tmp_path),
+        mock.patch.object(REFRESH.process, "run", side_effect=run),
+        mock.patch.object(REFRESH.jobs.process, "start", Started()),
+        mock.patch.object(REFRESH.latest_plugins.machine_state, "drift", return_value={}),
+    ):
+        assert REFRESH.main(["--host", "codex"]) == 0
+    assert order[-2:] == ["codex plugin add", "trust"]
+    assert no_codex_daemon == [
+        ("codex", tmp_path / "state", REFRESH.codex_installed.MARKETPLACE_OVERRIDES)
+    ]
+
+
+def test_nothing_is_trusted_when_every_installed_build_is_already_trusted(
+    tmp_path: Path, no_codex_daemon: list[tuple[object, ...]]
+) -> None:
+    listing = json.dumps(
+        {"installed": [{"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"}]}
+    )
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return completed(0, listing) if command[:3] == ["codex", "plugin", "list"] else completed(0)
+
+    with (
+        _patched_homes(tmp_path),
+        mock.patch.object(REFRESH.process, "run", side_effect=run),
+        mock.patch.object(REFRESH.jobs.process, "start", Started()),
+        mock.patch.object(REFRESH.latest_plugins.machine_state, "drift", return_value={}),
+    ):
+        assert REFRESH.main(["--host", "codex"]) == 0
+    assert no_codex_daemon == []
+
+
+def test_the_install_step_reports_untrusted_builds_and_trusts_them(
+    tmp_path: Path, no_codex_daemon: list[tuple[object, ...]]
+) -> None:
+    context = install.Context(
+        home=tmp_path, environ={}, windows=False, documents=tmp_path / "Documents"
+    )
+    (context.codex_home / "plugins/cache/tj-agents/agent/build-3").mkdir(parents=True)
+    with mock.patch.dict(os.environ, {"CODEX_HOME": str(context.codex_home)}):
+        assert install.check_codex_hook_trust(context) == [
+            "trust agent@tj-agents build build-3 hooks"
+        ]
+        assert install.apply_codex_hook_trust(context) == [
+            "trusted 0 tj-agents Codex hook(s)"
+        ]
+    assert no_codex_daemon == [
+        ("codex", context.state_directory, REFRESH.codex_installed.MARKETPLACE_OVERRIDES)
+    ]

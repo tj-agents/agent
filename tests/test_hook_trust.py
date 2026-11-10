@@ -91,7 +91,7 @@ class HookTrustTests(unittest.TestCase):
     def updates(self, *hooks):
         return TRUST.trust_updates(
             {"installed": [self.plugin]},
-            [{"cwd": str(self.cwd), "errors": [], "hooks": list(hooks)}], self.cwd,
+            [{"cwd": str(self.cwd), "errors": [], "hooks": list(hooks)}], {self.cwd},
         )
 
     def git_result(self, arguments, cwd):
@@ -356,6 +356,40 @@ class HookTrustTests(unittest.TestCase):
         )
         self.assertEqual({}, TRUST.apply_trust("codex", self.cwd, timeout=7))
         self.assertEqual(server_class.call_args.kwargs["timeout"], 7)
+
+    @patch.object(TRUST, "run")
+    @patch.object(TRUST, "AppServer")
+    def test_installed_tj_agents_hooks_are_trusted_in_every_trusted_project_and_others_are_not(self, app, runner):
+        codex_home = self.cwd / "codex-home"
+        (codex_home / "plugins/cache/tj-agents/base/build-2").mkdir(parents=True)
+        project = self.cwd / "project"
+        (project / ".codex").mkdir(parents=True)
+        (project / ".codex/config.toml").write_text("")
+        state = self.cwd / "state"
+        third_party = dict(self.hook, pluginId="other@elsewhere", key="other@elsewhere:hooks.json:stop:0:0",
+                           trustStatus="untrusted")
+        listing = {"data": [{"cwd": str(self.cwd), "errors": [], "hooks": [self.hook]},
+                            {"cwd": str(project), "errors": [], "hooks": [self.hook, third_party]}]}
+        other = {"pluginId": "other@elsewhere", "installed": True, "enabled": True,
+                 "marketplaceSource": {"sourceType": "git", "source": "https://github.com/someone/plugins.git"}}
+        inventory = json.dumps({"installed": [self.plugin, other]})
+        runner.side_effect = lambda arguments, cwd, *_: (
+            inventory if "plugin" in arguments else self.git_result(arguments, cwd))
+        server = app.return_value.__enter__.return_value
+        server.request.side_effect = lambda method, params: listing if method == "hooks/list" else {}
+        with patch.dict(TRUST.os.environ, {"CODEX_HOME": str(codex_home)}),                 patch.object(TRUST.Path, "home", return_value=self.cwd),                 patch.object(TRUST.projects, "user_config",
+                             return_value={"projects": {str(project): {"trust_level": "trusted"}}}),                 patch.object(TRUST.projects.tempfile, "gettempdir", return_value=str(self.cwd / "elsewhere")):
+            self.assertEqual(["trust base@tj-agents build build-2 hooks"], TRUST.pending(state))
+            updates = TRUST.trust_installed("codex", state, ("-c", "override"))
+            self.assertEqual([], TRUST.pending(state))
+        self.assertEqual({self.hook["key"]: {"trusted_hash": self.hook["currentHash"]}}, updates)
+        server.request.assert_any_call("hooks/list", {"cwds": [str(self.cwd), str(project.resolve())]})
+        server.request.assert_any_call("config/batchWrite", {
+            "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
+            "reloadUserConfig": True,
+        })
+        self.assertIn(["codex", "-c", "override", "plugin", "list", "--json"],
+                      [call.args[0] for call in runner.call_args_list])
 
 if __name__ == "__main__":
     unittest.main()
