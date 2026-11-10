@@ -52,7 +52,9 @@ RUNTIME_EXPORTS = (
     ".agents/agent/resources",
     ".agents/agent/utility/plugins/scripts",
 )
-LIFECYCLE_COMMANDS = {"start": "tj_start.py", "status": "tj_status.py", "reload": "tj_reload.py"}
+LIFECYCLE_COMMANDS = {
+    "start": "tj_start.py", "status": "tj_status.py", "recover": "tj_recover.py",
+}
 PROFILE_START = "# >>> tj-agents >>>"
 PROFILE_END = "# <<< tj-agents <<<"
 PROFILE_BACKUP = ".pre-tj-agents.bak"
