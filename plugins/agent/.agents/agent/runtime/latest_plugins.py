@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     if notice is None:
         return 0
     context = {"hookEventName": event or "SessionStart", "additionalContext": notice}
-    print(json.dumps({"hookSpecificOutput": context}))
+    print(json.dumps({"systemMessage": notice, "hookSpecificOutput": context}))
     return 0
 
 

@@ -117,6 +117,7 @@ class Machine:
         assert "decision" not in document
         context = document["hookSpecificOutput"]
         assert context["hookEventName"] == event
+        assert document["systemMessage"] == context["additionalContext"]
         return context["additionalContext"]
 
     def reason(self) -> str | None:
