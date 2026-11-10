@@ -125,6 +125,13 @@ def test_rust_comments_and_examples_cannot_supply_contracts(source: str) -> None
     assert capabilities.rust_tests(source) == set()
 
 
+def test_rust_character_literals_preserve_real_test_attributes() -> None:
+    source = (
+        'const QUOTE: char = \'"\';\n#[test]\nfn real_test() {}\nconst S: &str = "x";'
+    )
+    assert capabilities.rust_tests(source) == {"real_test"}
+
+
 @pytest.mark.parametrize("host", list(Host))
 def test_every_launch_protocol_method_has_a_registered_contract(host: Host) -> None:
     source = (ROOT / ".agents/agent/runtime/launch_contract.py").read_text(
