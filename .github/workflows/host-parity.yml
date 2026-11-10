@@ -29,5 +29,12 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked
+      - name: Install the shared process boundary
+        shell: pwsh
+        run: |
+          $cliRef = uv run python -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['tool']['uv']['sources']['tj-cli']['rev'])"
+          cargo install --locked --git https://github.com/tj-agents/cli --rev $cliRef --bin tj_hook tj-cli
+      - name: Resolve implementations and tests at their pinned sources
+        run: uv run python -B .agents/agent/runtime/capabilities.py --root .
       - name: Exercise both host adapters with fakes
-        run: uv run pytest tests/test_capabilities.py tests/test_capability_contracts.py tests/test_tj_recover.py tests/test_hook_trust.py tests/test_install.py::NativePermissionsTests -q
+        run: uv run pytest tests/test_capabilities.py tests/test_capability_contracts.py tests/test_tj_recover.py tests/test_hook_trust.py::HookTrustTests::test_installed_tj_agents_hooks_are_trusted_in_every_trusted_project_and_others_are_not tests/test_install.py::NativePermissionsTests -q
