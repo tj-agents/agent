@@ -137,3 +137,13 @@ def test_codex_failed_daemon_probe_or_thread_read_is_not_absence(
     monkeypatch.setattr(codex_launch, "daemon", Server)
     with pytest.raises(LaunchError, match=r"permission denied|thread read failed"):
         codex_launch.liveness(strict=True)
+
+
+def test_codex_default_probe_keeps_status_working_without_native_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def daemon() -> None:
+        raise LaunchError("native executable unavailable")
+
+    monkeypatch.setattr(codex_launch, "daemon", daemon)
+    assert codex_launch.liveness() == {}

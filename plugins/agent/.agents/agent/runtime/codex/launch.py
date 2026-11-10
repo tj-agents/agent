@@ -220,7 +220,8 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
             statuses = {thread: server.request("thread/read", {"threadId": thread})["thread"]["status"]["type"]
                         for thread in loaded}
     except (
-        OSError, subprocess.SubprocessError, RuntimeError, ValueError, KeyError, TypeError,
+        OSError, subprocess.SubprocessError, RuntimeError, LaunchError,
+        ValueError, KeyError, TypeError,
     ) as error:
         if strict:
             raise LaunchError(f"Cannot determine Codex liveness: {error}") from error
