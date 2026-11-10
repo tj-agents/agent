@@ -32,13 +32,9 @@ RUNTIME = Path(__file__).resolve().parent
 class Installed(Protocol):
     RELOAD: str
 
-    def installed_build_behind(
-        self, marketplace: str, plugin: str, install: Path
-    ) -> str | None: ...
+    def behind(self, marketplaces: tuple[str, ...]) -> list[str]: ...
 
-    def loaded_build_behind(
-        self, root: Path, pin: str, install: Path
-    ) -> str | None: ...
+    def running_behind(self, root: Path) -> str | None: ...
 
 
 INSTALLED: Mapping[Host, Installed] = {
@@ -48,22 +44,7 @@ INSTALLED: Mapping[Host, Installed] = {
 
 
 def installed_behind(host: Host) -> list[str]:
-    found = []
-    for marketplace in MARKETPLACES:
-        pins = claude_installed.pins(marketplace)
-        installs = claude_installed.installs(marketplace)
-        for plugin, pin in sorted(pins.items()):
-            if plugin not in installs:
-                continue
-            revision, path = installs[plugin]
-            behind = (
-                f"installed {revision[:12]}, marketplace {pin[:12]}"
-                if revision != pin
-                else INSTALLED[host].installed_build_behind(marketplace, plugin, path)
-            )
-            if behind:
-                found.append(f"{plugin}@{marketplace}: {behind}")
-    return found
+    return INSTALLED[host].behind(MARKETPLACES)
 
 
 def running_root(host: Host) -> Path:
@@ -74,12 +55,7 @@ def running_root(host: Host) -> Path:
 def running_behind(host: Host) -> str | None:
     if not os.environ.get(host.plugin_root_variable):
         return None
-    pin = claude_installed.pins("tj-agents").get("agent")
-    install = claude_installed.installs("tj-agents").get("agent")
-    if not pin or not install or install[0] != pin:
-        return None
-    behind = INSTALLED[host].loaded_build_behind(running_root(host), pin, install[1])
-    return f"agent@tj-agents: {behind}" if behind else None
+    return INSTALLED[host].running_behind(running_root(host))
 
 
 def update_command(host: Host) -> list[str]:

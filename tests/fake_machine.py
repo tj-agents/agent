@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import install
+from codex import catalog as codex_catalog
 from codex import hook_trust
 
 CONVERGE = {"setup": {"script": "scripts/setup.py", "converge": True}}
@@ -32,6 +33,24 @@ def pin_plugin(claude_home: Path, plugin: str, pin: str) -> None:
     )
     kept = [entry for entry in entries if entry["name"] != plugin]
     write_json(catalog, {"plugins": [*kept, {"name": plugin, "source": {"sha": pin}}]})
+
+
+def record_codex_plugin(home: Path, plugin: str, pin: str, version: str) -> None:
+    source = {"source": "git-subdir", "sha": pin}
+    path = home / ".tmp/marketplaces/tj-agents/.agents/plugins/marketplace.json"
+    entries = (
+        json.loads(path.read_text(encoding="utf-8"))["plugins"]
+        if path.is_file()
+        else []
+    )
+    kept = [entry for entry in entries if entry["name"] != plugin]
+    write_json(path, {"plugins": [*kept, {"name": plugin, "source": source}]})
+    root = home / "plugins/cache/tj-agents" / plugin / version
+    write_json(root / ".codex-plugin/plugin.json", {"name": plugin, "version": version})
+    codex_catalog.remember(
+        [{"pluginId": f"{plugin}@tj-agents", "source": source, "version": version}],
+        verified_install=True,
+    )
 
 
 def install_plugin(

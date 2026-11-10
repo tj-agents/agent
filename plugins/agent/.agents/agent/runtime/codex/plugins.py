@@ -39,6 +39,9 @@ def resolve_executable() -> str:
 
 
 def installations(project: Path, entries: list) -> list:
+    from codex import catalog
+
+    catalog.remember(entries)
     return entries
 
 

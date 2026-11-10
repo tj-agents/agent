@@ -65,9 +65,7 @@ class Report:
 
 
 class Installed(Protocol):
-    def build_current(
-        self, marketplace: str, plugin: str, install: Path, digests: Digests
-    ) -> bool: ...
+    def current(self, marketplace: str, plugin: str, digests: Digests) -> bool: ...
 
     def refresh(
         self,
@@ -88,15 +86,7 @@ INSTALLED: Mapping[Host, Installed] = {
 
 
 def current(host: Host, digests: Digests, marketplace: str, plugin: str) -> bool:
-    pin = claude_installed.pins(marketplace).get(plugin)
-    install = claude_installed.installs(marketplace).get(plugin)
-    return bool(
-        pin
-        and install
-        and install[0] == pin
-        and install[1].is_dir()
-        and INSTALLED[host].build_current(marketplace, plugin, install[1], digests)
-    )
+    return INSTALLED[host].current(marketplace, plugin, digests)
 
 
 def host_argument(value: str) -> Host:
