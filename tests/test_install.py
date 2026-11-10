@@ -710,12 +710,16 @@ class RunStepsTests(Machine):
                 self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
                 self.assertEqual("--check" in arguments, run.call_args.args[2])
 
-    def test_unknown_step_fails_before_any_machine_operation(self):
+    def test_unknown_step_fails_before_any_machine_operation_and_is_recorded(self):
+        state = self.root / "state"
         with mock.patch.object(install, "machine_context") as context, \
+                mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(state)}), \
                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             install.main(["--step", "not an install step"])
         self.assertEqual(2, error.exception.code)
         context.assert_not_called()
+        self.assertEqual("install rejected its arguments: --step 'not an install step'",
+                         install.jobs.recent_failure(state, install.jobs.Job.INSTALL))
 
     def legacy_machine(self):
         pass
