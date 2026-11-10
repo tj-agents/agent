@@ -963,25 +963,34 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class LockedExecutableTests(unittest.TestCase):
-    def test_a_locked_executable_is_retried_then_succeeds(self):
-        results = [
-            subprocess.CompletedProcess([], 1, "", "tj_hook: Access is denied. (os error 5)"),
-            subprocess.CompletedProcess([], 0, "ok", ""),
-        ]
-        sleeps = []
-        context = install.Context(home=Path(), environ={}, windows=True,
-                                  run=lambda *_args, **_kwargs: results.pop(0), sleep=sleeps.append)
-        self.assertEqual(0, install.run_installer(context, ["installer"]).returncode)
-        self.assertEqual([install.LOCKED_RETRY_SECONDS], sleeps)
+def test_a_locked_executable_is_retried_then_succeeds() -> None:
+    results = [
+        subprocess.CompletedProcess(
+            [], 1, "", "tj_hook: Access is denied. (os error 5)"
+        ),
+        subprocess.CompletedProcess([], 0, "ok", ""),
+    ]
+    sleeps: list[float] = []
 
-    def test_other_failures_are_not_retried(self):
-        calls = []
+    def run(_command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return results.pop(0)
 
-        def run(*_args, **_kwargs):
-            calls.append(1)
-            return subprocess.CompletedProcess([], 1, "", "verification failed")
+    context = install.Context(
+        home=Path(), environ={}, windows=True, run=run, sleep=sleeps.append
+    )
+    assert install.run_installer(context, ["installer"]).returncode == 0
+    assert sleeps == [install.LOCKED_RETRY_SECONDS]
 
-        context = install.Context(home=Path(), environ={}, windows=True, run=run, sleep=lambda _s: None)
-        self.assertEqual(1, install.run_installer(context, ["installer"]).returncode)
-        self.assertEqual([1], calls)
+
+def test_other_failures_are_not_retried() -> None:
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess([], 1, "", "verification failed")
+
+    context = install.Context(
+        home=Path(), environ={}, windows=True, run=run, sleep=lambda _s: None
+    )
+    assert install.run_installer(context, ["installer"]).returncode == 1
+    assert calls == [["installer"]]
