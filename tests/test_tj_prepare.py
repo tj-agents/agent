@@ -345,3 +345,14 @@ def test_claude_installed_version_obeys_scope_precedence(
     assert claude_installed.installs("tj-agents") == {
         "python": (expected, tmp_path / expected),
     }
+
+
+def test_claude_scope_covers_nested_folders_but_not_nested_repositories(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    assert claude_projects.applies(nested, "project", str(tmp_path))
+    (tmp_path / ".git").mkdir()
+    (nested / ".git").mkdir()
+    assert not claude_projects.applies(nested, "project", str(tmp_path))
