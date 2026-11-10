@@ -176,7 +176,7 @@ def test_prepare_skips_host_maintenance_commands(selected_project: Path) -> None
 def test_prepare_uses_the_hosts_directory_and_configuration_options(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    target = tmp_path / "target"
+    target = tmp_path / "café"
     target.mkdir()
     (target / ".agents").mkdir()
     (target / ".agents/plugins.json").write_text(
@@ -200,16 +200,20 @@ def test_prepare_uses_the_hosts_directory_and_configuration_options(
     monkeypatch.setattr(
         sys,
         "stdin",
-        io.StringIO(
-            json.dumps(
-                [
-                    "-C",
-                    "target",
-                    "--config",
-                    'model="test"',
-                    "multiline\nprompt & | < > ^ %",
-                ]
-            )
+        io.TextIOWrapper(
+            io.BytesIO(
+                json.dumps(
+                    [
+                        "-C",
+                        "café",
+                        "--config",
+                        'model="test"',
+                        "multiline\nprompt & | < > ^ %",
+                    ],
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ),
+            encoding="cp1252",
         ),
     )
     assert (

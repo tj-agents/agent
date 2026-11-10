@@ -65,7 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--arguments-stdin", action="store_true")
     arguments = parser.parse_args(argv)
     try:
-        host_arguments = json.load(sys.stdin) if arguments.arguments_stdin else []
+        host_arguments = (
+            json.load(sys.stdin.buffer) if arguments.arguments_stdin else []
+        )
         if not isinstance(host_arguments, list) or any(
             not isinstance(value, str) for value in host_arguments
         ):
