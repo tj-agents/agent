@@ -208,8 +208,9 @@ def test_item_fields_reach_the_created_work_item(claude_handoff: Handoff) -> Non
 
 def test_the_calling_session_becomes_the_parent_by_default(
     claude_handoff: Handoff,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    os.environ["CLAUDE_CODE_SESSION_ID"] = "caller"
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "caller")
     claude_handoff.run_launcher("--model", "claude-opus-5-5")
     assert claude_handoff.launch.call_args.kwargs["parent"] == "claude:caller"
 
