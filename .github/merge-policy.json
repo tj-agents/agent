@@ -3,6 +3,8 @@
   "required_checks": [
     "verify / hosts",
     "verify / verify (ubuntu-latest)",
-    "verify / verify (windows-latest)"
+    "verify / verify (windows-latest)",
+    "Check host declarations and behavior (ubuntu-latest)",
+    "Check host declarations and behavior (windows-latest)"
   ]
 }

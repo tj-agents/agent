@@ -16,12 +16,6 @@ def test_registry_resolves_all_agent_implementations_and_contracts() -> None:
     )
 
 
-def test_registry_resolves_all_pinned_repositories(tmp_path: Path) -> None:
-    sources = capabilities.fetch_sources(tmp_path)
-    sources["agent"] = capabilities.Source(ROOT)
-    assert capabilities.validate(sources) == []
-
-
 @pytest.mark.parametrize("host", list(Host))
 def test_a_missing_host_contract_is_rejected(host: Host) -> None:
     with pytest.raises(ValueError, match="implementation and contract"):
@@ -115,6 +109,20 @@ def test_rust_contracts_require_a_test_attribute(tmp_path: Path) -> None:
 def test_rust_test_attributes_allow_platform_guards() -> None:
     source = "#[cfg(windows)]\n#[test]\nfn contract() {}\nfn helper() {}\n"
     assert capabilities.rust_tests(source) == {"contract"}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "// #[test]\nfn helper() {}",
+        "/* #[test]\nfn helper() {} */",
+        "/* outer /* inner */ #[test]\nfn helper() {} */",
+        'const EXAMPLE: &str = r#"#[test]\nfn helper() {}"#;',
+        'const EXAMPLE: &str = "#[test]\\nfn helper() {}";',
+    ],
+)
+def test_rust_comments_and_examples_cannot_supply_contracts(source: str) -> None:
+    assert capabilities.rust_tests(source) == set()
 
 
 @pytest.mark.parametrize("host", list(Host))

@@ -9,9 +9,10 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import assert_never
+from typing import assert_never, cast
 
 from tj_agent.host import Host
+from tj_cli import process
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,10 +354,33 @@ def python_symbols(nodes: list[ast.stmt], prefix: str = "") -> set[str]:
     return found
 
 
+def rust_code(text: str) -> str:
+    tokens = re.compile(
+        r'//[^\n]*|/\*|(?:br|cr|r)(?P<hashes>#{0,255})"[\s\S]*?"(?P=hashes)|[bc]?"(?:\\.|[^"\\])*"'
+    )
+    parts = []
+    cursor = 0
+    while token := tokens.search(text, cursor):
+        parts.append(text[cursor : token.start()])
+        parts.append(" ")
+        cursor = token.end()
+        if token[0] == "/*":
+            depth = 1
+            for boundary in re.finditer(r"/\*|\*/", text[cursor:]):
+                depth += 1 if boundary[0] == "/*" else -1
+                if depth == 0:
+                    cursor += boundary.end()
+                    break
+            else:
+                cursor = len(text)
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
 def rust_tests(text: str) -> set[str]:
     functions = re.finditer(
         r"((?:\s*#\[[^\]]+\])*)\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*\(",
-        text,
+        rust_code(text),
     )
     return {
         function[2]
@@ -376,7 +400,7 @@ class Source:
             if not target.is_relative_to(self.root.resolve()):
                 raise ValueError(f"Reference escapes its repository: {path}")
             return target.read_text(encoding="utf-8")
-        result = subprocess.run(
+        result = process.run(
             ["git", "-C", str(self.root), "show", f"{self.revision}:{path}"],
             capture_output=True,
             text=True,
@@ -384,7 +408,7 @@ class Source:
             check=True,
             timeout=60,
         )
-        return result.stdout
+        return cast(str, result.stdout)
 
 
 def validate(
@@ -476,7 +500,7 @@ def fetch_sources(directory: Path) -> dict[str, Source]:
             ],
         )
         for command in commands:
-            subprocess.run(command, check=True, capture_output=True, timeout=120)
+            process.run(command, check=True, capture_output=True, timeout=120)
         sources[repository] = Source(root, revision)
     return sources
 
