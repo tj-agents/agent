@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
+import jobs
 import required_plugins
 from codex import catalog, user_plugins
 from tj_agent.host import Host
@@ -53,8 +54,6 @@ def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
 
 
 def behind(marketplaces: tuple[str, ...]) -> list[str]:
-    import jobs
-
     digests = Digests(jobs.state_directory())
     found = []
     for identity in sorted(refresh_identities(marketplaces)):
@@ -72,8 +71,6 @@ def current(marketplace: str, plugin: str, digests: Digests) -> bool:
 
 
 def running_behind(root: Path) -> str | None:
-    import jobs
-
     build = catalog.recorded(jobs.state_directory()).get("agent@tj-agents")
     loaded = catalog.label(root)
     if build is not None and loaded != build.version:
@@ -146,14 +143,24 @@ def refresh(
             HOST, "installed versions", codex_command("plugin", "list", "--json")
         )
         if refreshed is not None:
+            verified = [
+                entry
+                for entry in json.loads(refreshed.stdout)["installed"]
+                if entry.get("pluginId") in stale
+            ]
             catalog.remember(
-                [
-                    entry
-                    for entry in json.loads(refreshed.stdout)["installed"]
-                    if entry.get("pluginId") in stale
-                ],
+                verified,
                 verified_install=True,
             )
+            digests = Digests(jobs.state_directory())
+            listed_versions = {entry["pluginId"] for entry in verified}
+            for identity in stale:
+                plugin, _, marketplace = identity.rpartition("@")
+                if identity not in listed_versions or not catalog.current(
+                    marketplace, plugin, digests
+                ):
+                    report.fail(HOST, identity, "native installation did not converge")
+            digests.save()
 
 
 def cached(marketplaces: tuple[str, ...]) -> set[str]:

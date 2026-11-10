@@ -22,6 +22,7 @@ import session_hook
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from codex import launch as codex_launch
+from fake_machine import CodexPlugins
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -236,13 +237,18 @@ class Report:
     listing: object
     commands: list[list[str]] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+    inventory: CodexPlugins | None = None
 
     def step(
         self, host: Host, label: str, command: list[str]
     ) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
+        if self.inventory is not None and command[:3] == ["codex", "plugin", "add"]:
+            self.inventory.install(command[3])
         output = (
-            json.dumps(self.listing)
+            self.inventory.listing()
+            if self.inventory is not None
+            else json.dumps(self.listing)
             if label in ("list", "versions", "installed versions")
             else "{}"
         )
@@ -253,13 +259,18 @@ class Report:
 
 
 def test_refresh_updates_selected_plugins(
-    host: Host, monkeypatch: pytest.MonkeyPatch
+    host: Host, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     row = {"id": "agent@tj-agents", "scope": "user"}
     report = Report([row])
     installed = claude_installed
     if host is Host.CODEX:
         installed = codex_installed
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+        monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
+        report.inventory = CodexPlugins(
+            tmp_path / "codex", {"agent@tj-agents": "local"}
+        )
         report.listing = {
             "installed": [
                 {"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"}
