@@ -905,6 +905,39 @@ def test_current_codex_plugins_repair_pending_hook_trust(
     spawned.assert_not_called()
 
 
+def test_codex_hook_receipts_detect_content_changes_with_unchanged_commands(
+    tmp_path: Path,
+) -> None:
+    build = tmp_path / "codex/plugins/cache/tj-agents/agent/local"
+    (build / ".codex-plugin").mkdir(parents=True)
+    (build / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"name": "agent", "hooks": "hooks.json"}), encoding="utf-8"
+    )
+    (build / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {"hooks": [{"type": "command", "command": "python startup.py"}]}
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = build / "startup.py"
+    script.write_text("print('before')", encoding="utf-8")
+    state = tmp_path / "state"
+    state.mkdir()
+    with _patched_homes(tmp_path):
+        (state / codex_hook_trust.RECEIPT).write_text(
+            json.dumps(codex_hook_trust.published_hooks()), encoding="utf-8"
+        )
+        assert codex_hook_trust.pending(state) == []
+        script.write_text("print('changed content')", encoding="utf-8")
+        assert codex_hook_trust.pending(state) == ["trust agent@tj-agents hooks"]
+
+
 def test_immutable_codex_builds_need_only_published_version_metadata(
     tmp_path: Path,
 ) -> None:
