@@ -1173,7 +1173,7 @@ def main(argv: list[str] | None = None) -> int:
         print("install requires Python 3.12 or newer", file=sys.stderr)
         return 2
     arguments = list(argv if argv is not None else sys.argv[1:])
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser = argparse.ArgumentParser(prog="tj install", description=__doc__, allow_abbrev=False)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="report drift, write nothing, exit 1 on drift")
     modes.add_argument("--onboard", action="store_true", help="allow explicitly requested plugin enrollment")

@@ -12,6 +12,8 @@ from functools import partial
 from pathlib import Path
 from typing import Protocol
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import jobs
 import latest_plugins
 from claude import installed as claude_installed
