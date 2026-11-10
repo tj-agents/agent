@@ -44,6 +44,8 @@ Generated Claude and Codex command hooks run through this native launcher. Templ
 the wrapping; authored hook manifests keep the payload executable and arguments.
 
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: retired state, native permission defaults,
+Codex's shared daemon auto-start (a `daemon_auto_start = false` override is removed so refresh can reload open
+Codex sessions in place),
 the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions, plugin setup and plugin copies. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
