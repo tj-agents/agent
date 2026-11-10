@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 from fake_machine import (
+    CodexPlugins,
     Started,
     agent_root,
     converge,
@@ -259,19 +260,18 @@ class RefreshPluginsTests(unittest.TestCase):
         )
 
     def test_codex_upgrades_each_marketplace_then_adds_each_installed_plugin(self):
-        listing = json.dumps(
-            {
-                "installed": [
-                    {"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"},
-                    {"pluginId": "base@agents", "marketplaceName": "agents"},
-                    {"pluginId": "other@elsewhere", "marketplaceName": "elsewhere"},
-                ]
-            }
+        inventory = CodexPlugins(
+            self.codex_home,
+            dict.fromkeys(
+                ("agent@tj-agents", "base@agents", "other@elsewhere"), "local"
+            ),
         )
 
         def run(command, **_kwargs):
             if command[:3] == ["codex", "plugin", "list"]:
-                return completed(0, listing)
+                return completed(0, inventory.listing())
+            if command[:3] == ["codex", "plugin", "add"]:
+                inventory.install(command[3])
             return completed(0)
 
         with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
@@ -348,21 +348,21 @@ class RefreshPluginsTests(unittest.TestCase):
         self.install("base", "b" * 40, "b" * 40, label="label2", codex_label="old")
         self.install("cli", "c" * 40, "c" * 40)
         record_codex_plugin(self.codex_home, "agent", "a" * 40, "label1")
-        listing = json.dumps(
+        inventory = CodexPlugins(
+            self.codex_home,
             {
-                "installed": [
-                    {"pluginId": f"{name}@tj-agents", "marketplaceName": "tj-agents"}
-                    for name in ("agent", "base", "cli")
-                ]
-            }
+                "agent@tj-agents": "label1",
+                "base@tj-agents": "label2",
+                "cli@tj-agents": "label3",
+            },
         )
 
         def run(command, **_kwargs):
-            return (
-                completed(0, listing)
-                if command[:3] == ["codex", "plugin", "list"]
-                else completed(0)
-            )
+            if command[:3] == ["codex", "plugin", "list"]:
+                return completed(0, inventory.listing())
+            if command[:3] == ["codex", "plugin", "add"]:
+                inventory.install(command[3])
+            return completed(0)
 
         with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
             self.assertEqual(0, REFRESH.main(["update", "--host", "codex"]))
@@ -422,13 +422,13 @@ def _current_machine(home: Path) -> Any:
 
 
 def test_codex_commands_carry_marketplace_overrides_and_no_cwd(tmp_path: Path) -> None:
-    listing = json.dumps(
-        {"installed": [{"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"}]}
-    )
+    inventory = CodexPlugins(tmp_path / "codex", {"agent@tj-agents": "local"})
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if command[:3] == ["codex", "plugin", "list"]:
-            return completed(0, listing)
+            return completed(0, inventory.listing())
+        if command[:3] == ["codex", "plugin", "add"]:
+            inventory.install(command[3])
         return completed(0)
 
     with (
@@ -483,19 +483,15 @@ def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None
     pin_plugin(claude, "personal", OLD_PIN)
     install_plugin(claude, "personal", NEW_PIN, converge=True)
     claude_listing = json.dumps([{"id": "personal@tj-agents", "scope": "user"}])
-    codex_listing = json.dumps(
-        {
-            "installed": [
-                {"pluginId": "personal@tj-agents", "marketplaceName": "tj-agents"}
-            ]
-        }
-    )
+    inventory = CodexPlugins(tmp_path / "codex", {"personal@tj-agents": "local"})
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if command[:3] == ["claude", "plugin", "list"]:
             return completed(0, claude_listing)
         if command[:3] == ["codex", "plugin", "list"]:
-            return completed(0, codex_listing)
+            return completed(0, inventory.listing())
+        if command[:3] == ["codex", "plugin", "add"]:
+            inventory.install(command[3])
         return completed(0, "[]")
 
     started = Started()
@@ -589,6 +585,7 @@ class FakeDaemon:
     def __init__(self, failing: frozenset[str] = frozenset()) -> None:
         self.requests: list[tuple[str, dict[str, object]]] = []
         self.failing = failing
+        self.inventory: CodexPlugins | None = None
 
     def __enter__(self) -> "FakeDaemon":
         return self
@@ -600,27 +597,25 @@ class FakeDaemon:
         self.requests.append((method, params))
         if params.get("pluginName") in self.failing:
             raise RuntimeError(f"Codex {method} failed: boom")
+        if method == "plugin/install" and self.inventory is not None:
+            self.inventory.install(f"{params['pluginName']}@tj-agents")
         return {}
 
 
 def daemon_refresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, daemon: FakeDaemon
 ) -> tuple[int, list[list[str]], list[tuple[object, ...]]]:
-    listing = json.dumps(
-        {
-            "installed": [
-                {"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"},
-                {"pluginId": "base@tj-agents", "marketplaceName": "tj-agents"},
-            ]
-        }
+    inventory = CodexPlugins(
+        tmp_path / "codex", {"agent@tj-agents": "local", "base@tj-agents": "local"}
     )
+    daemon.inventory = inventory
     roots = json.dumps(
         {"marketplaces": [{"name": "tj-agents", "root": str(tmp_path / "market")}]}
     )
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if command[:3] == ["codex", "plugin", "list"]:
-            return completed(0, listing)
+            return completed(0, inventory.listing())
         if command[:4] == ["codex", "plugin", "marketplace", "list"]:
             return completed(0, roots)
         return completed(0)
@@ -693,15 +688,15 @@ def test_the_cli_path_trusts_new_hooks_once_after_adding_plugins(
     monkeypatch: pytest.MonkeyPatch,
     no_codex_daemon: list[tuple[object, ...]],
 ) -> None:
-    listing = json.dumps(
-        {"installed": [{"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"}]}
-    )
+    inventory = CodexPlugins(tmp_path / "codex", {"agent@tj-agents": "local"})
     order: list[str] = []
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         order.append(" ".join(command[:3]))
         if command[:3] == ["codex", "plugin", "list"]:
-            return completed(0, listing)
+            return completed(0, inventory.listing())
+        if command[:3] == ["codex", "plugin", "add"]:
+            inventory.install(command[3])
         return completed(0)
 
     monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
@@ -729,16 +724,14 @@ def test_the_cli_path_trusts_new_hooks_once_after_adding_plugins(
 def test_nothing_is_trusted_when_every_installed_build_is_already_trusted(
     tmp_path: Path, no_codex_daemon: list[tuple[object, ...]]
 ) -> None:
-    listing = json.dumps(
-        {"installed": [{"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"}]}
-    )
+    inventory = CodexPlugins(tmp_path / "codex", {"agent@tj-agents": "local"})
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        return (
-            completed(0, listing)
-            if command[:3] == ["codex", "plugin", "list"]
-            else completed(0)
-        )
+        if command[:3] == ["codex", "plugin", "list"]:
+            return completed(0, inventory.listing())
+        if command[:3] == ["codex", "plugin", "add"]:
+            inventory.install(command[3])
+        return completed(0)
 
     with (
         _patched_homes(tmp_path),
@@ -784,10 +777,12 @@ def test_the_install_step_reports_untrusted_builds_and_trusts_them(
 def test_a_project_scoped_codex_plugin_is_updated_and_stays_project_scoped(
     tmp_path: Path,
 ) -> None:
-    listing = json.dumps(
-        {"installed": [{"pluginId": "base@tj-agents", "marketplaceName": "tj-agents"}]}
-    )
     codex_home = tmp_path / "codex"
+    inventory = CodexPlugins(
+        codex_home,
+        {"agent@tj-agents": "local", "base@tj-agents": "local"},
+        hidden={"agent@tj-agents"},
+    )
     build = codex_home / "plugins/cache/tj-agents/agent/old-build/.codex-plugin"
     build.mkdir(parents=True)
     (build / "plugin.json").write_text('{"name": "agent"}', encoding="utf-8")
@@ -807,10 +802,12 @@ def test_a_project_scoped_codex_plugin_is_updated_and_stays_project_scoped(
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if command[:3] == ["codex", "plugin", "list"]:
-            return completed(0, listing)
+            return completed(0, inventory.listing())
         if command[:4] == ["codex", "plugin", "marketplace", "list"]:
             return completed(0, roots)
         added = command[:3] == ["codex", "plugin", "add"]
+        if added:
+            inventory.install(command[3])
         if added and command[3] not in config.read_text(encoding="utf-8"):
             with config.open("a", encoding="utf-8") as stream:
                 stream.write(f'\n[plugins."{command[3]}"]\nenabled = true\n')

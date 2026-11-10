@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
+import jobs
 import latest_plugins
 import pytest
 import tj_plugins
@@ -157,6 +158,41 @@ def test_inventory_from_an_old_catalog_cannot_record_a_new_source_pin(
     publish(home, "b" * 40, "b" * 12)
     catalog.remember([old])
     assert not catalog.current("tj-agents", "agent", Digests(home.parent / "state"))
+
+
+@pytest.mark.parametrize(
+    "outcome", ["uninstalled", "error", "omitted", "missing-cache"]
+)
+def test_a_native_add_cannot_report_success_without_converging(
+    home: Path, outcome: str
+) -> None:
+    entry = publish(home, "a" * 40, "a" * 12)
+    changed = False
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        nonlocal changed
+        if command[:3] == ["codex", "plugin", "list"]:
+            rows = [entry]
+            if changed:
+                if outcome == "uninstalled":
+                    rows = [{**entry, "installed": False}]
+                elif outcome == "error":
+                    rows = [{**entry, "error": "unusable"}]
+                elif outcome == "omitted":
+                    rows = []
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps({"installed": rows}), ""
+            )
+        if command[:3] == ["codex", "plugin", "add"]:
+            changed = True
+            if outcome != "missing-cache":
+                installed(home, "a" * 12)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with mock.patch.object(process, "run", side_effect=run):
+        assert tj_plugins.main(["update", "--host", "codex"]) == 1
+    failure = jobs.recent_failure(home.parent / "state", jobs.Job.UPDATE)
+    assert failure is not None and "did not converge" in failure
 
 
 @pytest.mark.parametrize(
