@@ -42,7 +42,7 @@ def test_an_unreadable_inventory_aborts_profile_installation(
         return iterdir(path)
 
     monkeypatch.setattr(Path, "iterdir", inventory)
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionError, match="Access is denied"):
         work_items_install.installed_plugins()
     commands: list[list[str]] = []
 
@@ -70,7 +70,7 @@ def test_invalid_codex_configuration_is_reported_to_the_caller(
     codex_home: Path,
 ) -> None:
     (codex_home / "config.toml").write_text("invalid = [", encoding="utf-8")
-    with pytest.raises(tomllib.TOMLDecodeError):
+    with pytest.raises(tomllib.TOMLDecodeError, match="Invalid value"):
         projects.user_config()
 
 
@@ -88,7 +88,7 @@ def test_an_unreadable_codex_configuration_is_reported_to_the_caller(
         return read_text(path, encoding=encoding, errors=errors)
 
     monkeypatch.setattr(Path, "read_text", denied)
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionError, match="Access is denied"):
         projects.user_config()
 
 
