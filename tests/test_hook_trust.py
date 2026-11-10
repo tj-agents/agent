@@ -361,7 +361,15 @@ class HookTrustTests(unittest.TestCase):
     @patch.object(TRUST, "AppServer")
     def test_installed_tj_agents_hooks_are_trusted_in_every_trusted_project_and_others_are_not(self, app, runner):
         codex_home = self.cwd / "codex-home"
-        (codex_home / "plugins/cache/tj-agents/base/build-2").mkdir(parents=True)
+        build = codex_home / "plugins/cache/tj-agents/base/build-2"
+        (build / ".codex-plugin").mkdir(parents=True)
+        (build / ".codex-plugin/plugin.json").write_text('{"name": "base", "hooks": "./hooks/codex.json"}')
+        (build / "hooks").mkdir()
+        (build / "hooks/codex.json").write_text(
+            '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "python startup.py"}]}]}}')
+        staging = codex_home / "plugins/cache/tj-agents/plugin-install-AbC123/agent/.codex-plugin"
+        staging.mkdir(parents=True)
+        (staging / "plugin.json").write_text('{"name": "agent", "hooks": "./hooks/codex.json"}')
         project = self.cwd / "project"
         (project / ".codex").mkdir(parents=True)
         (project / ".codex/config.toml").write_text("")
@@ -376,10 +384,13 @@ class HookTrustTests(unittest.TestCase):
         runner.side_effect = lambda arguments, cwd, *_: (
             inventory if "plugin" in arguments else self.git_result(arguments, cwd))
         server = app.return_value.__enter__.return_value
-        server.request.side_effect = lambda method, params: listing if method == "hooks/list" else {}
+        trusted = {"data": [dict(entry, hooks=[dict(hook, trustStatus="trusted") if hook is self.hook else hook
+                                              for hook in entry["hooks"]]) for entry in listing["data"]]}
+        listings = iter([listing, trusted])
+        server.request.side_effect = lambda method, params: next(listings) if method == "hooks/list" else {}
         with patch.dict(TRUST.os.environ, {"CODEX_HOME": str(codex_home)}),                 patch.object(TRUST.Path, "home", return_value=self.cwd),                 patch.object(TRUST.projects, "user_config",
                              return_value={"projects": {str(project): {"trust_level": "trusted"}}}),                 patch.object(TRUST.projects.tempfile, "gettempdir", return_value=str(self.cwd / "elsewhere")):
-            self.assertEqual(["trust base@tj-agents build build-2 hooks"], TRUST.pending(state))
+            self.assertEqual(["trust base@tj-agents hooks"], TRUST.pending(state))
             updates = TRUST.trust_installed("codex", state, ("-c", "override"))
             self.assertEqual([], TRUST.pending(state))
         self.assertEqual({self.hook["key"]: {"trusted_hash": self.hook["currentHash"]}}, updates)
@@ -388,8 +399,23 @@ class HookTrustTests(unittest.TestCase):
             "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
             "reloadUserConfig": True,
         })
-        self.assertIn(["codex", "-c", "override", "plugin", "list", "--json"],
-                      [call.args[0] for call in runner.call_args_list])
+        self.assertIn((["codex", "-c", "override", "plugin", "list", "--json"], self.cwd, 45),
+                      [call.args for call in runner.call_args_list])
+
+    @patch.object(TRUST, "run")
+    @patch.object(TRUST, "AppServer")
+    def test_hooks_still_untrusted_after_the_write_fail_and_record_nothing(self, app, runner):
+        state = self.cwd / "state"
+        listing = {"data": [{"cwd": str(self.cwd), "errors": [], "hooks": [self.hook]}]}
+        inventory = json.dumps({"installed": [self.plugin]})
+        runner.side_effect = lambda arguments, cwd, *_: (
+            inventory if "plugin" in arguments else self.git_result(arguments, cwd))
+        app.return_value.__enter__.return_value.request.side_effect = (
+            lambda method, params: listing if method == "hooks/list" else {})
+        with patch.object(TRUST.Path, "home", return_value=self.cwd),                 patch.object(TRUST.projects, "user_config", return_value={}):
+            with self.assertRaisesRegex(RuntimeError, "still not trusted"):
+                TRUST.trust_installed("codex", state)
+        self.assertFalse((state / TRUST.RECEIPT).exists())
 
 if __name__ == "__main__":
     unittest.main()

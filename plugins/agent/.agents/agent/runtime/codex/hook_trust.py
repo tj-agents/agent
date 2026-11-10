@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections import Counter
 import importlib.util
 import io
@@ -421,17 +422,29 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
         return updates
 
 
-def published_builds():
-    cache = Host.CODEX.configuration_root / "plugins" / "cache" / required_plugins.MARKETPLACE_NAME
-    builds = {}
+def published_hooks():
+    marketplace = required_plugins.MARKETPLACE_NAME
+    cache = Host.CODEX.configuration_root / "plugins" / "cache" / marketplace
+    hooks = {}
     for plugin in sorted(cache.iterdir()) if cache.is_dir() else ():
-        found = [entry.name for entry in plugin.iterdir() if entry.is_dir()] if plugin.is_dir() else []
-        if len(found) == 1:
-            builds[f"{plugin.name}@{required_plugins.MARKETPLACE_NAME}"] = found[0]
-    return builds
+        builds = [entry for entry in plugin.iterdir() if entry.is_dir()] if plugin.is_dir() else []
+        if len(builds) != 1:
+            continue
+        identity = f"{plugin.name}@{marketplace}"
+        manifest_path = builds[0] / ".codex-plugin/plugin.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+            definitions = required_definitions(builds[0], identity) if manifest.get("name") == plugin.name else []
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+            definitions = [("unreadable", str(builds[0]))]
+        if definitions:
+            hooks[identity] = hashlib.sha256(json.dumps(definitions).encode()).hexdigest()
+    return hooks
 
 
-def recorded_builds(state):
+def recorded_hooks(state):
     try:
         recorded = json.loads((state / RECEIPT).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -440,27 +453,48 @@ def recorded_builds(state):
 
 
 def pending(state):
-    recorded = recorded_builds(state)
-    return [f"trust {identity} build {build} hooks" for identity, build in published_builds().items()
-            if recorded.get(identity) != build]
+    recorded = recorded_hooks(state)
+    return [f"trust {identity} hooks" for identity, digest in published_hooks().items()
+            if recorded.get(identity) != digest]
+
+
+def untrusted(listing):
+    suffix = "@" + required_plugins.MARKETPLACE_NAME
+    return [(Path(entry["cwd"]).resolve(), hook) for entry in listing.get("data", [])
+            for hook in entry.get("hooks", [])
+            if hook.get("source") == "plugin" and hook.get("enabled") and not hook.get("isManaged")
+            and hook.get("trustStatus") in {"untrusted", "modified"}
+            and str(hook.get("pluginId", "")).endswith(suffix)]
 
 
 def trust_installed(executable, state, launch_args=(), timeout=TIMEOUT):
     """Trust the hooks of every installed tj-agents plugin, in every project Codex trusts."""
-    builds = published_builds()
+    hooks = published_hooks()
     cwds = [Path.home().resolve(), *projects.trusted(projects.user_config())]
+    request = {"cwds": [str(cwd) for cwd in cwds]}
+    updates = {}
     with AppServer(executable, cwds[0], launch_args, timeout=timeout) as server:
-        listing = server.request("hooks/list", {"cwds": [str(cwd) for cwd in cwds]})
-        inventory = json.loads(run([*command(executable), *launch_args, "plugin", "list", "--json"],
-                                   cwds[0], timeout))
-        updates = trust_updates(inventory, listing["data"], set(cwds))
+        listing = server.request("hooks/list", request)
+        rows = {}
+        for cwd, hook in untrusted(listing):
+            if hook["pluginId"] not in rows:
+                found = json.loads(run([*command(executable), *launch_args, "plugin", "list", "--json"],
+                                       cwd, timeout)).get("installed", [])
+                rows.update({row["pluginId"]: row for row in found
+                             if isinstance(row, dict) and row.get("pluginId") not in rows})
+        if rows:
+            updates = trust_updates({"installed": list(rows.values())}, listing["data"], set(cwds))
         if updates:
             server.request("config/batchWrite", {
                 "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
                 "reloadUserConfig": True,
             })
+            listing = server.request("hooks/list", request)
+        remaining = sorted({hook["key"] for _, hook in untrusted(listing)})
+        if remaining:
+            raise RuntimeError("tj-agents hooks are still not trusted: " + ", ".join(remaining))
     state.mkdir(parents=True, exist_ok=True)
-    (state / RECEIPT).write_text(json.dumps(builds), encoding="utf-8")
+    (state / RECEIPT).write_text(json.dumps(hooks), encoding="utf-8")
     return updates
 
 
