@@ -6,7 +6,7 @@ import standards
 from tj_cli import process
 
 
-def repository(directory: Path) -> Path:
+def repository(directory: Path) -> Path | None:
     directory = directory.resolve()
     for parent in (directory, *directory.parents):
         git = parent / ".git"
@@ -20,15 +20,19 @@ def repository(directory: Path) -> Path:
                 if common.is_file():
                     return (git / common.read_text(encoding="utf-8").strip()).resolve()
                 return git
-    return directory
+    return None
 
 
 def applies(directory: Path, scope: str, owner: str | None) -> bool:
     if scope == "user":
         return True
-    if scope not in {"project", "local"} or not owner:
+    if scope not in {"project", "local"} or not isinstance(owner, str) or not owner:
         return False
-    return repository(directory) == repository(Path(owner))
+    common = repository(directory)
+    owner_common = repository(Path(owner))
+    if common is not None and owner_common is not None:
+        return common == owner_common
+    return directory.resolve().is_relative_to(Path(owner).resolve())
 
 
 def prepare_instructions(project: Path) -> None:
