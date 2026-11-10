@@ -1,6 +1,6 @@
 ---
 name: recent
-description: List recent Claude or Codex conversations with their exact resume commands. Use when asked which conversation to resume, what the last session covered, or which conversation owns a worktree.
+description: Use when finding recent Claude or Codex conversations, a checkout's conversation owner, or the exact command to resume one.
 kind: utility
 domain: agent
 profile: core
