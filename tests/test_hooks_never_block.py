@@ -17,7 +17,7 @@ BLOCKING = (
 
 
 def registered_scripts() -> set[Path]:
-    scripts = set()
+    scripts: set[Path] = set()
     for manifest in MANIFESTS:
         for groups in json.loads(manifest.read_text(encoding="utf-8"))[
             "hooks"
