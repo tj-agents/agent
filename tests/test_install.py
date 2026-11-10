@@ -966,7 +966,7 @@ class LockedExecutableTests(unittest.TestCase):
             subprocess.CompletedProcess([], 0, "ok", ""),
         ]
         sleeps = []
-        context = install.Context(home=Path("."), environ={}, windows=True,
+        context = install.Context(home=Path(), environ={}, windows=True,
                                   run=lambda *_args, **_kwargs: results.pop(0), sleep=sleeps.append)
         self.assertEqual(0, install.run_installer(context, ["installer"]).returncode)
         self.assertEqual([install.LOCKED_RETRY_SECONDS], sleeps)
@@ -978,6 +978,6 @@ class LockedExecutableTests(unittest.TestCase):
             calls.append(1)
             return subprocess.CompletedProcess([], 1, "", "verification failed")
 
-        context = install.Context(home=Path("."), environ={}, windows=True, run=run, sleep=lambda _s: None)
+        context = install.Context(home=Path(), environ={}, windows=True, run=run, sleep=lambda _s: None)
         self.assertEqual(1, install.run_installer(context, ["installer"]).returncode)
         self.assertEqual([1], calls)
