@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -45,3 +46,28 @@ def test_unchanged_files_are_not_read_again(
 
 def test_a_missing_tree_has_no_digest(tmp_path: Path) -> None:
     assert Digests(tmp_path / "state").tree(tmp_path / "absent") is None
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [[], [None], [[]], [2], [""], ["a" * 63], ["g" * 64], ["a" * 64, "extra"]],
+)
+def test_malformed_cached_digest_is_recomputed(
+    tmp_path: Path, tail: list[object]
+) -> None:
+    root = tree(tmp_path / "plugin", {"a.py": b"x"})
+    source = root / "a.py"
+    status = source.stat()
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "plugin-digests.json").write_text(
+        json.dumps({str(source): [status.st_size, status.st_mtime_ns, *tail]}),
+        encoding="utf-8",
+    )
+    expected = Digests(tmp_path / "fresh").tree(root)
+    digests = Digests(state)
+    assert digests.tree(root) == expected
+    digests.save()
+    recovered = Digests(state)
+    assert recovered.tree(root) == expected
+    assert not recovered.changed
