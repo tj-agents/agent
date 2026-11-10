@@ -13,7 +13,7 @@ from tree_digest import Digests
 RECEIPT = "codex-plugin-versions.json"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Build:
     source: str
     version: str

@@ -46,7 +46,7 @@ class RequiredPluginsError(RuntimeError):
 
 
 class MissingRequiredPluginsError(RequiredPluginsError):
-    def __init__(self, message, project, missing):
+    def __init__(self, message: str, project: Path, missing: Sequence[str]) -> None:
         super().__init__(message)
         self.project = project
         self.missing = tuple(missing)
