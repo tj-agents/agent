@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tj_agent.host import Host
+from tree_digest import Digests
 
 HOST = Host.CLAUDE
 RELOAD = "type /reload-plugins"
@@ -75,12 +76,32 @@ def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
     return found
 
 
-def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
-    return None
+def current(marketplace: str, plugin: str, digests: Digests) -> bool:
+    pin = pins(marketplace).get(plugin)
+    install = installs(marketplace).get(plugin)
+    return bool(pin and install and install[0] == pin and install[1].is_dir())
 
 
-def build_current(marketplace: str, plugin: str, install: Path, digests: Any) -> bool:
-    return True
+def behind(marketplaces: tuple[str, ...]) -> list[str]:
+    found = []
+    for marketplace in marketplaces:
+        installed = installs(marketplace)
+        for plugin, pin in sorted(pins(marketplace).items()):
+            if plugin in installed and installed[plugin][0] != pin:
+                revision = installed[plugin][0]
+                found.append(
+                    f"{plugin}@{marketplace}: installed {revision[:12]}, marketplace {pin[:12]}"
+                )
+    return found
+
+
+def running_behind(root: Path) -> str | None:
+    pin = pins("tj-agents").get("agent")
+    install = installs("tj-agents").get("agent")
+    if not pin or not install or install[0] != pin:
+        return None
+    behind = loaded_build_behind(root, pin, install[1])
+    return f"agent@tj-agents: {behind}" if behind else None
 
 
 def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:

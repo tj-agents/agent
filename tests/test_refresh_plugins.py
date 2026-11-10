@@ -19,6 +19,7 @@ from fake_machine import (
     install_plugin,
     machine_context,
     pin_plugin,
+    record_codex_plugin,
 )
 import install
 import latest_plugins
@@ -346,6 +347,7 @@ class RefreshPluginsTests(unittest.TestCase):
         self.install("agent", "a" * 40, "a" * 40, label="label1", codex_label="label1")
         self.install("base", "b" * 40, "b" * 40, label="label2", codex_label="old")
         self.install("cli", "c" * 40, "c" * 40)
+        record_codex_plugin(self.codex_home, "agent", "a" * 40, "label1")
         listing = json.dumps(
             {
                 "installed": [
@@ -877,6 +879,7 @@ def test_current_plugins_spawn_no_subprocess(host: Host, tmp_path: Path) -> None
     )
     shutil.copytree(root, tmp_path / "codex/plugins/cache/tj-agents/agent/current")
     with _patched_homes(tmp_path), mock.patch.object(REFRESH.process, "run") as spawned:
+        record_codex_plugin(tmp_path / "codex", "agent", AGENT_PIN, "current")
         assert REFRESH.main(["update", "--host", host.value]) == 0
     spawned.assert_not_called()
 
@@ -936,50 +939,6 @@ def test_codex_hook_receipts_detect_content_changes_with_unchanged_commands(
         assert codex_hook_trust.pending(state) == []
         script.write_text("print('changed content')", encoding="utf-8")
         assert codex_hook_trust.pending(state) == ["trust agent@tj-agents hooks"]
-
-
-def test_immutable_codex_builds_need_only_published_version_metadata(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source"
-    version = "a" * 12
-    (source / ".codex-plugin").mkdir(parents=True)
-    (source / ".codex-plugin/plugin.json").write_text(
-        json.dumps({"version": version}), encoding="utf-8"
-    )
-    with _patched_homes(tmp_path):
-        installed = tmp_path / "codex/plugins/cache/tj-agents/agent" / version
-        shutil.copytree(source, installed)
-        digests = mock.Mock()
-        assert REFRESH.codex_installed.build_current(
-            "tj-agents", "agent", source, digests
-        )
-        digests.tree.assert_not_called()
-        (installed / ".codex-plugin/plugin.json").write_text(
-            '{"version":"local"}', encoding="utf-8"
-        )
-        assert not REFRESH.codex_installed.build_current(
-            "tj-agents", "agent", source, digests
-        )
-
-
-def test_local_codex_builds_keep_the_standards_branch_content_check(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "skill.md").write_text("current", encoding="utf-8")
-    with _patched_homes(tmp_path):
-        installed = tmp_path / "codex/plugins/cache/tj-agents/agent/local"
-        shutil.copytree(source, installed)
-        digests = REFRESH.Digests(tmp_path / "state")
-        assert REFRESH.codex_installed.build_current(
-            "tj-agents", "agent", source, digests
-        )
-        (installed / "skill.md").write_text("outdated", encoding="utf-8")
-        assert not REFRESH.codex_installed.build_current(
-            "tj-agents", "agent", source, digests
-        )
 
 
 def test_current_downloads_activate_an_older_managed_claude_session(

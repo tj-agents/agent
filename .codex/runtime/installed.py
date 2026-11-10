@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any, Callable
 
 import required_plugins
-from codex import user_plugins
+from codex import catalog, user_plugins
 from tj_agent.host import Host
+from tree_digest import Digests
 
 HOST = Host.CODEX
 RELOAD = "restart this session"
@@ -28,25 +28,6 @@ MARKETPLACE_OVERRIDES = (
 
 def codex_command(*arguments: str) -> list[str]:
     return ["codex", *arguments, *MARKETPLACE_OVERRIDES]
-
-
-def label(root: Path) -> str | None:
-    try:
-        version = json.loads(
-            (root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
-        ).get("version")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return version if isinstance(version, str) else None
-
-
-def installed_label(marketplace: str, plugin: str) -> str | None:
-    directory = HOST.configuration_root / "plugins" / "cache" / marketplace / plugin
-    try:
-        builds = [entry.name for entry in directory.iterdir() if entry.is_dir()]
-    except OSError:
-        return None
-    return builds[0] if len(builds) == 1 else None
 
 
 def identities() -> set[str]:
@@ -71,32 +52,32 @@ def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
     }
 
 
-def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
-    expected, actual = label(install), installed_label(marketplace, plugin)
-    if expected and actual and actual != expected:
-        return f"installed build {actual}, marketplace build {expected}"
-    return None
+def behind(marketplaces: tuple[str, ...]) -> list[str]:
+    import jobs
+
+    digests = Digests(jobs.state_directory())
+    found = []
+    for identity in sorted(refresh_identities(marketplaces)):
+        plugin, _, marketplace = identity.rpartition("@")
+        if not catalog.current(marketplace, plugin, digests):
+            found.append(
+                f"{identity}: installed build does not match its verified Codex catalog version"
+            )
+    digests.save()
+    return found
 
 
-def build_current(marketplace: str, plugin: str, install: Path, digests: Any) -> bool:
-    directory = HOST.configuration_root / "plugins" / "cache" / marketplace / plugin
-    try:
-        builds = [entry for entry in directory.iterdir() if entry.is_dir()]
-    except OSError:
-        return False
-    if len(builds) != 1:
-        return False
-    expected = label(install)
-    if expected and re.fullmatch(r"[0-9a-f]{12}", expected):
-        return builds[0].name == expected and label(builds[0]) == expected
-    installed = digests.tree(builds[0])
-    return installed is not None and installed == digests.tree(install)
+def current(marketplace: str, plugin: str, digests: Digests) -> bool:
+    return catalog.current(marketplace, plugin, digests)
 
 
-def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
-    expected, loaded = label(install), label(root)
-    if expected and loaded != expected:
-        return f"this session loaded build {loaded or 'that was since replaced'}, current {expected}"
+def running_behind(root: Path) -> str | None:
+    import jobs
+
+    build = catalog.recorded(jobs.state_directory()).get("agent@tj-agents")
+    loaded = catalog.label(root)
+    if build is not None and loaded != build.version:
+        return f"agent@tj-agents: this session loaded build {loaded or 'that was since replaced'}, current {build.version}"
     return None
 
 
@@ -128,6 +109,11 @@ def refresh(
             f"marketplace {marketplace}",
             codex_command("plugin", "marketplace", "upgrade", marketplace),
         )
+    versions = report.step(HOST, "versions", codex_command("plugin", "list", "--json"))
+    if versions is None:
+        return
+    entries = json.loads(versions.stdout)["installed"]
+    catalog.remember(entries)
     unlisted = candidates - listed
     published = published_plugins(report) if unlisted else set()
     installed = sorted(listed | (unlisted & published))
@@ -155,6 +141,11 @@ def refresh(
     trust_hooks(report)
     if open_sessions:
         reload_open_sessions(report)
+    if not report.failures:
+        catalog.remember(
+            [entry for entry in entries if entry.get("pluginId") in stale],
+            verified_install=True,
+        )
 
 
 def cached(marketplaces: tuple[str, ...]) -> set[str]:

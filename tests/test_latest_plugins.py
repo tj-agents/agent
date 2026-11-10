@@ -25,6 +25,7 @@ from fake_machine import (
     install_plugin,
     machine_context,
     pin_plugin,
+    record_codex_plugin,
     write_json,
     write_tool_receipt,
 )
@@ -98,6 +99,8 @@ class Machine:
 
     def codex_build(self, label: str) -> None:
         (self.home / "codex/plugins/cache/tj-agents/agent" / label).mkdir(parents=True)
+        if label == "aaaaaaaaaaaa":
+            record_codex_plugin(self.home / "codex", "agent", PIN, label)
 
     def converge(self) -> None:
         converge(self.context, machine_state.packaged("install.py").parents[3])
