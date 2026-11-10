@@ -199,7 +199,7 @@ def test_native_liveness_reports_active_sessions(
     assert live["native"].activity in ("busy", "active")
 
 
-def test_stale_prompt_is_blocked(
+def test_a_stale_prompt_is_reported_and_never_blocked(
     host: Host,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -207,21 +207,25 @@ def test_stale_prompt_is_blocked(
 ) -> None:
     seen: list[Host] = []
 
-    def refusal(selected: Host, state: Path, *, full: bool) -> str:
+    def notice(selected: Host, state: Path, *, full: bool) -> str:
         assert state == tmp_path and not full
         seen.append(selected)
         return "Updating plugins"
 
-    monkeypatch.setattr(latest_plugins, "reason", refusal)
+    monkeypatch.setattr(latest_plugins, "reason", notice)
     monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path)
     monkeypatch.setattr(
         sys, "stdin", io.StringIO('{"hook_event_name":"UserPromptSubmit"}')
     )
     assert latest_plugins.main(["--host", str(host)]) == 0
     assert seen == [host]
-    assert json.loads(capsys.readouterr().out) == {
-        "decision": "block",
-        "reason": "Updating plugins",
+    output = json.loads(capsys.readouterr().out)
+    assert "decision" not in output
+    assert output == {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "Updating plugins",
+        }
     }
 
 

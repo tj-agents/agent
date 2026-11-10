@@ -19,6 +19,23 @@ def packaged(relative: str) -> Path:
     return script if script is not None and script.is_file() else RUNTIME / relative
 
 
+def build(root: Path) -> str | None:
+    try:
+        manifest = json.loads(
+            (root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    version = manifest.get("version") if isinstance(manifest, dict) else None
+    return version if isinstance(version, str) else None
+
+
+def installed_build() -> bool:
+    """Whether this hook runs the Agent build that machine installs come from."""
+    own, installed = build(RUNTIME.parents[2]), build(packaged("install.py").parents[3])
+    return own is None or installed is None or own == installed
+
+
 def plugin_builds() -> dict[str, list[str]]:
     builds = {}
     for marketplace in MARKETPLACES:

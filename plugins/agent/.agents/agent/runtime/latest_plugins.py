@@ -94,30 +94,29 @@ def fixing(
     job: jobs.Job,
     command: Sequence[str],
     behind: str,
-    then: str,
-    rerun: str,
+    then: str | None = None,
 ) -> str:
+    rerun = f"run {shlex.join(command)}"
     running = jobs.running(state, job)
     failure = None if running else jobs.recent_failure(state, job)
     if failure:
         return f"tj-agents {job.label} failed ({failure}); {rerun}."
     if not running and not jobs.start(state, job, command):
         return f"tj-agents {behind} are behind and tj_hook is missing; {rerun}."
-    return f"Updating tj-agents {behind}… {then} when this says done."
+    after = f"; {then} when it finishes" if then else ""
+    return f"Updating tj-agents {behind} in the background{after}."
 
 
 def repair_machine(state: Path, *, full: bool) -> str | None:
+    if not machine_state.installed_build():
+        return None
     if not full and machine_state.current(state):
         return None
     drift = machine_state.drift(state)
     if not drift:
         return None
-    command = install_command(drift)
     behind = "; ".join(f"{step} ({'; '.join(found)})" for step, found in drift.items())
-    rerun = f"run {shlex.join(command)}"
-    return fixing(
-        state, jobs.Job.INSTALL, command, behind, "send the prompt again", rerun
-    )
+    return fixing(state, jobs.Job.INSTALL, install_command(drift), behind)
 
 
 def reason(host: Host, state: Path, *, full: bool) -> str | None:
@@ -129,7 +128,6 @@ def reason(host: Host, state: Path, *, full: bool) -> str | None:
             refresh_command(),
             "plugins",
             INSTALLED[host].RELOAD,
-            "run agent:refresh-plugins",
         )
     if running_behind(host):
         return f"Plugins updated: {INSTALLED[host].RELOAD}."
@@ -147,17 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     state = jobs.state_directory()
     if event in ("", "SessionStart"):
         retired_state.remove(state)
-    refusal = reason(arguments.host, state, full=event != "UserPromptSubmit")
-    if refusal is None:
+    notice = reason(arguments.host, state, full=event != "UserPromptSubmit")
+    if notice is None:
         return 0
-    if event == "UserPromptSubmit":
-        print(json.dumps({"decision": "block", "reason": refusal}))
-    else:
-        context = {
-            "hookEventName": event or "SessionStart",
-            "additionalContext": refusal,
-        }
-        print(json.dumps({"hookSpecificOutput": context}))
+    context = {"hookEventName": event or "SessionStart", "additionalContext": notice}
+    print(json.dumps({"hookSpecificOutput": context}))
     return 0
 
 

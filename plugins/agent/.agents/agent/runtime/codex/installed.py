@@ -67,9 +67,16 @@ def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str 
     return None
 
 
-def build_current(marketplace: str, plugin: str, install: Path) -> bool:
-    expected = label(install)
-    return expected is not None and installed_label(marketplace, plugin) == expected
+def build_current(marketplace: str, plugin: str, install: Path, digests: Any) -> bool:
+    directory = HOST.configuration_root / "plugins" / "cache" / marketplace / plugin
+    try:
+        builds = [entry for entry in directory.iterdir() if entry.is_dir()]
+    except OSError:
+        return False
+    if len(builds) != 1:
+        return False
+    installed = digests.tree(builds[0])
+    return installed is not None and installed == digests.tree(install)
 
 
 def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:

@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -131,14 +132,11 @@ class RefreshPluginsTests(unittest.TestCase):
         ]
         registry.write_text(json.dumps({"plugins": rows}), encoding="utf-8")
         if codex_label:
-            (
-                self.codex_home
-                / "plugins"
-                / "cache"
-                / "tj-agents"
-                / plugin
-                / codex_label
-            ).mkdir(parents=True)
+            build = self.codex_home / "plugins" / "cache" / "tj-agents" / plugin / codex_label
+            shutil.copytree(root, build)
+            (build / ".codex-plugin" / "plugin.json").write_text(
+                json.dumps({"version": codex_label}), encoding="utf-8"
+            )
 
     def test_one_failing_update_is_reported_and_the_rest_still_run(self):
         listing = json.dumps(
@@ -337,7 +335,7 @@ class RefreshPluginsTests(unittest.TestCase):
             updates,
         )
 
-    def test_codex_skips_only_plugins_whose_installed_build_matches_the_current_label(
+    def test_codex_skips_only_plugins_whose_cached_content_matches_the_pinned_install(
         self,
     ):
         self.install("agent", "a" * 40, "a" * 40, label="label1", codex_label="label1")

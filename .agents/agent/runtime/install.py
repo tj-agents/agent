@@ -416,10 +416,27 @@ def real_git_bash(context: Context, proxy: Path) -> str:
     return real
 
 
+def hidden_bash_inputs(context: Context, real: str) -> dict[str, str]:
+    source, _ = hidden_bash_paths(context)
+    compiler = context.which("clang.exe") or context.which("gcc.exe") or ""
+    return {"source": hashlib.sha256(source.read_bytes()).hexdigest(), "compiler": compiler, "real": real}
+
+
+def hidden_bash_receipt(proxy: Path) -> Path:
+    return proxy.with_suffix(".json")
+
+
+def hidden_bash_current(context: Context, proxy: Path, real: str) -> bool:
+    receipt = read_json(hidden_bash_receipt(proxy))
+    return (proxy.is_file() and receipt.get("inputs") == hidden_bash_inputs(context, real)
+            and receipt.get("proxy") == hashlib.sha256(proxy.read_bytes()).hexdigest())
+
+
 def hidden_bash_plan(context: Context) -> tuple[bool, dict[str, str]]:
-    source, proxy = hidden_bash_paths(context)
-    stale = not proxy.is_file() or proxy.stat().st_mtime < source.stat().st_mtime
-    wanted = {"TJ_AGENTS_REAL_GIT_BASH": real_git_bash(context, proxy), "CLAUDE_CODE_GIT_BASH_PATH": str(proxy)}
+    _, proxy = hidden_bash_paths(context)
+    real = real_git_bash(context, proxy)
+    stale = not hidden_bash_current(context, proxy, real)
+    wanted = {"TJ_AGENTS_REAL_GIT_BASH": real, "CLAUDE_CODE_GIT_BASH_PATH": str(proxy)}
     variables = {name: value for name, value in wanted.items() if context.user_environment.get(name) != value}
     return stale, variables
 
@@ -501,6 +518,10 @@ def build_hidden_bash(context: Context, real: str) -> None:
         if probe.returncode != 73 or probe.stdout != "HIDDEN_BASH_OK":
             raise InstallError("The hidden Bash proxy did not preserve Bash output and exit status")
         install_hidden_bash(build, proxy)
+        write_json(hidden_bash_receipt(proxy), {
+            "inputs": hidden_bash_inputs(context, real),
+            "proxy": hashlib.sha256(proxy.read_bytes()).hexdigest(),
+        })
     finally:
         build.unlink(missing_ok=True)
 
@@ -1146,7 +1167,13 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--onboard", action="store_true", help="allow explicitly requested plugin enrollment")
     parser.add_argument("--step", action="append", choices=[step.name for step in STEPS],
                         help="run named steps with their dependencies and required preconditions; repeat to select several")
-    parsed = parser.parse_args(arguments)
+    try:
+        parsed = parser.parse_args(arguments)
+    except SystemExit as error:
+        if error.code:
+            jobs.record(jobs.state_directory(), jobs.Job.INSTALL,
+                        [f"install rejected its arguments: {shlex.join(arguments)}"])
+        raise
     context = machine_context()
     context.onboard = parsed.onboard
     native_runtime.expose()
