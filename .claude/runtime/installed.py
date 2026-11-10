@@ -36,11 +36,14 @@ def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
     registry = read(HOST.configuration_root / "plugins" / "installed_plugins.json")
     plugins = registry.get("plugins", {}) if isinstance(registry, dict) else {}
     found = {}
+    precedence = {"user": 0, "project": 1, "local": 2}
     for plugin_id, rows in plugins.items():
         name, _, source = plugin_id.rpartition("@")
         if source != marketplace or not isinstance(rows, list):
             continue
-        for row in rows:
+        ordered = sorted((row for row in rows if isinstance(row, dict)),
+                         key=lambda row: precedence.get(row.get("scope"), -1))
+        for row in ordered:
             if (isinstance(row, dict) and isinstance(row.get("gitCommitSha"), str)
                     and project_plugins.applies(Path.cwd(), row.get("scope"), row.get("projectPath"))):
                 found[name] = (row["gitCommitSha"], Path(row.get("installPath", "")))

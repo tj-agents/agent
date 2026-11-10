@@ -44,7 +44,9 @@ def prepare_instructions(project: Path) -> None:
         return
     if original.strip():
         current = shared.read_text(encoding="utf-8") if shared.exists() else ""
-        content = original.replace("@AGENTS.md", "").strip()
+        content = "\n".join(
+            line for line in original.splitlines() if line.strip() != "@AGENTS.md"
+        ).strip()
         shared.write_text(current.rstrip() + "\n\n" + content + "\n", encoding="utf-8")
     pointer.write_text("@AGENTS.md\n", encoding="utf-8")
 
