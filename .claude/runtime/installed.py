@@ -59,7 +59,7 @@ def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str 
     return None
 
 
-def build_current(marketplace: str, plugin: str, install: Path) -> bool:
+def build_current(marketplace: str, plugin: str, install: Path, digests: Any) -> bool:
     return True
 
 

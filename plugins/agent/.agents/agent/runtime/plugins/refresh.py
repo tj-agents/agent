@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import jobs
 import latest_plugins
+from tree_digest import Digests
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from tj_agent.host import Host
@@ -66,7 +67,9 @@ class Report:
 
 
 class Installed(Protocol):
-    def build_current(self, marketplace: str, plugin: str, install: Path) -> bool: ...
+    def build_current(
+        self, marketplace: str, plugin: str, install: Path, digests: Digests
+    ) -> bool: ...
 
     def refresh(
         self,
@@ -84,14 +87,14 @@ INSTALLED: Mapping[Host, Installed] = {
 }
 
 
-def current(host: Host, marketplace: str, plugin: str) -> bool:
+def current(host: Host, digests: Digests, marketplace: str, plugin: str) -> bool:
     pin = claude_installed.pins(marketplace).get(plugin)
     install = claude_installed.installs(marketplace).get(plugin)
     return bool(
         pin
         and install
         and install[0] == pin
-        and INSTALLED[host].build_current(marketplace, plugin, install[1])
+        and INSTALLED[host].build_current(marketplace, plugin, install[1], digests)
     )
 
 
@@ -106,8 +109,10 @@ def main(argv: list[str] | None = None) -> int:
             print("tj: another plugin refresh is running")
             return 0
         report = Report()
+        digests = Digests(state)
         for host in hosts:
-            INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host))
+            INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host, digests))
+        digests.save()
         machine = latest_plugins.repair_machine(state, full=True)
         if machine:
             print(f"tj: {machine}")
