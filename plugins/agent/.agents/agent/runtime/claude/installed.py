@@ -42,7 +42,7 @@ def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
         if source != marketplace or not isinstance(rows, list):
             continue
         ordered = sorted((row for row in rows if isinstance(row, dict)),
-                         key=lambda row: precedence.get(row.get("scope"), -1))
+                         key=lambda row: precedence.get(row.get("scope", ""), -1))
         for row in ordered:
             if (isinstance(row, dict) and isinstance(row.get("gitCommitSha"), str)
                     and project_plugins.applies(Path.cwd(), row.get("scope"), row.get("projectPath"))):

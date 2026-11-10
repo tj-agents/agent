@@ -60,7 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="tj prepare", description="Prepare repository standards before a session."
     )
-    parser.add_argument("--host", type=Host, choices=list(Host), required=True)
+    hosts = {host.value: host for host in Host}
+    parser.add_argument("--host", choices=list(hosts), required=True)
     parser.add_argument("--cwd", type=Path, default=Path.cwd())
     parser.add_argument("--arguments-stdin", action="store_true")
     arguments = parser.parse_args(argv)
@@ -72,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             not isinstance(value, str) for value in host_arguments
         ):
             raise ValueError("Host arguments must be a JSON string array")
-        prepare(arguments.cwd, arguments.host, tuple(host_arguments))
+        prepare(arguments.cwd, hosts[arguments.host], tuple(host_arguments))
     except (
         OSError,
         ValueError,
