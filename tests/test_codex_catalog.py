@@ -127,6 +127,28 @@ def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) ->
     assert latest_plugins.installed_behind(Host.CODEX) == []
 
 
+def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) -> None:
+    entry = publish(home, "a" * 40, "local")
+    present = False
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        nonlocal present
+        if command[:3] == ["codex", "plugin", "list"]:
+            listing = {"installed": [{**entry, "installed": present}]}
+            return subprocess.CompletedProcess(command, 0, json.dumps(listing), "")
+        if command[:3] == ["codex", "plugin", "add"]:
+            installed(home, "local")
+            present = True
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    with mock.patch.object(process, "run", side_effect=run) as native:
+        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        assert present
+        native.reset_mock()
+        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        native.assert_not_called()
+
+
 def test_inventory_from_an_old_catalog_cannot_record_a_new_source_pin(
     home: Path,
 ) -> None:
@@ -134,6 +156,19 @@ def test_inventory_from_an_old_catalog_cannot_record_a_new_source_pin(
     installed(home, "a" * 12)
     publish(home, "b" * 40, "b" * 12)
     catalog.remember([old])
+    assert not catalog.current("tj-agents", "agent", Digests(home.parent / "state"))
+
+
+@pytest.mark.parametrize(
+    "invalid", [{"installed": False}, {"error": "unusable"}, {"errors": ["unusable"]}]
+)
+def test_unusable_inventory_invalidates_a_previously_current_build(
+    home: Path, invalid: dict[str, object]
+) -> None:
+    entry = publish(home, "a" * 40, "a" * 12)
+    installed(home, "a" * 12)
+    catalog.remember([entry])
+    catalog.remember([{**entry, **invalid}])
     assert not catalog.current("tj-agents", "agent", Digests(home.parent / "state"))
 
 

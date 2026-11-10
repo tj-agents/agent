@@ -141,11 +141,19 @@ def refresh(
     trust_hooks(report)
     if open_sessions:
         reload_open_sessions(report)
-    if not report.failures:
-        catalog.remember(
-            [entry for entry in entries if entry.get("pluginId") in stale],
-            verified_install=True,
+    if stale and not report.failures:
+        refreshed = report.step(
+            HOST, "installed versions", codex_command("plugin", "list", "--json")
         )
+        if refreshed is not None:
+            catalog.remember(
+                [
+                    entry
+                    for entry in json.loads(refreshed.stdout)["installed"]
+                    if entry.get("pluginId") in stale
+                ],
+                verified_install=True,
+            )
 
 
 def cached(marketplaces: tuple[str, ...]) -> set[str]:
