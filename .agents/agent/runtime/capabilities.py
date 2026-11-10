@@ -356,7 +356,8 @@ def python_symbols(nodes: list[ast.stmt], prefix: str = "") -> set[str]:
 
 def rust_code(text: str) -> str:
     tokens = re.compile(
-        r'//[^\n]*|/\*|(?:br|cr|r)(?P<hashes>#{0,255})"[\s\S]*?"(?P=hashes)|[bc]?"(?:\\.|[^"\\])*"'
+        r"//[^\n]*|/\*|b?'(?:\\(?:u\{[\da-fA-F_]+\}|x[\da-fA-F]{2}|.)|[^'\\])'"
+        r'|(?:br|cr|r)(?P<hashes>#{0,255})"[\s\S]*?"(?P=hashes)|[bc]?"(?:\\.|[^"\\])*"'
     )
     parts = []
     cursor = 0
