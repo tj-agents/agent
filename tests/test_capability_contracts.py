@@ -261,6 +261,7 @@ class Report:
 def test_refresh_updates_selected_plugins(
     host: Host, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     row = {"id": "agent@tj-agents", "scope": "user"}
     report = Report([row])
     installed = claude_installed

@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+from claude import project_plugins
 from tj_agent.host import Host
 from tree_digest import Digests
 
@@ -41,19 +42,31 @@ def pins(marketplace: str) -> dict[str, str]:
     }
 
 
-def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
+def installs(marketplace: str, scope: str | None = None) -> dict[str, tuple[str, Path]]:
     registry = read(HOST.configuration_root / "plugins" / "installed_plugins.json")
     plugins = registry.get("plugins", {}) if isinstance(registry, dict) else {}
     found = {}
+    precedence = {"user": 0, "project": 1, "local": 2}
     for plugin_id, rows in plugins.items():
         name, _, source = plugin_id.rpartition("@")
         if source != marketplace or not isinstance(rows, list):
             continue
-        for row in rows:
+        ordered = sorted(
+            (
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and (scope is None or row.get("scope") == scope)
+            ),
+            key=lambda row: precedence.get(row.get("scope", ""), -1),
+        )
+        for row in ordered:
             if (
                 isinstance(row, dict)
-                and row.get("scope") == "user"
                 and isinstance(row.get("gitCommitSha"), str)
+                and project_plugins.applies(
+                    Path.cwd(), row.get("scope"), row.get("projectPath")
+                )
             ):
                 found[name] = (row["gitCommitSha"], Path(row.get("installPath", "")))
     return found
@@ -76,10 +89,14 @@ def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
     return found
 
 
-def current(marketplace: str, plugin: str, digests: Digests) -> bool:
+def pinned(marketplace: str, plugin: str, scope: str | None = None) -> bool:
     pin = pins(marketplace).get(plugin)
-    install = installs(marketplace).get(plugin)
+    install = installs(marketplace, scope).get(plugin)
     return bool(pin and install and install[0] == pin and install[1].is_dir())
+
+
+def current(marketplace: str, plugin: str, digests: Digests) -> bool:
+    return pinned(marketplace, plugin)
 
 
 def behind(marketplaces: tuple[str, ...]) -> list[str]:
@@ -125,23 +142,26 @@ def refresh(
         return
     plugins = sorted(
         {
-            row["id"]
+            (row["id"], row["scope"])
             for row in json.loads(listing.stdout)
-            if row["scope"] == "user" and row["id"].rpartition("@")[2] in marketplaces
+            if row["id"].rpartition("@")[2] in marketplaces
+            and project_plugins.applies(
+                Path.cwd(), row["scope"], row.get("projectPath")
+            )
         }
     )
     stale = [
-        plugin
-        for plugin in plugins
-        if not current(plugin.rpartition("@")[2], plugin.rpartition("@")[0])
+        (plugin, scope)
+        for plugin, scope in plugins
+        if not pinned(plugin.rpartition("@")[2], plugin.rpartition("@")[0], scope)
     ]
     if len(stale) < len(plugins):
         print(f"{HOST}: {len(plugins) - len(stale)} plugin(s) already at their pin")
-    for plugin in stale:
+    for plugin, scope in stale:
         report.step(
             HOST,
             plugin,
-            ["claude", "plugin", "update", plugin, "--scope", "user", "--json", "-y"],
+            ["claude", "plugin", "update", plugin, "--scope", scope, "--json", "-y"],
         )
 
 

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import agent_cli
-from codex import catalog, hook_trust
+from codex import catalog, hook_trust, user_plugins
 from tj_agent.host import Host
+from tj_cli import process
 import required_plugins
+import standards
 
 HOST = Host.CODEX
 VALUE_OPTIONS = frozenset(
@@ -165,3 +167,37 @@ def ensure_hooks(
         except (OSError, RuntimeError) as error:
             return str(error)
     return None
+
+
+def prepare_instructions(project: Path) -> None:
+    override = project / "AGENTS.override.md"
+    if override.is_file() and override.read_text(encoding="utf-8").strip():
+        raise standards.StandardsError(
+            f"{override} shadows the repository standards index"
+        )
+
+
+def install(project: Path, identities: Sequence[str]) -> None:
+    try:
+        for identity in identities:
+            result = process.run(
+                ["codex", "plugin", "add", identity, "--json"],
+                cwd=project,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=120,
+                check=False,
+            )
+            if result.returncode:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise required_plugins.RequiredPluginsError(
+                    f"Cannot install {identity} for {project}: {detail}"
+                )
+    finally:
+        path = user_plugins.path()
+        if path.is_file():
+            original = path.read_text(encoding="utf-8")
+            updated = user_plugins.without(original, identities)
+            if updated != original:
+                path.write_text(updated, encoding="utf-8")
