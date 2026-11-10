@@ -26,7 +26,9 @@ import install
 import latest_plugins
 import machine_state
 import plugin_copies
+import plugin_activation
 import pytest
+import required_plugins
 from tj_agent.host import Host
 
 
@@ -49,7 +51,8 @@ from codex import launch as codex_launch  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def no_codex_daemon(monkeypatch: pytest.MonkeyPatch) -> list[tuple[object, ...]]:
+def no_codex_daemon(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[tuple[object, ...]]:
+    monkeypatch.chdir(tmp_path)
     trusted: list[tuple[object, ...]] = []
     monkeypatch.setattr(codex_launch, "liveness", dict)
     monkeypatch.setattr(codex_launch, "executable", lambda: "codex")
@@ -599,6 +602,8 @@ class FakeDaemon:
             raise RuntimeError(f"Codex {method} failed: boom")
         if method == "plugin/install" and self.inventory is not None:
             self.inventory.install(f"{params['pluginName']}@tj-agents")
+        if method == "thread/loaded/list":
+            return {"data": [], "nextCursor": None}
         return {}
 
 
@@ -650,13 +655,103 @@ def test_open_codex_sessions_reload_through_the_daemon_instead_of_a_cli_add(
     ]
     manifest = str(tmp_path / "market" / ".agents" / "plugins" / "marketplace.json")
     assert daemon.requests == [
+        ("thread/loaded/list", {"cursor": None}),
         ("plugin/install", {"marketplacePath": manifest, "pluginName": "agent"}),
         ("plugin/install", {"marketplacePath": manifest, "pluginName": "base"}),
+        ("thread/loaded/list", {"cursor": None}),
         ("config/batchWrite", {"edits": [], "reloadUserConfig": True}),
     ]
     assert trusted == [
         ("codex", tmp_path / "state", REFRESH.codex_installed.MARKETPLACE_OVERRIDES)
     ]
+
+
+def test_codex_reloads_after_the_updated_repository_standards_are_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selection = tmp_path / ".agents/plugins.json"
+    selection.parent.mkdir()
+    selection.write_text('{"schema_version": 1, "plugins": ["agent@tj-agents"]}', encoding="utf-8")
+    root = tmp_path / "updated-agent"
+    standard = root / ".agents/agent/convention/lanes/SKILL.md"
+    standard.parent.mkdir(parents=True)
+    standard.write_text(
+        "---\nname: lanes\nkind: convention\nprofile: core\n"
+        "applicability: agent sessions\n---\nFull lanes standard\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(required_plugins, "check", lambda *args: {"agent@tj-agents": root})
+    daemon = FakeDaemon()
+    native_request = daemon.request
+
+    def request(method: str, params: dict[str, object]) -> dict[str, object]:
+        if method == "config/batchWrite":
+            assert "agent:lanes" in (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+        return native_request(method, params)
+
+    monkeypatch.setattr(daemon, "request", request)
+    code, _commands, _trusted = daemon_refresh(tmp_path, monkeypatch, daemon)
+    assert code == 0
+    assert daemon.requests[-1][0] == "config/batchWrite"
+
+
+@pytest.mark.parametrize(
+    ("local", "failed"), [(False, False), (True, False), (False, True)]
+)
+def test_codex_reconciles_other_loaded_repositories_before_reloading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local: bool, failed: bool
+) -> None:
+    other = tmp_path / "other-repository"
+    selection = other / ".agents/plugins.json"
+    selection.parent.mkdir(parents=True)
+    selection.write_text('{"schema_version": 1, "plugins": ["agent@tj-agents"]}', encoding="utf-8")
+    instructions = other / "AGENTS.md"
+    instructions.write_text("Existing repository instructions\n", encoding="utf-8")
+    if local:
+        (selection.parent / "repo-capabilities.local.json").write_text("{}", encoding="utf-8")
+    daemon = FakeDaemon()
+    native_request = daemon.request
+    update_standards = REFRESH.codex_installed.update_project_standards
+
+    def update(project: Path) -> None:
+        if failed:
+            raise required_plugins.RequiredPluginsError("Cannot verify updated standards")
+        update_standards(project)
+
+    monkeypatch.setattr(REFRESH.codex_installed, "update_project_standards", update)
+
+    def request(method: str, params: dict[str, object]) -> dict[str, object]:
+        response = native_request(method, params)
+        if method == "thread/loaded/list":
+            return {"data": ["other-thread"], "nextCursor": None}
+        if method == "thread/read":
+            return {"thread": {"cwd": str(other)}}
+        if method == "plugin/install" and params.get("pluginName") == "agent":
+            standard = tmp_path / "codex/plugins/cache/tj-agents/agent/local/.agents/agent/convention/lanes/SKILL.md"
+            standard.parent.mkdir(parents=True)
+            standard.write_text(
+                "---\nname: lanes\nkind: convention\nprofile: core\n"
+                "applicability: agent sessions\n---\nFull lanes standard\n",
+                encoding="utf-8",
+            )
+        if method == "config/batchWrite":
+            content = instructions.read_text(encoding="utf-8")
+            assert ("agent:lanes" in content) is (not local and not failed)
+            assert "Existing repository instructions" in content
+        return response
+
+    monkeypatch.setattr(daemon, "request", request)
+    code, _commands, _trusted = daemon_refresh(tmp_path, monkeypatch, daemon)
+    assert code == int(failed)
+    assert daemon.requests[-1][0] == "config/batchWrite"
+    assert plugin_activation.pending(tmp_path / "state", Host.CODEX, other) is failed
+    if failed:
+        failed = False
+        report = REFRESH.Report()
+        with _patched_homes(tmp_path):
+            REFRESH.codex_installed.reload_open_sessions(report)
+        assert not report.failures
+        assert not plugin_activation.pending(tmp_path / "state", Host.CODEX, other)
 
 
 def test_a_failed_daemon_install_is_reported_and_the_rest_still_reload(

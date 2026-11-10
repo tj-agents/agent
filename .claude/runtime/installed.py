@@ -42,34 +42,36 @@ def pins(marketplace: str) -> dict[str, str]:
     }
 
 
-def installs(marketplace: str, scope: str | None = None) -> dict[str, tuple[str, Path]]:
+def scoped_installs(marketplace: str) -> dict[tuple[str, str], tuple[str, Path]]:
     registry = read(HOST.configuration_root / "plugins" / "installed_plugins.json")
     plugins = registry.get("plugins", {}) if isinstance(registry, dict) else {}
     found = {}
-    precedence = {"user": 0, "project": 1, "local": 2}
     for plugin_id, rows in plugins.items():
         name, _, source = plugin_id.rpartition("@")
         if source != marketplace or not isinstance(rows, list):
             continue
-        ordered = sorted(
-            (
-                row
-                for row in rows
-                if isinstance(row, dict)
-                and (scope is None or row.get("scope") == scope)
-            ),
-            key=lambda row: precedence.get(row.get("scope", ""), -1),
-        )
-        for row in ordered:
+        for row in rows:
             if (
                 isinstance(row, dict)
+                and isinstance(row.get("scope"), str)
                 and isinstance(row.get("gitCommitSha"), str)
                 and project_plugins.applies(
                     Path.cwd(), row.get("scope"), row.get("projectPath")
                 )
             ):
-                found[name] = (row["gitCommitSha"], Path(row.get("installPath", "")))
+                found[name, row["scope"]] = (
+                    row["gitCommitSha"],
+                    Path(row.get("installPath", "")),
+                )
     return found
+
+
+def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
+    precedence = {"user": 0, "project": 1, "local": 2}
+    ordered = sorted(
+        scoped_installs(marketplace).items(), key=lambda item: precedence[item[0][1]]
+    )
+    return {plugin: installation for (plugin, _scope), installation in ordered}
 
 
 def identities() -> set[str]:
@@ -91,8 +93,16 @@ def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
 
 def pinned(marketplace: str, plugin: str, scope: str | None = None) -> bool:
     pin = pins(marketplace).get(plugin)
-    install = installs(marketplace, scope).get(plugin)
-    return bool(pin and install and install[0] == pin and install[1].is_dir())
+    installations = [
+        installation
+        for (name, installed_scope), installation in scoped_installs(
+            marketplace
+        ).items()
+        if name == plugin and (scope is None or installed_scope == scope)
+    ]
+    return bool(pin and installations) and all(
+        revision == pin and root.is_dir() for revision, root in installations
+    )
 
 
 def current(marketplace: str, plugin: str, digests: Digests) -> bool:
@@ -102,10 +112,12 @@ def current(marketplace: str, plugin: str, digests: Digests) -> bool:
 def behind(marketplaces: tuple[str, ...]) -> list[str]:
     found = []
     for marketplace in marketplaces:
-        installed = installs(marketplace)
-        for plugin, pin in sorted(pins(marketplace).items()):
-            if plugin in installed and installed[plugin][0] != pin:
-                revision = installed[plugin][0]
+        expected = pins(marketplace)
+        for (plugin, _scope), (revision, _root) in sorted(
+            scoped_installs(marketplace).items()
+        ):
+            pin = expected.get(plugin)
+            if pin and revision != pin:
                 found.append(
                     f"{plugin}@{marketplace}: installed {revision[:12]}, marketplace {pin[:12]}"
                 )

@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jobs
 import machine_state
+import plugin_activation
+import required_plugins
 import retired_state
 from claude import installed as claude_installed
 from codex import installed as codex_installed
@@ -106,7 +108,9 @@ def repair_machine(state: Path, *, full: bool) -> str | None:
 
 def reason(host: Host, state: Path, *, full: bool) -> str | None:
     machine = repair_machine(state, full=full)
-    if installed_behind(host):
+    if installed_behind(host) or plugin_activation.pending(
+        state, host, required_plugins.project_root(Path.cwd())
+    ):
         return fixing(
             state,
             jobs.Job.UPDATE,

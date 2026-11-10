@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 import jobs
+import plugin_activation
 import required_plugins
-from codex import catalog, user_plugins
+import standards
+from codex import catalog, hook_trust, launch, user_plugins
 from tj_agent.host import Host
 from tree_digest import Digests
 
@@ -25,6 +27,61 @@ MARKETPLACE_OVERRIDES = (
     f"marketplaces.{required_plugins.MARKETPLACE_NAME}.sparse_paths="
     f"{json.dumps(list(required_plugins.MARKETPLACE_SPARSE_PATHS))}",
 )
+
+
+class Server(Protocol):
+    def request(self, method: str, params: dict[str, object]) -> dict[str, object]: ...
+
+
+def loaded_directories(server: Server) -> set[Path]:
+    directories = set()
+    seen = set()
+    cursor: str | None = None
+    while True:
+        page = server.request("thread/loaded/list", {"cursor": cursor})
+        threads = page.get("data")
+        if not isinstance(threads, list) or any(
+            not isinstance(thread, str) for thread in threads
+        ):
+            raise RuntimeError("Codex returned an invalid loaded-thread list")
+        for identity in threads:
+            thread = server.request("thread/read", {"threadId": identity}).get("thread")
+            directory = thread.get("cwd") if isinstance(thread, dict) else None
+            if not isinstance(directory, str) or not Path(directory).is_absolute():
+                raise RuntimeError(
+                    f"Codex thread {identity} has no absolute working directory"
+                )
+            directories.add(Path(directory))
+        next_cursor = page.get("nextCursor")
+        if next_cursor is None:
+            return directories
+        if not isinstance(next_cursor, str) or next_cursor in seen:
+            raise RuntimeError("Codex returned an invalid loaded-thread cursor")
+        seen.add(next_cursor)
+        cursor = next_cursor
+
+
+def update_project_standards(directory: Path) -> None:
+    project = required_plugins.project_root(directory)
+    if (project / ".agents/repo-capabilities.local.json").is_file():
+        return
+    selected = required_plugins.selected(project)
+    if not selected:
+        return
+    builds = catalog.recorded(jobs.state_directory())
+    digests = Digests(jobs.state_directory())
+    roots = {}
+    for identity in selected:
+        plugin, _, marketplace = identity.rpartition("@")
+        build = builds.get(identity)
+        root = catalog.root(marketplace, plugin, build.version) if build else None
+        if root is None or not catalog.current(marketplace, plugin, digests):
+            raise standards.StandardsError(
+                f"Cannot verify updated standards for {identity} in {project}"
+            )
+        roots[identity] = root
+    digests.save()
+    standards.update(project, roots)
 
 
 def codex_command(*arguments: str) -> list[str]:
@@ -81,8 +138,6 @@ def running_behind(root: Path) -> str | None:
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
-    from codex import launch
-
     listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
     if listing is None:
         return
@@ -136,8 +191,6 @@ def refresh(
         report, [identity for identity in stale if identity not in user_enabled]
     )
     trust_hooks(report)
-    if open_sessions:
-        reload_open_sessions(report)
     if stale and not report.failures:
         refreshed = report.step(
             HOST, "installed versions", codex_command("plugin", "list", "--json")
@@ -161,6 +214,8 @@ def refresh(
                 ):
                     report.fail(HOST, identity, "native installation did not converge")
             digests.save()
+    if open_sessions and report.failures:
+        reload_open_sessions(report)
 
 
 def cached(marketplaces: tuple[str, ...]) -> set[str]:
@@ -228,9 +283,6 @@ def keep_project_scope(report: Any, identities: list[str]) -> None:
 
 def trust_hooks(report: Any) -> bool:
     """Trust installed tj-agents hooks so no Codex launch asks to trust them."""
-    import jobs
-    from codex import hook_trust, launch
-
     state = jobs.state_directory()
     if not hook_trust.pending(state):
         return False
@@ -265,13 +317,17 @@ def marketplace_roots(report: Any) -> dict[str, Path] | None:
 
 def install_through_daemon(report: Any, identities: list[str]) -> None:
     """Install through the shared daemon, which reloads every loaded thread's plugins, hooks and skills."""
-    from codex import launch
-
     roots = marketplace_roots(report)
     if roots is None:
         return
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
+            for directory in loaded_directories(server):
+                plugin_activation.begin(
+                    jobs.state_directory(),
+                    HOST,
+                    required_plugins.project_root(directory),
+                )
             for identity in identities:
                 plugin, _, marketplace = identity.rpartition("@")
                 manifest = (
@@ -291,23 +347,44 @@ def install_through_daemon(report: Any, identities: list[str]) -> None:
 
 
 def reload_open_sessions(report: Any) -> None:
-    from codex import launch
-
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
+            projects = {
+                required_plugins.project_root(directory)
+                for directory in loaded_directories(server)
+            }
+            completed = []
+            state = jobs.state_directory()
+            for project in sorted(projects):
+                plugin_activation.begin(state, HOST, project)
+                try:
+                    update_project_standards(project)
+                except (
+                    OSError,
+                    ValueError,
+                    required_plugins.RequiredPluginsError,
+                    standards.StandardsError,
+                ) as error:
+                    report.fail(HOST, "repository standards", str(error))
+                else:
+                    completed.append(project)
             server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
+            for project in completed:
+                plugin_activation.complete(state, HOST, project)
     except (OSError, RuntimeError) as error:
         report.fail(HOST, "open sessions", str(error))
 
 
 def repair_hooks(report: Any) -> None:
-    from codex import launch
-
-    if trust_hooks(report) and launch.liveness():
-        reload_open_sessions(report)
+    state = jobs.state_directory()
+    if hook_trust.pending(state):
+        plugin_activation.begin(state, HOST, required_plugins.project_root(Path.cwd()))
+    trust_hooks(report)
 
 
 def restart(report: Any, managed: bool) -> None:
+    if launch.liveness():
+        reload_open_sessions(report)
     print(
         "Open Codex sessions in the shared app-server reload updated plugins in place."
     )

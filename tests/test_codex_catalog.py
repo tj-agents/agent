@@ -17,6 +17,7 @@ from tree_digest import Digests
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.chdir(tmp_path)
     directory = tmp_path / "codex"
     monkeypatch.setenv("CODEX_HOME", str(directory))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "absent-claude"))

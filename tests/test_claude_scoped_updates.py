@@ -86,8 +86,8 @@ def test_update_changes_only_the_stale_applicable_scope(
         return subprocess.CompletedProcess(command, 0, output, "")
 
     monkeypatch.setattr(process, "run", run)
-    report = tj_plugins.Report()
-    claude_installed.refresh(report, ("tj-agents",), lambda *args: False)
+    assert tj_plugins.main(["update", "--host", "claude"]) == 0
+    assert claude_installed.behind(("tj-agents",))
     updates = [
         command for command in commands if command[:3] == ["claude", "plugin", "update"]
     ]
