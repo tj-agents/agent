@@ -7,6 +7,7 @@ Every agent tab runs under `tj run`, opened in Windows Terminal or tmux; a launc
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import importlib.util
 import os
 from pathlib import Path
@@ -16,7 +17,7 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -223,7 +224,8 @@ def posix_inner_command(directory, cleared, forced, executable, arguments):
     return ['sh', '-c', 'cd "$1" && shift && exec "$@"', 'sh', str(directory), 'env', *env_args, executable, *arguments]
 
 
-def _client(run, command, what, **kwargs):
+def _client(run: Callable[..., subprocess.CompletedProcess[str]], command: list[str],
+            what: str, **kwargs: Any) -> str:
     """Run a terminal's own control command; every way it can fail is a LaunchError naming `what`."""
     try:
         result = run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, **kwargs)
@@ -248,17 +250,37 @@ TJ_RUN_TIMEOUT_SECONDS = 30
 SESSION_TIMEOUT_SECONDS = 180
 
 
-def _launch_tmux(directory, title, command, cleared, forced, environ, run):
+def _launch_tmux(directory, title, command, cleared, forced, environ, run, session=None):
     inner = posix_inner_command(directory, cleared, forced, command[0], command[1:])
-    window = _client(run, ['tmux', 'new-window', '-n', title, '-P', '-F', '#{window_id}', '--', *inner],
-                     'tmux new-window')
+    target = ["-t", f"={session}:"] if session and not environ.get("TMUX") else []
+    operation = ["new-window", *target]
+    if session and not environ.get("TMUX"):
+        try:
+            _client(
+                run, ["tmux", "has-session", "-t", f"={session}"], "tmux has-session"
+            )
+        except LaunchError:
+            operation = ["new-session", "-d", "-s", session]
+    window = _client(
+        run,
+        ["tmux", *operation, "-n", title, "-P", "-F", "#{window_id}", "--", *inner],
+        "tmux new-window",
+    )
     if window:
-        _client(run, ['tmux', 'set-option', '-w', '-t', window, 'automatic-rename', 'off'], 'tmux set-option')
-        _client(run, ['tmux', 'set-option', '-w', '-t', window, 'allow-rename', 'off'], 'tmux set-option')
+        _client(
+            run,
+            ["tmux", "set-option", "-w", "-t", window, "automatic-rename", "off"],
+            "tmux set-option",
+        )
+        _client(
+            run,
+            ["tmux", "set-option", "-w", "-t", window, "allow-rename", "off"],
+            "tmux set-option",
+        )
 
 
 def _launch_windows_terminal(directory, title, command, cleared, forced, environ, run):
-    terminal = shutil.which('wt.exe')
+    terminal = shutil.which("wt.exe")
     if not terminal:
         raise LaunchError('wt.exe was not found on PATH.')
     # --window 0 is the most recently focused window; omitting it opens a separate OS window.
@@ -268,16 +290,31 @@ def _launch_windows_terminal(directory, title, command, cleared, forced, environ
             env=_environment_for(environ, cleared, forced))
 
 
-def open_tab(directory, title, command, cleared=(), forced=None, environ=os.environ, run=subprocess.run):
+def open_tab(
+    directory,
+    title,
+    command,
+    cleared=(),
+    forced=None,
+    environ=os.environ,
+    run=subprocess.run,
+    tmux_session=None,
+):
     """Open `command` as a new tab titled `title`, in Windows Terminal or the current tmux server."""
-    if run is subprocess.run and 'PYTEST_CURRENT_TEST' in os.environ:
-        raise LaunchError('Refusing to open a real terminal tab under pytest; inject a fake run.')
+    if run is subprocess.run and "PYTEST_CURRENT_TEST" in os.environ:
+        raise LaunchError(
+            "Refusing to open a real terminal tab under pytest; inject a fake run."
+        )
     forced = dict(forced or {})
     if IS_WINDOWS:
-        return _launch_windows_terminal(directory, title, command, cleared, forced, environ, run)
-    if environ.get('TMUX'):
-        return _launch_tmux(directory, title, command, cleared, forced, environ, run)
-    raise LaunchError('Agent tabs open in Windows Terminal or tmux; start tmux first.')
+        return _launch_windows_terminal(
+            directory, title, command, cleared, forced, environ, run
+        )
+    if environ.get("TMUX") or tmux_session:
+        return _launch_tmux(
+            directory, title, command, cleared, forced, environ, run, tmux_session
+        )
+    raise LaunchError("Agent tabs open in Windows Terminal or tmux; start tmux first.")
 
 
 def await_launch(launch_id, want_session=False, timeout=TJ_RUN_TIMEOUT_SECONDS,
@@ -304,22 +341,65 @@ def await_launch(launch_id, want_session=False, timeout=TJ_RUN_TIMEOUT_SECONDS,
         wait(0.5)
 
 
-def launch(host, directory, title, arguments, item=None, parent=None, want_session=False,
-           environ=os.environ, run=subprocess.run):
+def launch(
+    host,
+    directory,
+    title,
+    arguments,
+    item=None,
+    parent=None,
+    want_session=False,
+    environ=os.environ,
+    run=subprocess.run,
+    tmux_session=None,
+):
     """Open a `tj run` tab for one agent and return its confirmed launch."""
     adapter = host_launch(host)
-    tj = shutil.which('tj')
+    tj = shutil.which("tj")
     if not tj:
-        raise LaunchError('tj is not on PATH; run the Agent install.')
+        raise LaunchError("tj is not on PATH; run the Agent install.")
     launch_id = uuid.uuid4().hex
-    clear = [name for name in adapter.TAB_CLEARED if IS_WINDOWS or name != 'TERM']
-    force = {name: value for name, value in adapter.TAB_FORCED.items() if IS_WINDOWS or name != 'TERM'}
+    clear = [name for name in adapter.TAB_CLEARED if IS_WINDOWS or name != "TERM"]
+    force = {
+        name: value
+        for name, value in adapter.TAB_FORCED.items()
+        if IS_WINDOWS or name != "TERM"
+    }
     cleared, forced = launch_environment(clear=clear, force=force)
-    command = [tj, 'run', '--host', str(host), '--title', title, '--cwd', str(directory),
-               *(['--item', item] if item else []), '--launch-id', launch_id,
-               *(['--parent', parent] if parent else []), '--', adapter.executable(), *arguments]
-    open_tab(directory, title, command, cleared, forced, environ, run)
+    command = [
+        tj,
+        "run",
+        "--host",
+        str(host),
+        "--title",
+        title,
+        "--cwd",
+        str(directory),
+        *(["--item", item] if item else []),
+        "--launch-id",
+        launch_id,
+        *(["--parent", parent] if parent else []),
+        "--",
+        adapter.executable(),
+        *arguments,
+    ]
+    options = {"tmux_session": tmux_session} if tmux_session else {}
+    open_tab(directory, title, command, cleared, forced, environ, run, **options)
     return await_launch(launch_id, want_session=want_session)
+
+
+def attach_tmux(
+    session: str, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run
+) -> None:
+    if run is subprocess.run and "PYTEST_CURRENT_TEST" in os.environ:
+        raise LaunchError(
+            "Refusing to attach a real terminal under pytest; inject a fake run."
+        )
+    result = run(["tmux", "attach-session", "-t", f"={session}"], check=False)
+    if result.returncode:
+        raise LaunchError(
+            f"tmux attach-session failed; attach with: tmux attach -t {session}"
+        )
 
 
 def parent_session(value):

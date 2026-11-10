@@ -2,7 +2,7 @@
 
 Part of [TJ Agents](https://github.com/tj-agents), Tommy's agentic engineering standards and tooling for
 Claude Code and Codex with harness parity. Agent owns behavior that acts on an agent session: session
-registration, the lifecycle commands (`tj start`, `tj status`, `tj reload`), handoff, refresh, lanes and
+registration, the lifecycle commands (`tj start`, `tj status`, `tj recover`), handoff, refresh, lanes and
 machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS mechanics with no agent
 judgement, such as closing a terminal or the clipboard, belong in `tj-agents/cli`; common behavior and the
 engineering and workflow process belong in `tj-agents/core`; the session↔work-item link store is
@@ -108,10 +108,11 @@ installed runtime and reports the update failure.
 ```text
 tj start 461 [--codex] [--lane L4]   worktree via worktrunk, card In Progress, agent in a tj run tab
 tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
-tj reload [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
+tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
+tj recover --dry-run                 preview restores and stale sessions to end without changing anything
 ```
 
-`tj` dispatches these to the `tj-start`, `tj-status` and `tj-reload` shims the installer writes beside it.
+`tj` dispatches these to the `tj-start`, `tj-status` and `tj-recover` shims the installer writes beside it.
 Every agent tab is a Windows Terminal or tmux tab whose root process is `tj run`, from
 [TJ CLI](https://github.com/tj-agents/cli). `tj run` records the launch in agent-store. The SessionStart
 hook then binds the native session to that launch, so the session inherits its title, work item and parent,
@@ -120,6 +121,12 @@ and a Codex thread is named after its title. Liveness always comes from the host
 attach to that daemon, so they carry no `-c` overrides; a requested reasoning effort is applied to the first
 turn through the daemon. The store holds links only. Its release is pinned in
 `.agents/agent/runtime/agent-store.json`, which Renovate bumps.
+
+Recovery considers every registered session, including those without a work item. It leaves live sessions
+alone and restores dead sessions whose host transcript changed after the previous boot. Older dead sessions
+are marked ended; `--older` includes them again, and `--ended` includes sessions that ended cleanly.
+Missing transcripts and directories are reported per session. On Linux, recovery uses the previous boot
+in the systemd journal and opens tmux windows, creating and attaching to `tj-recover` from a plain terminal.
 
 ## Skills
 

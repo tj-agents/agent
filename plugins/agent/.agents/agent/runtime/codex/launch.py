@@ -1,6 +1,7 @@
 """Codex executable selection, daemon-attached launch arguments and thread liveness."""
 
 import glob
+import json
 import os
 from pathlib import Path
 import re
@@ -190,9 +191,24 @@ def daemon(timeout=DAEMON_TIMEOUT_SECONDS):
     return hook_trust.AppServer(executable(), Path.cwd(), timeout=timeout, existing=True)
 
 
-def liveness() -> dict[str, Liveness]:
+def liveness(*, strict: bool = False) -> dict[str, Liveness]:
     """Threads loaded in the shared app-server daemon, by thread id; an absent daemon has none."""
     try:
+        if strict:
+            result = process.run(
+                [executable(), "app-server", "daemon", "version"],
+                capture_output=True, text=True, encoding="utf-8",
+                timeout=DAEMON_TIMEOUT_SECONDS, check=False,
+            )
+            if result.returncode:
+                detail = result.stderr.strip() or result.stdout.strip()
+                if "failed to connect to" in detail and any(
+                    f"(os error {code})" in detail for code in (2, 111, 10061)
+                ):
+                    return {}
+                raise LaunchError(f"Cannot determine Codex daemon state: {detail}")
+            if not isinstance(json.loads(result.stdout), dict):
+                raise LaunchError("Codex daemon version returned invalid JSON")
         with daemon() as server:
             loaded, cursor = [], None
             while True:
@@ -203,7 +219,12 @@ def liveness() -> dict[str, Liveness]:
                     break
             statuses = {thread: server.request("thread/read", {"threadId": thread})["thread"]["status"]["type"]
                         for thread in loaded}
-    except (OSError, RuntimeError, LaunchError, KeyError, TypeError):
+    except (
+        OSError, subprocess.SubprocessError, RuntimeError, LaunchError,
+        ValueError, KeyError, TypeError,
+    ) as error:
+        if strict:
+            raise LaunchError(f"Cannot determine Codex liveness: {error}") from error
         return {}
     return {thread: Liveness(alive=status != "notLoaded", activity=status) for thread, status in statuses.items()}
 
