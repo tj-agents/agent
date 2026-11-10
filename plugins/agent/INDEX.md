@@ -8,5 +8,4 @@
 - `plugins` — utility — core
 - `recent` — utility — core
 - `recover` — utility — core
-- `refresh-plugins` — utility — core
 - `search` — utility — core

@@ -34,9 +34,7 @@ sys.path.insert(0, str(RUNTIME))
 
 
 def load(name):
-    spec = importlib.util.spec_from_file_location(
-        name, RUNTIME / "plugins" / f"{name}.py"
-    )
+    spec = importlib.util.spec_from_file_location(name, RUNTIME / "tj_plugins.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -175,7 +173,7 @@ class RefreshPluginsTests(unittest.TestCase):
             return completed(0)
 
         with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
-            self.assertEqual(1, REFRESH.main(["--host", "claude"]))
+            self.assertEqual(1, REFRESH.main(["update", "--host", "claude"]))
         commands = [call.args[0] for call in spawned.call_args_list]
         self.assertIn(
             [
@@ -226,7 +224,7 @@ class RefreshPluginsTests(unittest.TestCase):
             return completed(0)
 
         with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
-            self.assertEqual(0, REFRESH.main(["--host", "claude"]))
+            self.assertEqual(0, REFRESH.main(["update", "--host", "claude"]))
         commands = [call.args[0] for call in spawned.call_args_list]
         updates = [
             command
@@ -276,7 +274,7 @@ class RefreshPluginsTests(unittest.TestCase):
             return completed(0)
 
         with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
-            self.assertEqual(0, REFRESH.main(["--host", "codex"]))
+            self.assertEqual(0, REFRESH.main(["update", "--host", "codex"]))
         commands = [call.args[0] for call in spawned.call_args_list]
         command_fn = REFRESH.codex_installed.codex_command
         self.assertEqual(
@@ -320,7 +318,7 @@ class RefreshPluginsTests(unittest.TestCase):
             )
 
         with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
-            self.assertEqual(0, REFRESH.main(["--host", "claude"]))
+            self.assertEqual(0, REFRESH.main(["update", "--host", "claude"]))
         updates = [
             call.args[0]
             for call in spawned.call_args_list
@@ -365,7 +363,7 @@ class RefreshPluginsTests(unittest.TestCase):
             )
 
         with mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned:
-            self.assertEqual(0, REFRESH.main(["--host", "codex"]))
+            self.assertEqual(0, REFRESH.main(["update", "--host", "codex"]))
         adds = [
             call.args[0]
             for call in spawned.call_args_list
@@ -381,13 +379,13 @@ class RefreshPluginsTests(unittest.TestCase):
         )
 
     def test_a_held_refresh_lock_makes_a_second_refresh_exit_without_running(self):
-        job = REFRESH.jobs.Job.REFRESH
+        job = REFRESH.jobs.Job.UPDATE
         with (
             REFRESH.jobs.held(self.state, job) as first,
             mock.patch.object(REFRESH.process, "run") as spawned,
         ):
             self.assertTrue(first)
-            self.assertEqual(0, REFRESH.main(["--host", "claude"]))
+            self.assertEqual(0, REFRESH.main(["update", "--host", "claude"]))
         spawned.assert_not_called()
         self.assertFalse(REFRESH.jobs.lock_path(self.state, job).exists())
 
@@ -400,8 +398,8 @@ class RefreshPluginsTests(unittest.TestCase):
             )
 
         with mock.patch.object(REFRESH.process, "run", side_effect=run):
-            self.assertEqual(1, REFRESH.main(["--host", "claude"]))
-        job = REFRESH.jobs.Job.REFRESH
+            self.assertEqual(1, REFRESH.main(["update", "--host", "claude"]))
+        job = REFRESH.jobs.Job.UPDATE
         self.assertEqual(
             "claude: list: boom", REFRESH.jobs.recent_failure(self.state, job)
         )
@@ -437,7 +435,7 @@ def test_codex_commands_carry_marketplace_overrides_and_no_cwd(tmp_path: Path) -
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
         mock.patch.object(machine_state, "drift", return_value={}),
     ):
-        assert REFRESH.main(["--host", "codex"]) == 0
+        assert REFRESH.main(["update", "--host", "codex"]) == 0
     overrides = REFRESH.codex_installed.MARKETPLACE_OVERRIDES
     codex_calls = [
         call for call in spawned.call_args_list if call.args[0][0] == "codex"
@@ -466,9 +464,9 @@ def test_codex_refresh_fails_with_no_tj_agents_rows_after_listing(
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
         mock.patch.object(machine_state, "drift", return_value={}),
     ):
-        assert REFRESH.main(["--host", "codex"]) == 1
+        assert REFRESH.main(["update", "--host", "codex"]) == 1
         failure = REFRESH.jobs.recent_failure(
-            tmp_path / "state", REFRESH.jobs.Job.REFRESH
+            tmp_path / "state", REFRESH.jobs.Job.UPDATE
         )
         assert failure == "codex: list: no tj-agents plugins installed"
 
@@ -505,8 +503,8 @@ def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None
         mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned,
         mock.patch.object(REFRESH.jobs.process, "start", started),
     ):
-        assert REFRESH.main(["--host", "claude"]) == 0
-        assert REFRESH.main(["--host", "codex"]) == 0
+        assert REFRESH.main(["update", "--host", "claude"]) == 0
+        assert REFRESH.main(["update", "--host", "codex"]) == 0
     commands = [call.args[0] for call in spawned.call_args_list]
     assert {command[0] for command in commands if command[0] != "tj"} == {
         "claude",
@@ -561,7 +559,7 @@ def test_a_downloaded_pin_is_repaired_by_install_on_the_next_prompt(
         assert latest_plugins.reason(Host.CLAUDE, state, full=True) is None
 
         pin_plugin(claude, "personal", NEW_PIN)
-        assert REFRESH.main(["--host", "claude"]) == 0
+        assert REFRESH.main(["update", "--host", "claude"]) == 0
         assert started.commands == []
 
         assert latest_plugins.reason(Host.CLAUDE, state, full=True) is not None
@@ -640,7 +638,7 @@ def daemon_refresh(
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
         mock.patch.object(machine_state, "drift", return_value={}),
     ):
-        code = REFRESH.main(["--host", "codex"])
+        code = REFRESH.main(["update", "--host", "codex"])
     return code, [call.args[0] for call in spawned.call_args_list], trusted
 
 
@@ -682,7 +680,7 @@ def test_a_failed_daemon_install_is_reported_and_the_rest_still_reload(
         "config/batchWrite",
         {"edits": [], "reloadUserConfig": True},
     )
-    failure = REFRESH.jobs.recent_failure(tmp_path / "state", REFRESH.jobs.Job.REFRESH)
+    failure = REFRESH.jobs.recent_failure(tmp_path / "state", REFRESH.jobs.Job.UPDATE)
     assert failure is not None and failure.startswith(
         "codex: agent@tj-agents: Codex plugin/install failed"
     )
@@ -718,7 +716,7 @@ def test_the_cli_path_trusts_new_hooks_once_after_adding_plugins(
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
         mock.patch.object(machine_state, "drift", return_value={}),
     ):
-        assert REFRESH.main(["--host", "codex"]) == 0
+        assert REFRESH.main(["update", "--host", "codex"]) == 0
     assert order[-2:] == ["codex plugin add", "trust"]
     assert no_codex_daemon == [
         ("codex", tmp_path / "state", REFRESH.codex_installed.MARKETPLACE_OVERRIDES)
@@ -745,7 +743,7 @@ def test_nothing_is_trusted_when_every_installed_build_is_already_trusted(
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
         mock.patch.object(machine_state, "drift", return_value={}),
     ):
-        assert REFRESH.main(["--host", "codex"]) == 0
+        assert REFRESH.main(["update", "--host", "codex"]) == 0
     assert no_codex_daemon == []
 
 
@@ -821,7 +819,7 @@ def test_a_project_scoped_codex_plugin_is_updated_and_stays_project_scoped(
         mock.patch.object(REFRESH.jobs.process, "start", Started()),
         mock.patch.object(machine_state, "drift", return_value={}),
     ):
-        assert REFRESH.main(["--host", "codex"]) == 0
+        assert REFRESH.main(["update", "--host", "codex"]) == 0
     adds = [
         call.args[0][3]
         for call in spawned.call_args_list
@@ -854,7 +852,7 @@ def test_refresh_requires_a_host_when_session_context_is_ambiguous(
 
 
 def test_hook_refresh_pins_the_requested_host() -> None:
-    assert latest_plugins.refresh_command(Host.CODEX)[-2:] == ["--host", "codex"]
+    assert latest_plugins.update_command(Host.CODEX)[-2:] == ["--host", "codex"]
 
 
 def test_claude_requests_only_the_calling_wrapper_to_resume(
@@ -879,5 +877,77 @@ def test_current_plugins_spawn_no_subprocess(host: Host, tmp_path: Path) -> None
     )
     shutil.copytree(root, tmp_path / "codex/plugins/cache/tj-agents/agent/current")
     with _patched_homes(tmp_path), mock.patch.object(REFRESH.process, "run") as spawned:
-        assert REFRESH.main(["--host", host.value]) == 0
+        assert REFRESH.main(["update", "--host", host.value]) == 0
     spawned.assert_not_called()
+
+
+def test_immutable_codex_builds_need_only_published_version_metadata(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    version = "a" * 12
+    (source / ".codex-plugin").mkdir(parents=True)
+    (source / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"version": version}), encoding="utf-8"
+    )
+    with _patched_homes(tmp_path):
+        installed = tmp_path / "codex/plugins/cache/tj-agents/agent" / version
+        shutil.copytree(source, installed)
+        digests = mock.Mock()
+        assert REFRESH.codex_installed.build_current(
+            "tj-agents", "agent", source, digests
+        )
+        digests.tree.assert_not_called()
+        (installed / ".codex-plugin/plugin.json").write_text(
+            '{"version":"local"}', encoding="utf-8"
+        )
+        assert not REFRESH.codex_installed.build_current(
+            "tj-agents", "agent", source, digests
+        )
+
+
+def test_local_codex_builds_keep_the_standards_branch_content_check(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "skill.md").write_text("current", encoding="utf-8")
+    with _patched_homes(tmp_path):
+        installed = tmp_path / "codex/plugins/cache/tj-agents/agent/local"
+        shutil.copytree(source, installed)
+        digests = REFRESH.Digests(tmp_path / "state")
+        assert REFRESH.codex_installed.build_current(
+            "tj-agents", "agent", source, digests
+        )
+        (installed / "skill.md").write_text("outdated", encoding="utf-8")
+        assert not REFRESH.codex_installed.build_current(
+            "tj-agents", "agent", source, digests
+        )
+
+
+def test_current_downloads_activate_an_older_managed_claude_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = tmp_path / "claude"
+    pin_plugin(claude, "agent", AGENT_PIN)
+    install_plugin(claude, "agent", AGENT_PIN)
+    monkeypatch.setenv("TJ_RUN_LAUNCH_ID", "fixture")
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "older-agent"))
+    with (
+        _patched_homes(tmp_path),
+        mock.patch.object(REFRESH.process, "run", return_value=completed()) as run,
+    ):
+        assert REFRESH.main(["update", "--host", "claude"]) == 0
+    assert len(run.call_args_list) == 1
+    assert run.call_args.args[0][:3] == ["tj", "restart", "--reason"]
+
+
+def test_a_missing_claude_install_cannot_be_current(tmp_path: Path) -> None:
+    claude = tmp_path / "claude"
+    pin_plugin(claude, "agent", AGENT_PIN)
+    root = install_plugin(claude, "agent", AGENT_PIN)
+    shutil.rmtree(root)
+    with _patched_homes(tmp_path):
+        assert not REFRESH.already_current(
+            Host.CLAUDE, REFRESH.Digests(tmp_path / "state")
+        )

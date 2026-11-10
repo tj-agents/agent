@@ -20,7 +20,7 @@ FAILURE_SECONDS = 600
 
 
 class Job(Enum):
-    REFRESH = ("plugin-refresh", "plugin refresh")
+    UPDATE = ("plugin-update", "plugin update")
     INSTALL = ("machine-install", "machine install")
 
     def __init__(self, file_name: str, label: str) -> None:

@@ -11,7 +11,7 @@ package = false
 mypy-groups = [[".agents", "tests"], [".claude/runtime"], [".codex/runtime"]]
 
 [tool.uv.sources]
-tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "ba8308382b080c5031ee06f63223d147300400f1", subdirectory = "packages/tj-cli" }
+tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "364757479c8d7c4615e595c01019bdd158dd0819", subdirectory = "packages/tj-cli" }
 
 [dependency-groups]
 dev = ["mypy>=2.4.1", "pytest>=9.1.1", "ruff>=0.17.4", "pytest-socket>=0.7.0"]
@@ -71,7 +71,6 @@ raises-require-match-for = ["*"]
 ".agents/agent/utility/plugins/scripts/config_conflicts.py" = ["ANN401"]
 ".agents/agent/runtime/tj_recover.py" = ["TID251"]
 ".agents/agent/runtime/retired_state.py" = ["PLR6301", "TRY300"]
-".agents/agent/runtime/plugins/refresh.py" = ["PLR6301", "TID251"]
 ".agents/agent/runtime/latest_plugins.py" = ["TID251"]
 
 [[tool.python-standards.exceptions]]
@@ -368,7 +367,6 @@ reason = "Existing test flattens nested fixture data for assertions."
 ".agents/agent/runtime/tj_start.py" = ["E501", "I001", "TID251"]
 ".agents/agent/runtime/tj_status.py" = ["E501", "I001", "TID251"]
 ".agents/agent/utility/handoff/scripts/handoff.py" = ["E501", "I001", "TID251"]
-".agents/agent/utility/refresh-plugins/scripts/refresh_plugins.py" = ["E501", "I001"]
 ".agents/codex/utility/hooks/scripts/hook_control.py" = ["ANN401", "B904", "E501", "E712", "I001", "PTH105", "PTH123", "RUF059", "TRY300", "UP037"]
 ".agents/codex/utility/memory/scripts/memory.py" = ["E501", "I001"]
 ".claude/runtime/installed.py" = ["ANN401", "E501", "I001", "UP035"]
@@ -442,7 +440,6 @@ exclude = [
   ".agents/agent/runtime/tj_status.py",
   ".agents/agent/runtime/transcripts.py",
   ".agents/agent/utility/handoff/scripts/handoff.py",
-  ".agents/agent/utility/refresh-plugins/scripts/refresh_plugins.py",
   ".agents/codex/utility/hooks/scripts/hook_control.py",
   ".agents/codex/utility/memory/scripts/memory.py",
   ".claude/runtime/installed.py",
@@ -568,14 +565,6 @@ disable_error_code = ["type-arg"]
 [[tool.mypy.overrides]]
 module = "plugin_selection"
 disable_error_code = ["arg-type", "index", "no-untyped-call", "no-untyped-def", "return-value", "type-arg", "union-attr"]
-
-[[tool.mypy.overrides]]
-module = "plugins.refresh"
-disable_error_code = ["arg-type"]
-
-[[tool.mypy.overrides]]
-module = "refresh_plugins"
-disable_error_code = ["no-untyped-call", "no-untyped-def"]
 
 [[tool.mypy.overrides]]
 module = "repo_config"

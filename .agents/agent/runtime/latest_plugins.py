@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Refuse work while this session, its plugins or the machine are behind their pins.
+"""Report when this session, its plugins or the machine are behind their pins.
 
-Each cause starts only its own fix: plugins behind their pin start the plugin refresh,
+Each cause starts only its own fix: plugins behind their pin start the plugin update,
 and machine drift starts only the install steps that repair it.
 """
 
@@ -72,6 +72,8 @@ def running_root(host: Host) -> Path:
 
 
 def running_behind(host: Host) -> str | None:
+    if not os.environ.get(host.plugin_root_variable):
+        return None
     pin = claude_installed.pins("tj-agents").get("agent")
     install = claude_installed.installs("tj-agents").get("agent")
     if not pin or not install or install[0] != pin:
@@ -80,11 +82,12 @@ def running_behind(host: Host) -> str | None:
     return f"agent@tj-agents: {behind}" if behind else None
 
 
-def refresh_command(host: Host) -> list[str]:
+def update_command(host: Host) -> list[str]:
     return [
         sys.executable,
         "-B",
-        str(machine_state.packaged("plugins/refresh.py")),
+        str(machine_state.packaged("tj_plugins.py")),
+        "update",
         "--host",
         host.value,
     ]
@@ -130,12 +133,20 @@ def reason(host: Host, state: Path, *, full: bool) -> str | None:
     if installed_behind(host):
         return fixing(
             state,
-            jobs.Job.REFRESH,
-            refresh_command(host),
+            jobs.Job.UPDATE,
+            update_command(host),
             "plugins",
             INSTALLED[host].RELOAD,
         )
     if running_behind(host):
+        if host is Host.CLAUDE and os.environ.get("TJ_RUN_LAUNCH_ID"):
+            return fixing(
+                state,
+                jobs.Job.UPDATE,
+                update_command(host),
+                "running plugins",
+                "this conversation resumes when idle without background work",
+            )
         return f"Plugins updated: {INSTALLED[host].RELOAD}."
     return machine
 

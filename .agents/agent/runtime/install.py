@@ -63,6 +63,7 @@ RUNTIME_EXPORTS = (
 )
 LIFECYCLE_COMMANDS = {
     "start": "tj_start.py", "status": "tj_status.py", "recover": "tj_recover.py",
+    "plugins": "tj_plugins.py", "install": "install.py",
 }
 PROFILE_START = "# >>> tj-agents >>>"
 PROFILE_END = "# <<< tj-agents <<<"
@@ -1052,14 +1053,14 @@ def apply_retired_state(context: Context) -> list[str]:
 
 
 def check_native_cli(context: Context) -> list[str]:
-    pending = native_runtime.pending()
+    pending = native_runtime.pending(revision=native_runtime.NATIVE_REVISION)
     if pending:
         return ["install or update native CLI binaries: " + ", ".join(pending)]
     return []
 
 
 def apply_native_cli(context: Context) -> list[str]:
-    changed = native_runtime.prepare()
+    changed = native_runtime.prepare(revision=native_runtime.NATIVE_REVISION)
     context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
     return ["installed native CLI binaries: " + ", ".join(changed)] if changed else ["native CLI available on PATH"]
 

@@ -242,3 +242,19 @@ def test_installer_check_converges_when_parent_shell_path_omits_native_directory
         assert install.main(["--check", "--step", "native CLI"]) == 0
         assert install.main(["--check", "--step", "native CLI"]) == 0
     prepare.assert_not_called()
+
+
+def test_install_requires_the_release_that_implements_safe_resume(
+    tmp_path: Path,
+) -> None:
+    context = install.Context(home=tmp_path, environ={}, windows=os.name == "nt")
+    with (
+        mock.patch.object(
+            native_runtime, "pending", return_value=("older revision",)
+        ) as pending,
+        mock.patch.object(native_runtime, "prepare", return_value=()) as prepare,
+    ):
+        assert install.check_native_cli(context)
+        install.apply_native_cli(context)
+    pending.assert_called_once_with(revision=native_runtime.NATIVE_REVISION)
+    prepare.assert_called_once_with(revision=native_runtime.NATIVE_REVISION)
