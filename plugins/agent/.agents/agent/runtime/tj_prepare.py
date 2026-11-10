@@ -1,4 +1,5 @@
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -35,11 +36,6 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
         raise standards.StandardsError(
             configured.stderr.strip() or configured.stdout.strip()
         )
-    if (project / ".agents/repo-capabilities.local.json").is_file():
-        raise standards.StandardsError(
-            "Local-only adoption preserves this repository's instruction files; "
-            "its owner must supply standards routing."
-        )
     try:
         roots = required_plugins.check(
             directory, host, inventory_options=inventory_options
@@ -49,8 +45,14 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
         roots = required_plugins.check(
             directory, host, inventory_options=inventory_options
         )
-    for adapter in host_plugins.PLUGINS.values():
-        adapter.prepare_instructions(project)
+    if (project / ".agents/repo-capabilities.local.json").is_file():
+        raise standards.StandardsError(
+            "Local-only adoption preserves this repository's instruction files; "
+            "its owner must supply standards routing."
+        )
+    host_plugins.PLUGINS[Host.CLAUDE].prepare_instructions(project)
+    if host != Host.CLAUDE:
+        host_plugins.PLUGINS[host].prepare_instructions(project)
     return standards.update(project, roots or {})
 
 
@@ -60,12 +62,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     parser.add_argument("--cwd", type=Path, default=Path.cwd())
-    parser.add_argument("arguments", nargs=argparse.REMAINDER)
+    parser.add_argument("--arguments-stdin", action="store_true")
     arguments = parser.parse_args(argv)
     try:
-        host_arguments = arguments.arguments
-        if host_arguments[:1] == ["--"]:
-            host_arguments = host_arguments[1:]
+        host_arguments = json.load(sys.stdin) if arguments.arguments_stdin else []
+        if not isinstance(host_arguments, list) or any(
+            not isinstance(value, str) for value in host_arguments
+        ):
+            raise ValueError("Host arguments must be a JSON string array")
         prepare(arguments.cwd, arguments.host, tuple(host_arguments))
     except (
         OSError,
