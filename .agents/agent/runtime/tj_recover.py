@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -66,7 +67,7 @@ def sessions(item: str | None, handle: str | None) -> list[dict[str, Any]]:
 
 
 def plan(
-    records: list[dict[str, Any]],
+    records: Sequence[dict[str, Any]],
     older: bool,
     ended: bool,
 ) -> list[Recovery]:

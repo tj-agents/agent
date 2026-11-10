@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Collection, Iterable, Sequence
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import required_plugins
 from codex import user_plugins
@@ -23,6 +24,10 @@ MARKETPLACE_OVERRIDES = (
     f"marketplaces.{required_plugins.MARKETPLACE_NAME}.sparse_paths="
     f"{json.dumps(list(required_plugins.MARKETPLACE_SPARSE_PATHS))}",
 )
+
+
+class InventoryError(Exception):
+    pass
 
 
 def codex_command(*arguments: str) -> list[str]:
@@ -49,15 +54,17 @@ def installed_label(marketplace: str, plugin: str) -> str | None:
 def identities() -> set[str]:
     cache = HOST.configuration_root / "plugins" / "cache"
     try:
-        return {
-            f"{plugin.name}@{marketplace.name}"
-            for marketplace in cache.iterdir()
-            if marketplace.is_dir()
-            for plugin in marketplace.iterdir()
-            if plugin.is_dir() and any(build.is_dir() for build in plugin.iterdir())
-        }
-    except OSError:
+        marketplaces = list(cache.iterdir())
+    except FileNotFoundError:
         return set()
+    found = set()
+    for marketplace in marketplaces:
+        if not marketplace.is_dir():
+            continue
+        for plugin in marketplace.iterdir():
+            if plugin.is_dir() and any(build.is_dir() for build in plugin.iterdir()):
+                found.add(f"{plugin.name}@{marketplace.name}")
+    return found
 
 
 def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
@@ -79,17 +86,23 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
     return None
 
 
-def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]) -> None:
+def refresh(
+    report: Any, marketplaces: Collection[str], current: Callable[[str, str], bool]
+) -> None:
     from codex import launch
 
     listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
     if listing is None:
         return
-    listed = {row["pluginId"] for row in json.loads(listing.stdout)["installed"]
-              if row["marketplaceName"] in marketplaces}
+    listed = {
+        row["pluginId"]
+        for row in json.loads(listing.stdout)["installed"]
+        if row["marketplaceName"] in marketplaces
+    }
     candidates = listed | cached(marketplaces)
     if required_plugins.MARKETPLACE_NAME in marketplaces and not any(
-        identity.endswith("@" + required_plugins.MARKETPLACE_NAME) for identity in candidates
+        identity.endswith("@" + required_plugins.MARKETPLACE_NAME)
+        for identity in candidates
     ):
         report.fail(
             HOST, "list", f"no {required_plugins.MARKETPLACE_NAME} plugins installed"
@@ -102,11 +115,24 @@ def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, 
             codex_command("plugin", "marketplace", "upgrade", marketplace),
         )
     unlisted = candidates - listed
-    published = published_plugins(report) if unlisted else set()
+    published = set()
+    if unlisted:
+        try:
+            published = published_plugins(report)
+        except InventoryError as error:
+            report.fail(HOST, "publication", str(error))
+            return
     installed = sorted(listed | (unlisted & published))
     for identity in sorted(unlisted - published):
-        print(f"{HOST}: {identity} is no longer published; left for plugin setup to remove")
-    stale = [identity for identity in installed if not current(identity.rpartition("@")[2], identity.rpartition("@")[0])]
+        print(
+            f"{HOST}: {identity} is no longer published; "
+            "left for plugin setup to remove"
+        )
+    stale = [
+        identity
+        for identity in installed
+        if not current(identity.rpartition("@")[2], identity.rpartition("@")[0])
+    ]
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
     user_enabled = user_plugins.enabled(read_user_config())
@@ -116,34 +142,51 @@ def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, 
     else:
         for identity in stale:
             report.step(HOST, identity, codex_command("plugin", "add", identity))
-    keep_project_scope(report, [identity for identity in stale if identity not in user_enabled])
+    keep_project_scope(
+        report, [identity for identity in stale if identity not in user_enabled]
+    )
     trust_hooks(report)
     if open_sessions:
         reload_open_sessions(report)
 
 
-def cached(marketplaces: tuple[str, ...]) -> set[str]:
+def cached(marketplaces: Iterable[str]) -> set[str]:
     cache = HOST.configuration_root / "plugins" / "cache"
     found = set()
     for marketplace in marketplaces:
         directory = cache / marketplace
         for plugin in directory.iterdir() if directory.is_dir() else ():
-            builds = [entry for entry in plugin.iterdir() if entry.is_dir()] if plugin.is_dir() else []
+            builds = (
+                [entry for entry in plugin.iterdir() if entry.is_dir()]
+                if plugin.is_dir()
+                else []
+            )
             if len(builds) == 1 and manifest_name(builds[0]) == plugin.name:
                 found.add(f"{plugin.name}@{marketplace}")
     return found
 
 
 def published_plugins(report: Any) -> set[str]:
-    roots = marketplace_roots(report) or {}
+    roots = marketplace_roots(report)
+    if roots is None:
+        raise InventoryError("Could not determine marketplace roots")
     found = set()
     for marketplace, root in roots.items():
         try:
-            manifest = json.loads((root / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        found.update(f"{entry['name']}@{marketplace}" for entry in manifest.get("plugins", [])
-                     if isinstance(entry, dict) and isinstance(entry.get("name"), str))
+            manifest = json.loads(
+                (root / ".agents" / "plugins" / "marketplace.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (OSError, ValueError) as error:
+            raise InventoryError(
+                f"unreadable manifest for {marketplace}: {error}"
+            ) from error
+        found.update(
+            f"{entry['name']}@{marketplace}"
+            for entry in manifest.get("plugins", [])
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+        )
     return found
 
 
@@ -160,7 +203,7 @@ def read_user_config() -> str:
     return path.read_text(encoding="utf-8-sig") if path.is_file() else ""
 
 
-def keep_project_scope(report: Any, identities: list[str]) -> None:
+def keep_project_scope(report: Any, identities: Collection[str]) -> None:
     """Undo the user-level enablement `codex plugin add` gives a plugin only projects select."""
     text = read_user_config()
     try:
@@ -199,7 +242,7 @@ def marketplace_roots(report: Any) -> dict[str, Path] | None:
         return None
 
 
-def install_through_daemon(report: Any, identities: list[str]) -> None:
+def install_through_daemon(report: Any, identities: Sequence[str]) -> None:
     """Install through the shared daemon, which reloads every loaded thread's plugins, hooks and skills."""
     from codex import launch
 
@@ -210,9 +253,14 @@ def install_through_daemon(report: Any, identities: list[str]) -> None:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
             for identity in identities:
                 plugin, _, marketplace = identity.rpartition("@")
-                manifest = roots[marketplace] / ".agents" / "plugins" / "marketplace.json"
+                manifest = (
+                    roots[marketplace] / ".agents" / "plugins" / "marketplace.json"
+                )
                 try:
-                    server.request("plugin/install", {"marketplacePath": str(manifest), "pluginName": plugin})
+                    server.request(
+                        "plugin/install",
+                        {"marketplacePath": str(manifest), "pluginName": plugin},
+                    )
                 except RuntimeError as error:
                     report.fail(HOST, identity, str(error))
                     continue

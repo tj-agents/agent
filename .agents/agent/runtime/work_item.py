@@ -19,8 +19,10 @@ def parent_item_ref(parent: str) -> str | None:
     """The ref of `parent`'s first linked item, owner role first, or None."""
     try:
         shown = agent_store.run("show", parent)
-    except agent_store.AgentStoreError:
-        return None
+    except agent_store.AgentStoreError as error:
+        if error.code == "not-found":
+            return None
+        raise LaunchError(f"Could not read the parent work item: {error}") from error
     links = shown["session"]["links"]
     if not links:
         return None
@@ -50,6 +52,7 @@ def create(
             command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=COMMAND_TIMEOUT_SECONDS,
             check=False,
         )

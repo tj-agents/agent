@@ -85,7 +85,9 @@ def refresh_command() -> list[str]:
 
 
 def install_command(steps: Iterable[str]) -> list[str]:
-    selected = [argument for step in steps for argument in ("--step", step)]
+    selected: list[str] = []
+    for step in steps:
+        selected.extend(("--step", step))
     return [sys.executable, "-B", str(machine_state.packaged("install.py")), *selected]
 
 

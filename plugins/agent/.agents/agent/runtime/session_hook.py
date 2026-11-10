@@ -9,19 +9,19 @@ addressable by name. Exit 0 always: bookkeeping never stops a session.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from tj_agent.host import Host
 import agent_store
+from tj_agent.host import Host
 from tj_cli import process
 
 LAUNCH_ENV = "TJ_RUN_LAUNCH_ID"
@@ -66,7 +66,9 @@ def wrapper_arguments(environ: Mapping[str, str]) -> list[str]:
     return ["--wrapper-pid", pid, "--wrapper-started-at", started_at] if pid and started_at else []
 
 
-def register(host: Host, session_id: str, cwd: str, root: str | None, arguments: list[str]) -> dict:
+def register(
+    host: Host, session_id: str, cwd: str, root: str | None, arguments: Sequence[str]
+) -> dict:
     base = ["register", "--session", f"{host}:{session_id}", "--cwd", cwd]
     if root:
         base += ["--worktree", root]

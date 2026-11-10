@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
 import subprocess
-from typing import Any, Callable
+from collections.abc import Callable, Collection
+from pathlib import Path
+from typing import Any
 
 from tj_agent.host import Host
 
@@ -70,15 +71,30 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
     return None
 
 
-def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]) -> None:
+def refresh(
+    report: Any, marketplaces: Collection[str], current: Callable[[str, str], bool]
+) -> None:
     for marketplace in marketplaces:
-        report.step(HOST, f"marketplace {marketplace}", ["claude", "plugin", "marketplace", "update", marketplace])
+        report.step(
+            HOST,
+            f"marketplace {marketplace}",
+            ["claude", "plugin", "marketplace", "update", marketplace],
+        )
     listing = report.step(HOST, "list", ["claude", "plugin", "list", "--json"])
     if listing is None:
         return
-    plugins = sorted({row["id"] for row in json.loads(listing.stdout)
-                      if row["scope"] == "user" and row["id"].rpartition("@")[2] in marketplaces})
-    stale = [plugin for plugin in plugins if not current(plugin.rpartition("@")[2], plugin.rpartition("@")[0])]
+    plugins = sorted(
+        {
+            row["id"]
+            for row in json.loads(listing.stdout)
+            if row["scope"] == "user" and row["id"].rpartition("@")[2] in marketplaces
+        }
+    )
+    stale = [
+        plugin
+        for plugin in plugins
+        if not current(plugin.rpartition("@")[2], plugin.rpartition("@")[0])
+    ]
     if len(stale) < len(plugins):
         print(f"{HOST}: {len(plugins) - len(stale)} plugin(s) already at their pin")
     for plugin in stale:
