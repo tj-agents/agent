@@ -7,6 +7,7 @@ from pathlib import Path
 
 import agent_cli
 from codex import hook_trust
+from codex.project_plugins import install as install, prepare_instructions as prepare_instructions
 from tj_agent.host import Host
 import required_plugins
 
