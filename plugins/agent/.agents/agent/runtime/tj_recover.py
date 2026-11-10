@@ -77,16 +77,23 @@ def plan(
         or session["state"] != "ended"
         or (older and session.get("end_reason") == STALE_REASON)
     ]
-    live = {
-        host: agent_cli.host_launch(host).liveness()
-        for host in {Host(session["host"]) for session in candidates}
-    }
+    live, errors = {}, {}
+    for host in {Host(session["host"]) for session in candidates}:
+        try:
+            live[host] = agent_cli.host_launch(host).liveness(strict=True)
+        except (agent_cli.LaunchError, OSError, RuntimeError) as error:
+            live[host] = {}
+            errors[host] = str(error)
     agents = [
         lifecycle.Agent(session, live[Host(session["host"])].get(session["native_id"]))
         for session in candidates
     ]
     dead = [agent for agent in agents if not agent.alive]
-    cutoff = None if older or not dead else boot_history.previous_boot()
+    cutoff = (
+        None
+        if older or not any(agent.host not in errors for agent in dead)
+        else boot_history.previous_boot()
+    )
     launches = {
         row["launch_id"]: row for row in agent_store.run("launches")["launches"]
     }
@@ -108,6 +115,8 @@ def plan(
             or session["cwd"],
         )
         try:
+            if host in errors:
+                raise agent_cli.LaunchError(errors[host])
             if cutoff is not None:
                 row = replace(
                     row,
@@ -135,7 +144,7 @@ def plan(
                     row = replace(
                         row, action=Action.RESPAWN, background=agent.live.background
                     )
-        except (OSError, ValueError, RuntimeError) as error:
+        except (agent_cli.LaunchError, OSError, ValueError, RuntimeError) as error:
             row = replace(row, action=Action.FAILED, error=str(error))
         if row.action != Action.SKIP:
             results.append(row)
@@ -161,6 +170,7 @@ def restore(row: Recovery) -> Recovery:
         adapter.resume_arguments(directory, row.title, handle.split(":", 1)[1]),
         item=row.item,
         parent=row.parent,
+        want_session=True,
         tmux_session="tj-recover",
     )
     return replace(
@@ -221,7 +231,11 @@ def main(argv: list[str] | None = None) -> int:
         and not os.environ.get("TMUX")
         and any(row.action == Action.RESUMED for row in rows)
     ):
-        agent_cli.attach_tmux("tj-recover")
+        try:
+            agent_cli.attach_tmux("tj-recover")
+        except agent_cli.LaunchError as error:
+            print(f"tj recover: {error}", file=sys.stderr)
+            return 1
     return int(any(row.action == Action.FAILED for row in rows))
 
 

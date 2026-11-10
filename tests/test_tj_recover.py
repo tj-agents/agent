@@ -26,11 +26,14 @@ class FakeHost:
     root: Path
     live: dict[str, Liveness] = field(default_factory=dict)
     respawned: list[str] = field(default_factory=list)
+    error: str | None = None
     SESSION_ENVIRONMENT: tuple[str, ...] = ()
     TAB_CLEARED: tuple[str, ...] = ()
     TAB_FORCED: dict[str, str] = field(default_factory=dict)
 
-    def liveness(self) -> dict[str, Liveness]:
+    def liveness(self, *, strict: bool = False) -> dict[str, Liveness]:
+        if self.error:
+            raise agent_cli.LaunchError(self.error)
         return self.live
 
     def transcript_modified(self, session_id: str) -> float:
@@ -150,6 +153,7 @@ def test_recover_previous_uptime_session_without_item(
     assert rows[0]["action"] == "resumed"
     assert recovery.launched[0]["arguments"] == ["resume", "recent"]
     assert recovery.launched[0]["item"] is None
+    assert recovery.launched[0]["want_session"] is True
 
 
 def test_recover_auto_ends_old_dead_and_leaves_live_alone(recovery: Recovery) -> None:
@@ -250,6 +254,22 @@ def test_recover_missing_transcript_never_ends_session(recovery: Recovery) -> No
     assert code == 1
     assert rows[0]["action"] == "failed"
     assert recovery.ended == []
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_failed_liveness_never_ends_or_restores_affected_host(
+    recovery: Recovery, dry_run: bool
+) -> None:
+    recovery.session(Host.CODEX, "old", 99)
+    recovery.session(Host.CODEX, "recent")
+    recovery.session(Host.CLAUDE, "okay")
+    recovery.hosts[Host.CODEX].error = "probe failed"
+    code, rows = recovery.run(*(["--dry-run"] if dry_run else []))
+    assert code == 1
+    assert [row["action"] for row in rows[:2]] == ["failed", "failed"]
+    assert all(row["error"] == "probe failed" for row in rows[:2])
+    assert recovery.ended == []
+    assert len(recovery.launched) == (0 if dry_run else 1)
 
 
 def test_recover_session_and_item_filters(recovery: Recovery) -> None:
