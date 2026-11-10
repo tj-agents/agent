@@ -21,6 +21,7 @@ import pytest
 import session_hook
 from claude import installed as claude_installed
 from codex import installed as codex_installed
+from codex import launch as codex_launch
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -234,12 +235,17 @@ def test_a_stale_prompt_is_reported_and_never_blocked(
 class Report:
     listing: object
     commands: list[list[str]] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
 
     def step(
         self, host: Host, label: str, command: list[str]
     ) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
-        output = json.dumps(self.listing) if label == "list" else "{}"
+        output = (
+            json.dumps(self.listing)
+            if label in ("list", "versions", "installed versions")
+            else "{}"
+        )
         return subprocess.CompletedProcess(command, 0, output, "")
 
     def fail(self, host: Host, label: str, detail: str) -> None:
@@ -263,7 +269,7 @@ def test_refresh_updates_selected_plugins(
         monkeypatch.setattr(installed, "read_user_config", lambda: "")
         monkeypatch.setattr(installed, "keep_project_scope", lambda *args: None)
         monkeypatch.setattr(installed, "trust_hooks", lambda report: None)
-        monkeypatch.setattr(agent_cli.host_launch(host), "liveness", dict)
+        monkeypatch.setattr(codex_launch, "liveness", dict)
     installed.refresh(report, ("tj-agents",), lambda *args: False)
     assert any("agent@tj-agents" in command for command in report.commands)
     assert all(command[0] == str(host) for command in report.commands)

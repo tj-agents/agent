@@ -719,7 +719,8 @@ def test_the_cli_path_trusts_new_hooks_once_after_adding_plugins(
         mock.patch.object(machine_state, "drift", return_value={}),
     ):
         assert REFRESH.main(["update", "--host", "codex"]) == 0
-    assert order[-2:] == ["codex plugin add", "trust"]
+    assert order.count("trust") == 1
+    assert order.index("codex plugin add") < order.index("trust")
     assert no_codex_daemon == [
         ("codex", tmp_path / "state", REFRESH.codex_installed.MARKETPLACE_OVERRIDES)
     ]

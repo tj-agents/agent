@@ -115,6 +115,10 @@ def remember(entries: Iterable[object], *, verified_install: bool = False) -> No
             entry.get("version"),
             entry.get("source"),
         )
+        if entry.get("installed") is False or entry.get("error") or entry.get("errors"):
+            if isinstance(identity, str):
+                builds.pop(identity, None)
+            continue
         if (
             not isinstance(identity, str)
             or not isinstance(version, str)
