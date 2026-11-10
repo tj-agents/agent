@@ -744,14 +744,69 @@ def test_the_install_step_reports_untrusted_builds_and_trusts_them(
     context = install.Context(
         home=tmp_path, environ={}, windows=False, documents=tmp_path / "Documents"
     )
-    (context.codex_home / "plugins/cache/tj-agents/agent/build-3").mkdir(parents=True)
+    build = context.codex_home / "plugins/cache/tj-agents/agent/build-3"
+    (build / ".codex-plugin").mkdir(parents=True)
+    (build / ".codex-plugin/plugin.json").write_text(
+        '{"name": "agent", "hooks": "./hooks.json"}', encoding="utf-8"
+    )
+    (build / "hooks.json").write_text(
+        '{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "x"}]}]}}',
+        encoding="utf-8",
+    )
     with mock.patch.dict(os.environ, {"CODEX_HOME": str(context.codex_home)}):
-        assert install.check_codex_hook_trust(context) == [
-            "trust agent@tj-agents build build-3 hooks"
-        ]
+        assert install.check_codex_hook_trust(context) == ["trust agent@tj-agents hooks"]
         assert install.apply_codex_hook_trust(context) == [
             "trusted 0 tj-agents Codex hook(s)"
         ]
     assert no_codex_daemon == [
         ("codex", context.state_directory, REFRESH.codex_installed.MARKETPLACE_OVERRIDES)
     ]
+
+
+def test_a_project_scoped_codex_plugin_is_updated_and_stays_project_scoped(
+    tmp_path: Path,
+) -> None:
+    listing = json.dumps(
+        {"installed": [{"pluginId": "base@tj-agents", "marketplaceName": "tj-agents"}]}
+    )
+    codex_home = tmp_path / "codex"
+    build = codex_home / "plugins/cache/tj-agents/agent/old-build/.codex-plugin"
+    build.mkdir(parents=True)
+    (build / "plugin.json").write_text('{"name": "agent"}', encoding="utf-8")
+    staging = codex_home / "plugins/cache/tj-agents/plugin-install-AbC123/agent"
+    staging.mkdir(parents=True)
+    retired = codex_home / "plugins/cache/tj-agents/machine/old-build/.codex-plugin"
+    retired.mkdir(parents=True)
+    (retired / "plugin.json").write_text('{"name": "machine"}', encoding="utf-8")
+    market = tmp_path / "market"
+    (market / ".agents/plugins").mkdir(parents=True)
+    (market / ".agents/plugins/marketplace.json").write_text(
+        json.dumps({"plugins": [{"name": "agent"}, {"name": "base"}]}), encoding="utf-8"
+    )
+    roots = json.dumps({"marketplaces": [{"name": "tj-agents", "root": str(market)}]})
+    config = codex_home / "config.toml"
+    config.write_text('[plugins."base@tj-agents"]\nenabled = true\n', encoding="utf-8")
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[:3] == ["codex", "plugin", "list"]:
+            return completed(0, listing)
+        if command[:4] == ["codex", "plugin", "marketplace", "list"]:
+            return completed(0, roots)
+        added = command[:3] == ["codex", "plugin", "add"]
+        if added and command[3] not in config.read_text(encoding="utf-8"):
+            with config.open("a", encoding="utf-8") as stream:
+                stream.write(f'\n[plugins."{command[3]}"]\nenabled = true\n')
+        return completed(0)
+
+    with (
+        _patched_homes(tmp_path),
+        mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned,
+        mock.patch.object(REFRESH.jobs.process, "start", Started()),
+        mock.patch.object(REFRESH.latest_plugins.machine_state, "drift", return_value={}),
+    ):
+        assert REFRESH.main(["--host", "codex"]) == 0
+    adds = [call.args[0][3] for call in spawned.call_args_list if call.args[0][:3] == ["codex", "plugin", "add"]]
+    assert adds == ["agent@tj-agents", "base@tj-agents"]
+    text = config.read_text(encoding="utf-8")
+    assert 'plugins."agent@tj-agents"' not in text
+    assert 'plugins."base@tj-agents"' in text

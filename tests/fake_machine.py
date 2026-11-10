@@ -113,7 +113,7 @@ def converge(context: Any, root: Path) -> None:
     code = install.run_steps(steps, context, False, io.StringIO(), errors)
     assert code == 0, errors.getvalue()
     write_json(
-        context.state_directory / hook_trust.RECEIPT, hook_trust.published_builds()
+        context.state_directory / hook_trust.RECEIPT, hook_trust.published_hooks()
     )
 
 

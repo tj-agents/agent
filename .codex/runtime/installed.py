@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import required_plugins
+from codex import user_plugins
 from tj_agent.host import Host
 
 HOST = Host.CODEX
@@ -84,31 +85,91 @@ def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, 
     listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
     if listing is None:
         return
-    installed = [row for row in json.loads(listing.stdout)["installed"] if row["marketplaceName"] in marketplaces]
+    listed = {row["pluginId"] for row in json.loads(listing.stdout)["installed"]
+              if row["marketplaceName"] in marketplaces}
+    candidates = listed | cached(marketplaces)
     if required_plugins.MARKETPLACE_NAME in marketplaces and not any(
-        row["marketplaceName"] == required_plugins.MARKETPLACE_NAME for row in installed
+        identity.endswith("@" + required_plugins.MARKETPLACE_NAME) for identity in candidates
     ):
         report.fail(
             HOST, "list", f"no {required_plugins.MARKETPLACE_NAME} plugins installed"
         )
         return
-    for marketplace in sorted({row["marketplaceName"] for row in installed}):
+    for marketplace in sorted({identity.rpartition("@")[2] for identity in candidates}):
         report.step(
             HOST,
             f"marketplace {marketplace}",
             codex_command("plugin", "marketplace", "upgrade", marketplace),
         )
-    stale = [row for row in installed if not current(row["marketplaceName"], row["pluginId"].rpartition("@")[0])]
+    unlisted = candidates - listed
+    published = published_plugins(report) if unlisted else set()
+    installed = sorted(listed | (unlisted & published))
+    for identity in sorted(unlisted - published):
+        print(f"{HOST}: {identity} is no longer published; left for plugin setup to remove")
+    stale = [identity for identity in installed if not current(identity.rpartition("@")[2], identity.rpartition("@")[0])]
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
-    if stale and launch.liveness():
-        reload_open_sessions(report, [row["pluginId"] for row in stale])
-        return
-    for row in stale:
-        report.step(
-            HOST, row["pluginId"], codex_command("plugin", "add", row["pluginId"])
-        )
+    user_enabled = user_plugins.enabled(read_user_config())
+    open_sessions = bool(stale) and bool(launch.liveness())
+    if open_sessions:
+        install_through_daemon(report, stale)
+    else:
+        for identity in stale:
+            report.step(HOST, identity, codex_command("plugin", "add", identity))
+    keep_project_scope(report, [identity for identity in stale if identity not in user_enabled])
     trust_hooks(report)
+    if open_sessions:
+        reload_open_sessions(report)
+
+
+def cached(marketplaces: tuple[str, ...]) -> set[str]:
+    cache = HOST.configuration_root / "plugins" / "cache"
+    found = set()
+    for marketplace in marketplaces:
+        directory = cache / marketplace
+        for plugin in directory.iterdir() if directory.is_dir() else ():
+            builds = [entry for entry in plugin.iterdir() if entry.is_dir()] if plugin.is_dir() else []
+            if len(builds) == 1 and manifest_name(builds[0]) == plugin.name:
+                found.add(f"{plugin.name}@{marketplace}")
+    return found
+
+
+def published_plugins(report: Any) -> set[str]:
+    roots = marketplace_roots(report) or {}
+    found = set()
+    for marketplace, root in roots.items():
+        try:
+            manifest = json.loads((root / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        found.update(f"{entry['name']}@{marketplace}" for entry in manifest.get("plugins", [])
+                     if isinstance(entry, dict) and isinstance(entry.get("name"), str))
+    return found
+
+
+def manifest_name(root: Path) -> str | None:
+    try:
+        name = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")).get("name")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return name if isinstance(name, str) else None
+
+
+def read_user_config() -> str:
+    path = user_plugins.path()
+    return path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+
+
+def keep_project_scope(report: Any, identities: list[str]) -> None:
+    """Undo the user-level enablement `codex plugin add` gives a plugin only projects select."""
+    text = read_user_config()
+    try:
+        scoped = user_plugins.without(text, identities)
+    except ValueError as error:
+        report.fail(HOST, "plugin scope", str(error))
+        return
+    if scoped != text:
+        user_plugins.path().write_text(scoped, encoding="utf-8")
 
 
 def trust_hooks(report: Any) -> None:
@@ -131,10 +192,14 @@ def marketplace_roots(report: Any) -> dict[str, Path] | None:
     listing = report.step(HOST, "marketplace roots", codex_command("plugin", "marketplace", "list", "--json"))
     if listing is None:
         return None
-    return {entry["name"]: Path(entry["root"]) for entry in json.loads(listing.stdout)["marketplaces"]}
+    try:
+        return {entry["name"]: Path(entry["root"]) for entry in json.loads(listing.stdout)["marketplaces"]}
+    except (ValueError, KeyError, TypeError) as error:
+        report.fail(HOST, "marketplace roots", f"unreadable listing: {error}")
+        return None
 
 
-def reload_open_sessions(report: Any, identities: list[str]) -> None:
+def install_through_daemon(report: Any, identities: list[str]) -> None:
     """Install through the shared daemon, which reloads every loaded thread's plugins, hooks and skills."""
     from codex import launch
 
@@ -152,9 +217,17 @@ def reload_open_sessions(report: Any, identities: list[str]) -> None:
                     report.fail(HOST, identity, str(error))
                     continue
                 print(f"{HOST}: {identity} ok")
-            trust_hooks(report)
-            server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
     except (OSError, RuntimeError, KeyError) as error:
+        report.fail(HOST, "open sessions", str(error))
+
+
+def reload_open_sessions(report: Any) -> None:
+    from codex import launch
+
+    try:
+        with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
+            server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
+    except (OSError, RuntimeError) as error:
         report.fail(HOST, "open sessions", str(error))
 
 
