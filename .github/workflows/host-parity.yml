@@ -37,4 +37,4 @@ jobs:
       - name: Resolve implementations and tests at their pinned sources
         run: uv run python -B .agents/agent/runtime/capabilities.py --root .
       - name: Exercise both host adapters with fakes
-        run: uv run pytest tests/test_capabilities.py tests/test_capability_contracts.py tests/test_tj_recover.py tests/test_hook_trust.py::HookTrustTests::test_installed_tj_agents_hooks_are_trusted_in_every_trusted_project_and_others_are_not tests/test_install.py::NativePermissionsTests -q
+        run: uv run pytest tests/test_capabilities.py tests/test_capability_contracts.py tests/test_tj_recover.py tests/test_hook_trust.py::test_installed_hooks_are_trusted_only_in_trusted_projects tests/test_install.py::NativePermissionsTests -q
