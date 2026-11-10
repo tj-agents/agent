@@ -12,43 +12,43 @@ from __future__ import annotations
 import argparse
 import codecs
 import contextlib
-from dataclasses import dataclass, field
 import hashlib
 import importlib.util
 import io
 import json
 import os
-from pathlib import Path
 import secrets
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 from types import ModuleType
-from typing import Callable, Sequence
 
 RUNTIME = Path(__file__).resolve().parent
 ROOT = RUNTIME.parents[2]
 sys.path.insert(0, str(RUNTIME))
 
-from tj_agent.host import Host
+import agent_store
+import host_permissions
+import jobs
+import machine_state
+import native_runtime
+import plugin_copies
+import required_plugins
+import retired_state
+import runtime_delivery
+import work_items_install
 from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
 from codex import launch as codex_launch
 from codex import projects as codex_projects
-import host_permissions
-import jobs
-import machine_state
-import plugin_copies
-import required_plugins
-import retired_state
-import runtime_delivery
-import native_runtime
-import agent_store
-import work_items_install
 from tj_agent import content
+from tj_agent.host import Host
 from tj_cli import handy_install, process, worktrunk_install
 
 INSTALLER_TIMEOUT_SECONDS = 600
@@ -805,24 +805,32 @@ def apply_tj_item(context: Context) -> list[str]:
     return [f"installed {pin.package} {pin.revision[:12]}" for pin in installed]
 
 
-def cli_installer(module: ModuleType, arguments: list[str]) -> tuple[int, list[str]]:
+@dataclass(frozen=True, slots=True)
+class InstallerResult:
+    exit_code: int
+    lines: list[str]
+
+
+def cli_installer(module: ModuleType, arguments: Sequence[str]) -> InstallerResult:
     output = io.StringIO()
     with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-        code = module.main(arguments)
+        code = module.main(list(arguments))
     lines = output.getvalue().splitlines()
-    return code, [line.strip() for line in lines if line.strip()]
+    return InstallerResult(code, [line.strip() for line in lines if line.strip()])
 
 
 def cli_tool_step(name: str, module: ModuleType) -> Step:
     def check(context: Context) -> list[str]:
-        code, lines = cli_installer(module, ["--check"])
-        return [] if code == 0 else lines or [f"install {name}"]
+        result = cli_installer(module, ["--check"])
+        return [] if result.exit_code == 0 else result.lines or [f"install {name}"]
 
     def apply(context: Context) -> list[str]:
-        code, lines = cli_installer(module, [])
-        if code:
-            raise InstallError("; ".join(lines) or f"the {name} installer failed")
-        return lines
+        result = cli_installer(module, [])
+        if result.exit_code:
+            raise InstallError(
+                "; ".join(result.lines) or f"the {name} installer failed"
+            )
+        return result.lines
 
     return Step(name, check, apply)
 
@@ -870,22 +878,33 @@ def codex_config_path(context: Context) -> Path:
     return context.codex_home / "config.toml"
 
 
-def codex_daemon_text(context: Context) -> tuple[str, str]:
+@dataclass(frozen=True, slots=True)
+class TextChange:
+    original: str
+    updated: str
+
+
+def codex_daemon_text(context: Context) -> TextChange:
     path = codex_config_path(context)
     text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
-    return text, codex_daemon.enabled_text(text)
+    return TextChange(text, codex_daemon.enabled_text(text))
 
 
 def check_codex_daemon(context: Context) -> list[str]:
-    text, enabled = codex_daemon_text(context)
-    return [] if enabled == text else [f"let Codex launches start its shared daemon in {codex_config_path(context)}"]
+    change = codex_daemon_text(context)
+    if change.updated == change.original:
+        return []
+    return [
+        "let Codex launches start its shared daemon in "
+        f"{codex_config_path(context)}"
+    ]
 
 
 def apply_codex_daemon(context: Context) -> list[str]:
-    text, enabled = codex_daemon_text(context)
-    if enabled == text:
+    change = codex_daemon_text(context)
+    if change.updated == change.original:
         return []
-    write_profile(codex_config_path(context), enabled, "utf-8", False)
+    write_profile(codex_config_path(context), change.updated, "utf-8", False)
     return [f"removed {codex_daemon.FEATURE} = false from {codex_config_path(context)}"]
 
 

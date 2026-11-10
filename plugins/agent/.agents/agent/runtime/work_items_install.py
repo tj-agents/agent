@@ -64,7 +64,10 @@ class Pins:
 
 
 def installed_plugins() -> set[str]:
-    return {identity for host in Host for identity in INSTALLED[host].identities()}
+    found = set()
+    for host in Host:
+        found.update(INSTALLED[host].identities())
+    return found
 
 
 def default_tool_directory(environ: Mapping[str, str], windows: bool) -> Path:
@@ -77,7 +80,9 @@ def default_tool_directory(environ: Mapping[str, str], windows: bool) -> Path:
 
 
 def install_command(uv: str, pins: Pins, profiles: Sequence[Pin]) -> list[str]:
-    extras = [argument for pin in profiles for argument in ("--with", pin.requirement)]
+    extras: list[str] = []
+    for pin in profiles:
+        extras.extend(("--with", pin.requirement))
     return [
         uv,
         "tool",

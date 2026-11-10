@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Protocol
@@ -32,7 +32,7 @@ class Report:
     def __init__(self) -> None:
         self.failures: list[str] = []
 
-    def run(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return process.run(
             command,
             capture_output=True,
@@ -44,7 +44,7 @@ class Report:
         )
 
     def step(
-        self, host: Host, label: str, command: list[str]
+        self, host: Host, label: str, command: Sequence[str]
     ) -> subprocess.CompletedProcess[str] | None:
         try:
             result = self.run(command)
@@ -71,7 +71,7 @@ class Installed(Protocol):
     def refresh(
         self,
         report: Report,
-        marketplaces: tuple[str, ...],
+        marketplaces: Collection[str],
         current: Callable[[str, str], bool],
     ) -> None: ...
 

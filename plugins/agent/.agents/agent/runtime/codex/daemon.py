@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Mapping
 
 FEATURE = "daemon_auto_start"
 
 
-def disabled(config: dict[str, object]) -> bool:
+def disabled(config: Mapping[str, object]) -> bool:
     features = config.get("features")
     return isinstance(features, dict) and features.get(FEATURE) is False
 
@@ -42,13 +43,13 @@ def enabled_text(text: str) -> str:
     return result
 
 
-def disabling(table: tuple[str, ...], value: dict[str, object]) -> bool:
+def disabling(table: tuple[str, ...], value: Mapping[str, object]) -> bool:
     if table == ("features",):
         return value == {FEATURE: False}
     return table == () and value == {"features": {FEATURE: False}}
 
 
-def comparable(config: dict[str, object]) -> dict[str, object]:
+def comparable(config: Mapping[str, object]) -> dict[str, object]:
     return {k: v for k, v in config.items() if not (k == "features" and v == {})}
 
 
