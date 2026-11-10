@@ -550,7 +550,7 @@ class RuntimeTests(Machine):
         install.apply_runtime(context)
         runtime = context.state_directory / 'bin' / '.agents' / 'agent' / 'runtime'
         for script in install.LIFECYCLE_COMMANDS.values():
-            result = subprocess.run([sys.executable, '-I', '-B', str(runtime / script), '--help'],
+            result = subprocess.run([sys.executable, '-E', '-s', '-B', str(runtime / script), '--help'],
                                     cwd=self.root, capture_output=True, text=True, timeout=15)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertIn('usage: tj ', result.stdout)
@@ -713,7 +713,7 @@ class RunStepsTests(Machine):
     def test_unknown_step_fails_before_any_machine_operation_and_is_recorded(self):
         state = self.root / "state"
         with mock.patch.object(install, "machine_context") as context, \
-                mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(state)}), \
+                mock.patch.object(install.jobs, "state_directory", return_value=state), \
                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             install.main(["--step", "not an install step"])
         self.assertEqual(2, error.exception.code)
