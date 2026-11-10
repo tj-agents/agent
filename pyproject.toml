@@ -36,7 +36,7 @@ files = [".agents", "tests"]
 mypy_path = [".agents/agent/runtime", "plugins/agent/.agents/agent/runtime", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["host", "plugins", "install", "host_sessions", "repo_config", "test_required_plugins", "claude.*", "codex.*", "host_plugins", "required_plugins", "runtime_delivery", "tj_agent", "tj_agent.*", "agent_cli", "agent_store", "lifecycle", "host_sessions"]
+module = ["host_permissions", "session_hook", "host", "plugins", "install", "host_sessions", "repo_config", "test_required_plugins", "claude.*", "codex.*", "host_plugins", "required_plugins", "runtime_delivery", "tj_agent", "tj_agent.*", "agent_cli", "agent_store", "lifecycle", "host_sessions"]
 follow_imports = "skip"
 
 [[tool.mypy.overrides]]
@@ -416,6 +416,7 @@ reason = "Existing test flattens nested fixture data for assertions."
 "tests/test_websocket.py" = ["E501", "I001", "N812", "PT009", "TID251"]
 "tests/test_work_item.py" = ["TID251"]
 
+"tests/test_capability_contracts.py" = ["PLR6301", "TID251"]
 [tool.ruff.format]
 exclude = [
   ".agents/agent/resources/handoff/launch_claude.py",
@@ -779,3 +780,8 @@ disable_error_code = ["no-any-return"]
 [[tool.mypy.overrides]]
 module = "verify_machine"
 disable_error_code = ["assignment", "no-untyped-def", "type-arg", "unreachable"]
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_capabilities.py"
+rule = "PY001"
+reason = "Existing test flattens nested fixture data for assertions."

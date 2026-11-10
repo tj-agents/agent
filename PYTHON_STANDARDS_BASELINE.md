@@ -691,3 +691,13 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | verify_machine | no-untyped-def | 8 | Repair the existing no-untyped-def diagnostic and remove this exact override. |
 | verify_machine | type-arg | 1 | Repair the existing type-arg diagnostic and remove this exact override. |
 | verify_machine | unreachable | 1 | Repair the existing unreachable diagnostic and remove this exact override. |
+
+## Upstream capability merge
+
+The broader Ruff scope identified two existing diagnostics in the upstream capability-contract test. `git diff --quiet e3e2eb7 -- tests/test_capability_contracts.py` proved the file unchanged from the merged upstream baseline.
+
+| File | Rule | Existing count | Required repair |
+| --- | --- | ---: | --- |
+| tests/test_capability_contracts.py | PLR6301 | 1 | Make the existing helper method static or remove this exact ignore. |
+| tests/test_capability_contracts.py | TID251 | 1 | Replace the existing path-based import and remove this exact ignore. |
+| tests/test_capabilities.py | PY001 | 1 | Rewrite the existing nested comprehension and remove this exact exception. |
