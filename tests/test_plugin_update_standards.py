@@ -12,6 +12,9 @@ import standards
 import tj_plugins
 from claude import installed as claude_installed
 from codex import installed as codex_installed
+from codex import launch as codex_launch
+from launch_contract import Liveness
+from launch_errors import LaunchError
 from tj_agent.host import Host
 
 
@@ -130,6 +133,33 @@ def test_interrupted_update_retains_activation_for_a_fresh_invocation(
     assert tj_plugins.main(["update", "--host", "claude"]) == 0
     assert events == ["activated"]
     assert not plugin_activation.pending(state, Host.CLAUDE, tmp_path)
+
+
+def test_unreadable_codex_daemon_retains_pending_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / "state"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(jobs, "state_directory", lambda: state)
+    monkeypatch.setattr(tj_plugins, "already_current", lambda *args: True)
+    monkeypatch.setattr(codex_installed, "repair_hooks", lambda _report: None)
+    monkeypatch.setattr(required_plugins, "check", lambda *args: None)
+    failed = True
+
+    def liveness(*, strict: bool = False) -> dict[str, Liveness]:
+        assert strict
+        if failed:
+            raise LaunchError("Cannot determine Codex liveness: connection failed")
+        return {}
+
+    monkeypatch.setattr(codex_launch, "liveness", liveness)
+    plugin_activation.begin(state, Host.CODEX, tmp_path)
+    assert tj_plugins.main(["update", "--host", "codex"]) == 1
+    assert plugin_activation.pending(state, Host.CODEX, tmp_path)
+    assert "connection failed" in (jobs.recent_failure(state, jobs.Job.UPDATE) or "")
+    failed = False
+    assert tj_plugins.main(["update", "--host", "codex"]) == 0
+    assert not plugin_activation.pending(state, Host.CODEX, tmp_path)
 
 
 @pytest.mark.parametrize("host", list(Host))

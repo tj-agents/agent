@@ -23,7 +23,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "absent-claude"))
     monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
     monkeypatch.delenv("PLUGIN_ROOT", raising=False)
-    monkeypatch.setattr(launch, "liveness", dict)
+    monkeypatch.setattr(launch, "liveness", lambda **_kwargs: {})
     return directory
 
 
