@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -35,9 +36,13 @@ PINS = json.loads((RUNTIME / "work-items.json").read_text(encoding="utf-8"))
 PIN = "b354217d980a143516a3bd6029d60ffcc9ea3e7b"
 OLD = "9e207f3dbe4ce5d06e1a792f6f8edcc366fc4cfd"
 UPDATING_CLAUDE = (
-    "Updating tj-agents plugins… type /reload-plugins when this says done."
+    "Updating tj-agents plugins in the background; "
+    "type /reload-plugins when it finishes."
 )
-UPDATING_CODEX = "Updating tj-agents plugins… restart this session when this says done."
+UPDATING_CODEX = (
+    "Updating tj-agents plugins in the background; "
+    "restart this session when it finishes."
+)
 REFRESH = [sys.executable, "-B", str(RUNTIME / "plugins" / "refresh.py")]
 INSTALL = [sys.executable, "-B", str(RUNTIME / "install.py")]
 DRIFT_STEPS = [
@@ -50,6 +55,9 @@ DRIFT_STEPS = [
     "Codex hook trust",
     "plugin copies",
 ]
+
+
+INSTALLED_BUILD = machine_state.installed_build
 
 
 @dataclass
@@ -103,7 +111,14 @@ class Machine:
         self.capsys.readouterr()
         assert latest_plugins.main(["--host", host]) == 0
         output = self.capsys.readouterr().out
-        return json.loads(output) if output.strip() else None
+        if not output.strip():
+            return None
+        document = json.loads(output)
+        assert "decision" not in document
+        context = document["hookSpecificOutput"]
+        assert context["hookEventName"] == event
+        assert document["systemMessage"] == context["additionalContext"]
+        return context["additionalContext"]
 
     def reason(self) -> str | None:
         return latest_plugins.reason(Host.CLAUDE, self.state, full=True)
@@ -122,6 +137,7 @@ def machine(
     context = machine_context(tmp_path)
     monkeypatch.setattr(install, "machine_context", lambda: context)
     monkeypatch.setattr(retired_state, "remove", lambda _state: None)
+    monkeypatch.setattr(machine_state, "installed_build", lambda: True)
     started = Started()
     monkeypatch.setattr(process, "start", started)
     catalog = tmp_path / "claude/plugins/marketplaces/tj-agents/.claude-plugin"
@@ -169,18 +185,17 @@ def test_a_stale_install_without_tj_hook_says_how_to_refresh(machine: Machine) -
     machine.registry(OLD)
     machine.converge()
     machine.monkeypatch.setattr(process, "start", missing_tj_hook)
-    assert machine.hook("claude", "UserPromptSubmit") == {
-        "decision": "block",
-        "reason": "tj-agents plugins are behind and tj_hook is missing; "
-        "run agent:refresh-plugins.",
-    }
+    assert machine.hook("claude", "UserPromptSubmit") == (
+        "tj-agents plugins are behind and tj_hook is missing; "
+        f"run {shlex.join(latest_plugins.refresh_command())}."
+    )
 
 
 def test_a_running_refresh_is_not_started_again(machine: Machine) -> None:
     machine.registry(OLD)
     machine.converge()
     with jobs.held(machine.state, jobs.Job.REFRESH):
-        assert machine.hook("claude", "UserPromptSubmit")["reason"] == UPDATING_CLAUDE
+        assert machine.hook("claude", "UserPromptSubmit") == UPDATING_CLAUDE
     assert machine.started.commands == []
 
 
@@ -193,24 +208,22 @@ def test_a_recent_failed_refresh_is_reported_instead_of_retried(
         machine.state / "plugin-refresh.json",
         {"finished": time.time(), "failures": ["claude: list: boom"]},
     )
-    assert machine.hook("claude", "UserPromptSubmit")["reason"] == (
+    assert machine.hook("claude", "UserPromptSubmit") == (
         "tj-agents plugin refresh failed (claude: list: boom); "
-        "run agent:refresh-plugins."
+        f"run {shlex.join(latest_plugins.refresh_command())}."
     )
     assert machine.started.commands == []
 
 
-def test_a_stale_codex_build_blocks_and_session_start_says_so(machine: Machine) -> None:
+def test_a_stale_codex_build_is_reported_at_prompt_and_session_start(
+    machine: Machine,
+) -> None:
     machine.registry(PIN)
     machine.codex_build("bbbbbbbbbbbb")
     machine.converge()
     with jobs.held(machine.state, jobs.Job.REFRESH):
-        assert machine.hook("codex", "UserPromptSubmit")["reason"] == UPDATING_CODEX
-        context = machine.hook("codex", "SessionStart")["hookSpecificOutput"]
-    assert context == {
-        "hookEventName": "SessionStart",
-        "additionalContext": UPDATING_CODEX,
-    }
+        assert machine.hook("codex", "UserPromptSubmit") == UPDATING_CODEX
+        assert machine.hook("codex", "SessionStart") == UPDATING_CODEX
 
 
 def test_only_the_running_session_behind_asks_for_a_reload(machine: Machine) -> None:
@@ -219,10 +232,9 @@ def test_only_the_running_session_behind_asks_for_a_reload(machine: Machine) -> 
     agent = machine.claude / "plugins/cache/tj-agents/agent"
     running = agent / f"{OLD[:12]}-d086935e"
     running.mkdir(parents=True)
-    assert machine.hook("claude", "UserPromptSubmit", running) == {
-        "decision": "block",
-        "reason": "Plugins updated: type /reload-plugins.",
-    }
+    assert machine.hook("claude", "UserPromptSubmit", running) == (
+        "Plugins updated: type /reload-plugins."
+    )
     current = agent / f"{PIN[:12]}-d086935e"
     current.mkdir(parents=True)
     assert machine.hook("claude", "UserPromptSubmit", current) is None
@@ -240,26 +252,27 @@ def test_only_the_running_codex_session_behind_asks_for_a_restart(
         {"name": "agent", "version": "cccccccccccc"},
     )
     expected = "Plugins updated: restart this session."
-    assert machine.hook("codex", "UserPromptSubmit", older)["reason"] == expected
+    assert machine.hook("codex", "UserPromptSubmit", older) == expected
     deleted = machine.home / "deleted-build"
-    assert machine.hook("codex", "UserPromptSubmit", deleted)["reason"] == expected
+    assert machine.hook("codex", "UserPromptSubmit", deleted) == expected
 
 
-def test_a_drifted_tj_item_receipt_blocks_and_names_the_drift(machine: Machine) -> None:
+def test_a_drifted_tj_item_receipt_is_reported_by_name(machine: Machine) -> None:
     machine.registry(PIN)
     machine.converge()
     write_tool_receipt(machine.home / "uv-tools", [{**PINS["tool"], "revision": OLD}])
     tool = PINS["tool"]
-    assert machine.hook("claude", "UserPromptSubmit")["reason"] == (
+    assert machine.hook("claude", "UserPromptSubmit") == (
         "Updating tj-agents tj item CLI "
         f"(tj-work-items is {tool['repository']}@{OLD[:12]}"
-        f", pinned {tool['repository']}@{tool['revision'][:12]})… "
-        "send the prompt again when this says done."
+        f", pinned {tool['repository']}@{tool['revision'][:12]}) in the background."
     )
     assert machine.started.commands == [install_step("tj item CLI")]
 
 
-def test_a_selected_profile_missing_from_the_receipt_blocks(machine: Machine) -> None:
+def test_a_selected_profile_missing_from_the_receipt_is_reported(
+    machine: Machine,
+) -> None:
     machine.registry(PIN)
     machine.converge()
     plugin, pin = next(iter(PINS["profiles"].items()))
@@ -267,7 +280,7 @@ def test_a_selected_profile_missing_from_the_receipt_blocks(machine: Machine) ->
     (machine.home / "codex/plugins/cache" / marketplace / name / "local").mkdir(
         parents=True
     )
-    reason = machine.hook("claude", "UserPromptSubmit")["reason"]
+    reason = machine.hook("claude", "UserPromptSubmit")
     assert f"{pin['package']} is not installed" in reason
 
 
@@ -381,7 +394,7 @@ def test_plugin_copies_drift_names_the_converged_and_pinned_builds(
     copies_drifted(machine.home)
     assert machine.reason() == (
         "Updating tj-agents plugin copies (personal@tj-agents copies are from "
-        f"{OLD[:12]}, pinned {PIN[:12]})… send the prompt again when this says done."
+        f"{OLD[:12]}, pinned {PIN[:12]}) in the background."
     )
 
 
@@ -502,3 +515,21 @@ def test_a_step_whose_watch_fails_is_reported_as_drift(machine: Machine) -> None
     assert machine.hook("claude", "SessionStart") is not None
     assert machine.started.commands == [install_step("probe")]
     assert not (machine.state / machine_state.FINGERPRINT).exists()
+
+
+def test_a_session_on_an_older_build_leaves_machine_repair_to_the_installed_build(
+    machine: Machine,
+) -> None:
+    machine.registry(PIN)
+    machine.converge()
+    write_json(machine.install / ".codex-plugin/plugin.json", {"version": "new-build"})
+    running = machine.home / "older/plugin"
+    write_json(running / ".codex-plugin/plugin.json", {"version": "old-build"})
+    machine.monkeypatch.setattr(
+        machine_state, "RUNTIME", running / ".agents/agent/runtime"
+    )
+    machine.monkeypatch.setattr(machine_state, "installed_build", INSTALLED_BUILD)
+    write_tool_receipt(machine.home / "uv-tools", [{**PINS["tool"], "revision": OLD}])
+    assert not machine_state.installed_build()
+    assert machine.reason() is None
+    assert machine.started.commands == []

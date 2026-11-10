@@ -285,10 +285,25 @@ class HiddenBashTests(Machine):
         self.assertEqual(1, self.environment.broadcasts)
         self.assertEqual(2, len(self.calls))
 
-    def test_a_newer_source_rebuilds_the_proxy(self):
+    def test_only_a_changed_source_rebuilds_the_proxy(self):
+        plugin = self.root / "plugin"
+        source = plugin / ".agents/agent/resources/shell/hidden-bash.c"
+        source.parent.mkdir(parents=True)
+        source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
+                               user_environment=self.environment)
+        context.root = plugin
+        self.converge(step("hidden Git Bash for Claude"), context)
+        source.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        os.utime(source, (2_000_000_000, 2_000_000_000))
+        self.assertNotIn("build shell/hidden-bash.exe", install.check_hidden_bash(context))
+        source.write_text("int main(void) { return 1; }\n", encoding="utf-8")
+        self.assertIn("build shell/hidden-bash.exe", install.check_hidden_bash(context))
+
+    def test_a_proxy_without_a_receipt_is_rebuilt(self):
         proxy = self.home / ".agents-state/bin/hidden-bash.exe"
+        proxy.parent.mkdir(parents=True, exist_ok=True)
         proxy.write_bytes(b"old")
-        os.utime(proxy, (1, 1))
         context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
                                user_environment=self.environment)
         self.assertIn("build shell/hidden-bash.exe", install.check_hidden_bash(context))
@@ -695,12 +710,16 @@ class RunStepsTests(Machine):
                 self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
                 self.assertEqual("--check" in arguments, run.call_args.args[2])
 
-    def test_unknown_step_fails_before_any_machine_operation(self):
+    def test_unknown_step_fails_before_any_machine_operation_and_is_recorded(self):
+        state = self.root / "state"
         with mock.patch.object(install, "machine_context") as context, \
+                mock.patch.object(install.jobs, "state_directory", return_value=state), \
                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             install.main(["--step", "not an install step"])
         self.assertEqual(2, error.exception.code)
         context.assert_not_called()
+        self.assertEqual("install rejected its arguments: --step 'not an install step'",
+                         install.jobs.recent_failure(state, install.jobs.Job.INSTALL))
 
     def legacy_machine(self):
         pass
@@ -942,3 +961,36 @@ def test_the_agent_store_check_reads_its_install_receipt_without_running_it(
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_a_locked_executable_is_retried_then_succeeds() -> None:
+    results = [
+        subprocess.CompletedProcess(
+            [], 1, "", "tj_hook: Access is denied. (os error 5)"
+        ),
+        subprocess.CompletedProcess([], 0, "ok", ""),
+    ]
+    sleeps: list[float] = []
+
+    def run(_command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return results.pop(0)
+
+    context = install.Context(
+        home=Path(), environ={}, windows=True, run=run, sleep=sleeps.append
+    )
+    assert install.run_installer(context, ["installer"]).returncode == 0
+    assert sleeps == [install.LOCKED_RETRY_SECONDS]
+
+
+def test_other_failures_are_not_retried() -> None:
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess([], 1, "", "verification failed")
+
+    context = install.Context(
+        home=Path(), environ={}, windows=True, run=run, sleep=lambda _s: None
+    )
+    assert install.run_installer(context, ["installer"]).returncode == 1
+    assert calls == [["installer"]]
