@@ -114,9 +114,7 @@ def main(argv=None):
         item = agent_cli.resolve_item(args.item, args.title, working_directory, parent, args.item_field)
         shown = agent_cli.launch(agent_cli.Host.CODEX, working_directory, args.title,
                                  adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort),
-                                 item=item, parent=parent, want_session=bool(effort))
-        if effort:
-            adapter.deliver(shown['session']['native_id'], prompt_sentence, model, effort)
+                                 item=item, parent=parent)
 
         selection = f'{tier}{model}' if model else 'the CLI default model'
         if effort:
