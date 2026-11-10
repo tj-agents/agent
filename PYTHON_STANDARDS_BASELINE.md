@@ -44,14 +44,12 @@ Reason: preserve exact pre-existing custom-checker findings during the standards
 | .agents/agent/runtime/install.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/runtime/install.py | PY016 | 2 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/jobs.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
-| .agents/agent/runtime/latest_plugins.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/runtime/latest_plugins.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/native_runtime.py | PY016 | 3 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/required_plugins.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/runtime/retired_state.py | PY016 | 2 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/tj_agent/host.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/tj_start.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
-| .agents/agent/runtime/work_items_install.py | PY001 | 2 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/utility/plugins/scripts/machine_paths.py | PY001 | 2 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/utility/plugins/scripts/repo_config.py | PY001 | 3 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/codex/utility/hooks/scripts/hook_control.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
@@ -59,7 +57,6 @@ Reason: preserve exact pre-existing custom-checker findings during the standards
 | .claude/runtime/registry.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
 | .codex/runtime/hook_trust.py | PY001 | 4 | Rewrite the nested comprehension as named loops or one generator. |
 | .codex/runtime/hook_trust.py | PY016 | 3 | Inject process state or confine the read to an entry-point main. |
-| .codex/runtime/installed.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
 | .codex/runtime/launch.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
 | .codex/runtime/websocket.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
 | tests/conftest.py | PY016 | 2 | Inject process state or confine the read to an entry-point main. |

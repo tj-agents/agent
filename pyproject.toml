@@ -116,11 +116,6 @@ reason = "Legacy host integration reads process state while resolving native con
 
 [[tool.python-standards.exceptions]]
 path = ".agents/agent/runtime/latest_plugins.py"
-rule = "PY001"
-reason = "Existing host integration traversal flattens nested records."
-
-[[tool.python-standards.exceptions]]
-path = ".agents/agent/runtime/latest_plugins.py"
 rule = "PY016"
 reason = "Legacy host integration reads process state while resolving native configuration."
 
@@ -148,11 +143,6 @@ reason = "Legacy host integration reads process state while resolving native con
 path = ".agents/agent/runtime/tj_start.py"
 rule = "PY016"
 reason = "Legacy host integration reads process state while resolving native configuration."
-
-[[tool.python-standards.exceptions]]
-path = ".agents/agent/runtime/work_items_install.py"
-rule = "PY001"
-reason = "Existing host integration traversal flattens nested records."
 
 [[tool.python-standards.exceptions]]
 path = ".agents/agent/utility/plugins/scripts/machine_paths.py"
@@ -188,11 +178,6 @@ reason = "Existing host integration traversal flattens nested records."
 path = ".codex/runtime/hook_trust.py"
 rule = "PY016"
 reason = "Legacy host integration reads process state while resolving native configuration."
-
-[[tool.python-standards.exceptions]]
-path = ".codex/runtime/installed.py"
-rule = "PY001"
-reason = "Existing host integration traversal flattens nested records."
 
 [[tool.python-standards.exceptions]]
 path = ".codex/runtime/launch.py"
