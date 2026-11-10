@@ -754,7 +754,7 @@ class RunStepsTests(Machine):
 
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
-            "retired state", "Git long paths", "native CLI", "native permission defaults",
+            "retired state", "Git long paths", "native CLI", "native permission defaults", "Codex shared daemon",
             "Claude marketplace auto-update", "agent-store CLI",
             "tj item CLI", "worktrunk", "Handy",
             "launch-check runtime", "tj lifecycle commands",

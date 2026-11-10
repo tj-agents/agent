@@ -33,6 +33,7 @@ ROOT = RUNTIME.parents[2]
 sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
+from codex import daemon as codex_daemon
 import host_permissions
 import jobs
 import machine_state
@@ -876,6 +877,25 @@ def codex_config_path(context: Context) -> Path:
     return context.codex_home / "config.toml"
 
 
+def codex_daemon_text(context: Context) -> tuple[str, str]:
+    path = codex_config_path(context)
+    text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+    return text, codex_daemon.enabled_text(text)
+
+
+def check_codex_daemon(context: Context) -> list[str]:
+    text, enabled = codex_daemon_text(context)
+    return [] if enabled == text else [f"let Codex launches start its shared daemon in {codex_config_path(context)}"]
+
+
+def apply_codex_daemon(context: Context) -> list[str]:
+    text, enabled = codex_daemon_text(context)
+    if enabled == text:
+        return []
+    write_profile(codex_config_path(context), enabled, "utf-8", False)
+    return [f"removed {codex_daemon.FEATURE} = false from {codex_config_path(context)}"]
+
+
 def native_permissions_plan(context: Context) -> dict[Path, str]:
     mode = host_permissions.permissions(plugin_setup_project(context))
     return host_permissions.plan(context.claude_home / "settings.json", codex_config_path(context), mode)
@@ -1004,6 +1024,8 @@ STEPS = (
     Step("Git long paths", check_git_longpaths, apply_git_longpaths, windows_only),
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
+    Step("Codex shared daemon", check_codex_daemon, apply_codex_daemon,
+         watch=lambda context: [codex_config_path(context)]),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
     Step("agent-store CLI", check_agent_store, apply_agent_store, watch=watch_agent_store),
     Step("tj item CLI", check_tj_item, apply_tj_item, watch=watch_tj_item),

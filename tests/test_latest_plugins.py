@@ -41,6 +41,7 @@ UPDATING_CODEX = "Updating tj-agents plugins… restart this session when this s
 REFRESH = [sys.executable, "-B", str(RUNTIME / "plugins" / "refresh.py")]
 INSTALL = [sys.executable, "-B", str(RUNTIME / "install.py")]
 DRIFT_STEPS = [
+    "Codex shared daemon",
     "agent-store CLI",
     "tj item CLI",
     "launch-check runtime",
