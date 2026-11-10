@@ -11,6 +11,7 @@ import plugin_activation
 import required_plugins
 import standards
 from codex import catalog, hook_trust, launch, user_plugins
+from launch_errors import LaunchError
 from tj_agent.host import Host
 from tree_digest import Digests
 
@@ -383,8 +384,14 @@ def repair_hooks(report: Any) -> None:
 
 
 def restart(report: Any, managed: bool) -> None:
-    if launch.liveness():
+    try:
+        sessions = launch.liveness(strict=True)
+    except LaunchError as error:
+        report.fail(HOST, "open sessions", str(error))
+        return
+    if sessions:
         reload_open_sessions(report)
-    print(
-        "Open Codex sessions in the shared app-server reload updated plugins in place."
-    )
+        if not report.failures:
+            print("Open Codex sessions reloaded updated plugins in place.")
+    else:
+        print("No loaded Codex sessions need activation.")

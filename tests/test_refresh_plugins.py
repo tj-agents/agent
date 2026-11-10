@@ -54,7 +54,7 @@ from codex import launch as codex_launch  # noqa: E402
 def no_codex_daemon(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[tuple[object, ...]]:
     monkeypatch.chdir(tmp_path)
     trusted: list[tuple[object, ...]] = []
-    monkeypatch.setattr(codex_launch, "liveness", dict)
+    monkeypatch.setattr(codex_launch, "liveness", lambda **_kwargs: {})
     monkeypatch.setattr(codex_launch, "executable", lambda: "codex")
     monkeypatch.setattr(
         codex_hook_trust,
@@ -626,7 +626,7 @@ def daemon_refresh(
         return completed(0)
 
     trusted: list[tuple[object, ...]] = []
-    monkeypatch.setattr(codex_launch, "liveness", lambda: {"thread": object()})
+    monkeypatch.setattr(codex_launch, "liveness", lambda **_kwargs: {"thread": object()})
     monkeypatch.setattr(codex_launch, "daemon", lambda _timeout: daemon)
     monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
     monkeypatch.setattr(
@@ -982,7 +982,7 @@ def test_current_codex_plugins_repair_pending_hook_trust(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
 ) -> None:
     monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
-    monkeypatch.setattr(codex_launch, "liveness", lambda: {"session": {}})
+    monkeypatch.setattr(codex_launch, "liveness", lambda **_kwargs: {"session": {}})
     with (
         _patched_homes(tmp_path),
         mock.patch.object(REFRESH, "already_current", return_value=True),
