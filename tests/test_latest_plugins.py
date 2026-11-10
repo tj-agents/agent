@@ -187,7 +187,7 @@ def test_a_stale_install_without_tj_hook_says_how_to_refresh(machine: Machine) -
     machine.monkeypatch.setattr(process, "start", missing_tj_hook)
     assert machine.hook("claude", "UserPromptSubmit") == (
         "tj-agents plugins are behind and tj_hook is missing; "
-        f"run {shlex.join(latest_plugins.refresh_command())}."
+        f"run {shlex.join(latest_plugins.refresh_command(Host.CLAUDE))}."
     )
 
 
@@ -210,7 +210,7 @@ def test_a_recent_failed_refresh_is_reported_instead_of_retried(
     )
     assert machine.hook("claude", "UserPromptSubmit") == (
         "tj-agents plugin refresh failed (claude: list: boom); "
-        f"run {shlex.join(latest_plugins.refresh_command())}."
+        f"run {shlex.join(latest_plugins.refresh_command(Host.CLAUDE))}."
     )
     assert machine.started.commands == []
 
@@ -333,7 +333,12 @@ def test_the_stale_check_starts_only_the_fix_for_its_cause(
     cause(machine.home)
     machine.converge()
     refusal = machine.reason()
-    expected = [REFRESH if fix == "refresh" else install_step(fix) for fix in fixes]
+    expected = [
+        latest_plugins.refresh_command(Host.CLAUDE)
+        if fix == "refresh"
+        else install_step(fix)
+        for fix in fixes
+    ]
     assert machine.started.commands == expected
     assert (refusal is None) == (fixes == [])
 

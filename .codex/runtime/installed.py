@@ -31,7 +31,9 @@ def codex_command(*arguments: str) -> list[str]:
 
 def label(root: Path) -> str | None:
     try:
-        version = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version")
+        version = json.loads(
+            (root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        ).get("version")
     except (OSError, ValueError, AttributeError):
         return None
     return version if isinstance(version, str) else None
@@ -60,6 +62,14 @@ def identities() -> set[str]:
         return set()
 
 
+def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
+    return {
+        identity
+        for identity in identities()
+        if identity.rpartition("@")[2] in marketplaces
+    }
+
+
 def installed_build_behind(marketplace: str, plugin: str, install: Path) -> str | None:
     expected, actual = label(install), installed_label(marketplace, plugin)
     if expected and actual and actual != expected:
@@ -86,17 +96,23 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
     return None
 
 
-def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]) -> None:
+def refresh(
+    report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
+) -> None:
     from codex import launch
 
     listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
     if listing is None:
         return
-    listed = {row["pluginId"] for row in json.loads(listing.stdout)["installed"]
-              if row["marketplaceName"] in marketplaces}
+    listed = {
+        row["pluginId"]
+        for row in json.loads(listing.stdout)["installed"]
+        if row["marketplaceName"] in marketplaces
+    }
     candidates = listed | cached(marketplaces)
     if required_plugins.MARKETPLACE_NAME in marketplaces and not any(
-        identity.endswith("@" + required_plugins.MARKETPLACE_NAME) for identity in candidates
+        identity.endswith("@" + required_plugins.MARKETPLACE_NAME)
+        for identity in candidates
     ):
         report.fail(
             HOST, "list", f"no {required_plugins.MARKETPLACE_NAME} plugins installed"
@@ -112,8 +128,14 @@ def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, 
     published = published_plugins(report) if unlisted else set()
     installed = sorted(listed | (unlisted & published))
     for identity in sorted(unlisted - published):
-        print(f"{HOST}: {identity} is no longer published; left for plugin setup to remove")
-    stale = [identity for identity in installed if not current(identity.rpartition("@")[2], identity.rpartition("@")[0])]
+        print(
+            f"{HOST}: {identity} is no longer published; left for plugin setup to remove"
+        )
+    stale = [
+        identity
+        for identity in installed
+        if not current(identity.rpartition("@")[2], identity.rpartition("@")[0])
+    ]
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
     user_enabled = user_plugins.enabled(read_user_config())
@@ -123,7 +145,9 @@ def refresh(report: Any, marketplaces: tuple[str, ...], current: Callable[[str, 
     else:
         for identity in stale:
             report.step(HOST, identity, codex_command("plugin", "add", identity))
-    keep_project_scope(report, [identity for identity in stale if identity not in user_enabled])
+    keep_project_scope(
+        report, [identity for identity in stale if identity not in user_enabled]
+    )
     trust_hooks(report)
     if open_sessions:
         reload_open_sessions(report)
@@ -135,7 +159,11 @@ def cached(marketplaces: tuple[str, ...]) -> set[str]:
     for marketplace in marketplaces:
         directory = cache / marketplace
         for plugin in directory.iterdir() if directory.is_dir() else ():
-            builds = [entry for entry in plugin.iterdir() if entry.is_dir()] if plugin.is_dir() else []
+            builds = (
+                [entry for entry in plugin.iterdir() if entry.is_dir()]
+                if plugin.is_dir()
+                else []
+            )
             if len(builds) == 1 and manifest_name(builds[0]) == plugin.name:
                 found.add(f"{plugin.name}@{marketplace}")
     return found
@@ -146,17 +174,26 @@ def published_plugins(report: Any) -> set[str]:
     found = set()
     for marketplace, root in roots.items():
         try:
-            manifest = json.loads((root / ".agents" / "plugins" / "marketplace.json").read_text(encoding="utf-8"))
+            manifest = json.loads(
+                (root / ".agents" / "plugins" / "marketplace.json").read_text(
+                    encoding="utf-8"
+                )
+            )
         except (OSError, ValueError):
             continue
-        found.update(f"{entry['name']}@{marketplace}" for entry in manifest.get("plugins", [])
-                     if isinstance(entry, dict) and isinstance(entry.get("name"), str))
+        found.update(
+            f"{entry['name']}@{marketplace}"
+            for entry in manifest.get("plugins", [])
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+        )
     return found
 
 
 def manifest_name(root: Path) -> str | None:
     try:
-        name = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")).get("name")
+        name = json.loads(
+            (root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        ).get("name")
     except (OSError, ValueError, AttributeError):
         return None
     return name if isinstance(name, str) else None
@@ -188,7 +225,9 @@ def trust_hooks(report: Any) -> None:
     if not hook_trust.pending(state):
         return
     try:
-        trusted = hook_trust.trust_installed(launch.executable(), state, MARKETPLACE_OVERRIDES)
+        trusted = hook_trust.trust_installed(
+            launch.executable(), state, MARKETPLACE_OVERRIDES
+        )
     except (OSError, RuntimeError, ValueError) as error:
         report.fail(HOST, "hook trust", str(error))
         return
@@ -196,11 +235,18 @@ def trust_hooks(report: Any) -> None:
 
 
 def marketplace_roots(report: Any) -> dict[str, Path] | None:
-    listing = report.step(HOST, "marketplace roots", codex_command("plugin", "marketplace", "list", "--json"))
+    listing = report.step(
+        HOST,
+        "marketplace roots",
+        codex_command("plugin", "marketplace", "list", "--json"),
+    )
     if listing is None:
         return None
     try:
-        return {entry["name"]: Path(entry["root"]) for entry in json.loads(listing.stdout)["marketplaces"]}
+        return {
+            entry["name"]: Path(entry["root"])
+            for entry in json.loads(listing.stdout)["marketplaces"]
+        }
     except (ValueError, KeyError, TypeError) as error:
         report.fail(HOST, "marketplace roots", f"unreadable listing: {error}")
         return None
@@ -217,9 +263,14 @@ def install_through_daemon(report: Any, identities: list[str]) -> None:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
             for identity in identities:
                 plugin, _, marketplace = identity.rpartition("@")
-                manifest = roots[marketplace] / ".agents" / "plugins" / "marketplace.json"
+                manifest = (
+                    roots[marketplace] / ".agents" / "plugins" / "marketplace.json"
+                )
                 try:
-                    server.request("plugin/install", {"marketplacePath": str(manifest), "pluginName": plugin})
+                    server.request(
+                        "plugin/install",
+                        {"marketplacePath": str(manifest), "pluginName": plugin},
+                    )
                 except RuntimeError as error:
                     report.fail(HOST, identity, str(error))
                     continue
@@ -238,5 +289,7 @@ def reload_open_sessions(report: Any) -> None:
         report.fail(HOST, "open sessions", str(error))
 
 
-def restart(report: Any) -> None:
-    print("Open Codex sessions in the shared app-server reload updated plugins in place.")
+def restart(report: Any, managed: bool) -> None:
+    print(
+        "Open Codex sessions in the shared app-server reload updated plugins in place."
+    )

@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Bring the shared Claude and Codex plugin installs up to their marketplace pins.
-
-Then hand any machine drift the new pins cause to its own install step, and restart
-background sessions.
-"""
+"""Refresh the calling host against its locally available marketplace pins."""
 
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -18,12 +15,11 @@ from typing import Protocol
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import jobs
-import latest_plugins
-from tree_digest import Digests
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from tj_agent.host import Host
 from tj_cli import process
+from tree_digest import Digests
 
 MARKETPLACES = ("tj-agents", "agents")
 TIMEOUT_SECONDS = 600
@@ -78,7 +74,9 @@ class Installed(Protocol):
         current: Callable[[str, str], bool],
     ) -> None: ...
 
-    def restart(self, report: Report) -> None: ...
+    def restart(self, report: Report, managed: bool) -> None: ...
+
+    def refresh_identities(self, marketplaces: tuple[str, ...]) -> set[str]: ...
 
 
 INSTALLED: Mapping[Host, Installed] = {
@@ -98,11 +96,37 @@ def current(host: Host, digests: Digests, marketplace: str, plugin: str) -> bool
     )
 
 
+def selected_host(explicit: Host | None, environ: Mapping[str, str]) -> Host:
+    if explicit is not None:
+        return explicit
+    hosts = [host for host in Host if environ.get(host.session_variable)]
+    if len(hosts) != 1:
+        raise ValueError(
+            "Pass --host claude or --host codex outside an unambiguous agent session"
+        )
+    return hosts[0]
+
+
+def already_current(host: Host, digests: Digests) -> bool:
+    identities = {
+        identity
+        for identity in INSTALLED[host].refresh_identities(MARKETPLACES)
+        if identity.rpartition("@")[2] in MARKETPLACES
+    }
+    return bool(identities) and all(
+        current(host, digests, identity.rpartition("@")[2], identity.rpartition("@")[0])
+        for identity in identities
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", type=Host, choices=list(Host))
     arguments = parser.parse_args(argv)
-    hosts = [arguments.host] if arguments.host else list(Host)
+    try:
+        host = selected_host(arguments.host, os.environ)
+    except ValueError as error:
+        parser.error(str(error))
     state = jobs.state_directory()
     with jobs.held(state, jobs.Job.REFRESH) as acquired:
         if not acquired:
@@ -110,14 +134,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         report = Report()
         digests = Digests(state)
-        for host in hosts:
-            INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host, digests))
+        if already_current(host, digests):
+            digests.save()
+            print(f"tj: {host} plugins already match their local pins")
+            return 0
+        INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host, digests))
         digests.save()
-        machine = latest_plugins.repair_machine(state, full=True)
-        if machine:
-            print(f"tj: {machine}")
-        for host in hosts:
-            INSTALLED[host].restart(report)
+        if not report.failures:
+            INSTALLED[host].restart(report, bool(os.environ.get("TJ_RUN_LAUNCH_ID")))
         jobs.record(state, jobs.Job.REFRESH, report.failures)
     if report.failures:
         print(
