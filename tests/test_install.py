@@ -713,7 +713,7 @@ class RunStepsTests(Machine):
     def test_unknown_step_fails_before_any_machine_operation_and_is_recorded(self):
         state = self.root / "state"
         with mock.patch.object(install, "machine_context") as context, \
-                mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(state)}), \
+                mock.patch.object(install.jobs, "state_directory", return_value=state), \
                 contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             install.main(["--step", "not an install step"])
         self.assertEqual(2, error.exception.code)
