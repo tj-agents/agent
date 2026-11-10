@@ -7,25 +7,33 @@ dependencies = ["tj-cli"]
 [tool.uv]
 package = false
 
+[tool.python-standards]
+mypy-groups = [[".agents", "tests"], [".claude/runtime"], [".codex/runtime"]]
+
 [tool.uv.sources]
 tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "ba8308382b080c5031ee06f63223d147300400f1", subdirectory = "packages/tj-cli" }
 
 [dependency-groups]
-dev = ["mypy>=2.4.0", "pytest>=9.1.1", "ruff>=0.17.1"]
+dev = ["mypy>=2.4.1", "pytest>=9.1.1", "ruff>=0.17.4", "pytest-socket>=0.7.0"]
 
 [tool.ruff]
-include = [".agents/tests/test_shared_python_paths.py", "tests/test_install_artefacts.py", "tests/conftest.py", ".agents/agent/utility/plugins/scripts/config_conflicts.py", "tests/test_conflicted_plugin_settings.py", ".agents/agent/runtime/native_runtime.py", "tests/test_native_runtime.py", ".agents/agent/utility/plugins/scripts/machine_paths.py", "tests/test_local_codex_refresh.py", ".agents/agent/runtime/work_items_install.py", "tests/test_work_items_install.py", ".agents/agent/runtime/retired_state.py", "tests/test_retired_state.py", ".agents/agent/runtime/jobs.py", ".agents/agent/runtime/plugin_copies.py", ".agents/agent/runtime/plugins/refresh.py", ".agents/agent/runtime/latest_plugins.py", ".agents/agent/runtime/machine_state.py", "tests/test_plugin_copies.py", "tests/fake_machine.py", "tests/test_latest_plugins.py", ".agents/agent/runtime/tj_recover.py", ".agents/agent/runtime/boot_history.py", "tests/test_tj_recover.py", "tests/test_boot_history.py", "tests/test_session_recovery.py", ".codex/runtime/daemon.py", "tests/test_codex_daemon.py", ".codex/runtime/user_plugins.py", ".codex/runtime/projects.py", "tests/test_codex_user_plugins.py"]
+extend-exclude = [".agents/sync_generated.py", ".agents/dependencies", ".codex/skills", ".claude/skills", ".codex/hooks/snapshot.py", ".codex/hooks/bootstrap.py", ".worktrees", ".template", "plugins"]
+include = ["*.py", "*.pyi"]
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "N", "UP", "B", "A", "BLE", "C4", "SIM", "PTH", "PIE", "RET", "RUF"]
+explicit-preview-rules = true
+preview = true
+select = ["E", "W", "F", "I", "N", "UP", "B", "A", "BLE", "C4", "SIM", "PTH", "PIE", "RET", "RUF", "PGH004", "ANN401", "G004", "PLW1514", "LOG002", "LOG015", "PLC2701", "ICN001", "TID251", "TRY300", "PT009", "PT011", "PT006", "PLR6301"]
 
 [tool.mypy]
+enable_error_code = ["ignore-without-code", "exhaustive-match"]
 strict = true
 warn_unreachable = true
 explicit_package_bases = true
-files = [".agents/tests/test_shared_python_paths.py", "tests/test_install_artefacts.py", "tests/conftest.py", ".agents/agent/utility/plugins/scripts/config_conflicts.py", "tests/test_conflicted_plugin_settings.py", ".agents/agent/runtime/native_runtime.py", "tests/test_native_runtime.py", ".agents/agent/utility/plugins/scripts/machine_paths.py", "tests/test_local_codex_refresh.py", ".agents/agent/runtime/work_items_install.py", "tests/test_work_items_install.py", ".agents/agent/runtime/retired_state.py", "tests/test_retired_state.py", ".agents/agent/runtime/jobs.py", ".agents/agent/runtime/plugin_copies.py", ".agents/agent/runtime/plugins/refresh.py", ".agents/agent/runtime/latest_plugins.py", ".agents/agent/runtime/machine_state.py", "tests/test_plugin_copies.py", "tests/fake_machine.py", "tests/test_latest_plugins.py", ".agents/agent/runtime/tj_recover.py", ".agents/agent/runtime/boot_history.py", "tests/test_tj_recover.py", "tests/test_boot_history.py", "tests/test_session_recovery.py", ".codex/runtime/daemon.py", "tests/test_codex_daemon.py", ".codex/runtime/user_plugins.py", ".codex/runtime/projects.py", "tests/test_codex_user_plugins.py"]
-mypy_path = [".agents/agent/runtime", ".codex/runtime", "plugins/agent/.agents/agent/runtime", "tests"]
+exclude = ['(^|/)(?:\.agents/sync_generated\.py|\.agents/dependencies/|\.codex/skills/|\.claude/skills/|\.codex/hooks/(?:snapshot|bootstrap)\.py|\.worktrees/|\.template/)', '^plugins/']
+files = [".agents", "tests"]
+mypy_path = [".agents/agent/runtime", "plugins/agent/.agents/agent/runtime", "tests"]
 
 [[tool.mypy.overrides]]
 module = ["host", "plugins", "install", "host_sessions", "repo_config", "test_required_plugins", "claude.*", "codex.*", "host_plugins", "required_plugins", "runtime_delivery", "tj_agent", "tj_agent.*", "agent_cli", "agent_store", "lifecycle", "host_sessions"]
@@ -39,5 +47,735 @@ follow_imports = "silent"
 strict = true
 testpaths = ["tests", ".agents/tests"]
 pythonpath = ["tests", "plugins/agent/.agents/agent/runtime"]
-addopts = ["--import-mode=importlib", "-ra"]
+addopts = ["--import-mode=importlib", "-ra", "--disable-socket"]
 filterwarnings = ["error"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"unittest.TestCase" = { "msg" = "Use plain pytest functions and bare assertions." }
+"importlib.util.spec_from_file_location" = { "msg" = "Import the installed public API; do not load another checkout by path." }
+"sys.path" = { "msg" = "Install the declared dependency; do not modify the import search path." }
+
+[tool.ruff.lint.flake8-pytest-style]
+raises-require-match-for = ["*"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_tj_recover.py" = ["ANN401", "PLR6301"]
+"tests/test_session_recovery.py" = ["ANN401", "PLR6301", "PT006"]
+"tests/test_retired_state.py" = ["ANN401", "TID251"]
+"tests/test_native_runtime.py" = ["TID251"]
+"tests/test_local_codex_refresh.py" = ["TID251"]
+"tests/test_latest_plugins.py" = ["ANN401"]
+"tests/test_conflicted_plugin_settings.py" = ["PT011", "TID251"]
+"tests/test_boot_history.py" = ["PT006"]
+"tests/fake_machine.py" = ["ANN401"]
+".agents/agent/utility/plugins/scripts/config_conflicts.py" = ["ANN401"]
+".agents/agent/runtime/tj_recover.py" = ["TID251"]
+".agents/agent/runtime/retired_state.py" = ["PLR6301", "TRY300"]
+".agents/agent/runtime/plugins/refresh.py" = ["PLR6301", "TID251"]
+".agents/agent/runtime/latest_plugins.py" = ["TID251"]
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/resources/lanes/resolve.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/resources/lanes/resolve.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/agent_cli.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/agent_cli.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/history.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/install.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/install.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/jobs.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/latest_plugins.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/latest_plugins.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/native_runtime.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/required_plugins.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/retired_state.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/tj_agent/host.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/tj_start.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/runtime/work_items_install.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/utility/plugins/scripts/machine_paths.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/agent/utility/plugins/scripts/repo_config.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".agents/codex/utility/hooks/scripts/hook_control.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".claude/runtime/permissions.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".claude/runtime/registry.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".codex/runtime/hook_trust.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".codex/runtime/hook_trust.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".codex/runtime/installed.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".codex/runtime/launch.py"
+rule = "PY016"
+reason = "Legacy host integration reads process state while resolving native configuration."
+
+[[tool.python-standards.exceptions]]
+path = ".codex/runtime/websocket.py"
+rule = "PY001"
+reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = "tests/conftest.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fake_machine.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fixtures/owned_native.py"
+rule = "PY009"
+reason = "Executable fixture performs import-time process reads to emulate an external command."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fixtures/owned_native.py"
+rule = "PY016"
+reason = "Executable fixture reads process state to emulate an external command."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fixtures/plugin_cli.py"
+rule = "PY001"
+reason = "Existing test flattens nested fixture data for assertions."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fixtures/plugin_cli.py"
+rule = "PY009"
+reason = "Executable fixture performs import-time process reads to emulate an external command."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fixtures/plugin_cli.py"
+rule = "PY016"
+reason = "Executable fixture reads process state to emulate an external command."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fixtures/plugin_console_probe.py"
+rule = "PY016"
+reason = "Executable fixture reads process state to emulate an external command."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fixtures/plugin_console_probe.py"
+rule = "PY017"
+reason = "Executable fixture reads the clock to emulate host behavior."
+
+[[tool.python-standards.exceptions]]
+path = "tests/fixtures/runtime_import_probe.py"
+rule = "PY016"
+reason = "Executable fixture reads process state to emulate an external command."
+
+[[tool.python-standards.exceptions]]
+path = "tests/git_isolation.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_agent_cli.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_claude_worktree_installations.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_conflicted_plugin_settings.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_handoff_launchers.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_hook_trust.py"
+rule = "PY001"
+reason = "Existing test flattens nested fixture data for assertions."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_latest_plugins.py"
+rule = "PY017"
+reason = "Existing test observes the clock while exercising timeout behavior."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_local_codex_refresh.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_native_runtime.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_plugin_modules.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_plugin_setup.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_refresh_plugins.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_required_plugins.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_selection_convergence.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_session_hook_events.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_windows_process_visibility.py"
+rule = "PY016"
+reason = "Existing test reads or replaces process state at a command boundary."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_windows_process_visibility.py"
+rule = "PY017"
+reason = "Existing test observes the clock while exercising timeout behavior."
+
+[[tool.python-standards.exceptions]]
+path = "tests/test_work_items_install.py"
+rule = "PY001"
+reason = "Existing test flattens nested fixture data for assertions."
+
+[tool.ruff.lint.extend-per-file-ignores]
+".agents/agent/resources/handoff/launch_claude.py" = ["E501", "TID251", "TRY300"]
+".agents/agent/resources/handoff/launch_codex.py" = ["E501", "TID251", "TRY300"]
+".agents/agent/resources/lanes/resolve.py" = ["B904", "C416", "E501", "I001", "PTH100", "PTH118", "PTH120", "PTH123", "TID251"]
+".agents/agent/runtime/agent_cli.py" = ["ANN401", "E402", "E501", "I001", "PTH100", "TID251"]
+".agents/agent/runtime/agent_store.py" = ["E501", "I001", "PTH105"]
+".agents/agent/runtime/history.py" = ["C408", "E501", "I001", "PTH100", "TID251", "UP017"]
+".agents/agent/runtime/host_permissions.py" = ["E501", "I001", "RUF021", "RUF100", "TID251"]
+".agents/agent/runtime/host_plugins.py" = ["E501"]
+".agents/agent/runtime/host_sessions.py" = ["E501"]
+".agents/agent/runtime/install.py" = ["B905", "E402", "E501", "I001", "PLR6301", "PTH100", "PTH105", "PTH108", "PTH110", "RET502", "RET503", "RUF007", "SIM102", "SIM105", "TID251", "UP035", "UP036"]
+".agents/agent/runtime/launch_contract.py" = ["E501"]
+".agents/agent/runtime/launch_errors.py" = ["N818"]
+".agents/agent/runtime/lifecycle.py" = ["E402", "E501", "I001", "TID251"]
+".agents/agent/runtime/package_root.py" = ["E501", "I001"]
+".agents/agent/runtime/repository_configuration.py" = ["E501", "I001", "N818"]
+".agents/agent/runtime/required_plugins.py" = ["E501", "I001", "RUF059", "TRY300"]
+".agents/agent/runtime/runtime_delivery.py" = ["E501", "I001", "PTH100", "PTH105", "SIM105"]
+".agents/agent/runtime/session_hook.py" = ["E402", "E501", "I001", "PTH109", "TID251"]
+".agents/agent/runtime/tj_agent/content.py" = ["E501"]
+".agents/agent/runtime/tj_agent/host.py" = ["E501", "I001"]
+".agents/agent/runtime/tj_start.py" = ["E501", "I001", "TID251"]
+".agents/agent/runtime/tj_status.py" = ["E501", "I001", "TID251"]
+".agents/agent/utility/handoff/scripts/handoff.py" = ["E501", "I001", "TID251"]
+".agents/agent/utility/refresh-plugins/scripts/refresh_plugins.py" = ["E501", "I001"]
+".agents/codex/utility/hooks/scripts/hook_control.py" = ["ANN401", "B904", "E501", "E712", "I001", "PTH105", "PTH123", "RUF059", "TRY300", "UP037"]
+".agents/codex/utility/memory/scripts/memory.py" = ["E501", "I001"]
+".claude/runtime/installed.py" = ["ANN401", "E501", "I001", "UP035"]
+".claude/runtime/launch.py" = ["E501", "I001", "PTH113"]
+".claude/runtime/plugins.py" = ["E501", "I001", "SIM102", "UP033"]
+".claude/runtime/registry.py" = ["E501", "I001", "PTH105", "PTH108", "PTH110"]
+".claude/runtime/sessions.py" = ["C408", "E501", "I001"]
+".codex/runtime/hook_trust.py" = ["E501", "I001", "SIM114", "TRY300"]
+".codex/runtime/installed.py" = ["ANN401", "E501", "UP035"]
+".codex/runtime/launch.py" = ["E501", "I001", "PTH207"]
+".codex/runtime/permissions.py" = ["E501"]
+".codex/runtime/plugins.py" = ["B905", "E501", "I001", "SIM102"]
+".codex/runtime/sessions.py" = ["C408", "E501", "F401", "I001"]
+".codex/runtime/websocket.py" = ["E501", "RUF021"]
+"tests/fixtures/owned_native.py" = ["I001"]
+"tests/fixtures/plugin_cli.py" = ["E501", "I001"]
+"tests/fixtures/plugin_console_probe.py" = ["ANN401", "TID251"]
+"tests/fixtures/runtime_import_probe.py" = ["TID251"]
+"tests/git_isolation.py" = ["E501"]
+"tests/test_adopt_plugins.py" = ["E501", "I001", "PT009", "TID251"]
+"tests/test_agent_cli.py" = ["E501", "F401", "I001", "PLR6301", "PT009", "PTH100", "PTH109", "PTH118", "RUF059", "TID251"]
+"tests/test_claude_worktree_installations.py" = ["E501", "I001", "N812", "PLR6301", "PT009", "TID251"]
+"tests/test_codex_config_writers.py" = ["E501", "I001", "PT009", "TID251", "UP036"]
+"tests/test_credential_deny_rules.py" = ["E501", "I001", "PT009", "TID251", "UP036"]
+"tests/test_handoff_launchers.py" = ["E501", "I001", "PT009", "RUF059", "TID251"]
+"tests/test_harness_permissions_sync.py" = ["E501", "I001", "PT009", "SIM117", "TID251"]
+"tests/test_history.py" = ["C408", "E501", "I001", "PT009", "PTH201", "TID251"]
+"tests/test_hook_control.py" = ["BLE001", "E501", "I001", "PT009", "SIM117", "TID251"]
+"tests/test_hook_trust.py" = ["E402", "E501", "I001", "N812", "PT009", "RET503", "SIM117", "TID251"]
+"tests/test_host_launch.py" = ["TID251"]
+"tests/test_install.py" = ["E501", "I001", "PLR6301", "PT009", "SIM117", "TID251", "UP036"]
+"tests/test_lifecycle_commands.py" = ["E501", "I001", "PLR6301", "PT009", "TID251"]
+"tests/test_loader_roots.py" = ["F401", "TID251"]
+"tests/test_package_root.py" = ["E501", "I001", "PT009", "TID251"]
+"tests/test_plugin_modules.py" = ["E501", "I001", "PT009", "TID251"]
+"tests/test_plugin_scripts_entry.py" = ["E501", "PT009", "TID251"]
+"tests/test_plugin_setup.py" = ["E402", "E501", "I001", "PT009", "TID251"]
+"tests/test_refresh_plugins.py" = ["ANN401", "E501", "I001", "PT009", "TID251"]
+"tests/test_required_plugins.py" = ["E501", "I001", "N812", "PT009", "PT011", "SIM117", "TID251"]
+"tests/test_runtime_delivery.py" = ["E402", "E501", "I001", "PT009", "PTH211", "TID251"]
+"tests/test_selection_convergence.py" = ["E402", "E501", "I001", "PT009", "RET501", "TID251"]
+"tests/test_session_hook_events.py" = ["E501", "I001", "PLR6301", "PT009", "TID251"]
+"tests/test_session_hooks.py" = ["E501", "I001", "PT009", "SIM300", "TID251"]
+"tests/test_verify_machine.py" = ["E501", "I001", "PT009", "TID251"]
+"tests/test_websocket.py" = ["E501", "I001", "N812", "PT009", "TID251"]
+"tests/test_work_item.py" = ["TID251"]
+
+[tool.ruff.format]
+exclude = [
+  ".agents/agent/resources/handoff/launch_claude.py",
+  ".agents/agent/resources/handoff/launch_codex.py",
+  ".agents/agent/resources/lanes/resolve.py",
+  ".agents/agent/runtime/agent_cli.py",
+  ".agents/agent/runtime/agent_store.py",
+  ".agents/agent/runtime/history.py",
+  ".agents/agent/runtime/host_permissions.py",
+  ".agents/agent/runtime/host_plugins.py",
+  ".agents/agent/runtime/host_sessions.py",
+  ".agents/agent/runtime/install.py",
+  ".agents/agent/runtime/launch_contract.py",
+  ".agents/agent/runtime/lifecycle.py",
+  ".agents/agent/runtime/package_root.py",
+  ".agents/agent/runtime/repository_configuration.py",
+  ".agents/agent/runtime/required_plugins.py",
+  ".agents/agent/runtime/runtime_delivery.py",
+  ".agents/agent/runtime/session_hook.py",
+  ".agents/agent/runtime/tj_agent/content.py",
+  ".agents/agent/runtime/tj_agent/host.py",
+  ".agents/agent/runtime/tj_start.py",
+  ".agents/agent/runtime/tj_status.py",
+  ".agents/agent/runtime/transcripts.py",
+  ".agents/agent/utility/handoff/scripts/handoff.py",
+  ".agents/agent/utility/refresh-plugins/scripts/refresh_plugins.py",
+  ".agents/codex/utility/hooks/scripts/hook_control.py",
+  ".agents/codex/utility/memory/scripts/memory.py",
+  ".claude/runtime/installed.py",
+  ".claude/runtime/launch.py",
+  ".claude/runtime/permissions.py",
+  ".claude/runtime/plugins.py",
+  ".claude/runtime/registry.py",
+  ".claude/runtime/sessions.py",
+  ".codex/runtime/hook_trust.py",
+  ".codex/runtime/installed.py",
+  ".codex/runtime/launch.py",
+  ".codex/runtime/plugins.py",
+  ".codex/runtime/sessions.py",
+  ".codex/runtime/websocket.py",
+  "tests/fixtures/plugin_cli.py",
+  "tests/git_isolation.py",
+  "tests/test_adopt_plugins.py",
+  "tests/test_agent_cli.py",
+  "tests/test_claude_worktree_installations.py",
+  "tests/test_codex_config_writers.py",
+  "tests/test_credential_deny_rules.py",
+  "tests/test_handoff_launchers.py",
+  "tests/test_harness_permissions_sync.py",
+  "tests/test_history.py",
+  "tests/test_hook_control.py",
+  "tests/test_hook_trust.py",
+  "tests/test_install.py",
+  "tests/test_lifecycle_commands.py",
+  "tests/test_package_root.py",
+  "tests/test_plugin_modules.py",
+  "tests/test_plugin_scripts_entry.py",
+  "tests/test_plugin_setup.py",
+  "tests/test_refresh_plugins.py",
+  "tests/test_required_plugins.py",
+  "tests/test_runtime_delivery.py",
+  "tests/test_selection_convergence.py",
+  "tests/test_session_hook_events.py",
+  "tests/test_session_hooks.py",
+  "tests/test_verify_machine.py",
+  "tests/test_websocket.py",
+]
+
+[[tool.mypy.overrides]]
+module = "adopt_plugins"
+disable_error_code = ["assignment", "type-arg", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "agent_cli"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "agent_store"
+disable_error_code = ["no-any-return", "no-untyped-def", "type-arg"]
+
+[[tool.mypy.overrides]]
+module = "fake_machine"
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = "git_isolation"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "handoff"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "harness_permissions"
+disable_error_code = ["type-arg", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "harness_permissions_sync"
+disable_error_code = ["arg-type", "attr-defined", "index", "return-value", "type-arg"]
+
+[[tool.mypy.overrides]]
+module = "history"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "hook_control"
+disable_error_code = ["attr-defined", "no-any-return"]
+
+[[tool.mypy.overrides]]
+module = "host_permissions"
+disable_error_code = ["arg-type", "no-any-return", "no-untyped-def", "union-attr", "unreachable"]
+
+[[tool.mypy.overrides]]
+module = "host_plugins"
+disable_error_code = ["type-arg"]
+
+[[tool.mypy.overrides]]
+module = "host_sessions"
+disable_error_code = ["type-arg"]
+
+[[tool.mypy.overrides]]
+module = "install"
+disable_error_code = ["arg-type", "attr-defined", "no-any-return", "no-untyped-def", "type-arg", "union-attr", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "latest_plugins"
+disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+module = "launch_claude"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "launch_codex"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "lifecycle"
+disable_error_code = ["call-arg", "no-any-return", "no-untyped-def", "type-arg", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "lock_io"
+disable_error_code = ["no-any-return", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "memory"
+disable_error_code = ["type-arg"]
+
+[[tool.mypy.overrides]]
+module = "plugin_selection"
+disable_error_code = ["arg-type", "index", "no-untyped-call", "no-untyped-def", "return-value", "type-arg", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "plugins.refresh"
+disable_error_code = ["arg-type"]
+
+[[tool.mypy.overrides]]
+module = "refresh_plugins"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "repo_config"
+disable_error_code = ["assignment", "no-untyped-call", "no-untyped-def", "type-arg", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "repository_configuration"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "required_plugins"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "type-arg", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "resolve"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "runtime.hook_trust"
+disable_error_code = ["no-untyped-call", "no-untyped-def", "union-attr", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "runtime.installed"
+disable_error_code = ["no-any-return", "type-arg", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "runtime.launch"
+disable_error_code = ["no-any-return", "no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "runtime.permissions"
+disable_error_code = ["type-arg"]
+
+[[tool.mypy.overrides]]
+module = "runtime.plugins"
+disable_error_code = ["no-any-return", "operator", "return-value", "type-arg"]
+
+[[tool.mypy.overrides]]
+module = "runtime.registry"
+disable_error_code = ["type-arg"]
+
+[[tool.mypy.overrides]]
+module = "runtime.sessions"
+disable_error_code = ["assignment", "no-untyped-call", "no-untyped-def", "type-arg", "union-attr", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "runtime.websocket"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "runtime_delivery"
+disable_error_code = ["arg-type", "attr-defined", "no-untyped-def", "type-arg"]
+
+[[tool.mypy.overrides]]
+module = "session_hook"
+disable_error_code = ["arg-type", "no-any-return", "no-untyped-def", "type-arg"]
+
+[[tool.mypy.overrides]]
+module = "test_adopt_plugins"
+disable_error_code = ["arg-type", "assignment", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_agent_cli"
+disable_error_code = ["attr-defined", "func-returns-value", "no-untyped-call", "no-untyped-def", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "test_claude_worktree_installations"
+disable_error_code = ["attr-defined", "no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_codex_config_writers"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_credential_deny_rules"
+disable_error_code = ["no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_handoff_launchers"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_harness_permissions_sync"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "type-arg", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_history"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_hook_control"
+disable_error_code = ["arg-type", "attr-defined", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_hook_trust"
+disable_error_code = ["dict-item", "index", "no-untyped-call", "no-untyped-def", "operator", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "test_install"
+disable_error_code = ["arg-type", "assignment", "attr-defined", "list-item", "no-untyped-call", "no-untyped-def", "var-annotated"]
+
+[[tool.mypy.overrides]]
+module = "test_install_artefacts"
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = "test_latest_plugins"
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = "test_lifecycle_commands"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_loader_roots"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_package_root"
+disable_error_code = ["arg-type", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_plugin_modules"
+disable_error_code = ["no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_plugin_scripts_entry"
+disable_error_code = ["no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_plugin_setup"
+disable_error_code = ["arg-type", "dict-item", "no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_refresh_plugins"
+disable_error_code = ["arg-type", "func-returns-value", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_required_plugins"
+disable_error_code = ["arg-type", "attr-defined", "no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_runtime_delivery"
+disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_selection_convergence"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_session_hook_events"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_session_hooks"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_tj_recover"
+disable_error_code = ["arg-type", "attr-defined", "misc", "no-untyped-call"]
+
+[[tool.mypy.overrides]]
+module = "test_verify_machine"
+disable_error_code = ["arg-type", "no-untyped-def", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "test_websocket"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "test_work_items_install"
+disable_error_code = ["attr-defined"]
+
+[[tool.mypy.overrides]]
+module = "tj_agent.host"
+disable_error_code = ["no-any-return"]
+
+[[tool.mypy.overrides]]
+module = "tj_agent.plugins.sources"
+disable_error_code = ["no-any-return", "type-arg", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "tj_recover"
+disable_error_code = ["attr-defined", "call-arg", "no-untyped-call"]
+
+[[tool.mypy.overrides]]
+module = "tj_start"
+disable_error_code = ["attr-defined", "no-any-return", "no-untyped-call", "no-untyped-def", "type-arg"]
+
+[[tool.mypy.overrides]]
+module = "tj_status"
+disable_error_code = ["no-untyped-def", "type-arg"]
+
+[[tool.mypy.overrides]]
+module = "transcripts"
+disable_error_code = ["no-untyped-call", "no-untyped-def"]
+
+[[tool.mypy.overrides]]
+module = "update_marketplace_plugins"
+disable_error_code = ["no-any-return"]
+
+[[tool.mypy.overrides]]
+module = "verify_machine"
+disable_error_code = ["assignment", "no-untyped-def", "type-arg", "unreachable"]
