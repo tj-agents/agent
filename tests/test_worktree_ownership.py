@@ -3,6 +3,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import agent_cli
 import agent_store
 import pytest
 import session_hook
@@ -298,7 +299,7 @@ def test_codex_naming_and_ownership_capture_are_independent(
             raise agent_store.AgentStoreError("conflict", "claim failed")
         return store.run(*arguments)
 
-    adapter = session_hook.agent_cli.host_launch(Host.CODEX)
+    adapter = agent_cli.host_launch(Host.CODEX)
     monkeypatch.setattr(adapter, "name_session", name_session)
     monkeypatch.setattr(agent_store, "run", run_store)
     with pytest.raises(RuntimeError, match=f"{failure} failed"):

@@ -57,10 +57,9 @@ def _record(value: object, label: str) -> Mapping[str, object]:
 
 
 def _owner(session: Mapping[str, object]) -> Owner:
-    try:
-        host = Host(session.get("host"))
-    except ValueError as error:
-        raise OwnershipError("agent-store returned an invalid session host") from error
+    host = next((host for host in Host if host.value == session.get("host")), None)
+    if host is None:
+        raise OwnershipError("agent-store returned an invalid session host")
     native_id = session.get("native_id")
     launch_id = session.get("launch_id")
     if not isinstance(native_id, str) or not (

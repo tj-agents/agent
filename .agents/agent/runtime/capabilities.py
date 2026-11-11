@@ -94,6 +94,17 @@ REVISIONS = {
 
 CAPABILITIES = (
     Capability(
+        "session-command-environment",
+        Support(
+            "agent:.claude/runtime/launch.py::record_session_environment",
+            "agent:tests/test_capability_contracts.py::test_session_environment_reaches_tool_commands",
+        ),
+        Support(
+            "agent:.codex/runtime/launch.py::record_session_environment",
+            "agent:tests/test_capability_contracts.py::test_session_environment_reaches_tool_commands",
+        ),
+    ),
+    Capability(
         "native-executable-selection",
         Support(
             "agent:.claude/runtime/launch.py::executable",
