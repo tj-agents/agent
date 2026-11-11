@@ -5,6 +5,7 @@ from pathlib import Path
 
 import agent_cli
 import agent_store
+import owned_launch
 import pytest
 import session_hook
 from claude import launch as claude_launch
@@ -265,6 +266,7 @@ def test_startup_does_not_downgrade_an_unknown_launch_to_unmanaged_ownership(
         return store.run(*arguments)
 
     monkeypatch.setattr(agent_store, "run", missing_launch)
+    monkeypatch.setattr(owned_launch, "current", lambda: "missing")
     with pytest.raises(agent_store.AgentStoreError, match="Unknown launch"):
         session_hook.start(
             Host.CLAUDE,

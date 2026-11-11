@@ -15,6 +15,7 @@ import install
 import jobs
 import latest_plugins
 import machine_state
+import owned_launch
 import plugin_copies
 import pytest
 import retired_state
@@ -620,13 +621,57 @@ def test_a_missing_pinned_build_starts_the_plugin_update(machine: Machine) -> No
     assert machine.reason() == UPDATING_CLAUDE
 
 
-def test_managed_claude_adopts_downloaded_plugins_without_a_manual_reload(
+@pytest.mark.parametrize("host", list(Host))
+def test_an_owned_session_on_an_older_build_updates_without_a_reload_instruction(
+    machine: Machine, monkeypatch: pytest.MonkeyPatch, host: Host
+) -> None:
+    machine.registry(PIN)
+    machine.codex_build("aaaaaaaaaaaa")
+    machine.converge()
+    older = machine.home / "older-agent"
+    write_json(
+        older / ".codex-plugin/plugin.json",
+        {"name": "agent", "version": "cccccccccccc"},
+    )
+    monkeypatch.setattr(owned_launch, "current", lambda: "fixture")
+    notice = machine.hook(host.value, "UserPromptSubmit", older)
+    assert notice == "Updating tj-agents running plugins in the background."
+    assert machine.started.commands == [latest_plugins.update_command(host)]
+
+
+def test_an_owned_session_is_told_only_that_plugins_are_updating(
     machine: Machine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    machine.registry(OLD)
+    machine.converge()
+    monkeypatch.setattr(owned_launch, "current", lambda: "fixture")
+    assert machine.hook("claude", "UserPromptSubmit") == (
+        "Updating tj-agents plugins in the background."
+    )
+
+
+def test_a_prompt_starts_the_update_only_for_drift_no_earlier_start_covered(
+    machine: Machine,
+) -> None:
+    machine.registry(OLD)
+    machine.converge()
+    update = latest_plugins.update_command(Host.CLAUDE)
+    assert machine.hook("claude", "UserPromptSubmit") == UPDATING_CLAUDE
+    assert machine.hook("claude", "UserPromptSubmit") is None
+    assert machine.started.commands == [update]
+    assert machine.hook("claude", "SessionStart") == UPDATING_CLAUDE
+    assert machine.started.commands == [update, update]
+    pin_plugin(machine.claude, "agent", "f" * 40)
+    assert machine.hook("claude", "UserPromptSubmit") == UPDATING_CLAUDE
+    assert machine.started.commands == [update, update, update]
+
+
+def test_a_prompt_starts_the_install_only_for_drift_no_earlier_start_covered(
+    machine: Machine,
 ) -> None:
     machine.registry(PIN)
     machine.converge()
-    running = machine.home / "older-agent"
-    monkeypatch.setenv("TJ_RUN_LAUNCH_ID", "fixture")
-    notice = machine.hook("claude", "UserPromptSubmit", running)
-    assert "resumes when idle" in notice
-    assert machine.started.commands == [latest_plugins.update_command(Host.CLAUDE)]
+    copies_drifted(machine.home)
+    assert machine.hook("claude", "UserPromptSubmit") is not None
+    assert machine.hook("claude", "UserPromptSubmit") is None
+    assert machine.started.commands == [install_step("plugin copies")]

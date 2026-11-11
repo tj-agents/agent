@@ -99,6 +99,22 @@ def record(state: Path, job: Job, failures: Sequence[str]) -> None:
     status_path(state, job).write_text(json.dumps(status), encoding="utf-8")
 
 
+def attempt_path(state: Path, job: Job) -> Path:
+    return state / f"{job.file_name}-attempt.json"
+
+
+def attempted(state: Path, job: Job) -> object:
+    try:
+        return json.loads(attempt_path(state, job).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def attempt(state: Path, job: Job, drift: Sequence[str]) -> None:
+    state.mkdir(parents=True, exist_ok=True)
+    attempt_path(state, job).write_text(json.dumps(list(drift)), encoding="utf-8")
+
+
 def start(state: Path, job: Job, command: Sequence[str]) -> bool:
     log = log_path(state, job)
     log.parent.mkdir(parents=True, exist_ok=True)
