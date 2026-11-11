@@ -7,11 +7,6 @@ import owned_launch
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def no_owning_launch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(owned_launch, "current", lambda: None)
-
-
 @pytest.fixture
 def loader_package_roots(tmp_path: Path) -> tuple[Path, Path]:
     outer = tmp_path / "outer"
@@ -39,3 +34,8 @@ def preserve_empty_process_environment() -> Iterator[None]:
         for key in empty:
             if os.environ.get(key) == "" and not set_variable(key, ""):
                 raise ctypes.WinError(ctypes.get_last_error())
+
+
+@pytest.fixture(autouse=True)
+def no_owning_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(owned_launch, "current", lambda: None)
