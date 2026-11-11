@@ -79,14 +79,16 @@ def pointer(path: Path, prefix: str = "") -> Path:
 
 def main_repository(directory: Path) -> Path:
     root = cast(Path, worktrees.repository_root(directory))
+    canonical_root = root.resolve(strict=True)
     nearest = next(
         (path for path in (directory, *directory.parents) if (path / ".git").exists()),
         None,
     )
     if (
         nearest is None
-        or nearest.resolve(strict=True) != root.resolve(strict=True)
-        or not directory.resolve(strict=True).is_relative_to(root.resolve(strict=True))
+        or str(nearest.resolve(strict=True)) != str(canonical_root)
+        or directory.resolve(strict=True).parts[: len(canonical_root.parts)]
+        != canonical_root.parts
     ):
         raise LaunchError(f"Codex Git trust root does not contain {directory}")
     marker = root / ".git"
@@ -107,15 +109,18 @@ def main_repository(directory: Path) -> Path:
         raise LaunchError(f"Unsupported Codex linked worktree identity: {root}")
     common = git_dir.parent.parent
     main = common.parent
+    linked_root = worktrees.linked_root(root)
     if (
-        pointer(git_dir / "gitdir").resolve(strict=True) != marker.resolve(strict=True)
-        or pointer(git_dir / "commondir").resolve(strict=True)
-        != common.resolve(strict=True)
+        str(pointer(git_dir / "gitdir").resolve(strict=True))
+        != str(marker.resolve(strict=True))
+        or str(pointer(git_dir / "commondir").resolve(strict=True))
+        != str(common.resolve(strict=True))
         or not (main / ".git").is_dir()
         or (main / ".git").is_symlink()
         or (main / ".git").is_junction()
-        or (main / ".git").resolve(strict=True) != common.resolve(strict=True)
-        or worktrees.linked_root(root) != root.resolve(strict=True)
+        or str((main / ".git").resolve(strict=True)) != str(common.resolve(strict=True))
+        or linked_root is None
+        or str(linked_root.resolve(strict=True)) != str(canonical_root)
     ):
         raise LaunchError(f"Codex linked worktree backlinks do not match: {root}")
     return main
