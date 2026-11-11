@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import functools
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -128,30 +129,35 @@ def prepare_instructions(project: Path) -> None:
     pointer.write_text("@AGENTS.md\n", encoding="utf-8")
 
 
-def install(project: Path, identities: Sequence[str]) -> None:
-    local = (project / ".agents/repo-capabilities.local.json").is_file()
-    scope = "local" if local else "project"
-    for identity in identities:
-        result = process.run(
-            [
-                "claude",
-                "plugin",
-                "install",
-                identity,
-                "--scope",
-                scope,
-                "--json",
-                "-y",
-            ],
-            cwd=project,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=120,
-            check=False,
+def user_enabled() -> Mapping[str, object]:
+    try:
+        settings = json.loads((HOST.configuration_root / "settings.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    enabled = settings.get("enabledPlugins") if isinstance(settings, dict) else None
+    return enabled if isinstance(enabled, dict) else {}
+
+
+def plugin_command(project: Path, identity: str, *arguments: str) -> None:
+    result = process.run(
+        ["claude", "plugin", *arguments, identity, "--scope", "user", "--json", "-y"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=False,
+    )
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise required_plugins.RequiredPluginsError(
+            f"Cannot {arguments[0]} {identity} for {project}: {detail}"
         )
-        if result.returncode:
-            detail = result.stderr.strip() or result.stdout.strip()
-            raise required_plugins.RequiredPluginsError(
-                f"Cannot install {identity} for {project}: {detail}"
-            )
+
+
+def install(project: Path, identities: Sequence[str]) -> None:
+    enabled = user_enabled()
+    for identity in identities:
+        plugin_command(project, identity, "install")
+        if enabled.get(identity) is not True:
+            plugin_command(project, identity, "disable")

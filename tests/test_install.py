@@ -959,6 +959,18 @@ def test_the_agent_store_check_reads_its_install_receipt_without_running_it(
     assert store.pending() is not None
 
 
+def test_an_older_agent_store_pin_never_replaces_a_newer_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = install.agent_store
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path))
+    store.executable().write_bytes(b"newer agent-store")
+    store.write_receipt("v99.0.0", b"newer agent-store")
+    assert store.pending() is None
+    assert store.install(mock.Mock(side_effect=AssertionError)) == "v99.0.0"
+    assert store.executable().read_bytes() == b"newer agent-store"
+
+
 if __name__ == "__main__":
     unittest.main()
 
