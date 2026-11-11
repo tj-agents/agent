@@ -422,6 +422,15 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
         return updates
 
 
+def package_stamp(root: Path) -> str:
+    files = {}
+    for path in root.rglob("*"):
+        if path.is_file() and not generated_cache(path):
+            status = path.stat()
+            files[path.relative_to(root).as_posix()] = (status.st_size, status.st_mtime_ns)
+    return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
 def published_hooks():
     marketplace = required_plugins.MARKETPLACE_NAME
     cache = Host.CODEX.configuration_root / "plugins" / "cache" / marketplace
@@ -440,7 +449,7 @@ def published_hooks():
         except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
             definitions = [("unreadable", str(builds[0]))]
         if definitions:
-            hooks[identity] = hashlib.sha256(json.dumps(definitions).encode()).hexdigest()
+            hooks[identity] = hashlib.sha256(json.dumps((definitions, package_stamp(builds[0]))).encode()).hexdigest()
     return hooks
 
 

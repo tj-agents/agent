@@ -1,4 +1,6 @@
+import os
 import re
+import subprocess
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -97,3 +99,27 @@ def test_install_artefacts_report_a_wrapper_naming_a_deleted_runtime_module(
     )
     missing, _ = missing_scripts(written_artefacts(context))
     assert missing == [f"{profile}: {launcher}"]
+
+
+@pytest.mark.parametrize(
+    ("command", "arguments"),
+    [("plugins", ["update", "--help"]), ("install", ["--help"])],
+)
+def test_installed_commands_resolve_the_delivered_payload(
+    command: str, arguments: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = installed_machine(tmp_path / "home", monkeypatch, windows=os.name == "nt")
+    suffix = ".cmd" if context.windows else ""
+    shim = next(
+        path
+        for path in install.lifecycle_shims(context)
+        if path.name == f"tj-{command}{suffix}"
+    )
+    invocation = [str(shim), *arguments]
+    if context.windows:
+        invocation = ["cmd.exe", "/d", "/c", *invocation]
+    result = subprocess.run(
+        invocation, capture_output=True, text=True, timeout=15, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage:" in result.stdout

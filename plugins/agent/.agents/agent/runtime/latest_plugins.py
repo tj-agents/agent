@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Refuse work while this session, its plugins or the machine are behind their pins.
+"""Report when this session, its plugins or the machine are behind their pins.
 
-Each cause starts only its own fix: plugins behind their pin start the plugin refresh,
+Each cause starts only its own fix: plugins behind their pin start the plugin update,
 and machine drift starts only the install steps that repair it.
 """
 
@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jobs
 import machine_state
+import plugin_activation
+import required_plugins
 import retired_state
 from claude import installed as claude_installed
 from codex import installed as codex_installed
@@ -32,13 +34,9 @@ RUNTIME = Path(__file__).resolve().parent
 class Installed(Protocol):
     RELOAD: str
 
-    def installed_build_behind(
-        self, marketplace: str, plugin: str, install: Path
-    ) -> str | None: ...
+    def behind(self, marketplaces: tuple[str, ...]) -> list[str]: ...
 
-    def loaded_build_behind(
-        self, root: Path, pin: str, install: Path
-    ) -> str | None: ...
+    def running_behind(self, root: Path) -> str | None: ...
 
 
 INSTALLED: Mapping[Host, Installed] = {
@@ -48,22 +46,7 @@ INSTALLED: Mapping[Host, Installed] = {
 
 
 def installed_behind(host: Host) -> list[str]:
-    found = []
-    for marketplace in MARKETPLACES:
-        pins = claude_installed.pins(marketplace)
-        installs = claude_installed.installs(marketplace)
-        for plugin, pin in sorted(pins.items()):
-            if plugin not in installs:
-                continue
-            revision, path = installs[plugin]
-            behind = (
-                f"installed {revision[:12]}, marketplace {pin[:12]}"
-                if revision != pin
-                else INSTALLED[host].installed_build_behind(marketplace, plugin, path)
-            )
-            if behind:
-                found.append(f"{plugin}@{marketplace}: {behind}")
-    return found
+    return INSTALLED[host].behind(MARKETPLACES)
 
 
 def running_root(host: Host) -> Path:
@@ -72,16 +55,20 @@ def running_root(host: Host) -> Path:
 
 
 def running_behind(host: Host) -> str | None:
-    pin = claude_installed.pins("tj-agents").get("agent")
-    install = claude_installed.installs("tj-agents").get("agent")
-    if not pin or not install or install[0] != pin:
+    if not os.environ.get(host.plugin_root_variable):
         return None
-    behind = INSTALLED[host].loaded_build_behind(running_root(host), pin, install[1])
-    return f"agent@tj-agents: {behind}" if behind else None
+    return INSTALLED[host].running_behind(running_root(host))
 
 
-def refresh_command() -> list[str]:
-    return [sys.executable, "-B", str(machine_state.packaged("plugins/refresh.py"))]
+def update_command(host: Host) -> list[str]:
+    return [
+        sys.executable,
+        "-B",
+        str(machine_state.packaged("tj_plugins.py")),
+        "update",
+        "--host",
+        host.value,
+    ]
 
 
 def install_command(steps: Iterable[str]) -> list[str]:
@@ -94,44 +81,52 @@ def fixing(
     job: jobs.Job,
     command: Sequence[str],
     behind: str,
-    then: str,
-    rerun: str,
+    then: str | None = None,
 ) -> str:
+    rerun = f"run {shlex.join(command)}"
     running = jobs.running(state, job)
     failure = None if running else jobs.recent_failure(state, job)
     if failure:
         return f"tj-agents {job.label} failed ({failure}); {rerun}."
     if not running and not jobs.start(state, job, command):
         return f"tj-agents {behind} are behind and tj_hook is missing; {rerun}."
-    return f"Updating tj-agents {behind}… {then} when this says done."
+    after = f"; {then} when it finishes" if then else ""
+    return f"Updating tj-agents {behind} in the background{after}."
 
 
 def repair_machine(state: Path, *, full: bool) -> str | None:
+    if not machine_state.installed_build():
+        return None
     if not full and machine_state.current(state):
         return None
     drift = machine_state.drift(state)
     if not drift:
         return None
-    command = install_command(drift)
     behind = "; ".join(f"{step} ({'; '.join(found)})" for step, found in drift.items())
-    rerun = f"run {shlex.join(command)}"
-    return fixing(
-        state, jobs.Job.INSTALL, command, behind, "send the prompt again", rerun
-    )
+    return fixing(state, jobs.Job.INSTALL, install_command(drift), behind)
 
 
 def reason(host: Host, state: Path, *, full: bool) -> str | None:
     machine = repair_machine(state, full=full)
-    if installed_behind(host):
+    if installed_behind(host) or plugin_activation.pending(
+        state, host, required_plugins.project_root(Path.cwd())
+    ):
         return fixing(
             state,
-            jobs.Job.REFRESH,
-            refresh_command(),
+            jobs.Job.UPDATE,
+            update_command(host),
             "plugins",
             INSTALLED[host].RELOAD,
-            "run agent:refresh-plugins",
         )
     if running_behind(host):
+        if host is Host.CLAUDE and os.environ.get("TJ_RUN_LAUNCH_ID"):
+            return fixing(
+                state,
+                jobs.Job.UPDATE,
+                update_command(host),
+                "running plugins",
+                "this conversation resumes when idle without background work",
+            )
         return f"Plugins updated: {INSTALLED[host].RELOAD}."
     return machine
 
@@ -147,17 +142,11 @@ def main(argv: list[str] | None = None) -> int:
     state = jobs.state_directory()
     if event in ("", "SessionStart"):
         retired_state.remove(state)
-    refusal = reason(arguments.host, state, full=event != "UserPromptSubmit")
-    if refusal is None:
+    notice = reason(arguments.host, state, full=event != "UserPromptSubmit")
+    if notice is None:
         return 0
-    if event == "UserPromptSubmit":
-        print(json.dumps({"decision": "block", "reason": refusal}))
-    else:
-        context = {
-            "hookEventName": event or "SessionStart",
-            "additionalContext": refusal,
-        }
-        print(json.dumps({"hookSpecificOutput": context}))
+    context = {"hookEventName": event or "SessionStart", "additionalContext": notice}
+    print(json.dumps({"systemMessage": notice, "hookSpecificOutput": context}))
     return 0
 
 

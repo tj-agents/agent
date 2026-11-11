@@ -20,7 +20,7 @@ FAILURE_SECONDS = 600
 
 
 class Job(Enum):
-    REFRESH = ("plugin-refresh", "plugin refresh")
+    UPDATE = ("plugin-update", "plugin update")
     INSTALL = ("machine-install", "machine install")
 
     def __init__(self, file_name: str, label: str) -> None:
@@ -95,6 +95,7 @@ def held(state: Path, job: Job) -> Iterator[bool]:
 
 def record(state: Path, job: Job, failures: Sequence[str]) -> None:
     status = {"finished": time.time(), "failures": list(failures)}
+    state.mkdir(parents=True, exist_ok=True)
     status_path(state, job).write_text(json.dumps(status), encoding="utf-8")
 
 

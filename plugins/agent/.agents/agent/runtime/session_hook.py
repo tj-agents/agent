@@ -21,6 +21,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from tj_agent.host import Host
+from tj_agent import worktrees
+import agent_cli
 import agent_store
 from tj_cli import process
 
@@ -88,10 +90,14 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
                                 [*terminal(environ), *title_arguments(environ), *wrapper_arguments(environ)])
     else:
         session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
-    if host is Host.CODEX and session.get("title"):
-        import agent_cli
-
-        agent_cli.host_launch(host).name_session(session_id, session["title"])
+    adapter = agent_cli.host_launch(host)
+    try:
+        if host is Host.CODEX and session.get("title"):
+            adapter.name_session(session_id, session["title"])
+    finally:
+        adapter.record_session_environment(session_id, environ)
+        if root:
+            worktrees.claim_started_worktree(host, session_id, Path(root), environ)
     return session
 
 
@@ -111,10 +117,16 @@ def prompt() -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("event", choices=("start", "prompt", "end"))
+    parser.add_argument("event", choices=("start", "prompt", "idle", "end"))
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     args = parser.parse_args(argv)
     data = payload()
+    if args.event == "idle":
+        if args.host is Host.CLAUDE:
+            from claude import idle
+
+            return idle.run(data, bool(os.environ.get(LAUNCH_ENV)))
+        return 0
     if args.event == "prompt":
         try:
             prompt()

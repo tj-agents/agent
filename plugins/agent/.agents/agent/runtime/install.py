@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from types import ModuleType
 from typing import Callable, Sequence
 
@@ -52,6 +53,9 @@ from tj_agent import content
 from tj_cli import handy_install, process, worktrunk_install
 
 INSTALLER_TIMEOUT_SECONDS = 600
+LOCKED = "(os error 5)"
+LOCKED_ATTEMPTS = 3
+LOCKED_RETRY_SECONDS = 2
 RUNTIME_EXPORTS = (
     ".agents/agent/runtime",
     ".agents/agent/resources",
@@ -59,7 +63,8 @@ RUNTIME_EXPORTS = (
 )
 LIFECYCLE_COMMANDS = {
     "start": "tj_start.py", "status": "tj_status.py", "recover": "tj_recover.py",
-    "prepare": "tj_prepare.py",
+    "plugins": "tj_plugins.py", "install": "install.py",
+    "prepare": "tj_prepare.py", "session": "tj_session.py",
 }
 PROFILE_START = "# >>> tj-agents >>>"
 PROFILE_END = "# <<< tj-agents <<<"
@@ -154,6 +159,7 @@ class Context:
     windows: bool
     run: Callable = process.run
     which: Callable = shutil.which
+    sleep: Callable = time.sleep
     documents: Path | None = None
     user_environment: object = None
     root: Path = ROOT
@@ -417,10 +423,27 @@ def real_git_bash(context: Context, proxy: Path) -> str:
     return real
 
 
+def hidden_bash_inputs(context: Context, real: str) -> dict[str, str]:
+    source, _ = hidden_bash_paths(context)
+    compiler = context.which("clang.exe") or context.which("gcc.exe") or ""
+    return {"source": hashlib.sha256(source.read_bytes()).hexdigest(), "compiler": compiler, "real": real}
+
+
+def hidden_bash_receipt(proxy: Path) -> Path:
+    return proxy.with_suffix(".json")
+
+
+def hidden_bash_current(context: Context, proxy: Path, real: str) -> bool:
+    receipt = read_json(hidden_bash_receipt(proxy))
+    return (proxy.is_file() and receipt.get("inputs") == hidden_bash_inputs(context, real)
+            and receipt.get("proxy") == hashlib.sha256(proxy.read_bytes()).hexdigest())
+
+
 def hidden_bash_plan(context: Context) -> tuple[bool, dict[str, str]]:
-    source, proxy = hidden_bash_paths(context)
-    stale = not proxy.is_file() or proxy.stat().st_mtime < source.stat().st_mtime
-    wanted = {"TJ_AGENTS_REAL_GIT_BASH": real_git_bash(context, proxy), "CLAUDE_CODE_GIT_BASH_PATH": str(proxy)}
+    _, proxy = hidden_bash_paths(context)
+    real = real_git_bash(context, proxy)
+    stale = not hidden_bash_current(context, proxy, real)
+    wanted = {"TJ_AGENTS_REAL_GIT_BASH": real, "CLAUDE_CODE_GIT_BASH_PATH": str(proxy)}
     variables = {name: value for name, value in wanted.items() if context.user_environment.get(name) != value}
     return stale, variables
 
@@ -502,6 +525,10 @@ def build_hidden_bash(context: Context, real: str) -> None:
         if probe.returncode != 73 or probe.stdout != "HIDDEN_BASH_OK":
             raise InstallError("The hidden Bash proxy did not preserve Bash output and exit status")
         install_hidden_bash(build, proxy)
+        write_json(hidden_bash_receipt(proxy), {
+            "inputs": hidden_bash_inputs(context, real),
+            "proxy": hashlib.sha256(proxy.read_bytes()).hexdigest(),
+        })
     finally:
         build.unlink(missing_ok=True)
 
@@ -521,8 +548,14 @@ def apply_hidden_bash(context: Context) -> list[str]:
 
 
 def run_installer(context: Context, command: list[str]) -> subprocess.CompletedProcess:
-    return context.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
+    for attempt in range(LOCKED_ATTEMPTS):
+        result = context.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
+        if not result.returncode or LOCKED not in f"{result.stdout}{result.stderr}":
+            return result
+        if attempt + 1 < LOCKED_ATTEMPTS:
+            context.sleep(LOCKED_RETRY_SECONDS)
+    return result
 
 
 def output_lines(result: subprocess.CompletedProcess) -> list[str]:
@@ -1021,14 +1054,14 @@ def apply_retired_state(context: Context) -> list[str]:
 
 
 def check_native_cli(context: Context) -> list[str]:
-    pending = native_runtime.pending()
+    pending = native_runtime.pending(revision=native_runtime.NATIVE_REVISION)
     if pending:
         return ["install or update native CLI binaries: " + ", ".join(pending)]
     return []
 
 
 def apply_native_cli(context: Context) -> list[str]:
-    changed = native_runtime.prepare()
+    changed = native_runtime.prepare(revision=native_runtime.NATIVE_REVISION)
     context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
     return ["installed native CLI binaries: " + ", ".join(changed)] if changed else ["native CLI available on PATH"]
 
@@ -1141,13 +1174,19 @@ def main(argv: list[str] | None = None) -> int:
         print("install requires Python 3.12 or newer", file=sys.stderr)
         return 2
     arguments = list(argv if argv is not None else sys.argv[1:])
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser = argparse.ArgumentParser(prog="tj install", description=__doc__, allow_abbrev=False)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="report drift, write nothing, exit 1 on drift")
     modes.add_argument("--onboard", action="store_true", help="allow explicitly requested plugin enrollment")
     parser.add_argument("--step", action="append", choices=[step.name for step in STEPS],
                         help="run named steps with their dependencies and required preconditions; repeat to select several")
-    parsed = parser.parse_args(arguments)
+    try:
+        parsed = parser.parse_args(arguments)
+    except SystemExit as error:
+        if error.code:
+            jobs.record(jobs.state_directory(), jobs.Job.INSTALL,
+                        [f"install rejected its arguments: {shlex.join(arguments)}"])
+        raise
     context = machine_context()
     context.onboard = parsed.onboard
     native_runtime.expose()

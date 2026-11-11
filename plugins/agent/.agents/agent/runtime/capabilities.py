@@ -86,13 +86,24 @@ class Capability:
 
 
 REVISIONS = {
-    "cli": "a661c0e0349ad34f936868dfcce20ef20a29708b",
+    "cli": "3f61c4be63cfba44973d38616a13580e04cf465e",
     "personal": "7e0b2a962df9ba1b90284990360cdbd9c49cbe3d",
     "core": "03f99b363e11943cf8918a99b6a7654f5b770edb",
-    "work-items": "d01958325388b6198d2eacb4b49e763ad39664f3",
+    "work-items": "0d107309e04bedd77d2b1b3834ad92db0a777d0c",
 }
 
 CAPABILITIES = (
+    Capability(
+        "session-command-environment",
+        Support(
+            "agent:.claude/runtime/launch.py::record_session_environment",
+            "agent:tests/test_capability_contracts.py::test_session_environment_reaches_tool_commands",
+        ),
+        Support(
+            "agent:.codex/runtime/launch.py::record_session_environment",
+            "agent:tests/test_capability_contracts.py::test_session_environment_reaches_tool_commands",
+        ),
+    ),
     Capability(
         "native-executable-selection",
         Support(
@@ -196,11 +207,11 @@ CAPABILITIES = (
         "stale-plugin-check",
         Support(
             "agent:.agents/agent/runtime/latest_plugins.py::main",
-            "agent:tests/test_capability_contracts.py::test_stale_prompt_is_blocked",
+            "agent:tests/test_capability_contracts.py::test_a_stale_prompt_is_reported_and_never_blocked",
         ),
         Support(
             "agent:.agents/agent/runtime/latest_plugins.py::main",
-            "agent:tests/test_capability_contracts.py::test_stale_prompt_is_blocked",
+            "agent:tests/test_capability_contracts.py::test_a_stale_prompt_is_reported_and_never_blocked",
         ),
     ),
     Capability(
