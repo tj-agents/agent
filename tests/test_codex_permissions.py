@@ -1,5 +1,8 @@
+import ntpath
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from codex import permissions
@@ -160,3 +163,108 @@ def test_project_layer_presence_does_not_grant_trust(tmp_path: Path) -> None:
     }
     with pytest.raises(LaunchError, match="explicit project trust"):
         permissions.require_project_trust(document, tmp_path, windows=False)
+
+
+@dataclass(frozen=True, slots=True)
+class WindowsGit:
+    checkout: PureWindowsPath
+    main: PureWindowsPath
+    registered: PureWindowsPath
+    files: dict[str, str]
+    directories: set[str]
+    canonical: dict[str, str]
+
+
+@pytest.fixture
+def windows_git(monkeypatch: pytest.MonkeyPatch) -> WindowsGit:
+    checkout, main = PureWindowsPath("C:/Agent/Case"), PureWindowsPath("C:/Agent/Main")
+    registered = main / ".git/worktrees/Case"
+    files = {
+        str(checkout / ".git"): f"gitdir: {registered}",
+        str(registered / "gitdir"): str(checkout / ".git"),
+        str(registered / "commondir"): "../..",
+    }
+    directories = {str(main / ".git"), str(registered)}
+    canonical: dict[str, str] = {}
+
+    def resolve(path: PureWindowsPath, *, strict: bool = False) -> PureWindowsPath:
+        normalized = ntpath.normpath(str(path))
+        return PureWindowsPath(canonical.get(normalized, normalized))
+
+    monkeypatch.setattr(PureWindowsPath, "resolve", resolve, raising=False)
+    monkeypatch.setattr(PureWindowsPath, "absolute", resolve, raising=False)
+    monkeypatch.setattr(PureWindowsPath, "is_symlink", lambda _: False, raising=False)
+    monkeypatch.setattr(PureWindowsPath, "is_junction", lambda _: False, raising=False)
+    monkeypatch.setattr(
+        PureWindowsPath, "is_dir", lambda path: str(path) in directories, raising=False
+    )
+    monkeypatch.setattr(
+        PureWindowsPath, "is_file", lambda path: str(path) in files, raising=False
+    )
+    monkeypatch.setattr(
+        PureWindowsPath,
+        "exists",
+        lambda path: str(path) in files or str(path) in directories,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        PureWindowsPath,
+        "stat",
+        lambda path: SimpleNamespace(st_size=len(files[str(path)])),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        PureWindowsPath,
+        "read_text",
+        lambda path, **options: files[str(path)],
+        raising=False,
+    )
+    monkeypatch.setattr(permissions.worktrees, "repository_root", lambda _: checkout)
+    monkeypatch.setattr(permissions.worktrees, "linked_root", lambda _: checkout)
+    return WindowsGit(checkout, main, registered, files, directories, canonical)
+
+
+def test_windows_exact_canonical_worktree_identity_is_admitted(
+    windows_git: WindowsGit,
+) -> None:
+    root = permissions.main_repository(cast(Path, windows_git.checkout))
+    assert str(root) == str(windows_git.main)
+
+
+@pytest.mark.parametrize(
+    "mismatch", ["backlink", "common", "main", "linked_root", "nearest", "containment"]
+)
+def test_windows_case_sensitive_worktree_identity_refuses_folded_matches(
+    windows_git: WindowsGit, mismatch: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout, registered = windows_git.checkout, windows_git.registered
+    distinct = checkout.parent / "case"
+    assert checkout == distinct and str(checkout) != str(distinct)
+    directory = checkout
+    if mismatch == "backlink":
+        windows_git.files[str(registered / "gitdir")] = str(distinct / ".git")
+    elif mismatch == "common":
+        windows_git.files[str(registered / "commondir")] = str(
+            windows_git.main / ".GIT"
+        )
+    elif mismatch == "main":
+        other = windows_git.main / ".GIT/worktrees/Case"
+        windows_git.files[str(checkout / ".git")] = f"gitdir: {other}"
+        windows_git.files[str(other / "gitdir")] = str(checkout / ".git")
+        windows_git.files[str(other / "commondir")] = "../.."
+        windows_git.directories.add(str(other))
+    elif mismatch == "linked_root":
+        monkeypatch.setattr(permissions.worktrees, "linked_root", lambda _: distinct)
+    elif mismatch == "nearest":
+        monkeypatch.setattr(
+            permissions.worktrees, "repository_root", lambda _: distinct
+        )
+    elif mismatch == "containment":
+        directory = checkout / "nested"
+        windows_git.canonical[str(directory)] = str(distinct / "nested")
+    with pytest.raises(LaunchError, match=r"backlinks|does not contain"):
+        permissions.require_project_trust(
+            config({str(windows_git.main): {"trust_level": "trusted"}}),
+            cast(Path, directory),
+            windows=True,
+        )
