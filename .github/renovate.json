@@ -1,5 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "github>tj-agents/renovate-config"
+  ],
   "customManagers": [
     {
       "customType": "regex",
