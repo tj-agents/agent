@@ -229,11 +229,11 @@ CAPABILITIES = (
         "wrapper-update",
         Support(
             "cli:src/run/update.rs::publish",
-            "cli:tests/run.rs::a_published_plugin_update_is_applied_to_an_idle_claude_in_place_once",
+            "cli:tests/run.rs::each_claude_update_is_applied_to_an_idle_claude_in_place_once",
         ),
         Support(
             "cli:src/run/update.rs::publish",
-            "cli:tests/run.rs::a_published_plugin_update_is_applied_to_codex_through_its_app_server",
+            "cli:tests/run.rs::a_codex_update_is_applied_through_its_app_server",
         ),
     ),
     Capability(

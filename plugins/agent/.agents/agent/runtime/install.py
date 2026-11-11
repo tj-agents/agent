@@ -1172,20 +1172,21 @@ REVISIONS: dict[Host, Callable[[], str]] = {
 
 
 def publish_update(context: Context) -> int:
-    hosts = [host for host in Host if context.which(host.value)]
-    if not hosts:
-        return 0
-    command = ["tj", "update", "--revision", REVISIONS[hosts[0]]()]
-    try:
-        result = context.run(command, capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        context.failures.append(f"update: {error}")
-        return 2
-    if result.returncode:
-        context.failures.append(f"update: {result.stderr.strip() or f'exit {result.returncode}'}")
-        return 2
-    print("apply  update: published the plugin revision for running tj run tabs")
-    return 0
+    code = 0
+    for host in (host for host in Host if context.which(host.value)):
+        command = ["tj", "update", "--host", host.value, "--revision", REVISIONS[host]()]
+        try:
+            result = context.run(command, capture_output=True, text=True, timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError) as error:
+            context.failures.append(f"{host} update: {error}")
+            code = 2
+            continue
+        if result.returncode:
+            context.failures.append(f"{host} update: {result.stderr.strip() or f'exit {result.returncode}'}")
+            code = 2
+            continue
+        print(f"apply  {host} update: published the plugin revision for running tj run tabs")
+    return code
 
 
 def pinned_installer(state: Path) -> Path | None:
