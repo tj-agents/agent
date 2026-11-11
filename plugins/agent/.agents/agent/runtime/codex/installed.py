@@ -424,7 +424,7 @@ def restart(report: Any, managed: bool) -> None:
     if report.failures:
         return
     if report.step(
-        HOST, "update running sessions", ["tj", "update", "--revision", revision()]
+        HOST, "update running sessions", ["tj", "update", "--host", "codex", "--revision", revision()]
     ):
         for project in completed:
             plugin_activation.complete(jobs.state_directory(), HOST, project)
