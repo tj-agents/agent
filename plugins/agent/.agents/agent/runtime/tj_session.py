@@ -10,7 +10,9 @@ from tj_agent import worktrees
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Record session worktree ownership")
+    parser = argparse.ArgumentParser(
+        prog="tj session", description="Record session worktree ownership"
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     claim = commands.add_parser("claim-worktree")
     claim.add_argument("--path", type=Path, required=True)
