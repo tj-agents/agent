@@ -37,7 +37,6 @@ def registered_scripts() -> set[Path]:
 
 def test_every_registered_hook_script_is_checked() -> None:
     assert {path.name for path in registered_scripts()} == {
-        "latest_plugins.py",
         "session_hook.py",
     }
 

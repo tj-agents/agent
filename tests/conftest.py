@@ -5,11 +5,20 @@ from pathlib import Path
 
 import owned_launch
 import pytest
+import tj_plugins
+from fake_machine import MARKETPLACE_REVISION
 
 
 @pytest.fixture(autouse=True)
 def no_owning_launch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(owned_launch, "current", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def marketplace_at_a_known_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        tj_plugins, "marketplace_revision", lambda *_arguments: MARKETPLACE_REVISION
+    )
 
 
 @pytest.fixture

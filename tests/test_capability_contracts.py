@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import io
 import json
 import subprocess
 import sys
@@ -16,8 +15,6 @@ import agent_cli
 import agent_store
 import host_permissions
 import host_plugins
-import jobs
-import latest_plugins
 import owned_launch
 import pytest
 import session_hook
@@ -214,37 +211,6 @@ def test_native_liveness_reports_active_sessions(
         live = adapter.liveness(run=run)
     assert live["native"].alive
     assert live["native"].activity in ("busy", "active")
-
-
-def test_a_stale_prompt_is_reported_and_never_blocked(
-    host: Host,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    seen: list[Host] = []
-
-    def notice(selected: Host, state: Path, *, full: bool) -> str:
-        assert state == tmp_path and not full
-        seen.append(selected)
-        return "Updating plugins"
-
-    monkeypatch.setattr(latest_plugins, "reason", notice)
-    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path)
-    monkeypatch.setattr(
-        sys, "stdin", io.StringIO('{"hook_event_name":"UserPromptSubmit"}')
-    )
-    assert latest_plugins.main(["--host", str(host)]) == 0
-    assert seen == [host]
-    output = json.loads(capsys.readouterr().out)
-    assert "decision" not in output
-    assert output == {
-        "systemMessage": "Updating plugins",
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": "Updating plugins",
-        },
-    }
 
 
 @dataclass

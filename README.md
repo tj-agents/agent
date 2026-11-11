@@ -56,11 +56,12 @@ profile package of each employer profile plugin installed on this machine, such 
 Their revisions are pinned in `.agents/agent/runtime/work-items.json`, which Renovate bumps; the step is a
 no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned `tj-cli`'s own installers.
 
-`tj plugins update` checks only the calling host's plugins against locally cached marketplace pins.
-It detects Claude or Codex from the session; use `--host claude` or `--host codex` outside a session.
-An unchanged installation needs no native CLI process or network request. Changed plugins use the host's
-native update commands. Updates publish their pins with `tj update`, which every `tj run` tab applies in
-place once idle. An unmanaged Claude session receives a `/reload-plugins` notice.
+`tj run` checks the tj-agents marketplace once at launch, in repositories that select tj-agents plugins, and
+starts `tj plugins update` in the background when it moved; nothing checks per prompt or polls. `tj plugins update`
+fetches the calling host's marketplaces, then updates only plugins behind their pins with the host's native
+commands. It detects Claude or Codex from the session; use `--host claude` or `--host codex` outside a session.
+A successful update publishes the marketplace commit it converged to with `tj update`, which every `tj run` tab
+applies in place once idle; a failed one publishes nothing. An unmanaged session receives a reload notice.
 Updates regenerate the calling repository's standards index before activation. Codex also reconciles
 the adopted repositories of loaded threads from verified installed builds before publishing.
 Local-only adoption preserves owner-supplied instruction files. Failed verification retains existing
@@ -68,11 +69,7 @@ instructions and reports the update failure.
 
 `tj install` owns machine setup and repair, including Handy, profiles, agent settings and command bindings.
 Run from the managed runtime, it hands over to the pinned Agent build's installer; a successful run ends by
-publishing the pins with `tj update`.
-The stale hook reports drift and starts the appropriate update or install step in the background; a prompt
-starts one only for drift no earlier start covered. It always allows the prompt, including when an update
-fails. Machine checks run at SessionStart and when their installed builds or checked files change; plugin
-updates do not run machine repair.
+publishing with `tj update`.
 
 Managed launches repair only the failing install step and retry readiness once: a failed
 plugin update (catch-up) or missing required plugins (plugin setup).

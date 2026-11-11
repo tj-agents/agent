@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,7 +12,6 @@ from tree_digest import Digests
 
 HOST = Host.CLAUDE
 RELOAD = "type /reload-plugins"
-BUILD = re.compile(r"([0-9a-f]{12})-[0-9a-f]+")
 
 
 def read(path: Path) -> object:
@@ -23,15 +21,12 @@ def read(path: Path) -> object:
         return None
 
 
+def marketplace_root(marketplace: str) -> Path:
+    return HOST.configuration_root / "plugins" / "marketplaces" / marketplace
+
+
 def pins(marketplace: str) -> dict[str, str]:
-    catalog = read(
-        HOST.configuration_root
-        / "plugins"
-        / "marketplaces"
-        / marketplace
-        / ".claude-plugin"
-        / "marketplace.json"
-    )
+    catalog = read(marketplace_root(marketplace) / ".claude-plugin" / "marketplace.json")
     entries = catalog.get("plugins", []) if isinstance(catalog, dict) else []
     return {
         entry["name"]: entry["source"]["sha"]
@@ -117,48 +112,20 @@ def current(marketplace: str, plugin: str, digests: Digests) -> bool:
     return pinned(marketplace, plugin)
 
 
-def behind(marketplaces: tuple[str, ...]) -> list[str]:
-    found = []
+def update_marketplaces(report: Any, marketplaces: tuple[str, ...]) -> None:
+    known = read(HOST.configuration_root / "plugins" / "known_marketplaces.json")
     for marketplace in marketplaces:
-        expected = pins(marketplace)
-        for (plugin, _scope), (revision, root) in sorted(
-            scoped_installs(marketplace).items()
-        ):
-            pin = expected.get(plugin)
-            if pin and revision != pin:
-                found.append(
-                    f"{plugin}@{marketplace}: installed {revision[:12]}, marketplace {pin[:12]}"
-                )
-            elif pin and not root.is_dir():
-                found.append(f"{plugin}@{marketplace}: installed {pin[:12]} is missing")
-    return found
-
-
-def running_behind(root: Path) -> str | None:
-    pin = pins("tj-agents").get("agent")
-    install = installs("tj-agents").get("agent")
-    if not pin or not install or install[0] != pin:
-        return None
-    behind = loaded_build_behind(root, pin, install[1])
-    return f"agent@tj-agents: {behind}" if behind else None
-
-
-def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
-    build = BUILD.fullmatch(root.name)
-    if root.resolve() == install.resolve() or (build and build.group(1) == pin[:12]):
-        return None
-    return f"this session loaded {root.name}, current {install.name}"
+        if isinstance(known, dict) and marketplace in known:
+            report.step(
+                HOST,
+                f"marketplace {marketplace}",
+                ["claude", "plugin", "marketplace", "update", marketplace],
+            )
 
 
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
-    for marketplace in marketplaces:
-        report.step(
-            HOST,
-            f"marketplace {marketplace}",
-            ["claude", "plugin", "marketplace", "update", marketplace],
-        )
     listing = report.step(HOST, "list", ["claude", "plugin", "list", "--json"])
     if listing is None:
         return
@@ -187,13 +154,5 @@ def refresh(
         )
 
 
-def revision() -> str:
-    return json.dumps(pins("tj-agents"), sort_keys=True)
-
-
-def restart(report: Any, managed: bool) -> None:
-    report.step(
-        HOST, "update running sessions", ["tj", "update", "--host", "claude", "--revision", revision()]
-    )
-    if not managed:
-        print(f"Plugins updated: {RELOAD}.")
+def activate(report: Any) -> None:
+    return None
