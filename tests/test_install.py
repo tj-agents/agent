@@ -592,10 +592,10 @@ class RuntimeTests(Machine):
     def test_managed_python_alias_updates_when_the_interpreter_changes(self):
         context = self.context(windows=False)
         alias = context.state_directory / 'bin' / 'python'
-        with mock.patch.object(install.sys, 'executable', '/managed/python-a'):
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-a'):
             install.apply_runtime(context)
             self.assertEqual(install.python_alias('/managed/python-a'), alias.read_text(encoding='utf-8'))
-        with mock.patch.object(install.sys, 'executable', '/managed/python-b'):
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-b'):
             self.assertIn('install Claude hook interpreter', install.python_alias_status(context, alias.parent))
             install.apply_runtime(context)
             self.assertEqual(install.python_alias('/managed/python-b'), alias.read_text(encoding='utf-8'))
@@ -603,12 +603,12 @@ class RuntimeTests(Machine):
     def test_managed_python_alias_upgrade_preserves_an_unowned_temporary_collision(self):
         context = self.context(windows=False)
         alias = context.state_directory / 'bin' / 'python'
-        with mock.patch.object(install.sys, 'executable', '/managed/python-a'):
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-a'):
             install.apply_runtime(context)
         collision = alias.with_name('.python.collision.tmp')
         collision.write_text('custom', encoding='utf-8')
         before = snapshot(self.root)
-        with mock.patch.object(install.sys, 'executable', '/managed/python-b'), \
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-b'), \
              mock.patch.object(install.secrets, 'token_hex', return_value='collision'):
             with self.assertRaises(FileExistsError):
                 install.install_python_alias(context, alias.parent)

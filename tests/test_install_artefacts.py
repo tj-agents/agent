@@ -1,6 +1,8 @@
 import os
 import re
+import shutil
 import subprocess
+import sys
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -16,7 +18,10 @@ SHELL_SCRIPTS = {".ps1", ".sh"}
 
 
 def installed_machine(
-    home: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    windows: bool,
+    root: Path = install.ROOT,
 ) -> install.Context:
     monkeypatch.setattr(
         install.agent_store, "executable", lambda: home / "native-bin" / "agent-store"
@@ -25,7 +30,7 @@ def installed_machine(
     for name in (".bashrc", ".zshrc"):
         (home / name).touch()
     context = install.Context(
-        home=home, environ={}, windows=windows, documents=home / "Documents"
+        home=home, environ={}, windows=windows, documents=home / "Documents", root=root
     )
     install.apply_runtime(context)
     install.apply_lifecycle_commands(context)
@@ -101,25 +106,126 @@ def test_install_artefacts_report_a_wrapper_naming_a_deleted_runtime_module(
     assert missing == [f"{profile}: {launcher}"]
 
 
-@pytest.mark.parametrize(
-    ("command", "arguments"),
-    [("plugins", ["update", "--help"]), ("install", ["--help"])],
-)
-def test_installed_commands_resolve_the_delivered_payload(
-    command: str, arguments: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_installed_commands_survive_removing_the_author_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    context = installed_machine(tmp_path / "home", monkeypatch, windows=os.name == "nt")
-    suffix = ".cmd" if context.windows else ""
-    shim = next(
-        path
-        for path in install.lifecycle_shims(context)
-        if path.name == f"tj-{command}{suffix}"
+    source = tmp_path / "author checkout"
+    plugin = source / "plugins" / "agent"
+    for export in install.RUNTIME_EXPORTS:
+        shutil.copytree(install.ROOT / export, plugin / export)
+    for name in ("install.ps1", "install.sh"):
+        shutil.copy2(Path(__file__).resolve().parents[1] / name, source / name)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.delenv("PYTHONHOME", raising=False)
+    monkeypatch.setenv("PYTHONNOUSERSITE", "1")
+    monkeypatch.setenv(
+        "PATH", str(Path(sys._base_executable).resolve().parent), prepend=os.pathsep
     )
-    invocation = [str(shim), *arguments]
-    if context.windows:
-        invocation = ["cmd.exe", "/d", "/c", *invocation]
+    if os.name == "nt":
+        shell = shutil.which("pwsh")
+        assert shell is not None
+        bootstrap = [shell, "-NoProfile", "-File", str(source / "install.ps1")]
+    else:
+        bootstrap = ["bash", str(source / "install.sh")]
     result = subprocess.run(
-        invocation, capture_output=True, text=True, timeout=15, check=False
+        [*bootstrap, "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "usage:" in result.stdout
+    assert "usage: tj install" in result.stdout
+    author_python = source / ".venv" / "Scripts" / "python.exe"
+    author_python.parent.mkdir(parents=True)
+    author_python.touch()
+    monkeypatch.setattr(install.sys, "executable", str(author_python))
+    context = installed_machine(
+        tmp_path / "home", monkeypatch, windows=os.name == "nt", root=plugin
+    )
+    shims = install.lifecycle_shims(context)
+    shutil.rmtree(source)
+    for shim in shims:
+        command = shim.stem.removeprefix("tj-")
+        arguments = ["update", "--help"] if command == "plugins" else ["--help"]
+        invocation = [str(shim), *arguments]
+        if context.windows:
+            invocation = ["cmd.exe", "/d", "/c", *invocation]
+        result = subprocess.run(
+            invocation,
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert result.returncode == 0, f"{shim}: {result.stderr}"
+        assert "usage:" in result.stdout
+
+
+@pytest.mark.parametrize("windows", [True, False])
+def test_all_installed_bindings_use_the_base_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    author_python = tmp_path / "author" / ".venv" / "python"
+    monkeypatch.setattr(install.sys, "executable", str(author_python))
+    context = installed_machine(tmp_path / "home", monkeypatch, windows)
+    for shim in install.lifecycle_shims(context):
+        text = shim.read_text(encoding="utf-8")
+        assert str(Path(sys._base_executable).resolve()) in text
+        assert str(author_python) not in text
+    if not windows:
+        alias = install.runtime_bin(context) / "python"
+        text = alias.read_text(encoding="utf-8")
+        assert install.managed_python_alias(text) == str(
+            Path(sys._base_executable).resolve()
+        )
+        assert str(author_python) not in text
+
+
+@pytest.mark.parametrize("base", [None, "", "relative-python"])
+def test_console_python_rejects_an_unresolved_base(
+    base: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(install.sys, "_base_executable", base)
+    with pytest.raises(install.InstallError, match="absolute base Python"):
+        install.console_python()
+
+
+@pytest.mark.parametrize("directory", [True, False])
+def test_console_python_rejects_an_unavailable_executable(
+    directory: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path / "python.exe"
+    if directory:
+        base.mkdir()
+    monkeypatch.setattr(install.sys, "_base_executable", str(base))
+    with pytest.raises(
+        install.InstallError, match="base Python interpreter is unavailable"
+    ):
+        install.console_python()
+
+
+def test_console_python_rejects_an_unsupported_python(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(install.sys, "version_info", (3, 11))
+    with pytest.raises(install.InstallError, match=r"Python 3\.12 or newer"):
+        install.console_python()
+
+
+def test_console_python_selects_the_console_base_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    windowed = tmp_path / "pythonw.exe"
+    windowed.touch()
+    console = windowed.with_name("python.exe")
+    console.touch()
+    monkeypatch.setattr(install.sys, "_base_executable", str(windowed))
+    assert install.console_python() == str(console)
+    console.unlink()
+    with pytest.raises(
+        install.InstallError, match="base Python interpreter is unavailable"
+    ):
+        install.console_python()
