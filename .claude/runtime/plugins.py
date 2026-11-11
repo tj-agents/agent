@@ -7,7 +7,6 @@ import functools
 import json
 import os
 from pathlib import Path
-import subprocess
 
 import agent_cli
 from tj_agent.host import Host
@@ -26,7 +25,6 @@ INFORMATION_OPTIONS = frozenset({"--help", "-h", "--version", "-v"})
 MAINTENANCE_COMMANDS = frozenset({
     "plugin", "plugins", "auth", "doctor", "install", "setup-token", "update", "upgrade", "mcp",
 })
-GIT_TIMEOUT_SECONDS = 5
 NODE_SHIM_BYPASSED = False
 
 
@@ -36,19 +34,33 @@ def resolve_executable() -> str:
 
 @functools.lru_cache(maxsize=None)
 def git_common_directory(project: Path) -> str | None:
-    if not project.is_dir() or not any((directory / ".git").exists() for directory in (project, *project.parents)):
+    if not project.is_dir():
         return None
+    for directory in (project, *project.parents):
+        marker = directory / ".git"
+        if marker.is_dir():
+            return os.path.normcase(str(marker.resolve()))
+        if marker.exists():
+            return os.path.normcase(str(linked_common_directory(marker)))
+    return None
+
+
+def linked_common_directory(marker: Path) -> Path:
     try:
-        result = process.run(['git', '-C', str(project), 'rev-parse', '--git-common-dir'],
-                             capture_output=True, text=True, encoding='utf-8', errors='replace',
-                             timeout=GIT_TIMEOUT_SECONDS)
-    except (OSError, subprocess.SubprocessError) as error:
+        link = marker.read_text(encoding="utf-8").strip()
+        if not link.startswith("gitdir:"):
+            raise ValueError(f"{marker} is not a gitdir link")
+        metadata = (marker.parent / link.removeprefix("gitdir:").strip()).resolve()
+        if not (metadata / "HEAD").is_file():
+            raise ValueError(f"{metadata} is not Git metadata")
+        common = metadata / "commondir"
+        if not common.is_file():
+            return metadata
+        return (metadata / common.read_text(encoding="utf-8").strip()).resolve()
+    except (OSError, ValueError) as error:
         raise required_plugins.RequiredPluginsError(
-            f'Cannot resolve the native Claude repository for {project}: {error}') from error
-    if result.returncode or not result.stdout.strip():
-        raise required_plugins.RequiredPluginsError(
-            f'Cannot resolve the native Claude repository for {project}: {result.stderr.strip()}')
-    return os.path.normcase(str((project / result.stdout.strip()).resolve()))
+            f"Cannot resolve the native Claude repository for {marker.parent}: {error}"
+        ) from error
 
 
 def installations(project: Path, entries: list) -> list:

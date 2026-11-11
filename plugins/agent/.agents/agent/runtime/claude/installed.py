@@ -12,6 +12,7 @@ from tree_digest import Digests
 
 HOST = Host.CLAUDE
 RELOAD = "type /reload-plugins"
+UPDATE = ("claude", "plugin", "update")
 
 
 def read(path: Path) -> object:
@@ -114,44 +115,81 @@ def current(marketplace: str, plugin: str, digests: Digests) -> bool:
 
 def update_marketplaces(report: Any, marketplaces: tuple[str, ...]) -> None:
     known = read(HOST.configuration_root / "plugins" / "known_marketplaces.json")
-    for marketplace in marketplaces:
-        if isinstance(known, dict) and marketplace in known:
-            report.step(
-                HOST,
-                f"marketplace {marketplace}",
-                ["claude", "plugin", "marketplace", "update", marketplace],
-            )
+    report.steps(
+        HOST,
+        [
+            [
+                (
+                    f"marketplace {marketplace}",
+                    ["claude", "plugin", "marketplace", "update", marketplace],
+                )
+            ]
+            for marketplace in marketplaces
+            if isinstance(known, dict) and marketplace in known
+        ],
+    )
+
+
+def registered(marketplaces: tuple[str, ...]) -> dict[str, list[str]]:
+    registry = read(HOST.configuration_root / "plugins" / "installed_plugins.json")
+    plugins = registry.get("plugins", {}) if isinstance(registry, dict) else {}
+    found: dict[str, list[str]] = {}
+    for plugin_id, rows in sorted(plugins.items()):
+        if plugin_id.rpartition("@")[2] not in marketplaces or not isinstance(
+            rows, list
+        ):
+            continue
+        for row in rows:
+            if (
+                isinstance(row, dict)
+                and isinstance(row.get("scope"), str)
+                and project_plugins.applies(
+                    Path.cwd(), row["scope"], row.get("projectPath")
+                )
+                and row["scope"] not in found.get(plugin_id, [])
+            ):
+                found.setdefault(plugin_id, []).append(row["scope"])
+    return found
+
+
+def stale(plugins: dict[str, list[str]]) -> dict[str, list[str]]:
+    found = {}
+    for plugin, scopes in plugins.items():
+        name, _, marketplace = plugin.rpartition("@")
+        behind = [scope for scope in scopes if not pinned(marketplace, name, scope)]
+        if behind:
+            found[plugin] = behind
+    return found
 
 
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
-    listing = report.step(HOST, "list", ["claude", "plugin", "list", "--json"])
-    if listing is None:
-        return
-    plugins = sorted(
-        {
-            (row["id"], row["scope"])
-            for row in json.loads(listing.stdout)
-            if row["id"].rpartition("@")[2] in marketplaces
-            and project_plugins.applies(
-                Path.cwd(), row["scope"], row.get("projectPath")
-            )
-        }
+    plugins = registered(marketplaces)
+    behind = stale(plugins)
+    if len(behind) < len(plugins):
+        print(f"{HOST}: {len(plugins) - len(behind)} plugin(s) already at their pin")
+    report.steps(
+        HOST,
+        [
+            [
+                (
+                    plugin,
+                    [*UPDATE, plugin, "--scope", scope, "--json", "-y"],
+                )
+                for scope in scopes
+            ]
+            for plugin, scopes in behind.items()
+        ],
     )
-    stale = [
-        (plugin, scope)
-        for plugin, scope in plugins
-        if not pinned(plugin.rpartition("@")[2], plugin.rpartition("@")[0], scope)
-    ]
-    if len(stale) < len(plugins):
-        print(f"{HOST}: {len(plugins) - len(stale)} plugin(s) already at their pin")
-    for plugin, scope in stale:
-        report.step(
-            HOST,
-            plugin,
-            ["claude", "plugin", "update", plugin, "--scope", scope, "--json", "-y"],
-        )
+    if report.failures:
+        return
+    for plugin, scopes in stale(behind).items():
+        name, _, marketplace = plugin.rpartition("@")
+        if name in pins(marketplace):
+            report.fail(
+                HOST, plugin, f"{', '.join(scopes)} did not reach its marketplace pin"
+            )
 
 
 def activate(report: Any) -> None:

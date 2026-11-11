@@ -121,13 +121,20 @@ def update_marketplaces(report: Any, marketplaces: tuple[str, ...]) -> None:
     except tomllib.TOMLDecodeError as error:
         report.fail(HOST, "marketplaces", f"unreadable config.toml: {error}")
         return
-    for marketplace in marketplaces:
-        if marketplace == required_plugins.MARKETPLACE_NAME or marketplace in configured:
-            report.step(
-                HOST,
-                f"marketplace {marketplace}",
-                codex_command("plugin", "marketplace", "upgrade", marketplace),
-            )
+    report.steps(
+        HOST,
+        [
+            [
+                (
+                    f"marketplace {marketplace}",
+                    codex_command("plugin", "marketplace", "upgrade", marketplace),
+                )
+            ]
+            for marketplace in marketplaces
+            if marketplace == required_plugins.MARKETPLACE_NAME
+            or marketplace in configured
+        ],
+    )
 
 
 def refresh(

@@ -8,7 +8,8 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import Protocol
@@ -26,6 +27,7 @@ from tree_digest import Digests
 
 MARKETPLACES = ("tj-agents", "agents")
 TIMEOUT_SECONDS = 600
+CONCURRENT_STEPS = 4
 REVISION = re.compile(r"[0-9a-f]{40}")
 
 
@@ -61,6 +63,16 @@ class Report:
             return None
         print(f"{host}: {label} ok")
         return result
+
+    def steps(
+        self, host: Host, groups: Sequence[Sequence[tuple[str, list[str]]]]
+    ) -> None:
+        with ThreadPoolExecutor(max_workers=CONCURRENT_STEPS) as pool:
+            list(pool.map(partial(self.sequence, host), groups))
+
+    def sequence(self, host: Host, commands: Sequence[tuple[str, list[str]]]) -> None:
+        for label, command in commands:
+            self.step(host, label, command)
 
     def fail(self, host: Host, label: str, detail: str) -> None:
         self.failures.append(f"{host}: {label}: {detail}")

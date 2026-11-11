@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -138,6 +139,39 @@ def install_plugin(
     rows[f"{plugin}@tj-agents"] = [row]
     write_json(registry, {"plugins": rows})
     return root
+
+
+CLAUDE_REGISTRY = threading.Lock()
+
+
+def update_claude_plugin(claude_home: Path, command: Sequence[str]) -> None:
+    plugin, scope = command[3], command[command.index("--scope") + 1]
+    name, _, marketplace = plugin.rpartition("@")
+    catalog = (
+        claude_home
+        / "plugins/marketplaces"
+        / marketplace
+        / ".claude-plugin/marketplace.json"
+    )
+    with CLAUDE_REGISTRY:
+        pins = (
+            {
+                entry["name"]: entry["source"]["sha"]
+                for entry in json.loads(catalog.read_text(encoding="utf-8"))["plugins"]
+            }
+            if catalog.is_file()
+            else {}
+        )
+        registry = claude_home / "plugins/installed_plugins.json"
+        if name not in pins or not registry.is_file():
+            return
+        document = json.loads(registry.read_text(encoding="utf-8"))
+        root = claude_home / "plugins/cache" / marketplace / name / pins[name][:12]
+        root.mkdir(parents=True, exist_ok=True)
+        for row in document["plugins"].get(plugin, []):
+            if row["scope"] == scope:
+                row.update(gitCommitSha=pins[name], installPath=str(root))
+        write_json(registry, document)
 
 
 def environment(home: Path) -> dict[str, str]:
