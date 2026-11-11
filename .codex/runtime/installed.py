@@ -216,7 +216,7 @@ def refresh(
                     report.fail(HOST, identity, "native installation did not converge")
             digests.save()
     if open_sessions and report.failures:
-        reload_open_sessions(report)
+        activate_open_sessions(report)
 
 
 def cached(marketplaces: tuple[str, ...]) -> set[str]:
@@ -347,33 +347,31 @@ def install_through_daemon(report: Any, identities: list[str]) -> None:
         report.fail(HOST, "open sessions", str(error))
 
 
-def reload_open_sessions(report: Any) -> None:
+def activate_open_sessions(report: Any) -> list[Path]:
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
             projects = {
                 required_plugins.project_root(directory)
                 for directory in loaded_directories(server)
             }
-            completed = []
-            state = jobs.state_directory()
-            for project in sorted(projects):
-                plugin_activation.begin(state, HOST, project)
-                try:
-                    update_project_standards(project)
-                except (
-                    OSError,
-                    ValueError,
-                    required_plugins.RequiredPluginsError,
-                    standards.StandardsError,
-                ) as error:
-                    report.fail(HOST, "repository standards", str(error))
-                else:
-                    completed.append(project)
-            server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
-            for project in completed:
-                plugin_activation.complete(state, HOST, project)
     except (OSError, RuntimeError) as error:
         report.fail(HOST, "open sessions", str(error))
+        return []
+    completed = []
+    for project in sorted(projects):
+        plugin_activation.begin(jobs.state_directory(), HOST, project)
+        try:
+            update_project_standards(project)
+        except (
+            OSError,
+            ValueError,
+            required_plugins.RequiredPluginsError,
+            standards.StandardsError,
+        ) as error:
+            report.fail(HOST, "repository standards", str(error))
+        else:
+            completed.append(project)
+    return completed
 
 
 def repair_hooks(report: Any) -> None:
@@ -383,15 +381,51 @@ def repair_hooks(report: Any) -> None:
     trust_hooks(report)
 
 
+def pins(marketplace: str) -> dict[str, str]:
+    try:
+        catalog_document = json.loads(
+            (
+                HOST.configuration_root
+                / ".tmp/marketplaces"
+                / marketplace
+                / ".agents/plugins/marketplace.json"
+            ).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+    entries = (
+        catalog_document.get("plugins", [])
+        if isinstance(catalog_document, dict)
+        else []
+    )
+    return {
+        entry["name"]: entry["source"]["sha"]
+        for entry in entries
+        if isinstance(entry, dict)
+        and isinstance(entry.get("source"), dict)
+        and isinstance(entry["source"].get("sha"), str)
+    }
+
+
+def revision() -> str:
+    return json.dumps(pins(required_plugins.MARKETPLACE_NAME), sort_keys=True)
+
+
 def restart(report: Any, managed: bool) -> None:
     try:
         sessions = launch.liveness(strict=True)
     except LaunchError as error:
         report.fail(HOST, "open sessions", str(error))
         return
-    if sessions:
-        reload_open_sessions(report)
-        if not report.failures:
-            print("Open Codex sessions reloaded updated plugins in place.")
-    else:
+    if not sessions:
         print("No loaded Codex sessions need activation.")
+        return
+    completed = activate_open_sessions(report)
+    if report.failures:
+        return
+    if report.step(
+        HOST, "update running sessions", ["tj", "update", "--revision", revision()]
+    ):
+        for project in completed:
+            plugin_activation.complete(jobs.state_directory(), HOST, project)
+        print("Open Codex sessions apply the update in place when idle.")

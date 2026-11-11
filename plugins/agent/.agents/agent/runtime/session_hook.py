@@ -1,9 +1,10 @@
 """Session hooks: SessionStart registers this session in agent-store, SessionEnd ends it, and each prompt
 cancels a pending no-PR closeout of the `tj run` tab (`tj done --cancel`).
 
-A session started by `tj run` binds to its launch (`TJ_RUN_LAUNCH_ID`) and inherits the launch's title,
-parent, terminal, wrapper and work item. A Codex thread is also named after its title, so it is
-addressable by name. Exit 0 always: bookkeeping never stops a session.
+A session owned by a `tj run` launch, as `tj launch` reports it, binds to that launch and inherits its title,
+parent, terminal, wrapper and work item; a session that only inherited `tj run` environment registers
+unbound. A Codex thread is also named after its title, so it is addressable by name. Exit 0 always:
+bookkeeping never stops a session.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from tj_agent.host import Host
 from tj_agent import worktrees
 import agent_cli
 import agent_store
+import owned_launch
 from tj_cli import process
 
 LAUNCH_ENV = "TJ_RUN_LAUNCH_ID"
@@ -77,8 +79,10 @@ def register(host: Host, session_id: str, cwd: str, root: str | None, arguments:
 
 def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> dict:
     root = worktree(cwd)
-    launch = environ.get(LAUNCH_ENV)
+    launch = owned_launch.current()
+    environ = {name: value for name, value in environ.items() if name != LAUNCH_ENV}
     if launch:
+        environ[LAUNCH_ENV] = launch
         try:
             session = register(host, session_id, cwd, root, ["--launch-id", launch])
         except agent_store.AgentStoreError as error:
@@ -125,7 +129,7 @@ def main(argv=None) -> int:
         if args.host is Host.CLAUDE:
             from claude import idle
 
-            return idle.run(data, bool(os.environ.get(LAUNCH_ENV)))
+            return idle.run(bool(os.environ.get(LAUNCH_ENV)))
         return 0
     if args.event == "prompt":
         try:

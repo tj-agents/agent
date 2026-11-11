@@ -1006,3 +1006,79 @@ def test_other_failures_are_not_retried() -> None:
     )
     assert install.run_installer(context, ["installer"]).returncode == 1
     assert calls == [["installer"]]
+
+
+@pytest.mark.parametrize("pinned", [True, False])
+def test_the_managed_runtime_hands_install_to_the_pinned_agent_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: bool
+) -> None:
+    from fake_machine import agent_root, install_plugin, pin_plugin
+
+    context = machine_context(tmp_path)
+    context.which = lambda _name: None
+    managed = context.state_directory / "bin"
+    runtime = managed / ".agents/agent/runtime"
+    monkeypatch.setattr(install, "ROOT", managed)
+    monkeypatch.setattr(install, "RUNTIME", runtime)
+    monkeypatch.setattr(install.machine_state, "RUNTIME", runtime)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    build = agent_root(install_plugin(tmp_path / "claude", "agent", "a" * 40), "new")
+    if pinned:
+        pin_plugin(tmp_path / "claude", "agent", "a" * 40)
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 3)
+
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install.process, "run", run),
+        mock.patch.object(install, "run_steps", return_value=0) as steps,
+        mock.patch.object(install.machine_state, "drift", return_value={}),
+    ):
+        code = install.main(["--step", "Handy"])
+    script = build / ".agents/agent/runtime/install.py"
+    if pinned:
+        assert code == 3
+        assert calls == [[sys.executable, "-B", str(script), "--step", "Handy"]]
+        steps.assert_not_called()
+    else:
+        assert code == 0
+        assert calls == []
+        steps.assert_called_once()
+
+
+def test_an_install_outside_the_managed_runtime_runs_its_own_build(
+    tmp_path: Path,
+) -> None:
+    assert install.pinned_installer(tmp_path / "state") is None
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_a_successful_install_publishes_the_pins_for_running_tabs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int
+) -> None:
+    from fake_machine import pin_plugin
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    pin_plugin(tmp_path / "claude", "agent", "a" * 40)
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, returncode, "", "no tj")
+
+    context = install.Context(
+        home=tmp_path, environ={}, windows=False, run=run, which=lambda name: name
+    )
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install, "run_steps", return_value=0),
+        mock.patch.object(install.machine_state, "drift", return_value={}),
+        contextlib.redirect_stdout(io.StringIO()),
+    ):
+        assert install.main(["--step", "plugin copies"]) == 2 * returncode
+    revision = json.dumps({"agent": "a" * 40}, sort_keys=True)
+    assert calls == [["tj", "update", "--revision", revision]]
+    assert context.failures == ([] if not returncode else ["update: no tj"])

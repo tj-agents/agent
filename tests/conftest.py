@@ -3,7 +3,13 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
+import owned_launch
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def no_owning_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(owned_launch, "current", lambda: None)
 
 
 @pytest.fixture
