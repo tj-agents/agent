@@ -63,6 +63,7 @@ RUNTIME_EXPORTS = (
 )
 LIFECYCLE_COMMANDS = {
     "start": "tj_start.py", "status": "tj_status.py", "recover": "tj_recover.py",
+    "plugins": "tj_plugins.py", "install": "install.py",
     "prepare": "tj_prepare.py",
 }
 PROFILE_START = "# >>> tj-agents >>>"
@@ -1053,14 +1054,14 @@ def apply_retired_state(context: Context) -> list[str]:
 
 
 def check_native_cli(context: Context) -> list[str]:
-    pending = native_runtime.pending()
+    pending = native_runtime.pending(revision=native_runtime.NATIVE_REVISION)
     if pending:
         return ["install or update native CLI binaries: " + ", ".join(pending)]
     return []
 
 
 def apply_native_cli(context: Context) -> list[str]:
-    changed = native_runtime.prepare()
+    changed = native_runtime.prepare(revision=native_runtime.NATIVE_REVISION)
     context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
     return ["installed native CLI binaries: " + ", ".join(changed)] if changed else ["native CLI available on PATH"]
 
@@ -1173,7 +1174,7 @@ def main(argv: list[str] | None = None) -> int:
         print("install requires Python 3.12 or newer", file=sys.stderr)
         return 2
     arguments = list(argv if argv is not None else sys.argv[1:])
-    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser = argparse.ArgumentParser(prog="tj install", description=__doc__, allow_abbrev=False)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--check", action="store_true", help="report drift, write nothing, exit 1 on drift")
     modes.add_argument("--onboard", action="store_true", help="allow explicitly requested plugin enrollment")

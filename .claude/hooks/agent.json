@@ -84,6 +84,42 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 6,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
+              "idle",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 6,
+            "command": "python",
+            "args": [
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
+              "idle",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      }
     ]
   }
 }
