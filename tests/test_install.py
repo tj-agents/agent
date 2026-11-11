@@ -592,10 +592,10 @@ class RuntimeTests(Machine):
     def test_managed_python_alias_updates_when_the_interpreter_changes(self):
         context = self.context(windows=False)
         alias = context.state_directory / 'bin' / 'python'
-        with mock.patch.object(install.sys, 'executable', '/managed/python-a'):
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-a'):
             install.apply_runtime(context)
             self.assertEqual(install.python_alias('/managed/python-a'), alias.read_text(encoding='utf-8'))
-        with mock.patch.object(install.sys, 'executable', '/managed/python-b'):
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-b'):
             self.assertIn('install Claude hook interpreter', install.python_alias_status(context, alias.parent))
             install.apply_runtime(context)
             self.assertEqual(install.python_alias('/managed/python-b'), alias.read_text(encoding='utf-8'))
@@ -603,12 +603,12 @@ class RuntimeTests(Machine):
     def test_managed_python_alias_upgrade_preserves_an_unowned_temporary_collision(self):
         context = self.context(windows=False)
         alias = context.state_directory / 'bin' / 'python'
-        with mock.patch.object(install.sys, 'executable', '/managed/python-a'):
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-a'):
             install.apply_runtime(context)
         collision = alias.with_name('.python.collision.tmp')
         collision.write_text('custom', encoding='utf-8')
         before = snapshot(self.root)
-        with mock.patch.object(install.sys, 'executable', '/managed/python-b'), \
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-b'), \
              mock.patch.object(install.secrets, 'token_hex', return_value='collision'):
             with self.assertRaises(FileExistsError):
                 install.install_python_alias(context, alias.parent)
@@ -957,6 +957,18 @@ def test_the_agent_store_check_reads_its_install_receipt_without_running_it(
     assert store.pending() is not None
     store.write_receipt("v0.0.0", b"replaced")
     assert store.pending() is not None
+
+
+def test_an_older_agent_store_pin_never_replaces_a_newer_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = install.agent_store
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path))
+    store.executable().write_bytes(b"newer agent-store")
+    store.write_receipt("v99.0.0", b"newer agent-store")
+    assert store.pending() is None
+    assert store.install(mock.Mock(side_effect=AssertionError)) == "v99.0.0"
+    assert store.executable().read_bytes() == b"newer agent-store"
 
 
 if __name__ == "__main__":

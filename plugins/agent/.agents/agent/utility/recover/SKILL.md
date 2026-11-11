@@ -1,6 +1,6 @@
 ---
 name: recover
-description: Recover dead Claude and Codex sessions with tj recover after a crash, reboot or closed terminal. Use when asked to recover or restore agents, sessions or tabs, or preview which dead sessions would return.
+description: Use when restoring dead Claude or Codex sessions after a crash, reboot or closed terminal, or previewing recovery.
 kind: utility
 domain: agent
 profile: core
