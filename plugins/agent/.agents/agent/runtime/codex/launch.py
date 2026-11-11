@@ -10,9 +10,10 @@ import subprocess
 from collections.abc import Mapping
 
 from tj_cli import process
+from codex import startup
 
 import agent_store
-from launch_contract import Liveness
+from launch_contract import Liveness, PreparedLaunch
 from launch_errors import LaunchError
 from native_executable import is_script
 
@@ -212,6 +213,16 @@ def resolve_executable(minimum="0.154.0", candidates=None):
 
 def executable() -> str:
     return resolve_executable()[0]
+
+
+def prepare(directory: Path, title: str, arguments: list[str], cli: str) -> PreparedLaunch:
+    minimum = "0.154.0" if arguments[2:3] == ["resume"] else startup.MINIMUM_VERSION
+    native = str(resolve_executable(minimum=minimum)[0])
+    return startup.prepare(directory, title, arguments, cli, native)
+
+
+def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
+    startup.abandon(prepared, launch_id, dispatched)
 
 
 def start_arguments(directory, title, prompt, model, effort):
