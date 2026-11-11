@@ -78,7 +78,7 @@ def launch_environment(clear=(), force=None):
     handler starts the command from an already-running terminal process that never sees ours.
     """
     session_state = (name for host in Host for name in host_launch(host).SESSION_ENVIRONMENT)
-    cleared = list(dict.fromkeys((*session_state, 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
+    cleared = list(dict.fromkeys((*session_state, 'NO_COLOR', 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
     forced = dict(force or {})
     return [name for name in cleared if name not in forced], forced
 

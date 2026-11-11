@@ -18,6 +18,7 @@ def test_codex_launch_removes_inherited_monochrome_environment(
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     adapter = agent_cli.host_launch(Host.CODEX)
+    monkeypatch.setattr(agent_cli.host_launch(Host.CLAUDE), "SESSION_ENVIRONMENT", ())
     monkeypatch.setattr(adapter, "executable", lambda: "codex")
     monkeypatch.setattr(agent_cli, "IS_WINDOWS", windows)
     monkeypatch.setattr(shutil, "which", lambda name: name)
