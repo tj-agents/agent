@@ -24,7 +24,7 @@ sys.path.insert(0, str(HERE))
 
 from tj_agent.host import Host
 from launch_contract import Launch
-from launch_errors import LaunchError, LaunchTimeout
+from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 import agent_store
 import work_item
@@ -123,6 +123,11 @@ def report_launch_failure(exc, err=None):
     if err is None:
         err = sys.stderr
     print(str(exc), file=err)
+    failure = exc
+    while failure is not None:
+        for note in getattr(failure, "__notes__", ()):
+            print(note, file=err)
+        failure = failure.__cause__
     if isinstance(exc, LaunchTimeout):
         print('The tab may already have opened; check the terminal before launching another.', file=err)
         return 3
@@ -385,7 +390,9 @@ def launch(
         return shown
     finally:
         if not completed:
-            adapter.abandon(prepared, launch_id, dispatched)
+            cleanup_failed_launch(
+                sys.exception(), lambda: adapter.abandon(prepared, launch_id, dispatched)
+            )
 
 
 def _launch_prepared(
