@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Update the current host's plugins to their marketplace pins and publish the update."""
+"""Update this host's plugins to their marketplace pins and publish the update."""
 
 from __future__ import annotations
 
