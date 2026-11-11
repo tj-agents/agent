@@ -3,7 +3,7 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from unittest import mock
 
@@ -238,27 +238,7 @@ def touched_python(path: Path) -> Path:
     return path
 
 
-def version_probe(
-    versions: Mapping[str, str],
-) -> Callable[..., "subprocess.CompletedProcess[str]"]:
-    def run(
-        command: Sequence[str | os.PathLike[str]], **_: object
-    ) -> "subprocess.CompletedProcess[str]":
-        python = str(command[0])
-        version = versions.get(python)
-        if version is None:
-            raise FileNotFoundError(python)
-        return subprocess.CompletedProcess(list(command), 0, version + "\n", "")
-
-    return run
-
-
-def lifecycle_context(
-    home: Path,
-    checkout: Path,
-    windows: bool,
-    run: Callable[..., "subprocess.CompletedProcess[str]"],
-) -> install.Context:
+def lifecycle_context(home: Path, checkout: Path, windows: bool) -> install.Context:
     home.mkdir()
     checkout.mkdir()
     return install.Context(
@@ -267,7 +247,6 @@ def lifecycle_context(
         windows=windows,
         documents=home / "Documents",
         root=checkout,
-        run=run,
     )
 
 
@@ -282,12 +261,7 @@ def test_check_reports_no_drift_for_a_launcher_bound_to_another_valid_base_pytho
     )
     python_a = touched_python(tmp_path / "python-a" / "python.exe")
     python_b = touched_python(tmp_path / "python-b" / "python.exe")
-    context = lifecycle_context(
-        tmp_path / "home",
-        tmp_path / "checkout",
-        windows,
-        version_probe({str(python_a): "3.12", str(python_b): "3.13"}),
-    )
+    context = lifecycle_context(tmp_path / "home", tmp_path / "checkout", windows)
     with mock.patch.object(install, "console_python", return_value=str(python_a)):
         install.apply_lifecycle_commands(context)
     before = {path: path.read_bytes() for path in install.lifecycle_paths(context)}
@@ -314,12 +288,7 @@ def test_check_reports_drift_for_a_launcher_bound_to_a_deleted_interpreter(
     )
     python_a = touched_python(tmp_path / "python-a" / "python.exe")
     python_b = touched_python(tmp_path / "python-b" / "python.exe")
-    context = lifecycle_context(
-        tmp_path / "home",
-        tmp_path / "checkout",
-        windows,
-        version_probe({str(python_a): "3.12", str(python_b): "3.13"}),
-    )
+    context = lifecycle_context(tmp_path / "home", tmp_path / "checkout", windows)
     with mock.patch.object(install, "console_python", return_value=str(python_a)):
         install.apply_lifecycle_commands(context)
     python_a.unlink()
@@ -345,12 +314,7 @@ def test_check_reports_drift_for_a_launcher_bound_to_a_venv_interpreter(
         tmp_path / "author checkout" / ".venv" / "Scripts" / "python.exe"
     )
     python_b = touched_python(tmp_path / "python-b" / "python.exe")
-    context = lifecycle_context(
-        tmp_path / "home",
-        tmp_path / "checkout",
-        windows,
-        version_probe({str(venv_python): "3.12", str(python_b): "3.13"}),
-    )
+    context = lifecycle_context(tmp_path / "home", tmp_path / "checkout", windows)
     for path, script in install.lifecycle_paths(context).items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(

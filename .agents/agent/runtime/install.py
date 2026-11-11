@@ -918,32 +918,6 @@ def independent_interpreter(context: Context, path: Path) -> bool:
     )
 
 
-def interpreter_supported(context: Context, path: Path) -> bool:
-    try:
-        result = context.run(
-            [
-                str(path),
-                "-S",
-                "-c",
-                "import sys; print('%d.%d' % sys.version_info[:2])",
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    if result.returncode:
-        return False
-    try:
-        major, minor = (int(part) for part in result.stdout.strip().split(".", 1))
-    except ValueError:
-        return False
-    return (major, minor) >= (3, 12)
-
-
 def lifecycle_binding(context: Context, path: Path, script: Path) -> str | None:
     if not path.is_file():
         return None
@@ -958,9 +932,7 @@ def lifecycle_binding(context: Context, path: Path, script: Path) -> str | None:
     if bound_script != str(script):
         return None
     candidate = Path(interpreter)
-    if not independent_interpreter(context, candidate) or not interpreter_supported(
-        context, candidate
-    ):
+    if not independent_interpreter(context, candidate):
         return None
     return interpreter
 
