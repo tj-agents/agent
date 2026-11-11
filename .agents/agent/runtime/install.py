@@ -64,7 +64,7 @@ RUNTIME_EXPORTS = (
 LIFECYCLE_COMMANDS = {
     "start": "tj_start.py", "status": "tj_status.py", "recover": "tj_recover.py",
     "plugins": "tj_plugins.py", "install": "install.py",
-    "prepare": "tj_prepare.py",
+    "prepare": "tj_prepare.py", "session": "tj_session.py",
 }
 PROFILE_START = "# >>> tj-agents >>>"
 PROFILE_END = "# <<< tj-agents <<<"
