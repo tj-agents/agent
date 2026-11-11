@@ -98,8 +98,12 @@ def label(path: Path) -> str | None:
         )
     except (OSError, ValueError):
         return None
-    version = data.get("version") if isinstance(data, dict) else None
-    return version if isinstance(version, str) else None
+    if not isinstance(data, dict):
+        return None
+    version = data.get("version")
+    if isinstance(version, str):
+        return version
+    return "local" if "version" not in data else None
 
 
 def remember(entries: Iterable[object], *, verified_install: bool = False) -> None:
