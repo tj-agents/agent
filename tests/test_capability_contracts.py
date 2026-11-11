@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType, TracebackType
@@ -23,6 +24,7 @@ from claude import installed as claude_installed
 from codex import installed as codex_installed
 from codex import launch as codex_launch
 from fake_machine import CodexPlugins
+from tj_agent import worktrees
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,6 +138,14 @@ def test_session_start_binds_the_launch(
     host: Host, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[str, ...]] = []
+    claims: list[tuple[Host, str, Path, Mapping[str, str]]] = []
+
+    def capture(
+        selected: Host, native_id: str, root: Path, environ: Mapping[str, str]
+    ) -> None:
+        claims.append((selected, native_id, root, environ))
+
+    monkeypatch.setattr(worktrees, "claim_started_worktree", capture)
 
     def store(*arguments: str) -> dict[str, dict[str, None]]:
         calls.append(arguments)
@@ -144,6 +154,9 @@ def test_session_start_binds_the_launch(
     monkeypatch.setattr(agent_store, "run", store)
     monkeypatch.setattr(session_hook, "worktree", lambda cwd: "/fixture")
     session_hook.start(host, "native", "/fixture/sub", {"TJ_RUN_LAUNCH_ID": "launch"})
+    assert claims == [
+        (host, "native", Path("/fixture"), {"TJ_RUN_LAUNCH_ID": "launch"})
+    ]
     assert calls == [
         (
             "register",
@@ -342,3 +355,19 @@ def test_native_executable_selection(
             minimum="1.0.0", candidates=[str(binary)]
         )
         assert resolved == str(binary) and version["text"] == "1.2.3"
+
+
+def test_session_environment_reaches_tool_commands(
+    host: Host, adapter: ModuleType, tmp_path: Path
+) -> None:
+    target = tmp_path / "environment file"
+    adapter.record_session_environment(
+        "native with spaces", {"CLAUDE_ENV_FILE": str(target)}
+    )
+    if host is Host.CLAUDE:
+        assert (
+            target.read_text(encoding="utf-8")
+            == "export CLAUDE_CODE_SESSION_ID='native with spaces'\n"
+        )
+    else:
+        assert not target.exists()
