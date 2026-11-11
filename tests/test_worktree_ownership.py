@@ -20,6 +20,7 @@ class Store:
     claims: list[str] = field(default_factory=list)
     corrupt: bool = False
     verbatim: bool = False
+    title: str | None = None
 
     @property
     def handle(self) -> str:
@@ -31,6 +32,7 @@ class Store:
             "host": str(self.host),
             "native_id": self.native_id,
             "launch_id": self.launch,
+            "title": self.title,
         }
         if arguments[0] == "show":
             result: dict[str, object] = {"session": session}
@@ -245,3 +247,62 @@ def test_codex_does_not_write_claude_environment(tmp_path: Path) -> None:
         },
     )
     assert not environment.exists()
+
+
+def test_startup_does_not_downgrade_an_unknown_launch_to_unmanaged_ownership(
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "linked"
+    git(repository, "worktree", "add", "-b", "feature", str(root))
+    store = Store(Host.CLAUDE)
+
+    def missing_launch(*arguments: str) -> dict[str, object]:
+        if "--launch-id" in arguments:
+            raise agent_store.AgentStoreError("not-found", "Unknown launch")
+        return store.run(*arguments)
+
+    monkeypatch.setattr(agent_store, "run", missing_launch)
+    with pytest.raises(agent_store.AgentStoreError, match="Unknown launch"):
+        session_hook.start(
+            Host.CLAUDE,
+            "native",
+            str(root),
+            {
+                "TJ_RUN_LAUNCH_ID": "missing",
+            },
+        )
+    assert store.claims == []
+
+
+@pytest.mark.parametrize("failure", ["claim", "name"])
+def test_codex_naming_and_ownership_capture_are_independent(
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    root = tmp_path / "linked"
+    git(repository, "worktree", "add", "-b", "feature", str(root))
+    store = Store(Host.CODEX, title="Owned title")
+    names: list[tuple[str, str]] = []
+
+    def name_session(session_id: str, title: str) -> None:
+        names.append((session_id, title))
+        if failure == "name":
+            raise RuntimeError("name failed")
+
+    def run_store(*arguments: str) -> dict[str, object]:
+        if arguments[0] == "claim-worktree" and failure == "claim":
+            raise agent_store.AgentStoreError("conflict", "claim failed")
+        return store.run(*arguments)
+
+    adapter = session_hook.agent_cli.host_launch(Host.CODEX)
+    monkeypatch.setattr(adapter, "name_session", name_session)
+    monkeypatch.setattr(agent_store, "run", run_store)
+    with pytest.raises(RuntimeError, match=f"{failure} failed"):
+        session_hook.start(Host.CODEX, "native", str(root), {})
+    assert names == [("native", "Owned title")]
+    if failure == "name":
+        assert store.claims == [str(root.resolve())]

@@ -90,11 +90,14 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
                                 [*terminal(environ), *title_arguments(environ), *wrapper_arguments(environ)])
     else:
         session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
-    agent_cli.host_launch(host).record_session_environment(session_id, environ)
-    if root:
-        worktrees.claim_started_worktree(host, session_id, Path(root))
-    if host is Host.CODEX and session.get("title"):
-        agent_cli.host_launch(host).name_session(session_id, session["title"])
+    adapter = agent_cli.host_launch(host)
+    try:
+        if host is Host.CODEX and session.get("title"):
+            adapter.name_session(session_id, session["title"])
+    finally:
+        adapter.record_session_environment(session_id, environ)
+        if root:
+            worktrees.claim_started_worktree(host, session_id, Path(root), environ)
     return session
 
 
