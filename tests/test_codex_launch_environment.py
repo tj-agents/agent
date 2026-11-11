@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -19,7 +20,7 @@ def test_codex_launch_removes_inherited_monochrome_environment(
     adapter = agent_cli.host_launch(Host.CODEX)
     monkeypatch.setattr(adapter, "executable", lambda: "codex")
     monkeypatch.setattr(agent_cli, "IS_WINDOWS", windows)
-    monkeypatch.setattr(agent_cli.shutil, "which", lambda name: name)
+    monkeypatch.setattr(shutil, "which", lambda name: name)
     monkeypatch.setattr(agent_cli, "await_launch", lambda *args, **kwargs: {})
     parent_environment = {
         "NO_COLOR": "1",
@@ -28,7 +29,8 @@ def test_codex_launch_removes_inherited_monochrome_environment(
         "KEPT": "value",
     }
 
-    agent_cli.launch(
+    # Exercise the untyped legacy launcher, including its real environment handling.
+    agent_cli.launch(  # type: ignore[no-untyped-call]
         Host.CODEX,
         tmp_path,
         "Native Codex handoff",
