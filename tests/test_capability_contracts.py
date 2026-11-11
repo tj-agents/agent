@@ -157,7 +157,10 @@ def test_session_start_binds_the_launch(
     assert claims == [
         (host, "native", Path("/fixture"), {"TJ_RUN_LAUNCH_ID": "launch"})
     ]
-    assert calls == [
+    expected: list[tuple[str, ...]] = (
+        [("show", "codex:native")] if host is Host.CODEX else []
+    )
+    expected += [
         (
             "register",
             "--session",
@@ -170,6 +173,7 @@ def test_session_start_binds_the_launch(
             "launch",
         )
     ]
+    assert calls == expected
 
 
 def test_session_title_reaches_the_native_host(

@@ -100,13 +100,14 @@ def test_an_unrecorded_launch_registers_by_title_and_reports_it_on_stderr(monkey
 
 
 def test_the_fallback_registration_carries_the_wrapper_pid_and_started_at(monkeypatch):
-    calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no launch'), {'session': {'title': None}})
+    calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no session'),
+                            hook.agent_store.AgentStoreError('not-found', 'no launch'), {'session': {'title': None}})
     monkeypatch.setattr(hook.agent_store, 'run', calls)
     monkeypatch.setattr(hook, 'worktree', lambda cwd: None)
     monkeypatch.setattr(hook, 'terminal', lambda environ: [])
     environ = {hook.LAUNCH_ENV: 'L1', hook.WRAPPER_PID_ENV: '4242', hook.WRAPPER_STARTED_AT_ENV: '2026-11-09T00:00:00Z'}
     hook.start(Host.CODEX, 'n1', '/repo/sub', environ)
-    assert calls.calls[1][-4:] == ('--wrapper-pid', '4242', '--wrapper-started-at', '2026-11-09T00:00:00Z')
+    assert calls.calls[2][-4:] == ('--wrapper-pid', '4242', '--wrapper-started-at', '2026-11-09T00:00:00Z')
 
 
 def test_a_session_not_started_by_tj_run_never_carries_wrapper_arguments(monkeypatch):

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 
 from tj_cli import process
 
+import agent_store
 from launch_contract import Liveness
 from launch_errors import LaunchError
 from native_executable import is_script
@@ -25,6 +26,40 @@ _CODEX_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?")
 
 def record_session_environment(session_id: str, environ: Mapping[str, str]) -> None:
     return None
+
+
+def registered_session(session_id: str) -> dict[str, object] | None:
+    handle = f"codex:{session_id}"
+    try:
+        shown = agent_store.run("show", handle)
+    except agent_store.AgentStoreError as error:
+        if error.code == "not-found":
+            return None
+        raise
+    session = shown.get("session")
+    if not isinstance(session, dict):
+        raise LaunchError(f"agent-store returned an invalid session for {handle}")
+    launch_id = session.get("launch_id")
+    if launch_id is None or session.get("state") == "ended":
+        return None
+    if (
+        not isinstance(launch_id, str) or not launch_id
+        or session.get("session") != handle
+        or session.get("host") != "codex"
+        or session.get("native_id") != session_id
+    ):
+        raise LaunchError(f"agent-store returned an invalid launch binding for {handle}")
+    bound = agent_store.run("show", "--launch-id", launch_id)
+    launch, session = bound.get("launch"), bound.get("session")
+    if (
+        not isinstance(launch, dict) or not isinstance(session, dict)
+        or launch.get("launch_id") != launch_id
+        or launch.get("host") != "codex" or launch.get("session") != handle
+        or session.get("session") != handle or session.get("host") != "codex"
+        or session.get("native_id") != session_id or session.get("launch_id") != launch_id
+    ):
+        raise LaunchError(f"agent-store launch and session bindings do not match for {handle}")
+    return None if session.get("state") == "ended" else session
 
 
 def parse_version(text):
