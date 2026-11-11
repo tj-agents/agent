@@ -1,5 +1,6 @@
-"""Session hooks: SessionStart registers this session in agent-store, SessionEnd ends it, and each prompt
-cancels a pending no-PR closeout of the `tj run` tab (`tj done --cancel`).
+"""Session hooks: SessionStart registers this session in agent-store, SessionEnd ends it for an explicit
+user exit and otherwise leaves it active for `tj recover`, and each prompt cancels a pending no-PR
+closeout of the `tj run` tab (`tj done --cancel`).
 
 A session started by `tj run` binds to its launch (`TJ_RUN_LAUNCH_ID`) and inherits the launch's title,
 parent, terminal, wrapper and work item. A Codex thread is also named after its title, so it is
@@ -30,6 +31,7 @@ LAUNCH_ENV = "TJ_RUN_LAUNCH_ID"
 TITLE_ENV = "AGENT_CLI_TAB_TITLE"
 WRAPPER_PID_ENV = "TJ_RUN_PID"
 WRAPPER_STARTED_AT_ENV = "TJ_RUN_STARTED_AT"
+EXPLICIT_EXIT_REASONS = frozenset({"clear", "resume", "logout", "prompt_input_exit"})
 
 
 def payload() -> dict:
@@ -101,7 +103,9 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
     return session
 
 
-def end(host: Host, session_id: str) -> None:
+def end(host: Host, session_id: str, reason: str | None) -> None:
+    if reason not in EXPLICIT_EXIT_REASONS:
+        return
     try:
         agent_store.run("end", "--session", f"{host}:{session_id}")
     except agent_store.AgentStoreError as error:
@@ -140,7 +144,8 @@ def main(argv=None) -> int:
         if args.event == "start":
             start(args.host, session_id, data.get("cwd") or os.getcwd(), os.environ)
         else:
-            end(args.host, session_id)
+            reason = data.get("reason")
+            end(args.host, session_id, reason if isinstance(reason, str) else None)
     except Exception as error:  # noqa: BLE001 - bookkeeping never stops a session
         print(f"agent-store {args.event}: {error}", file=sys.stderr)
     return 0
