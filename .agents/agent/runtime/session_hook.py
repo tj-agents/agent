@@ -21,6 +21,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from tj_agent.host import Host
+from tj_agent import worktrees
+import agent_cli
 import agent_store
 from tj_cli import process
 
@@ -88,9 +90,10 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
                                 [*terminal(environ), *title_arguments(environ), *wrapper_arguments(environ)])
     else:
         session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
+    agent_cli.host_launch(host).record_session_environment(session_id, environ)
+    if root:
+        worktrees.claim_started_worktree(host, session_id, Path(root))
     if host is Host.CODEX and session.get("title"):
-        import agent_cli
-
         agent_cli.host_launch(host).name_session(session_id, session["title"])
     return session
 
