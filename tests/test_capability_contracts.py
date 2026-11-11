@@ -24,8 +24,10 @@ from claude import installed as claude_installed
 from codex import installed as codex_installed
 from codex import launch as codex_launch
 from fake_machine import CodexPlugins
+from launch_contract import PreparedLaunch
 from tj_agent import worktrees
 from tj_agent.host import Host
+from tj_cli import process
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,6 +73,40 @@ def test_launch_preserves_prompt_model_and_effort(
     assert arguments[-1] == prompt
     assert arguments[arguments.index("--model") + 1] == "fixture-model"
     assert "high" in arguments or "model_reasoning_effort=high" in arguments
+
+
+def test_claude_preparation_preserves_native_command_without_creating_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = agent_cli.host_launch(Host.CLAUDE)
+    monkeypatch.setattr(adapter, "executable", lambda: "fixture-claude")
+    arguments = adapter.start_arguments(
+        tmp_path, "parity", "--help", "fixture-model", "high"
+    )
+    original = tuple(arguments)
+    prepared = adapter.prepare(tmp_path, "parity", arguments, "fixture-tj")
+    assert prepared.command == ("fixture-claude", *original)
+    assert tuple(arguments) == original
+    assert prepared.session is None and not prepared.created
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+def test_claude_abandon_preserves_existing_session_without_external_calls(
+    dispatched: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_call(*arguments: object, **options: object) -> None:
+        pytest.fail("Claude abandonment must not contact a native process or Store")
+
+    adapter = agent_cli.host_launch(Host.CLAUDE)
+    monkeypatch.setattr(adapter, "executable", unexpected_call)
+    monkeypatch.setattr(process, "run", unexpected_call)
+    monkeypatch.setattr(agent_store, "run", unexpected_call)
+    prepared = PreparedLaunch(
+        ("fixture-claude", "--resume", "existing-session"),
+        session="claude:existing-session",
+    )
+    adapter.abandon(prepared, "exact-launch", dispatched)
+    assert prepared.session == "claude:existing-session" and not prepared.created
 
 
 def test_handoff_preserves_item_parent_and_standing_rule(
