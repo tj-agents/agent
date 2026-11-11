@@ -15,7 +15,7 @@ from uuid import UUID
 import agent_store
 from codex import daemon, hook_trust, permissions, projects
 from launch_contract import PreparedLaunch
-from launch_errors import LaunchError
+from launch_errors import LaunchError, cleanup_failed_launch
 from package_root import find_package_root
 from tj_cli import process
 
@@ -137,7 +137,10 @@ def create(
         return thread_id
     finally:
         if not completed:
-            server.request("thread/archive", {"threadId": thread_id})
+            cleanup_failed_launch(
+                sys.exception(),
+                lambda: server.request("thread/archive", {"threadId": thread_id}),
+            )
 
 
 def prepare(
@@ -180,7 +183,15 @@ def prepare(
             )
             thread_id = create(server, directory, title, options.model, options.effort)
             prepared = PreparedLaunch(
-                (native, "--cd", str(directory), "resume", thread_id, options.prompt),
+                (
+                    native,
+                    "--cd",
+                    str(directory),
+                    "resume",
+                    thread_id,
+                    "--",
+                    options.prompt,
+                ),
                 f"codex:{thread_id}",
                 created=True,
             )
@@ -193,7 +204,7 @@ def prepare(
         return prepared
     finally:
         if prepared is not None and not completed:
-            abandon(prepared, "", False)
+            cleanup_failed_launch(sys.exception(), lambda: abandon(prepared, "", False))
 
 
 def not_started(
