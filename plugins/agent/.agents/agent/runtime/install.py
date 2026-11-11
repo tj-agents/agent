@@ -869,19 +869,94 @@ def cli_tool_step(name: str, module: ModuleType) -> Step:
     return Step(name, check, apply)
 
 
-def command_shim(command: str, script: Path, windows: bool) -> tuple[str, str]:
-    python = console_python()
+def command_shim_name(command: str, windows: bool) -> str:
+    return f"tj-{command}.cmd" if windows else f"tj-{command}"
+
+
+def command_shim_text(python: str, script: Path, windows: bool) -> str:
     if windows:
-        return f"tj-{command}.cmd", f'@"{python}" -B "{script}" %*\r\n'
-    return f"tj-{command}", f'#!/bin/sh\nexec {shlex.quote(python)} -B {shlex.quote(str(script))} "$@"\n'
+        return f'@"{python}" -B "{script}" %*\r\n'
+    return f'#!/bin/sh\nexec {shlex.quote(python)} -B {shlex.quote(str(script))} "$@"\n'
+
+
+def windows_shim_binding(text: str) -> tuple[str, str] | None:
+    suffix = '" %*\r\n'
+    if not (text.startswith('@"') and text.endswith(suffix)):
+        return None
+    python, separator, script = text[2 : -len(suffix)].partition('" -B "')
+    return (python, script) if separator else None
+
+
+def posix_shim_binding(text: str) -> tuple[str, str] | None:
+    prefix, suffix = "#!/bin/sh\nexec ", ' "$@"\n'
+    if not (text.startswith(prefix) and text.endswith(suffix)):
+        return None
+    try:
+        tokens = shlex.split(text[len(prefix) : -len(suffix)])
+    except ValueError:
+        return None
+    return (tokens[0], tokens[2]) if len(tokens) == 3 and tokens[1] == "-B" else None
+
+
+def parsed_shim_binding(windows: bool, text: str) -> tuple[str, str] | None:
+    return windows_shim_binding(text) if windows else posix_shim_binding(text)
+
+
+def independent_interpreter(context: Context, path: Path) -> bool:
+    if not path.is_absolute():
+        return False
+    try:
+        resolved = path.resolve(strict=True)
+        root = context.root.resolve(strict=True)
+    except OSError:
+        return False
+    if not resolved.is_file() or resolved == root or root in resolved.parents:
+        return False
+    return not any(
+        ancestor.name == ".venv" or (ancestor / "pyvenv.cfg").is_file()
+        for ancestor in resolved.parents
+    )
+
+
+def lifecycle_binding(context: Context, path: Path, script: Path) -> str | None:
+    if not path.is_file():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", newline="")
+    except (OSError, UnicodeDecodeError):
+        return None
+    binding = parsed_shim_binding(context.windows, text)
+    if binding is None:
+        return None
+    interpreter, bound_script = binding
+    if bound_script != str(script):
+        return None
+    candidate = Path(interpreter)
+    if not independent_interpreter(context, candidate):
+        return None
+    return interpreter
+
+
+def lifecycle_paths(context: Context) -> dict[Path, Path]:
+    directory = agent_store.executable().parent
+    scripts = runtime_bin(context) / ".agents" / "agent" / "runtime"
+    return {
+        directory / command_shim_name(command, context.windows): scripts / script
+        for command, script in LIFECYCLE_COMMANDS.items()
+    }
 
 
 def lifecycle_shims(context: Context) -> dict[Path, str]:
-    directory = agent_store.executable().parent
-    scripts = runtime_bin(context) / ".agents" / "agent" / "runtime"
-    shims = (command_shim(command, scripts / script, context.windows)
-             for command, script in LIFECYCLE_COMMANDS.items())
-    return {directory / name: text for name, text in shims}
+    fallback: str | None = None
+    shims: dict[Path, str] = {}
+    for path, script in lifecycle_paths(context).items():
+        interpreter = lifecycle_binding(context, path, script)
+        if interpreter is None:
+            if fallback is None:
+                fallback = console_python()
+            interpreter = fallback
+        shims[path] = command_shim_text(interpreter, script, context.windows)
+    return shims
 
 
 def shim_current(path: Path, text: str) -> bool:
@@ -1088,7 +1163,7 @@ STEPS = (
     cli_tool_step("Handy", handy_install),
     Step("launch-check runtime", check_runtime, apply_runtime, watch=watch_runtime),
     Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands,
-         watch=lambda context: list(lifecycle_shims(context))),
+         watch=lambda context: list(lifecycle_paths(context))),
     Step("shell profiles", check_profile, apply_profile, watch=profile_paths),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
