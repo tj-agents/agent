@@ -1070,7 +1070,11 @@ def test_a_successful_install_publishes_the_pins_for_running_tabs(
         return subprocess.CompletedProcess(command, returncode, "", "no tj")
 
     context = install.Context(
-        home=tmp_path, environ={}, windows=False, run=run, which=lambda name: name
+        home=tmp_path,
+        environ={},
+        windows=False,
+        run=run,
+        which=lambda name: name if name == "claude" else None,
     )
     with (
         mock.patch.object(install, "machine_context", return_value=context),
@@ -1080,5 +1084,28 @@ def test_a_successful_install_publishes_the_pins_for_running_tabs(
     ):
         assert install.main(["--step", "plugin copies"]) == 2 * returncode
     revision = json.dumps({"agent": "a" * 40}, sort_keys=True)
-    assert calls == [["tj", "update", "--revision", revision]]
-    assert context.failures == ([] if not returncode else ["update: no tj"])
+    assert calls == [["tj", "update", "--host", "claude", "--revision", revision]]
+    assert context.failures == ([] if not returncode else ["claude update: no tj"])
+
+
+def test_install_publishes_once_for_each_host_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(
+        install, "REVISIONS", {host: lambda: "pins" for host in install.Host}
+    )
+    context = install.Context(
+        home=tmp_path, environ={}, windows=False, run=run, which=lambda name: name
+    )
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert install.publish_update(context) == 0
+    assert calls == [
+        ["tj", "update", "--host", "claude", "--revision", "pins"],
+        ["tj", "update", "--host", "codex", "--revision", "pins"],
+    ]

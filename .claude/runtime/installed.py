@@ -193,7 +193,7 @@ def revision() -> str:
 
 def restart(report: Any, managed: bool) -> None:
     report.step(
-        HOST, "update running sessions", ["tj", "update", "--revision", revision()]
+        HOST, "update running sessions", ["tj", "update", "--host", "claude", "--revision", revision()]
     )
     if not managed:
         print(f"Plugins updated: {RELOAD}.")

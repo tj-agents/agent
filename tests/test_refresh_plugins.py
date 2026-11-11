@@ -669,7 +669,7 @@ def test_open_codex_sessions_install_through_the_daemon_and_publish_the_update(
     with _patched_homes(tmp_path):
         revision = REFRESH.codex_installed.revision()
     assert json.loads(revision)
-    assert commands[-1] == ["tj", "update", "--revision", revision]
+    assert commands[-1] == ["tj", "update", "--host", "codex", "--revision", revision]
     assert trusted == [
         ("codex", tmp_path / "state", REFRESH.codex_installed.MARKETPLACE_OVERRIDES)
     ]
@@ -971,7 +971,7 @@ def test_claude_publishes_its_pins_for_every_running_wrapper(
     report.step.assert_called_once_with(
         Host.CLAUDE,
         "update running sessions",
-        ["tj", "update", "--revision", revision],
+        ["tj", "update", "--host", "claude", "--revision", revision],
     )
     notice = "Plugins updated: type /reload-plugins."
     assert (notice in capsys.readouterr().out) is not managed
@@ -1068,7 +1068,7 @@ def test_current_downloads_activate_an_older_managed_claude_session(
     ):
         assert REFRESH.main(["update", "--host", "claude"]) == 0
     assert len(run.call_args_list) == 1
-    assert run.call_args.args[0][:3] == ["tj", "update", "--revision"]
+    assert run.call_args.args[0][:4] == ["tj", "update", "--host", "claude"]
 
 
 def test_a_missing_claude_install_cannot_be_current(tmp_path: Path) -> None:
