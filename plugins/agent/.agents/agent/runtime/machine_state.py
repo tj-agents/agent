@@ -14,8 +14,8 @@ FINGERPRINT = "machine-fingerprint.json"
 
 
 def packaged(relative: str) -> Path:
-    agent = claude_installed.installs("tj-agents").get("agent")
-    script = agent[1] / ".agents" / "agent" / "runtime" / relative if agent else None
+    agent = claude_installed.pinned_install("tj-agents", "agent")
+    script = agent / ".agents" / "agent" / "runtime" / relative if agent else None
     return script if script is not None and script.is_file() else RUNTIME / relative
 
 
@@ -31,8 +31,13 @@ def build(root: Path) -> str | None:
 
 
 def installed_build() -> bool:
-    """Whether this hook runs the Agent build that machine installs come from."""
-    own, installed = build(RUNTIME.parents[2]), build(packaged("install.py").parents[3])
+    """Whether this hook runs the pinned Agent build that machine installs come from."""
+    if not claude_installed.pins("tj-agents").get("agent"):
+        return True
+    pinned = claude_installed.pinned_install("tj-agents", "agent")
+    if pinned is None:
+        return False
+    own, installed = build(RUNTIME.parents[2]), build(pinned)
     return own is None or installed is None or own == installed
 
 
