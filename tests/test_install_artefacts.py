@@ -3,8 +3,9 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
+from unittest import mock
 
 import install
 import pytest
@@ -229,3 +230,137 @@ def test_console_python_selects_the_console_base_executable(
         install.InstallError, match="base Python interpreter is unavailable"
     ):
         install.console_python()
+
+
+def touched_python(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    return path
+
+
+def version_probe(
+    versions: Mapping[str, str],
+) -> Callable[..., "subprocess.CompletedProcess[str]"]:
+    def run(
+        command: Sequence[str | os.PathLike[str]], **_: object
+    ) -> "subprocess.CompletedProcess[str]":
+        python = str(command[0])
+        version = versions.get(python)
+        if version is None:
+            raise FileNotFoundError(python)
+        return subprocess.CompletedProcess(list(command), 0, version + "\n", "")
+
+    return run
+
+
+def lifecycle_context(
+    home: Path,
+    checkout: Path,
+    windows: bool,
+    run: Callable[..., "subprocess.CompletedProcess[str]"],
+) -> install.Context:
+    home.mkdir()
+    checkout.mkdir()
+    return install.Context(
+        home=home,
+        environ={},
+        windows=windows,
+        documents=home / "Documents",
+        root=checkout,
+        run=run,
+    )
+
+
+@pytest.mark.parametrize("windows", [True, False])
+def test_check_reports_no_drift_for_a_launcher_bound_to_another_valid_base_python(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    monkeypatch.setattr(
+        install.agent_store,
+        "executable",
+        lambda: tmp_path / "home" / "native-bin" / "agent-store",
+    )
+    python_a = touched_python(tmp_path / "python-a" / "python.exe")
+    python_b = touched_python(tmp_path / "python-b" / "python.exe")
+    context = lifecycle_context(
+        tmp_path / "home",
+        tmp_path / "checkout",
+        windows,
+        version_probe({str(python_a): "3.12", str(python_b): "3.13"}),
+    )
+    with mock.patch.object(install, "console_python", return_value=str(python_a)):
+        install.apply_lifecycle_commands(context)
+    before = {path: path.read_bytes() for path in install.lifecycle_paths(context)}
+
+    with mock.patch.object(install, "console_python", return_value=str(python_b)):
+        assert install.check_lifecycle_commands(context) == []
+        install.apply_lifecycle_commands(context)
+
+    after = {path: path.read_bytes() for path in install.lifecycle_paths(context)}
+    assert before == after
+    for text in after.values():
+        assert str(python_a).encode("utf-8") in text
+        assert str(python_b).encode("utf-8") not in text
+
+
+@pytest.mark.parametrize("windows", [True, False])
+def test_check_reports_drift_for_a_launcher_bound_to_a_deleted_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    monkeypatch.setattr(
+        install.agent_store,
+        "executable",
+        lambda: tmp_path / "home" / "native-bin" / "agent-store",
+    )
+    python_a = touched_python(tmp_path / "python-a" / "python.exe")
+    python_b = touched_python(tmp_path / "python-b" / "python.exe")
+    context = lifecycle_context(
+        tmp_path / "home",
+        tmp_path / "checkout",
+        windows,
+        version_probe({str(python_a): "3.12", str(python_b): "3.13"}),
+    )
+    with mock.patch.object(install, "console_python", return_value=str(python_a)):
+        install.apply_lifecycle_commands(context)
+    python_a.unlink()
+
+    with mock.patch.object(install, "console_python", return_value=str(python_b)):
+        assert install.check_lifecycle_commands(context) != []
+        install.apply_lifecycle_commands(context)
+
+    for text in (path.read_bytes() for path in install.lifecycle_paths(context)):
+        assert str(python_b).encode("utf-8") in text
+
+
+@pytest.mark.parametrize("windows", [True, False])
+def test_check_reports_drift_for_a_launcher_bound_to_a_venv_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    monkeypatch.setattr(
+        install.agent_store,
+        "executable",
+        lambda: tmp_path / "home" / "native-bin" / "agent-store",
+    )
+    venv_python = touched_python(
+        tmp_path / "author checkout" / ".venv" / "Scripts" / "python.exe"
+    )
+    python_b = touched_python(tmp_path / "python-b" / "python.exe")
+    context = lifecycle_context(
+        tmp_path / "home",
+        tmp_path / "checkout",
+        windows,
+        version_probe({str(venv_python): "3.12", str(python_b): "3.13"}),
+    )
+    for path, script in install.lifecycle_paths(context).items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(
+            install.command_shim_text(str(venv_python), script, windows).encode("utf-8")
+        )
+
+    with mock.patch.object(install, "console_python", return_value=str(python_b)):
+        assert install.check_lifecycle_commands(context) != []
+        install.apply_lifecycle_commands(context)
+
+    for text in (path.read_bytes() for path in install.lifecycle_paths(context)):
+        assert str(python_b).encode("utf-8") in text
+        assert str(venv_python).encode("utf-8") not in text
