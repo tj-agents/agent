@@ -289,7 +289,7 @@ CAPABILITIES = (
         "closeout",
         Support(
             "cli:src/run/closeout.rs::finish",
-            "cli:tests/run.rs::closes_out_when_every_pr_has_merged",
+            "cli:tests/run.rs::closes_out_after_done_and_idle",
         ),
         Support(
             "cli:src/run/closeout.rs::finish",
