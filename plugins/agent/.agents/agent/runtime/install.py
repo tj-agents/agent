@@ -19,6 +19,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shlex
 import shutil
@@ -577,8 +578,38 @@ def codex_agents_installer(context: Context) -> Path | None:
     return newest_existing([root / "scripts" / "install-codex-agents.ps1" for root in roots])
 
 
+def codex_agents_powershell(context: Context) -> str | None:
+    executable = context.which("pwsh")
+    if not context.windows:
+        return executable
+    paths = [context.environ.get("PATH")]
+    if context.user_environment is not None:
+        paths.append(context.user_environment.get("Path"))
+    candidates = [Path(executable)] if executable else []
+    variables = {name.casefold(): value for name, value in context.environ.items()}
+    for search_path in paths:
+        if not isinstance(search_path, str):
+            continue
+        for entry in search_path.split(";"):
+            directory = re.sub(r"%([^%]+)%", lambda match: variables.get(match[1].casefold(), match[0]),
+                               entry).strip().strip('"')
+            if directory and "\0" not in directory and Path(directory).is_absolute():
+                candidates.append(Path(directory) / "pwsh.exe")
+    for candidate in candidates:
+        try:
+            parts = candidate.parts + candidate.resolve().parts
+            packaged = any(part.casefold() == "windowsapps" for part in parts)
+            if not packaged and candidate.is_file():
+                return str(candidate)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def skip_codex_agents(context: Context) -> str | None:
-    if not context.which("pwsh"):
+    if not codex_agents_powershell(context):
+        if context.windows:
+            return "unpackaged PowerShell 7 is required; add its directory to process or User PATH to deliver Codex profile agents"
         return "pwsh is not installed; install PowerShell 7 to deliver Codex profile agents"
     if not context.codex_home.is_dir():
         return f"Codex is not set up ({context.codex_home} is missing)"
@@ -588,7 +619,10 @@ def skip_codex_agents(context: Context) -> str | None:
 
 
 def codex_agents_command(context: Context, flag: str) -> list[str]:
-    return [context.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
+    powershell = codex_agents_powershell(context)
+    if powershell is None:
+        raise InstallError("PowerShell 7 is unavailable for Codex profile agent delivery")
+    return [powershell, "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
             "-CodexHome", str(context.codex_home), flag]
 
 
