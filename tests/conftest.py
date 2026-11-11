@@ -37,5 +37,7 @@ def preserve_empty_process_environment() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def no_owning_launch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(owned_launch, "current", lambda: None)
+def no_owning_launch() -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(owned_launch, "current", lambda: None)
+        yield
