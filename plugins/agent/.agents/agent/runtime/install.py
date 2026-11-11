@@ -570,8 +570,9 @@ def codex_agents_installer(context: Context) -> Path | None:
 
 
 def skip_codex_agents(context: Context) -> str | None:
-    if not context.which("pwsh"):
-        return "pwsh is not installed; install PowerShell 7 to deliver Codex profile agents"
+    shell = "powershell.exe" if context.windows else "pwsh"
+    if not context.which(shell):
+        return f"{shell} is not installed; install PowerShell to deliver Codex profile agents"
     if not context.codex_home.is_dir():
         return f"Codex is not set up ({context.codex_home} is missing)"
     if codex_agents_installer(context) is None:
@@ -580,7 +581,8 @@ def skip_codex_agents(context: Context) -> str | None:
 
 
 def codex_agents_command(context: Context, flag: str) -> list[str]:
-    return [context.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
+    shell = "powershell.exe" if context.windows else "pwsh"
+    return [context.which(shell), "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
             "-CodexHome", str(context.codex_home), flag]
 
 
