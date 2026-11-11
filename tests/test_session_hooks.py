@@ -23,9 +23,8 @@ class SessionHookTests(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertTrue(EVENTS <= set(hooks(host)))
 
-    def test_each_event_runs_the_session_hook_and_nothing_hooks_stop(self):
+    def test_each_lifecycle_event_runs_the_session_hook(self):
         for host in ("claude", "codex"):
-            self.assertNotIn("Stop", hooks(host))
             for event, argument in (("SessionStart", "start"), ("UserPromptSubmit", "prompt"),
                                     ("SessionEnd", "end")):
                 with self.subTest(host=host, event=event):

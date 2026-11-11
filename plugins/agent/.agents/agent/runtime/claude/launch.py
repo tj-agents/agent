@@ -4,8 +4,9 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from launch_contract import Liveness
 from launch_errors import LaunchError
@@ -16,7 +17,6 @@ from tj_cli import process
 HOST = Host.CLAUDE
 IS_WINDOWS = os.name == "nt"
 SESSION_ENVIRONMENT: tuple[str, ...] = (
-    "NO_COLOR",
     "CLAUDECODE",
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_ENTRYPOINT",
@@ -27,6 +27,12 @@ SESSION_ENVIRONMENT: tuple[str, ...] = (
 )
 TAB_CLEARED: tuple[str, ...] = ()
 TAB_FORCED = {"FORCE_COLOR": "1", "TERM": "xterm-256color"}
+
+
+def record_session_environment(session_id: str, environ: Mapping[str, str]) -> None:
+    if path := environ.get("CLAUDE_ENV_FILE"):
+        with Path(path).open("a", encoding="utf-8") as stream:
+            stream.write(f"export {HOST.session_variable}={shlex.quote(session_id)}\n")
 
 
 def resolve_executable(home=None, which: Callable[[str], str | None] = shutil.which) -> str:

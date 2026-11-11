@@ -10,6 +10,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
+from tj_cli.errors import TjCliError
+
 
 class ProcessInfo(NamedTuple):
     pid: int
@@ -22,7 +24,7 @@ TOLERANCE_SECONDS = 0.01
 MAXIMUM_PID = 0xFFFFFFFF
 
 
-class Refusal(RuntimeError):  # noqa: N818
+class Refusal(TjCliError):  # noqa: N818
     pass
 
 

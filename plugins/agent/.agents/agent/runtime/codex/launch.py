@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 
 from tj_cli import process
 
@@ -20,6 +21,10 @@ TAB_CLEARED: tuple[str, ...] = ("TERM",)
 TAB_FORCED: dict[str, str] = {}
 DAEMON_TIMEOUT_SECONDS = 10
 _CODEX_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?")
+
+
+def record_session_environment(session_id: str, environ: Mapping[str, str]) -> None:
+    return None
 
 
 def parse_version(text):

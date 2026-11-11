@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType, TracebackType
@@ -21,6 +22,9 @@ import pytest
 import session_hook
 from claude import installed as claude_installed
 from codex import installed as codex_installed
+from codex import launch as codex_launch
+from fake_machine import CodexPlugins
+from tj_agent import worktrees
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -134,6 +138,14 @@ def test_session_start_binds_the_launch(
     host: Host, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[str, ...]] = []
+    claims: list[tuple[Host, str, Path, Mapping[str, str]]] = []
+
+    def capture(
+        selected: Host, native_id: str, root: Path, environ: Mapping[str, str]
+    ) -> None:
+        claims.append((selected, native_id, root, environ))
+
+    monkeypatch.setattr(worktrees, "claim_started_worktree", capture)
 
     def store(*arguments: str) -> dict[str, dict[str, None]]:
         calls.append(arguments)
@@ -142,6 +154,9 @@ def test_session_start_binds_the_launch(
     monkeypatch.setattr(agent_store, "run", store)
     monkeypatch.setattr(session_hook, "worktree", lambda cwd: "/fixture")
     session_hook.start(host, "native", "/fixture/sub", {"TJ_RUN_LAUNCH_ID": "launch"})
+    assert claims == [
+        (host, "native", Path("/fixture"), {"TJ_RUN_LAUNCH_ID": "launch"})
+    ]
     assert calls == [
         (
             "register",
@@ -199,7 +214,7 @@ def test_native_liveness_reports_active_sessions(
     assert live["native"].activity in ("busy", "active")
 
 
-def test_stale_prompt_is_blocked(
+def test_a_stale_prompt_is_reported_and_never_blocked(
     host: Host,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -207,21 +222,26 @@ def test_stale_prompt_is_blocked(
 ) -> None:
     seen: list[Host] = []
 
-    def refusal(selected: Host, state: Path, *, full: bool) -> str:
+    def notice(selected: Host, state: Path, *, full: bool) -> str:
         assert state == tmp_path and not full
         seen.append(selected)
         return "Updating plugins"
 
-    monkeypatch.setattr(latest_plugins, "reason", refusal)
+    monkeypatch.setattr(latest_plugins, "reason", notice)
     monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path)
     monkeypatch.setattr(
         sys, "stdin", io.StringIO('{"hook_event_name":"UserPromptSubmit"}')
     )
     assert latest_plugins.main(["--host", str(host)]) == 0
     assert seen == [host]
-    assert json.loads(capsys.readouterr().out) == {
-        "decision": "block",
-        "reason": "Updating plugins",
+    output = json.loads(capsys.readouterr().out)
+    assert "decision" not in output
+    assert output == {
+        "systemMessage": "Updating plugins",
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "Updating plugins",
+        },
     }
 
 
@@ -229,12 +249,22 @@ def test_stale_prompt_is_blocked(
 class Report:
     listing: object
     commands: list[list[str]] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    inventory: CodexPlugins | None = None
 
     def step(
         self, host: Host, label: str, command: list[str]
     ) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
-        output = json.dumps(self.listing) if label == "list" else "{}"
+        if self.inventory is not None and command[:3] == ["codex", "plugin", "add"]:
+            self.inventory.install(command[3])
+        output = (
+            self.inventory.listing()
+            if self.inventory is not None
+            else json.dumps(self.listing)
+            if label in ("list", "versions", "installed versions")
+            else "{}"
+        )
         return subprocess.CompletedProcess(command, 0, output, "")
 
     def fail(self, host: Host, label: str, detail: str) -> None:
@@ -242,13 +272,19 @@ class Report:
 
 
 def test_refresh_updates_selected_plugins(
-    host: Host, monkeypatch: pytest.MonkeyPatch
+    host: Host, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     row = {"id": "agent@tj-agents", "scope": "user"}
     report = Report([row])
     installed = claude_installed
     if host is Host.CODEX:
         installed = codex_installed
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+        monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
+        report.inventory = CodexPlugins(
+            tmp_path / "codex", {"agent@tj-agents": "local"}
+        )
         report.listing = {
             "installed": [
                 {"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"}
@@ -258,7 +294,7 @@ def test_refresh_updates_selected_plugins(
         monkeypatch.setattr(installed, "read_user_config", lambda: "")
         monkeypatch.setattr(installed, "keep_project_scope", lambda *args: None)
         monkeypatch.setattr(installed, "trust_hooks", lambda report: None)
-        monkeypatch.setattr(agent_cli.host_launch(host), "liveness", dict)
+        monkeypatch.setattr(codex_launch, "liveness", dict)
     installed.refresh(report, ("tj-agents",), lambda *args: False)
     assert any("agent@tj-agents" in command for command in report.commands)
     assert all(command[0] == str(host) for command in report.commands)
@@ -319,3 +355,19 @@ def test_native_executable_selection(
             minimum="1.0.0", candidates=[str(binary)]
         )
         assert resolved == str(binary) and version["text"] == "1.2.3"
+
+
+def test_session_environment_reaches_tool_commands(
+    host: Host, adapter: ModuleType, tmp_path: Path
+) -> None:
+    target = tmp_path / "environment file"
+    adapter.record_session_environment(
+        "native with spaces", {"CLAUDE_ENV_FILE": str(target)}
+    )
+    if host is Host.CLAUDE:
+        assert (
+            target.read_text(encoding="utf-8")
+            == "export CLAUDE_CODE_SESSION_ID='native with spaces'\n"
+        )
+    else:
+        assert not target.exists()
