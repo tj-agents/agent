@@ -1,5 +1,5 @@
 {
-  "tool": {"package": "tj-work-items", "repository": "tj-agents/work-items", "subdirectory": "packages/tj-work-items", "revision": "0d107309e04bedd77d2b1b3834ad92db0a777d0c"},
+  "tool": {"package": "tj-work-items", "repository": "tj-agents/work-items", "subdirectory": "packages/tj-work-items", "revision": "88973a3efacdf59b6ba7877712386f7292e4fbfa"},
   "profiles": {
     "infonetica@tj-agents": {"package": "tj-infonetica-profile", "repository": "tj-agents/infonetica", "subdirectory": "packages/tj-infonetica-profile", "revision": "adb477923d807df635673044d4ffe81916e86582"}
   }

@@ -66,6 +66,14 @@ def scoped_installs(marketplace: str) -> dict[tuple[str, str], tuple[str, Path]]
     return found
 
 
+def pinned_install(marketplace: str, plugin: str) -> Path | None:
+    pin = pins(marketplace).get(plugin)
+    for (name, _scope), (revision, root) in scoped_installs(marketplace).items():
+        if name == plugin and pin and revision == pin and root.is_dir():
+            return root
+    return None
+
+
 def installs(marketplace: str) -> dict[str, tuple[str, Path]]:
     precedence = {"user": 0, "project": 1, "local": 2}
     ordered = sorted(
@@ -113,7 +121,7 @@ def behind(marketplaces: tuple[str, ...]) -> list[str]:
     found = []
     for marketplace in marketplaces:
         expected = pins(marketplace)
-        for (plugin, _scope), (revision, _root) in sorted(
+        for (plugin, _scope), (revision, root) in sorted(
             scoped_installs(marketplace).items()
         ):
             pin = expected.get(plugin)
@@ -121,6 +129,8 @@ def behind(marketplaces: tuple[str, ...]) -> list[str]:
                 found.append(
                     f"{plugin}@{marketplace}: installed {revision[:12]}, marketplace {pin[:12]}"
                 )
+            elif pin and not root.is_dir():
+                found.append(f"{plugin}@{marketplace}: installed {pin[:12]} is missing")
     return found
 
 

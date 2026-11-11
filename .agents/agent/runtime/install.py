@@ -143,9 +143,17 @@ def newest_existing(paths: list[Path]) -> Path | None:
 
 
 def console_python() -> str:
-    executable = Path(sys.executable)
-    console = executable.with_name("python.exe")
-    return str(console) if executable.name.lower() == "pythonw.exe" and console.is_file() else sys.executable
+    if sys.version_info < (3, 12):
+        raise InstallError("the installed runtime requires Python 3.12 or newer")
+    base = getattr(sys, "_base_executable", None)
+    if not isinstance(base, str) or not base or not Path(base).is_absolute():
+        raise InstallError("an absolute base Python interpreter is required")
+    executable = Path(base).resolve()
+    if executable.name.lower() == "pythonw.exe":
+        executable = executable.with_name("python.exe")
+    if not executable.is_file():
+        raise InstallError(f"the base Python interpreter is unavailable: {executable}")
+    return str(executable)
 
 
 class InstallError(RuntimeError):
@@ -689,7 +697,7 @@ PYTHON_ALIAS_MARKER = '# tj-agents-managed-python-alias '
 
 
 def python_alias(interpreter: str | None = None) -> str:
-    interpreter = sys.executable if interpreter is None else interpreter
+    interpreter = console_python() if interpreter is None else interpreter
     marker = json.dumps({'interpreter': interpreter}, separators=(',', ':'), sort_keys=True)
     return '#!/bin/sh\n' + PYTHON_ALIAS_MARKER + marker + '\nexec ' + shlex.quote(interpreter) + ' "$@"\n'
 
