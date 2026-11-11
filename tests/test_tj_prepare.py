@@ -11,8 +11,9 @@ import required_plugins
 import standards
 import tj_prepare
 from claude import installed as claude_installed
-from claude import project_plugins as claude_projects
-from codex import project_plugins as codex_projects
+from claude import plugins as claude_projects
+from claude import project_plugins as claude_scope
+from codex import plugins as codex_projects
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -352,7 +353,7 @@ def test_claude_scope_covers_nested_folders_but_not_nested_repositories(
 ) -> None:
     nested = tmp_path / "nested"
     nested.mkdir()
-    assert claude_projects.applies(nested, "project", str(tmp_path))
+    assert claude_scope.applies(nested, "project", str(tmp_path))
     (tmp_path / ".git").mkdir()
     (nested / ".git").mkdir()
-    assert not claude_projects.applies(nested, "project", str(tmp_path))
+    assert not claude_scope.applies(nested, "project", str(tmp_path))

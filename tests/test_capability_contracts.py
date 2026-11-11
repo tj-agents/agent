@@ -21,6 +21,8 @@ import pytest
 import session_hook
 from claude import installed as claude_installed
 from codex import installed as codex_installed
+from codex import launch as codex_launch
+from fake_machine import CodexPlugins
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -234,12 +236,22 @@ def test_a_stale_prompt_is_reported_and_never_blocked(
 class Report:
     listing: object
     commands: list[list[str]] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    inventory: CodexPlugins | None = None
 
     def step(
         self, host: Host, label: str, command: list[str]
     ) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
-        output = json.dumps(self.listing) if label == "list" else "{}"
+        if self.inventory is not None and command[:3] == ["codex", "plugin", "add"]:
+            self.inventory.install(command[3])
+        output = (
+            self.inventory.listing()
+            if self.inventory is not None
+            else json.dumps(self.listing)
+            if label in ("list", "versions", "installed versions")
+            else "{}"
+        )
         return subprocess.CompletedProcess(command, 0, output, "")
 
     def fail(self, host: Host, label: str, detail: str) -> None:
@@ -247,13 +259,19 @@ class Report:
 
 
 def test_refresh_updates_selected_plugins(
-    host: Host, monkeypatch: pytest.MonkeyPatch
+    host: Host, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
     row = {"id": "agent@tj-agents", "scope": "user"}
     report = Report([row])
     installed = claude_installed
     if host is Host.CODEX:
         installed = codex_installed
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+        monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
+        report.inventory = CodexPlugins(
+            tmp_path / "codex", {"agent@tj-agents": "local"}
+        )
         report.listing = {
             "installed": [
                 {"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"}
@@ -263,7 +281,7 @@ def test_refresh_updates_selected_plugins(
         monkeypatch.setattr(installed, "read_user_config", lambda: "")
         monkeypatch.setattr(installed, "keep_project_scope", lambda *args: None)
         monkeypatch.setattr(installed, "trust_hooks", lambda report: None)
-        monkeypatch.setattr(agent_cli.host_launch(host), "liveness", dict)
+        monkeypatch.setattr(codex_launch, "liveness", dict)
     installed.refresh(report, ("tj-agents",), lambda *args: False)
     assert any("agent@tj-agents" in command for command in report.commands)
     assert all(command[0] == str(host) for command in report.commands)

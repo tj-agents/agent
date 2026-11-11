@@ -7,9 +7,18 @@ import os
 from tj_cli import native_install
 from tj_cli.paths import prepend
 
+NATIVE_REVISION = "3f61c4be63cfba44973d38616a13580e04cf465e"
 
-def pending() -> tuple[str, ...]:
-    return native_install.pending_native(native_install.default_bin_dir())
+
+def pending(*, revision: str | None = None) -> tuple[str, ...]:
+    directory = native_install.default_bin_dir()
+    if missing := native_install.pending_native(directory):
+        return missing
+    if revision is not None and (
+        reason := native_install.pending(directory, revision=revision)
+    ):
+        return (reason,)
+    return ()
 
 
 def search_path(value: str) -> str:

@@ -111,10 +111,16 @@ def prompt() -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("event", choices=("start", "prompt", "end"))
+    parser.add_argument("event", choices=("start", "prompt", "idle", "end"))
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     args = parser.parse_args(argv)
     data = payload()
+    if args.event == "idle":
+        if args.host is Host.CLAUDE:
+            from claude import idle
+
+            return idle.run(data, bool(os.environ.get(LAUNCH_ENV)))
+        return 0
     if args.event == "prompt":
         try:
             prompt()
