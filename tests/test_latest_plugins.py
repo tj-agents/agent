@@ -543,6 +543,46 @@ def test_a_session_on_an_older_build_leaves_machine_repair_to_the_installed_buil
     assert machine.started.commands == []
 
 
+def test_a_stale_project_scope_build_leaves_machine_repair_to_the_pinned_build(
+    machine: Machine,
+) -> None:
+    machine.registry(PIN)
+    machine.converge()
+    write_json(machine.install / ".codex-plugin/plugin.json", {"version": "new-build"})
+    stale = agent_root(machine.claude / "plugins/cache/tj-agents/agent/stale", "old")
+    write_json(stale / ".codex-plugin/plugin.json", {"version": "old-build"})
+    registry = machine.claude / "plugins/installed_plugins.json"
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    document["plugins"]["agent@tj-agents"].append(
+        {
+            "scope": "project",
+            "projectPath": str(Path.cwd()),
+            "gitCommitSha": OLD,
+            "installPath": str(stale),
+        }
+    )
+    write_json(registry, document)
+    machine.monkeypatch.setattr(
+        machine_state, "RUNTIME", stale / ".agents/agent/runtime"
+    )
+    machine.monkeypatch.setattr(machine_state, "installed_build", INSTALLED_BUILD)
+    write_tool_receipt(machine.home / "uv-tools", [{**PINS["tool"], "revision": OLD}])
+    assert machine_state.packaged("install.py") == (
+        machine.install / ".agents/agent/runtime/install.py"
+    )
+    assert not machine_state.installed_build()
+    machine.reason()
+    assert all("--step" not in command for command in machine.started.commands)
+
+
+def test_no_build_repairs_the_machine_until_the_pinned_build_is_installed(
+    machine: Machine,
+) -> None:
+    machine.registry(OLD)
+    machine.monkeypatch.setattr(machine_state, "installed_build", INSTALLED_BUILD)
+    assert not machine_state.installed_build()
+
+
 def test_managed_claude_adopts_downloaded_plugins_without_a_manual_reload(
     machine: Machine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
