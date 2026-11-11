@@ -16,7 +16,6 @@ from tj_cli import process
 HOST = Host.CLAUDE
 IS_WINDOWS = os.name == "nt"
 SESSION_ENVIRONMENT: tuple[str, ...] = (
-    "NO_COLOR",
     "CLAUDECODE",
     "CLAUDE_CODE_CHILD_SESSION",
     "CLAUDE_CODE_ENTRYPOINT",
