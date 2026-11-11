@@ -148,7 +148,9 @@ ordinary skills remain loaded on demand. Claude imports the shared instructions 
 Preparation preserves authored guidance and reports a nonempty Codex override that would hide it.
 Run `tj prepare --host codex --cwd PATH` directly when starting the native host outside `tj run`.
 
-Claude installations use project scope, or local scope for local adoption. Codex uses its native
+Claude installs a missing plugin once at user scope and disables it there unless the user already
+enabled it; the repository's project or local settings enable it. Project- and local-scope installations
+would shadow the user installation and miss its updates. Codex uses its native
 shared package cache while enablement remains in project config; installation removes the user
 activation written by `codex plugin add`. Shared cache storage does not enable a plugin everywhere.
 Existing user-scoped activation must be removed when adopting this model. Native configuration in a
