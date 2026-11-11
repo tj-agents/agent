@@ -98,7 +98,7 @@ def label(path: Path) -> str | None:
         )
     except (OSError, ValueError):
         return None
-    version = data.get("version") if isinstance(data, dict) else None
+    version = data.get("version", "local") if isinstance(data, dict) else None
     return version if isinstance(version, str) else None
 
 

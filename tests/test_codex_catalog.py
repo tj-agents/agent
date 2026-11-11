@@ -129,7 +129,10 @@ def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) ->
     assert latest_plugins.installed_behind(Host.CODEX) == []
 
 
-def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) -> None:
+@pytest.mark.parametrize("manifest_has_version", [True, False])
+def test_a_new_mutable_install_records_its_post_install_inventory(
+    home: Path, manifest_has_version: bool
+) -> None:
     entry = publish(home, "a" * 40, "local")
     present = False
 
@@ -139,7 +142,11 @@ def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) ->
             listing = {"installed": [{**entry, "installed": present}]}
             return subprocess.CompletedProcess(command, 0, json.dumps(listing), "")
         if command[:3] == ["codex", "plugin", "add"]:
-            installed(home, "local")
+            root = installed(home, "local")
+            if not manifest_has_version:
+                (root / ".codex-plugin/plugin.json").write_text(
+                    json.dumps({"name": "agent"}), encoding="utf-8"
+                )
             present = True
         return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -209,9 +216,16 @@ def test_unusable_inventory_invalidates_a_previously_current_build(
     assert not catalog.current("tj-agents", "agent", Digests(home.parent / "state"))
 
 
-def test_inventory_cannot_accept_mutated_local_contents(home: Path) -> None:
+@pytest.mark.parametrize("manifest_has_version", [True, False])
+def test_inventory_cannot_accept_mutated_local_contents(
+    home: Path, manifest_has_version: bool
+) -> None:
     entry = publish(home, "a" * 40, "local")
     root = installed(home, "local")
+    if not manifest_has_version:
+        (root / ".codex-plugin/plugin.json").write_text(
+            json.dumps({"name": "agent"}), encoding="utf-8"
+        )
     script = root / "startup.py"
     script.write_text("original", encoding="utf-8")
     catalog.remember([entry], verified_install=True)
