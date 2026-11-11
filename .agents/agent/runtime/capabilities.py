@@ -204,17 +204,6 @@ CAPABILITIES = (
         ),
     ),
     Capability(
-        "stale-plugin-check",
-        Support(
-            "agent:.agents/agent/runtime/latest_plugins.py::main",
-            "agent:tests/test_capability_contracts.py::test_a_stale_prompt_is_reported_and_never_blocked",
-        ),
-        Support(
-            "agent:.agents/agent/runtime/latest_plugins.py::main",
-            "agent:tests/test_capability_contracts.py::test_a_stale_prompt_is_reported_and_never_blocked",
-        ),
-    ),
-    Capability(
         "plugin-refresh",
         Support(
             "agent:.claude/runtime/installed.py::refresh",

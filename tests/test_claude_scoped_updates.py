@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 import tj_plugins
-from claude import installed as claude_installed
 from fake_machine import environment, pin_plugin, write_json
 from tj_cli import process
 
@@ -29,7 +28,7 @@ def install_scopes(home: Path, project: Path, versions: Mapping[str, str]) -> No
 
 
 @pytest.mark.parametrize("scope", ["project", "local"])
-def test_current_repository_plugins_need_no_native_process(
+def test_current_repository_plugins_install_nothing_and_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
 ) -> None:
     home = tmp_path / "claude"
@@ -40,11 +39,15 @@ def test_current_repository_plugins_need_no_native_process(
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.chdir(tmp_path)
 
-    def unexpected(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise AssertionError("A current repository must not invoke a native CLI")
+    commands: list[list[str]] = []
 
-    monkeypatch.setattr(process, "run", unexpected)
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(process, "run", run)
     assert tj_plugins.main(["update", "--host", "claude"]) == 0
+    assert [command[:2] for command in commands] == [["tj", "update"]]
 
 
 @pytest.mark.parametrize("stale_scope", ["user", "project", "local"])
@@ -87,7 +90,6 @@ def test_update_changes_only_the_stale_applicable_scope(
 
     monkeypatch.setattr(process, "run", run)
     assert tj_plugins.main(["update", "--host", "claude"]) == 0
-    assert claude_installed.behind(("tj-agents",))
     updates = [
         command for command in commands if command[:3] == ["claude", "plugin", "update"]
     ]

@@ -1,4 +1,4 @@
-"""A fake machine: plugin installs and pins, converged steps, detached starts."""
+"""A fake machine: plugin installs and pins, and converged steps."""
 
 from __future__ import annotations
 
@@ -11,11 +11,20 @@ from pathlib import Path
 from typing import Any
 
 import install
+import jobs
 from codex import catalog as codex_catalog
 from codex import hook_trust
 
 CONVERGE = {"setup": {"script": "scripts/setup.py", "converge": True}}
 FILE_STEPS = ("launch-check runtime", "tj lifecycle commands", "shell profiles")
+
+
+MARKETPLACE_REVISION = "f" * 40
+
+
+def recorded_failures(state: Path, job: jobs.Job = jobs.Job.UPDATE) -> list[str]:
+    status = json.loads(jobs.status_path(state, job).read_text(encoding="utf-8"))
+    return list(status["failures"])
 
 
 def write_json(path: Path, value: object) -> None:
@@ -129,14 +138,6 @@ def install_plugin(
     rows[f"{plugin}@tj-agents"] = [row]
     write_json(registry, {"plugins": rows})
     return root
-
-
-class Started:
-    def __init__(self) -> None:
-        self.commands: list[list[str]] = []
-
-    def __call__(self, command: Sequence[str], **_options: object) -> None:
-        self.commands.append([str(part) for part in command])
 
 
 def environment(home: Path) -> dict[str, str]:

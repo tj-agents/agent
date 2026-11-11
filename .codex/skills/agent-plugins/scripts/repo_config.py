@@ -99,7 +99,7 @@ def declarations(lock_path: Path, lock: dict) -> tuple[dict[str, dict], dict[str
 def claude_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool], allow: list[str]) -> str:
     settings = lock_io.load_json(path) if path.is_file() else {}
     settings["extraKnownMarketplaces"] = {
-        name: {"source": {"source": "github", "repo": release["owner_repository"]}, "autoUpdate": True}
+        name: {"source": {"source": "github", "repo": release["owner_repository"]}}
         for name, release in sources.items()
     }
     settings["enabledPlugins"] = identities
@@ -273,7 +273,7 @@ def local_state(path: Path) -> dict:
 def local_claude(path: Path, sources: dict, identities: dict, allow: list[str], previous: dict) -> tuple[str, dict]:
     settings = lock_io.load_json(path) if path.is_file() else {}
     wanted = {
-        "extraKnownMarketplaces": {name: {"source": {"source": "github", "repo": release["owner_repository"]}, "autoUpdate": True} for name, release in sources.items()},
+        "extraKnownMarketplaces": {name: {"source": {"source": "github", "repo": release["owner_repository"]}} for name, release in sources.items()},
         "enabledPlugins": identities,
     }
     owned = {}
