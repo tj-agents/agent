@@ -34,6 +34,7 @@ ROOT = RUNTIME.parents[2]
 sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
+from claude import installed as claude_installed
 from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
@@ -1239,6 +1240,36 @@ def repair(name: str, project: Path) -> list[str]:
     return step.apply(context)
 
 
+REVISIONS: dict[Host, Callable[[], str]] = {
+    Host.CLAUDE: claude_installed.revision,
+    Host.CODEX: codex_installed.revision,
+}
+
+
+def publish_update(context: Context) -> int:
+    hosts = [host for host in Host if context.which(host.value)]
+    if not hosts:
+        return 0
+    command = ["tj", "update", "--revision", REVISIONS[hosts[0]]()]
+    try:
+        result = context.run(command, capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        context.failures.append(f"update: {error}")
+        return 2
+    if result.returncode:
+        context.failures.append(f"update: {result.stderr.strip() or f'exit {result.returncode}'}")
+        return 2
+    print("apply  update: published the plugin revision for running tj run tabs")
+    return 0
+
+
+def pinned_installer(state: Path) -> Path | None:
+    if ROOT.resolve() != (state / "bin").resolve():
+        return None
+    pinned = machine_state.packaged("install.py")
+    return None if pinned.resolve() == (RUNTIME / "install.py").resolve() else pinned
+
+
 def machine_context() -> Context:
     home = Path.home()
     windows = os.name == "nt"
@@ -1271,6 +1302,9 @@ def main(argv: list[str] | None = None) -> int:
                         [f"install rejected its arguments: {shlex.join(arguments)}"])
         raise
     context = machine_context()
+    installer = pinned_installer(context.state_directory)
+    if installer is not None:
+        return process.run([sys.executable, "-B", str(installer), *arguments]).returncode
     context.onboard = parsed.onboard
     native_runtime.expose()
     context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
@@ -1282,6 +1316,8 @@ def main(argv: list[str] | None = None) -> int:
             print("install: another machine install is running", file=sys.stderr)
             return 2
         code = run_steps(steps, context, False)
+        if not code:
+            code = publish_update(context)
         jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
     machine_state.drift(context.state_directory)
     return code

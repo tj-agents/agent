@@ -187,9 +187,13 @@ def refresh(
         )
 
 
+def revision() -> str:
+    return json.dumps(pins("tj-agents"), sort_keys=True)
+
+
 def restart(report: Any, managed: bool) -> None:
-    if managed:
-        revision = json.dumps(pins("tj-agents"), sort_keys=True)
-        report.step(HOST, "resume when idle", ["tj", "restart", "--reason", revision])
-    else:
+    report.step(
+        HOST, "update running sessions", ["tj", "update", "--revision", revision()]
+    )
+    if not managed:
         print(f"Plugins updated: {RELOAD}.")

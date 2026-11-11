@@ -226,14 +226,14 @@ CAPABILITIES = (
         ),
     ),
     Capability(
-        "wrapper-restart",
+        "wrapper-update",
         Support(
-            "cli:src/run/mod.rs::restart",
-            "cli:tests/run.rs::a_requested_restart_resumes_an_idle_claude_in_the_same_launch",
+            "cli:src/run/update.rs::publish",
+            "cli:tests/run.rs::a_published_plugin_update_is_applied_to_an_idle_claude_in_place_once",
         ),
         Support(
-            "cli:src/run/mod.rs::restart",
-            "cli:tests/run.rs::a_requested_restart_resumes_an_idle_codex_in_the_same_launch",
+            "cli:src/run/update.rs::publish",
+            "cli:tests/run.rs::a_published_plugin_update_is_applied_to_codex_through_its_app_server",
         ),
     ),
     Capability(
