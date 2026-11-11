@@ -5,7 +5,7 @@ import json
 import subprocess
 import sys
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType, TracebackType
@@ -21,7 +21,7 @@ import session_hook
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from codex import launch as codex_launch
-from fake_machine import CodexPlugins
+from fake_machine import CodexPlugins, write_json
 from tj_agent import worktrees
 from tj_agent.host import Host
 
@@ -235,6 +235,13 @@ class Report:
         )
         return subprocess.CompletedProcess(command, 0, output, "")
 
+    def steps(
+        self, host: Host, groups: Sequence[Sequence[tuple[str, list[str]]]]
+    ) -> None:
+        for commands in groups:
+            for label, command in commands:
+                self.step(host, label, command)
+
     def fail(self, host: Host, label: str, detail: str) -> None:
         raise AssertionError((host, label, detail))
 
@@ -243,6 +250,10 @@ def test_refresh_updates_selected_plugins(
     host: Host, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    write_json(
+        tmp_path / "claude/plugins/installed_plugins.json",
+        {"plugins": {"agent@tj-agents": [{"scope": "user"}]}},
+    )
     row = {"id": "agent@tj-agents", "scope": "user"}
     report = Report([row])
     installed = claude_installed
