@@ -117,13 +117,34 @@ def test_prepare_reports_failure_without_replacing_existing_instructions(
 
 
 @pytest.mark.parametrize("local", [False, True])
-def test_claude_installs_in_the_repository_scope(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local: bool
+@pytest.mark.parametrize(
+    ("user_setting", "actions"),
+    [
+        (None, ["install", "disable"]),
+        (False, ["install", "disable"]),
+        (True, ["install"]),
+    ],
+)
+def test_claude_installs_once_at_user_scope_leaving_enablement_to_the_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local: bool,
+    user_setting: bool | None,
+    actions: list[str],
 ) -> None:
+    project = tmp_path / "project"
     if local:
-        state = tmp_path / ".agents/repo-capabilities.local.json"
-        state.parent.mkdir()
+        state = project / ".agents/repo-capabilities.local.json"
+        state.parent.mkdir(parents=True)
         state.write_text("{}", encoding="utf-8")
+    configuration = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(configuration))
+    if user_setting is not None:
+        configuration.mkdir()
+        (configuration / "settings.json").write_text(
+            json.dumps({"enabledPlugins": {"python@tj-agents": user_setting}}),
+            encoding="utf-8",
+        )
     calls: list[tuple[Sequence[str], object]] = []
 
     def run(
@@ -133,10 +154,27 @@ def test_claude_installs_in_the_repository_scope(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(claude_projects.process, "run", run)
-    claude_projects.install(tmp_path, ["python@tj-agents"])
-    command, directory = calls[0]
-    assert directory == tmp_path
-    assert command[command.index("--scope") + 1] == ("local" if local else "project")
+    claude_projects.install(project, ["python@tj-agents"])
+    assert [command[2] for command, _ in calls] == actions
+    for command, directory in calls:
+        assert directory == project
+        assert command[3] == "python@tj-agents"
+        assert command[command.index("--scope") + 1] == "user"
+
+
+def test_claude_reports_a_failed_user_scope_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+
+    def run(
+        command: Sequence[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, "", "native failure")
+
+    monkeypatch.setattr(claude_projects.process, "run", run)
+    with pytest.raises(required_plugins.RequiredPluginsError, match="native failure"):
+        claude_projects.install(tmp_path, ["python@tj-agents"])
 
 
 @pytest.mark.parametrize("returncode", [0, 1])
