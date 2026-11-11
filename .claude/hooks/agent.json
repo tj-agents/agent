@@ -20,7 +20,6 @@
         "hooks": [
           {
             "type": "command",
-            "async": true,
             "timeout": 30,
             "command": "python",
             "args": [

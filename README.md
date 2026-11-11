@@ -133,6 +133,14 @@ attach to that daemon, so they carry no `-c` overrides; a requested reasoning ef
 turn through the daemon. The store holds links only. Its release is pinned in
 `.agents/agent/runtime/agent-store.json`, which Renovate bumps.
 
+Session startup records its initial linked worktree in the store's ownership collection. Engineering's
+worktree creator calls `tj session claim-worktree --path PATH` after each creation, associating the
+exact linked root with the calling session and its launch. Primary checkouts are never claimed.
+The command returns a JSON ownership record; outside an agent session it returns `{"ownership": null}`.
+Missing or inconsistent agent identities fail visibly and leave the created worktree intact.
+Claude's synchronous registration hook exports its native identity through `CLAUDE_ENV_FILE` for
+subsequent tool commands; Codex provides `CODEX_THREAD_ID`.
+
 Before starting or resuming a host, `tj run` calls `tj prepare`. It derives native project settings
 from `.agents/plugins.json`, installs missing selected plugins, and updates a small marked standards
 index in `AGENTS.md`. The index requires applicable skill bodies to be read before relevant edits;

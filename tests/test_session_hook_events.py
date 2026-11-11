@@ -15,6 +15,11 @@ hook = importlib.import_module('session_hook')
 Host = hook.Host
 
 
+@pytest.fixture(autouse=True)
+def isolated_worktree_claim(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hook.worktrees, 'claim_started_worktree', lambda *_: None)
+
+
 class AgentStoreCalls:
     """A fake `agent_store.run` answering each registered outcome in turn and recording every call."""
 
