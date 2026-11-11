@@ -68,14 +68,29 @@ def write_receipt(version: str, binary: bytes) -> None:
     receipt_path().write_text(json.dumps(receipt), encoding="utf-8")
 
 
-def installed(version: str) -> bool:
+def installed_version() -> str | None:
     try:
         receipt = json.loads(receipt_path().read_text(encoding="utf-8"))
         binary = executable().read_bytes()
     except (OSError, ValueError):
-        return False
-    return (isinstance(receipt, dict) and receipt.get("version") == version
-            and receipt.get("sha256") == hashlib.sha256(binary).hexdigest())
+        return None
+    if not isinstance(receipt, dict) or receipt.get("sha256") != hashlib.sha256(binary).hexdigest():
+        return None
+    version = receipt.get("version")
+    return version if isinstance(version, str) else None
+
+
+def release(version: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in version.removeprefix("v").split("."))
+    except ValueError as error:
+        raise AgentStoreError("unexpected", f"agent-store version {version!r} is not a release") from error
+
+
+def current(pinned: str) -> str | None:
+    """The installed release when it is the pin or newer; an older pin never replaces it."""
+    version = installed_version()
+    return version if version is not None and release(version) >= release(pinned) else None
 
 
 def asset_name(version: str) -> str:
@@ -112,6 +127,9 @@ def _extract(name: str, archive: bytes) -> bytes:
 def install(download=_download) -> str:
     """Install the pinned release, verified against its published SHA-256; returns the version."""
     version = pinned_version()
+    present = current(version)
+    if present is not None:
+        return present
     name = asset_name(version)
     base = f"https://github.com/{REPOSITORY}/releases/download/{version}/{name}"
     archive = download(base)
@@ -135,5 +153,5 @@ def install(download=_download) -> str:
 
 def pending() -> str | None:
     version = pinned_version()
-    return None if installed(version) else f"install agent-store {version} into {executable().parent}"
+    return None if current(version) else f"install agent-store {version} into {executable().parent}"
 
