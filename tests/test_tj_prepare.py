@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -81,11 +82,13 @@ def test_prepare_installs_missing_selection_before_writing_instructions(
     if local:
         with pytest.raises(standards.StandardsError, match="Local-only adoption"):
             tj_prepare.prepare(selected_project, host)
-        assert calls == ["configure", "inventory", "install", "inventory"]
+        assert sorted(calls[:2]) == ["configure", "inventory"]
+        assert calls[2:] == ["install", "inventory"]
         assert not (selected_project / "AGENTS.md").exists()
         return
     assert tj_prepare.prepare(selected_project, host)
-    assert calls == ["configure", "inventory", "install", "inventory"]
+    assert sorted(calls[:2]) == ["configure", "inventory"]
+    assert calls[2:] == ["install", "inventory"]
     assert "python:style" in (selected_project / "AGENTS.md").read_text(
         encoding="utf-8"
     )
@@ -395,3 +398,51 @@ def test_claude_scope_covers_nested_folders_but_not_nested_repositories(
     (tmp_path / ".git").mkdir()
     (nested / ".git").mkdir()
     assert not claude_scope.applies(nested, "project", str(tmp_path))
+
+
+def test_prepare_repeats_the_inventory_after_configuration_changes(
+    selected_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roots = iter([{}, {"python@tj-agents": selected_project}])
+
+    def configure(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, "Updated: .claude/settings.json", "")
+
+    def inventory(
+        directory: Path, host: Host, *, inventory_options: tuple[str, ...]
+    ) -> dict[str, Path]:
+        return next(roots)
+
+    observed: list[dict[str, Path]] = []
+
+    def update(project: Path, found: dict[str, Path]) -> bool:
+        observed.append(found)
+        return True
+
+    monkeypatch.setattr(process, "run", configure)
+    monkeypatch.setattr(required_plugins, "check", inventory)
+    monkeypatch.setattr(standards, "update", update)
+    assert tj_prepare.prepare(selected_project, Host.CLAUDE)
+    assert observed == [{"python@tj-agents": selected_project}]
+
+
+def test_claude_common_directory_reads_git_metadata_without_a_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    common = tmp_path / "primary/.git"
+    worktree = common / "worktrees/feature"
+    worktree.mkdir(parents=True)
+    (worktree / "HEAD").write_text("ref: refs/heads/feature\n", encoding="utf-8")
+    (worktree / "commondir").write_text("../..\n", encoding="utf-8")
+    checkout = tmp_path / "feature"
+    (checkout / "nested").mkdir(parents=True)
+    (checkout / ".git").write_text(f"gitdir: {worktree}\n", encoding="utf-8")
+
+    def spawn(*args: object, **kwargs: object) -> None:
+        raise AssertionError("unexpected process")
+
+    monkeypatch.setattr(process, "run", spawn)
+    claude_projects.git_common_directory.cache_clear()
+    assert claude_projects.git_common_directory(checkout / "nested") == (
+        os.path.normcase(str(common.resolve()))
+    )
