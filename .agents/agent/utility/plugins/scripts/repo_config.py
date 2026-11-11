@@ -44,12 +44,32 @@ def repo_owners() -> frozenset[str]:
     return frozenset()
 
 
+def remote_urls(root: Path, run=process.run) -> list[str]:
+    completed = run(
+        [lock_io.executable("git"), "config", "--null", "--get-regexp", r"^(remote\..*\.url|url\..*\.insteadof)$"],
+        cwd=root, text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+    )
+    if completed.returncode not in {0, 1}:
+        raise lock_io.LockError(f"git config failed: {completed.stderr.strip() or completed.stdout.strip()}")
+    urls, rewrites = [], {}
+    for entry in filter(None, completed.stdout.split("\0")):
+        key, _, value = entry.partition("\n")
+        if key.startswith("remote."):
+            urls.append(value)
+        else:
+            rewrites[value] = key.removeprefix("url.").removesuffix(".insteadof")
+    rewritten = []
+    for url in urls:
+        prefix = max((prefix for prefix in rewrites if url.startswith(prefix)), key=len, default=None)
+        rewritten.append(url if prefix is None else rewrites[prefix] + url.removeprefix(prefix))
+    return rewritten
+
+
 def remote_owners(root: Path, run=process.run) -> set[str]:
     owners = set()
-    for name in lock_io.git(run, ["remote"], root).split():
-        for url in lock_io.git(run, ["remote", "get-url", "--all", name], root).splitlines():
-            match = GITHUB_OWNER.search(url)
-            owners.add(match.group(1).casefold() if match else url)
+    for url in remote_urls(root, run):
+        match = GITHUB_OWNER.search(url)
+        owners.add(match.group(1).casefold() if match else url)
     return owners
 
 
@@ -229,18 +249,18 @@ def preflight_paths(root: Path, paths: list[Path], *, scope: str = "local", read
         if any((parent / ".git").exists() for parent in root.parents):
             raise lock_io.LockError(f"Root is not the exact Git checkout: {root}")
     else:
-        top = Path(lock_io.git(run, ["rev-parse", "--show-toplevel"], root)).resolve()
-        if top != root:
+        top, git_common, git_exclude = lock_io.git(
+            run, ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir", "--git-path", "info/exclude"], root
+        ).splitlines()
+        if Path(top).resolve() != root:
             raise lock_io.LockError(f"Root is not the exact Git checkout: {root}")
         if scope == "local":
             tracked_paths = sorted({relative for lexical, target in zip(lexical_targets, targets) for relative in (lexical.relative_to(root).as_posix(), target.relative_to(root).as_posix(), target.resolve().relative_to(root).as_posix())})
             tracked = lock_io.git(run, ["--literal-pathspecs", "ls-files", "--cached", "-z", "--", *tracked_paths], root)
             if tracked:
                 raise lock_io.LockError("Local targets are tracked: " + tracked.replace("\0", ", "))
-            common = Path(lock_io.git(run, ["rev-parse", "--path-format=absolute", "--git-common-dir"], root)).resolve()
-            exclude = Path(lock_io.git(run, ["rev-parse", "--git-path", "info/exclude"], root))
-            if not exclude.is_absolute():
-                exclude = root / exclude
+            common = Path(git_common).resolve()
+            exclude = Path(git_exclude)
             if not exclude.resolve().is_relative_to(common):
                 raise lock_io.LockError(f"Git exclusion target escapes Git metadata: {exclude}")
             contained(common, exclude)

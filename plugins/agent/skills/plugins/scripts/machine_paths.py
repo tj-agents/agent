@@ -37,45 +37,44 @@ def describe(relative: str, text: str) -> list[str]:
     return [f"{relative}:{number}: {line}" for number, line in findings(text)]
 
 
+def tracked_snapshots(root: Path, relative: str) -> dict[str, str]:
+    revisions = {f"index:{stage}": f":{stage}:{relative}" for stage in range(4)}
+    revisions["HEAD"] = f"HEAD:{relative}"
+    result: subprocess.CompletedProcess[bytes] = process.run(
+        ["git", "cat-file", "--batch"],
+        cwd=root,
+        input="".join(f"{name}\n" for name in revisions.values()).encode("utf-8"),
+        capture_output=True,
+        timeout=10,
+    )
+    if result.returncode:
+        raise lock_io.LockError(
+            f"Cannot inspect tracked {relative}: "
+            f"{result.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    snapshots = {}
+    position = 0
+    for label, name in revisions.items():
+        end = result.stdout.index(b"\n", position)
+        header = result.stdout[position:end].decode("utf-8")
+        position = end + 1
+        if header == f"{name} missing":
+            continue
+        _, kind, size = header.rsplit(" ", 2)
+        if kind != "blob":
+            raise lock_io.LockError(f"Tracked {relative} is a {kind}, not a file")
+        content = result.stdout[position : position + int(size)]
+        position += int(size) + 1
+        snapshots[label] = (
+            content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        )
+    return snapshots
+
+
 def portable_tracked_text(root: Path, relative: str) -> str | None:
     if not (root / ".git").exists():
         return None
-
-    def git(*arguments: str) -> subprocess.CompletedProcess[str]:
-        result: subprocess.CompletedProcess[str] = process.run(
-            ["git", "--literal-pathspecs", *arguments],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=10,
-        )
-        return result
-
-    def checked(*arguments: str) -> str:
-        result = git(*arguments)
-        if result.returncode:
-            raise lock_io.LockError(
-                f"Cannot inspect tracked {relative}: {result.stderr.strip()}"
-            )
-        return result.stdout
-
-    indexed = checked("ls-files", "--stage", "--", relative)
-    snapshots = {
-        f"index:{stage}": checked("cat-file", "blob", oid)
-        for entry in indexed.splitlines()
-        for _, oid, stage in [entry.split("\t", 1)[0].split()]
-    }
-    head = git("rev-parse", "--verify", "--quiet", "HEAD")
-    if head.returncode not in {0, 1}:
-        raise lock_io.LockError(
-            f"Cannot inspect tracked {relative}: {head.stderr.strip()}"
-        )
-    if head.returncode == 0:
-        committed = checked("ls-tree", "HEAD", "--", relative)
-        if committed:
-            oid = committed.split("\t", 1)[0].split()[2]
-            snapshots["HEAD"] = checked("cat-file", "blob", oid)
+    snapshots = tracked_snapshots(root, relative)
     problems = [
         problem
         for revision, text in snapshots.items()

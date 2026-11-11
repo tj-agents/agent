@@ -2,6 +2,7 @@ import argparse
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import host_plugins
@@ -9,6 +10,33 @@ import required_plugins
 import standards
 from tj_agent.host import Host
 from tj_cli import process
+
+CONFIGURATION = Path(__file__).parent.parent / "utility/plugins/scripts/repo_config.py"
+
+
+def configure(project: Path) -> bool:
+    configured = process.run(
+        [
+            sys.executable,
+            "-B",
+            str(CONFIGURATION),
+            "--root",
+            str(project),
+            "--mode",
+            "write",
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    if configured.returncode:
+        raise standards.StandardsError(
+            configured.stderr.strip() or configured.stdout.strip()
+        )
+    return bool(configured.stdout.strip())
 
 
 def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> bool:
@@ -22,23 +50,19 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
     selected = required_plugins.selected(project)
     if not selected:
         return False
-    script = Path(__file__).parent.parent / "utility/plugins/scripts/repo_config.py"
-    configured = process.run(
-        [sys.executable, "-B", str(script), "--root", str(project), "--mode", "write"],
-        cwd=project,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=30,
-        check=False,
-    )
-    if configured.returncode:
-        raise standards.StandardsError(
-            configured.stderr.strip() or configured.stdout.strip()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        inventory = pool.submit(
+            required_plugins.check,
+            directory,
+            host,
+            inventory_options=inventory_options,
         )
+        changed = configure(project)
     try:
-        roots = required_plugins.check(
-            directory, host, inventory_options=inventory_options
+        roots = (
+            required_plugins.check(directory, host, inventory_options=inventory_options)
+            if changed
+            else inventory.result()
         )
     except required_plugins.MissingRequiredPluginsError as error:
         host_plugins.PLUGINS[host].install(project, error.missing)
