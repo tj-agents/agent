@@ -5,6 +5,7 @@ from pathlib import Path
 
 import install
 import pytest
+from codex import powershell as codex_powershell
 
 
 def powershell(directory: Path) -> Path:
@@ -87,7 +88,12 @@ def test_profile_delivery_preserves_current_unpacked_powershell(tmp_path: Path) 
         which=lambda _name: str(current),
         user_environment={"Path": str(persisted.parent)},
     )
-    assert install.codex_agents_powershell(context) == str(current)
+    assert codex_powershell.executable(
+        context.which("pwsh"),
+        context.environ,
+        str(persisted.parent),
+        context.windows,
+    ) == str(current)
 
 
 def test_profile_delivery_searches_beyond_packaged_process_path(tmp_path: Path) -> None:
@@ -101,7 +107,12 @@ def test_profile_delivery_searches_beyond_packaged_process_path(tmp_path: Path) 
         which=lambda _name: str(alias),
         user_environment={"Path": str(persisted.parent)},
     )
-    assert install.codex_agents_powershell(context) == str(current)
+    assert codex_powershell.executable(
+        context.which("pwsh"),
+        context.environ,
+        str(persisted.parent),
+        context.windows,
+    ) == str(current)
 
 
 @pytest.mark.parametrize("persisted", [None, "", 12, ";relative;\0bad;%UNKNOWN%"])
@@ -125,7 +136,15 @@ def test_profile_delivery_reports_packaged_only_powershell_without_running(
         run=run,
     )
     before = {path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
-    assert install.codex_agents_powershell(context) is None
+    assert (
+        codex_powershell.executable(
+            context.which("pwsh"),
+            context.environ,
+            persisted,
+            context.windows,
+        )
+        is None
+    )
     selected = next(
         step for step in install.STEPS if step.name == "Codex profile agents"
     )
@@ -148,7 +167,15 @@ def test_profile_delivery_keeps_posix_path_resolution(
         windows=False,
         which=lambda _name: executable,
     )
-    assert install.codex_agents_powershell(context) == executable
+    assert (
+        codex_powershell.executable(
+            context.which("pwsh"),
+            context.environ,
+            None,
+            context.windows,
+        )
+        == executable
+    )
 
 
 @pytest.mark.parametrize("windows", [False, True])
