@@ -68,14 +68,9 @@ def scoped_installs(marketplace: str) -> dict[tuple[str, str], tuple[str, Path]]
 
 def pinned_install(marketplace: str, plugin: str) -> Path | None:
     pin = pins(marketplace).get(plugin)
-    registry = read(HOST.configuration_root / "plugins" / "installed_plugins.json")
-    plugins = registry.get("plugins", {}) if isinstance(registry, dict) else {}
-    rows = plugins.get(f"{plugin}@{marketplace}") if isinstance(plugins, dict) else None
-    for row in rows if pin and isinstance(rows, list) else []:
-        if isinstance(row, dict) and row.get("gitCommitSha") == pin:
-            root = Path(str(row.get("installPath", "")))
-            if row.get("installPath") and root.is_dir():
-                return root
+    for (name, _scope), (revision, root) in scoped_installs(marketplace).items():
+        if name == plugin and pin and revision == pin and root.is_dir():
+            return root
     return None
 
 
@@ -126,7 +121,7 @@ def behind(marketplaces: tuple[str, ...]) -> list[str]:
     found = []
     for marketplace in marketplaces:
         expected = pins(marketplace)
-        for (plugin, _scope), (revision, _root) in sorted(
+        for (plugin, _scope), (revision, root) in sorted(
             scoped_installs(marketplace).items()
         ):
             pin = expected.get(plugin)
@@ -134,6 +129,8 @@ def behind(marketplaces: tuple[str, ...]) -> list[str]:
                 found.append(
                     f"{plugin}@{marketplace}: installed {revision[:12]}, marketplace {pin[:12]}"
                 )
+            elif pin and not root.is_dir():
+                found.append(f"{plugin}@{marketplace}: installed {pin[:12]} is missing")
     return found
 
 

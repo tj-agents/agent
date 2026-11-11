@@ -2,6 +2,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -581,6 +582,42 @@ def test_no_build_repairs_the_machine_until_the_pinned_build_is_installed(
     machine.registry(OLD)
     machine.monkeypatch.setattr(machine_state, "installed_build", INSTALLED_BUILD)
     assert not machine_state.installed_build()
+
+
+def test_a_pinned_build_installed_for_another_project_is_not_this_projects(
+    machine: Machine,
+) -> None:
+    elsewhere = machine.home / "elsewhere"
+    elsewhere.mkdir()
+    write_json(
+        machine.claude / "plugins/installed_plugins.json",
+        {
+            "version": 2,
+            "plugins": {
+                "agent@tj-agents": [
+                    {
+                        "scope": "project",
+                        "projectPath": str(elsewhere),
+                        "gitCommitSha": PIN,
+                        "installPath": str(machine.install),
+                    }
+                ]
+            },
+        },
+    )
+    machine.monkeypatch.setattr(machine_state, "installed_build", INSTALLED_BUILD)
+    assert machine_state.packaged("install.py") == RUNTIME / "install.py"
+    assert not machine_state.installed_build()
+
+
+def test_a_missing_pinned_build_starts_the_plugin_update(machine: Machine) -> None:
+    machine.registry(PIN)
+    shutil.rmtree(machine.install)
+    machine.monkeypatch.setattr(machine_state, "installed_build", INSTALLED_BUILD)
+    assert latest_plugins.installed_behind(Host.CLAUDE) == [
+        f"agent@tj-agents: installed {PIN[:12]} is missing"
+    ]
+    assert machine.reason() == UPDATING_CLAUDE
 
 
 def test_managed_claude_adopts_downloaded_plugins_without_a_manual_reload(
