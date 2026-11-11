@@ -180,11 +180,13 @@ def claim(path: Path, owner: Owner) -> Ownership:
     return Ownership(stored_path, owner, claimed_at)
 
 
-def claim_started_worktree(host: Host, native_id: str, cwd: Path) -> Ownership | None:
+def claim_started_worktree(
+    host: Host, native_id: str, cwd: Path, environ: Mapping[str, str]
+) -> Ownership | None:
     root = linked_root(cwd)
     if root is None:
         return None
-    owner = current_owner({host.session_variable: native_id})
+    owner = current_owner({**environ, host.session_variable: native_id})
     if owner is None:
         raise OwnershipError("The starting session has no ownership identity")
     return claim(root, owner)
