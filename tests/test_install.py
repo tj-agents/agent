@@ -417,10 +417,10 @@ class InstallerStepTests(Machine):
         context = self.context(windows=False, run=run, which=lambda name: "pwsh-path" if name == "pwsh" else None)
         self.converge(step("Codex profile agents"), context)
 
-    def test_codex_agents_skip_without_pwsh(self):
+    def test_codex_agents_skip_without_the_platform_shell(self):
         out = io.StringIO()
         install.run_steps([step("Codex profile agents")], self.context(), False, out)
-        self.assertIn("n/a    Codex profile agents: pwsh is not installed", out.getvalue())
+        self.assertIn("n/a    Codex profile agents: powershell.exe is not installed", out.getvalue())
 
     def test_codex_agents_skip_without_an_installed_engineering_package(self):
         (self.home / ".codex").mkdir()
