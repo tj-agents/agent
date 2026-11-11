@@ -139,13 +139,15 @@ def _read_windows_clipboard(user32: Any, kernel32: Any, hwnd: Any) -> str | None
         handle = user32.GetClipboardData(CF_UNICODETEXT)
         if not handle:
             return None
+        size = kernel32.GlobalSize(handle)
         pointer = kernel32.GlobalLock(handle)
         if not pointer:
             return None
         try:
-            return ctypes.wstring_at(pointer)
+            data = ctypes.string_at(pointer, size - size % 2)
         finally:
             kernel32.GlobalUnlock(handle)
+        return data.decode("utf-16-le").split("\x00", 1)[0]
     finally:
         user32.CloseClipboard()
 

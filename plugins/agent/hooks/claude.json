@@ -94,6 +94,46 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 6,
+            "command": "tj_hook",
+            "args": [
+              "--",
+              "python",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
+              "idle",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 6,
+            "command": "tj_hook",
+            "args": [
+              "--",
+              "python",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
+              "idle",
+              "--host",
+              "claude"
+            ]
+          }
+        ]
+      }
     ]
   }
 }
