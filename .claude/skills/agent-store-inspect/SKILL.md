@@ -1,6 +1,6 @@
 ---
 name: inspect
-description: Read which agent sessions are linked to which work items, and where each runs, from the agent-store link store. Use when asked which sessions work on an item, what a session is linked to, or to diagnose recorded links.
+description: Use when inspecting work-item/session links or launch records; use host observation when actual session liveness is needed.
 kind: utility
 domain: agent
 profile: core
