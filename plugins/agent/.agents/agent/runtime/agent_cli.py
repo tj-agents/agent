@@ -366,6 +366,32 @@ def launch(
         if IS_WINDOWS or name != "TERM"
     }
     cleared, forced = launch_environment(clear=clear, force=force)
+    prepared = adapter.prepare(directory, title, arguments, tj)
+    dispatched, completed = False, False
+
+    def dispatch(command, **options):
+        nonlocal dispatched
+        if run is subprocess.run and "PYTEST_CURRENT_TEST" in os.environ:
+            raise LaunchError("Refusing to open a real terminal tab under pytest; inject a fake run.")
+        dispatched = True
+        return run(command, **options)
+
+    try:
+        shown = _launch_prepared(
+            host, directory, title, prepared, tj, launch_id, item, parent, want_session,
+            cleared, forced, environ, dispatch, tmux_session,
+        )
+        completed = True
+        return shown
+    finally:
+        if not completed:
+            adapter.abandon(prepared, launch_id, dispatched)
+
+
+def _launch_prepared(
+    host, directory, title, prepared, tj, launch_id, item, parent, want_session,
+    cleared, forced, environ, run, tmux_session,
+):
     command = [
         tj,
         "run",
@@ -379,13 +405,24 @@ def launch(
         "--launch-id",
         launch_id,
         *(["--parent", parent] if parent else []),
+        *(["--session", prepared.session] if prepared.session else []),
         "--",
-        adapter.executable(),
-        *arguments,
+        *prepared.command,
     ]
     options = {"tmux_session": tmux_session} if tmux_session else {}
     open_tab(directory, title, command, cleared, forced, environ, run, **options)
-    return await_launch(launch_id, want_session=want_session)
+    shown = await_launch(launch_id, want_session=want_session or prepared.session is not None)
+    record = shown.get("launch")
+    session = shown.get("session")
+    if prepared.session is not None and (
+        not isinstance(record, dict)
+        or record.get("state") == "ended"
+        or not isinstance(session, dict)
+        or session.get("session") != prepared.session
+        or session.get("launch_id") != launch_id
+    ):
+        raise LaunchError(f"Launch {launch_id} did not bind the exact prepared session {prepared.session}")
+    return shown
 
 
 def attach_tmux(

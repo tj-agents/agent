@@ -13,7 +13,7 @@ import agent_store
 import boot_history
 import pytest
 import tj_recover
-from launch_contract import Liveness
+from launch_contract import Liveness, PreparedLaunch
 from tj_agent.host import Host
 
 ITEM = "github:github.com/tj-agents/agent:124"
@@ -49,6 +49,16 @@ class FakeHost:
 
     def executable(self) -> str:
         return "fake-agent"
+
+    def prepare(
+        self, directory: Path, title: str, arguments: list[str], cli: str
+    ) -> PreparedLaunch:
+        return PreparedLaunch((self.executable(), *arguments))
+
+    def abandon(
+        self, prepared: PreparedLaunch, launch_id: str, dispatched: bool
+    ) -> None:
+        pass
 
 
 @dataclass
