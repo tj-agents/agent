@@ -36,17 +36,19 @@ class AgentStoreCalls:
 
 
 class StartTests(unittest.TestCase):
-    def start(self, host, environ, title=None):
+    def start(self, host, environ, title=None, launch=None):
         run = mock.Mock(return_value={'session': {'title': title}})
         adapter = mock.Mock()
         with mock.patch.object(hook.agent_store, 'run', run), \
+                mock.patch.object(hook.owned_launch, 'current', return_value=launch), \
                 mock.patch.object(hook, 'worktree', return_value='/repo'), \
                 mock.patch('agent_cli.host_launch', return_value=adapter):
             hook.start(host, 'n1', '/repo/sub', environ=environ)
         return list(run.call_args.args), adapter
 
     def test_a_tj_run_session_binds_to_its_launch_and_a_codex_thread_takes_its_title(self):
-        arguments, adapter = self.start(Host.CODEX, {hook.LAUNCH_ENV: 'L1', 'WT_SESSION': 'w'}, title='agent#98')
+        arguments, adapter = self.start(Host.CODEX, {hook.LAUNCH_ENV: 'L1', 'WT_SESSION': 'w'}, title='agent#98',
+                                        launch='L1')
         self.assertEqual(['register', '--session', 'codex:n1', '--cwd', '/repo/sub', '--worktree', '/repo',
                           '--launch-id', 'L1'], arguments)
         adapter.name_session.assert_called_once_with('n1', 'agent#98')
@@ -87,6 +89,7 @@ class EventTests(unittest.TestCase):
 def test_an_unrecorded_launch_registers_by_title_and_reports_it_on_stderr(monkeypatch, capsys):
     calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no launch'), {'session': {'title': None}})
     monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook.owned_launch, 'current', lambda: 'L1')
     monkeypatch.setattr(hook, 'worktree', lambda cwd: '/repo')
     monkeypatch.setattr(hook, 'terminal', lambda environ: ['--terminal-kind', 'windows-terminal', '--terminal-id', 'w'])
     environ = {hook.LAUNCH_ENV: 'L1', hook.TITLE_ENV: 'agent#98'}
@@ -102,6 +105,7 @@ def test_an_unrecorded_launch_registers_by_title_and_reports_it_on_stderr(monkey
 def test_the_fallback_registration_carries_the_wrapper_pid_and_started_at(monkeypatch):
     calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no launch'), {'session': {'title': None}})
     monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook.owned_launch, 'current', lambda: 'L1')
     monkeypatch.setattr(hook, 'worktree', lambda cwd: None)
     monkeypatch.setattr(hook, 'terminal', lambda environ: [])
     environ = {hook.LAUNCH_ENV: 'L1', hook.WRAPPER_PID_ENV: '4242', hook.WRAPPER_STARTED_AT_ENV: '2026-11-09T00:00:00Z'}
@@ -119,9 +123,24 @@ def test_a_session_not_started_by_tj_run_never_carries_wrapper_arguments(monkeyp
     assert calls.calls == [('register', '--session', 'claude:n1', '--cwd', '/repo/sub')]
 
 
+def test_an_inherited_launch_environment_registers_an_unbound_session(monkeypatch):
+    calls = AgentStoreCalls({'session': {'title': None}})
+    claims = []
+    monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook, 'worktree', lambda cwd: '/repo')
+    monkeypatch.setattr(hook, 'terminal', lambda environ: [])
+    monkeypatch.setattr(hook.worktrees, 'claim_started_worktree', lambda *arguments: claims.append(arguments))
+    environ = {hook.LAUNCH_ENV: 'parent', hook.WRAPPER_PID_ENV: '4242',
+               hook.WRAPPER_STARTED_AT_ENV: '2026-11-09T00:00:00Z'}
+    hook.start(Host.CLAUDE, 'n1', '/repo/sub', environ)
+    assert calls.calls == [('register', '--session', 'claude:n1', '--cwd', '/repo/sub', '--worktree', '/repo')]
+    assert hook.LAUNCH_ENV not in claims[0][3]
+
+
 def test_a_launch_lookup_failure_other_than_not_found_propagates(monkeypatch):
     calls = AgentStoreCalls(hook.agent_store.AgentStoreError('unexpected', 'boom'))
     monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook.owned_launch, 'current', lambda: 'L1')
     monkeypatch.setattr(hook, 'worktree', lambda cwd: None)
     with pytest.raises(hook.agent_store.AgentStoreError):
         hook.start(Host.CLAUDE, 'n1', '/repo/sub', {hook.LAUNCH_ENV: 'L1'})

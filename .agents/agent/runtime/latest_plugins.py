@@ -2,7 +2,8 @@
 """Report when this session, its plugins or the machine are behind their pins.
 
 Each cause starts only its own fix: plugins behind their pin start the plugin update,
-and machine drift starts only the install steps that repair it.
+and machine drift starts only the install steps that repair it. A prompt starts a fix
+only for drift no earlier start already covered; session start retries it.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import json
 import os
 import shlex
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -20,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jobs
 import machine_state
+import owned_launch
 import plugin_activation
 import required_plugins
 import retired_state
@@ -37,6 +39,8 @@ class Installed(Protocol):
     def behind(self, marketplaces: tuple[str, ...]) -> list[str]: ...
 
     def running_behind(self, root: Path) -> str | None: ...
+
+    def revision(self) -> str: ...
 
 
 INSTALLED: Mapping[Host, Installed] = {
@@ -76,21 +80,32 @@ def install_command(steps: Iterable[str]) -> list[str]:
     return [sys.executable, "-B", str(machine_state.packaged("install.py")), *selected]
 
 
+def unowned_reload(host: Host) -> str | None:
+    return None if owned_launch.current() else INSTALLED[host].RELOAD
+
+
 def fixing(
     state: Path,
     job: jobs.Job,
     command: Sequence[str],
     behind: str,
-    then: str | None = None,
-) -> str:
+    drift: Sequence[str],
+    *,
+    retry: bool,
+    then: Callable[[], str | None] = lambda: None,
+) -> str | None:
     rerun = f"run {shlex.join(command)}"
     running = jobs.running(state, job)
     failure = None if running else jobs.recent_failure(state, job)
     if failure:
         return f"tj-agents {job.label} failed ({failure}); {rerun}."
+    if not retry and jobs.attempted(state, job) == list(drift):
+        return None
     if not running and not jobs.start(state, job, command):
         return f"tj-agents {behind} are behind and tj_hook is missing; {rerun}."
-    after = f"; {then} when it finishes" if then else ""
+    jobs.attempt(state, job, drift)
+    instruction = then()
+    after = f"; {instruction} when it finishes" if instruction else ""
     return f"Updating tj-agents {behind} in the background{after}."
 
 
@@ -103,29 +118,41 @@ def repair_machine(state: Path, *, full: bool) -> str | None:
     if not drift:
         return None
     behind = "; ".join(f"{step} ({'; '.join(found)})" for step, found in drift.items())
-    return fixing(state, jobs.Job.INSTALL, install_command(drift), behind)
+    return fixing(
+        state, jobs.Job.INSTALL, install_command(drift), behind, [behind], retry=full
+    )
 
 
 def reason(host: Host, state: Path, *, full: bool) -> str | None:
     machine = repair_machine(state, full=full)
-    if installed_behind(host) or plugin_activation.pending(
+    behind = installed_behind(host)
+    pending = plugin_activation.pending(
         state, host, required_plugins.project_root(Path.cwd())
-    ):
+    )
+    if behind or pending:
         return fixing(
             state,
             jobs.Job.UPDATE,
             update_command(host),
             "plugins",
-            INSTALLED[host].RELOAD,
+            [
+                *behind,
+                *(["activation pending"] if pending else []),
+                INSTALLED[host].revision(),
+            ],
+            retry=full,
+            then=lambda: unowned_reload(host),
         )
-    if running_behind(host):
-        if host is Host.CLAUDE and os.environ.get("TJ_RUN_LAUNCH_ID"):
+    running = running_behind(host)
+    if running:
+        if owned_launch.current():
             return fixing(
                 state,
                 jobs.Job.UPDATE,
                 update_command(host),
                 "running plugins",
-                "this conversation resumes when idle without background work",
+                [running, INSTALLED[host].revision()],
+                retry=full,
             )
         return f"Plugins updated: {INSTALLED[host].RELOAD}."
     return machine

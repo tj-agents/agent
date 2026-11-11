@@ -18,6 +18,7 @@ import host_permissions
 import host_plugins
 import jobs
 import latest_plugins
+import owned_launch
 import pytest
 import session_hook
 from claude import installed as claude_installed
@@ -153,6 +154,7 @@ def test_session_start_binds_the_launch(
 
     monkeypatch.setattr(agent_store, "run", store)
     monkeypatch.setattr(session_hook, "worktree", lambda cwd: "/fixture")
+    monkeypatch.setattr(owned_launch, "current", lambda: "launch")
     session_hook.start(host, "native", "/fixture/sub", {"TJ_RUN_LAUNCH_ID": "launch"})
     assert claims == [
         (host, "native", Path("/fixture"), {"TJ_RUN_LAUNCH_ID": "launch"})
