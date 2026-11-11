@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: Select a repository's plugins and generate its rolling-main Claude and Codex settings. Use when adopting plugins for a repository or stack, updating a repository's selected packages, or auditing a machine before removing old user-level plugin settings.
+description: Update the current host's plugins or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, adopting a stack, changing selected packages, or auditing machine plugin settings.
 
 kind: utility
 domain: agent
@@ -11,7 +11,27 @@ provenance: house
 route: infer
 ---
 
-# Plugin selection
+# Plugins
+
+Owns plugin updates for the current host and repository plugin selection.
+
+```text
+tj plugins update
+tj plugins update --host claude
+tj install --step "Handy"
+```
+
+Run `tj plugins update` when installed plugins look outdated or a plugin PR merged. It detects the current
+Claude or Codex session; pass `--host` outside a session. Current local pins take a local file check.
+Changed plugins use native installation. Codex reloads through its shared server; Claude sessions managed
+by `tj run` resume the same conversation once idle with no background tasks or scheduled wakeups.
+An unmanaged Claude session receives the native `/reload-plugins` notice. Update failures are reported;
+hooks warn and always allow work to continue.
+
+`tj install` converges machine tools, Handy, profiles, agent settings and command bindings. Use it for
+machine setup or repair. `tj init` remains shell initialization.
+
+## Repository selection
 
 Maintainers regenerate the adjacent Marketplace snapshot with
 `scripts/update_marketplace_plugins.py --source <marketplace-checkout>`; do not edit the lock by hand.

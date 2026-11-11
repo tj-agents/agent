@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: Select a repository's plugins and generate its rolling-main Claude and Codex settings. Use when adopting plugins for a repository or stack, updating a repository's selected packages, or auditing a machine before removing old user-level plugin settings.
+description: Update the current host's plugins or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, adopting a stack, changing selected packages, or auditing machine plugin settings.
 
 kind: utility
 domain: agent
@@ -11,7 +11,7 @@ provenance: house
 route: infer
 ---
 
-# Plugin selection
+# Plugins
 
 Read and follow the [canonical definition](../../../.agents/agent/utility/plugins/SKILL.md) in full.
 This discovery entry is generated; edit the referenced `.agents/` definition.

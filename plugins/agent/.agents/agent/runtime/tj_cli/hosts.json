@@ -1,0 +1,14 @@
+[
+  {
+    "name": "claude",
+    "marker_variable": "CLAUDECODE",
+    "marker_value": "1",
+    "session_id_variable": "CLAUDE_CODE_SESSION_ID"
+  },
+  {
+    "name": "codex",
+    "marker_variable": "CODEX_THREAD_ID",
+    "marker_value": "nonempty",
+    "session_id_variable": "CODEX_THREAD_ID"
+  }
+]

@@ -12,7 +12,6 @@ Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; a skill's n
 - `plugins` — utility — core — `.agents/agent/utility/plugins/SKILL.md`
 - `recent` — utility — core — `.agents/agent/utility/recent/SKILL.md`
 - `recover` — utility — core — `.agents/agent/utility/recover/SKILL.md`
-- `refresh-plugins` — utility — core — `.agents/agent/utility/refresh-plugins/SKILL.md`
 - `search` — utility — core — `.agents/agent/utility/search/SKILL.md`
 
 ## agent-store

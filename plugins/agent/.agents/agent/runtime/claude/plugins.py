@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import functools
 import os
 from pathlib import Path
 import subprocess
 
 import agent_cli
-from claude.project_plugins import install as install, prepare_instructions as prepare_instructions
 from tj_agent.host import Host
 import required_plugins
+import standards
 from tj_cli import process
 
 HOST = Host.CLAUDE
@@ -106,3 +106,52 @@ def inventory_entries(data: object) -> object:
 def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False,
                  required_roots: Mapping[str, Path] | None = None) -> str | None:
     return None
+
+
+def prepare_instructions(project: Path) -> None:
+    pointer = project / "CLAUDE.md"
+    shared = project / "AGENTS.md"
+    for path in (pointer, shared):
+        if path.is_symlink() or path.is_junction():
+            raise standards.StandardsError(
+                f"Refusing redirected instruction file: {path}"
+            )
+    original = pointer.read_text(encoding="utf-8") if pointer.exists() else ""
+    if original.strip() == "@AGENTS.md":
+        return
+    if original.strip():
+        current = shared.read_text(encoding="utf-8") if shared.exists() else ""
+        content = "\n".join(
+            line for line in original.splitlines() if line.strip() != "@AGENTS.md"
+        ).strip()
+        shared.write_text(current.rstrip() + "\n\n" + content + "\n", encoding="utf-8")
+    pointer.write_text("@AGENTS.md\n", encoding="utf-8")
+
+
+def install(project: Path, identities: Sequence[str]) -> None:
+    local = (project / ".agents/repo-capabilities.local.json").is_file()
+    scope = "local" if local else "project"
+    for identity in identities:
+        result = process.run(
+            [
+                "claude",
+                "plugin",
+                "install",
+                identity,
+                "--scope",
+                scope,
+                "--json",
+                "-y",
+            ],
+            cwd=project,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=120,
+            check=False,
+        )
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip()
+            raise required_plugins.RequiredPluginsError(
+                f"Cannot install {identity} for {project}: {detail}"
+            )

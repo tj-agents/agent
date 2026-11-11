@@ -15,7 +15,6 @@
       "plugins",
       "recent",
       "recover",
-      "refresh-plugins",
       "search"
     ]
   },
@@ -131,21 +130,6 @@
       ],
       "requires": [
         "tj"
-      ],
-      "provenance": [
-        "house"
-      ]
-    },
-    {
-      "name": "refresh-plugins",
-      "kind": "utility",
-      "profile": "core",
-      "applicability": [
-        "native host sessions"
-      ],
-      "requires": [
-        "python",
-        "native host"
       ],
       "provenance": [
         "house"
