@@ -129,6 +129,7 @@ def install_plugin(
     )
     (root / "scripts").mkdir(parents=True, exist_ok=True)
     (root / "scripts/setup.py").write_text("", encoding="utf-8")
+    claude_payload(root, plugin)
     registry = claude_home / "plugins/installed_plugins.json"
     rows = (
         json.loads(registry.read_text(encoding="utf-8"))["plugins"]
@@ -142,6 +143,11 @@ def install_plugin(
 
 
 CLAUDE_REGISTRY = threading.Lock()
+
+
+def claude_payload(root: Path, plugin: str) -> None:
+    """The smallest cached build Claude can load: its manifest naming the plugin."""
+    write_json(root / ".claude-plugin/plugin.json", {"name": plugin})
 
 
 def update_claude_plugin(claude_home: Path, command: Sequence[str]) -> None:
@@ -167,7 +173,7 @@ def update_claude_plugin(claude_home: Path, command: Sequence[str]) -> None:
             return
         document = json.loads(registry.read_text(encoding="utf-8"))
         root = claude_home / "plugins/cache" / marketplace / name / pins[name][:12]
-        root.mkdir(parents=True, exist_ok=True)
+        claude_payload(root, name)
         for row in document["plugins"].get(plugin, []):
             if row["scope"] == scope:
                 row.update(gitCommitSha=pins[name], installPath=str(root))

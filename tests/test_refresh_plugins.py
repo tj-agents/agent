@@ -13,6 +13,7 @@ from unittest import mock
 
 from git_isolation import without_git_config
 from fake_machine import (
+    claude_payload,
     MARKETPLACE_REVISION,
     CodexPlugins,
     environment,
@@ -115,6 +116,7 @@ class RefreshPluginsTests(unittest.TestCase):
         (root / ".codex-plugin").mkdir(parents=True)
         harness = {"plugin": f"tj-agents/{plugin}", "requires": {}}
         (root / "harness.json").write_text(json.dumps(harness), encoding="utf-8")
+        claude_payload(root, plugin)
         if label:
             (root / ".codex-plugin" / "plugin.json").write_text(
                 json.dumps({"version": label}), encoding="utf-8"

@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 import tj_plugins
-from fake_machine import environment, pin_plugin, update_claude_plugin, write_json
+from fake_machine import (
+    claude_payload,
+    environment,
+    pin_plugin,
+    update_claude_plugin,
+    write_json,
+)
 from tj_cli import process
 
 
@@ -14,7 +20,7 @@ def install_scopes(home: Path, project: Path, versions: Mapping[str, str]) -> No
     rows = []
     for scope, revision in versions.items():
         root = home / "plugins/cache/tj-agents/python" / revision[:12]
-        root.mkdir(parents=True, exist_ok=True)
+        claude_payload(root, "python")
         rows.append(
             {
                 "scope": scope,
@@ -156,3 +162,45 @@ def test_an_update_that_misses_its_pin_fails(
     error = capsys.readouterr().err
     assert "rust@tj-agents: user did not reach its marketplace pin" in error
     assert "python@tj-agents" not in error
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_torn_payload_at_its_pin_is_reinstalled_only_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    home = tmp_path / "claude"
+    pin_plugin(home, "python", "a" * 40)
+    install_scopes(home, tmp_path, {"user": "a" * 40})
+    torn = home / "plugins/cache/tj-agents/python" / ("a" * 12)
+    (torn / ".claude-plugin/plugin.json").unlink()
+    write_json(
+        home / "settings.json", {"enabledPlugins": {"python@tj-agents": enabled}}
+    )
+    for name, value in environment(tmp_path).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if command[:3] == ["claude", "plugin", "install"]:
+            claude_payload(torn, "python")
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr(process, "run", run)
+    expected = 0 if enabled else 1
+    assert tj_plugins.main(["update", "--host", "claude"]) == expected
+    verb = "install" if enabled else "update"
+    assert [command for command in commands if command[:2] == ["claude", "plugin"]] == [
+        [
+            "claude",
+            "plugin",
+            verb,
+            "python@tj-agents",
+            "--scope",
+            "user",
+            "--json",
+            "-y",
+        ]
+    ]

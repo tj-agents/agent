@@ -202,13 +202,18 @@ def refresh(
                 verified_install=True,
             )
             digests = Digests(jobs.state_directory())
-            listed_versions = {entry["pluginId"] for entry in verified}
+            reported = {entry["pluginId"]: entry for entry in verified}
             for identity in stale:
                 plugin, _, marketplace = identity.rpartition("@")
-                if identity not in listed_versions or not catalog.current(
-                    marketplace, plugin, digests
-                ):
-                    report.fail(HOST, identity, "native installation did not converge")
+                if identity not in reported:
+                    cause = "codex plugin list does not show it installed"
+                elif catalog.current(marketplace, plugin, digests):
+                    continue
+                else:
+                    cause = catalog.unconverged(marketplace, plugin, reported[identity])
+                report.fail(
+                    HOST, identity, f"native installation did not converge: {cause}"
+                )
             digests.save()
 
 
