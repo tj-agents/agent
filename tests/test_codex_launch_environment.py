@@ -35,7 +35,8 @@ def test_codex_launch_removes_inherited_monochrome_environment(
         "KEPT": "value",
     }
 
-    agent_cli.launch(
+    # Exercise the untyped legacy launcher, including its real environment handling.
+    agent_cli.launch(  # type: ignore[no-untyped-call]
         Host.CODEX,
         tmp_path,
         "Native Codex handoff",
