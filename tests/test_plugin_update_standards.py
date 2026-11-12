@@ -29,6 +29,7 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     for adapter in (claude_installed, codex_installed):
         monkeypatch.setattr(adapter, "update_marketplaces", lambda *_arguments: None)
     monkeypatch.setattr(codex_installed, "trust_hooks", lambda _report: True)
+    monkeypatch.setattr(tj_plugins, "agent_package", lambda *_arguments: None)
     return commands
 
 
