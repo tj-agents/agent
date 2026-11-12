@@ -64,15 +64,19 @@ def prompt(card: dict) -> str:
             f"Read it first with `tj item resolve {card['ref']} --body`, then follow the repository's workflow.")
 
 
-def start(item_reference: str, host: Host, cwd: Path, lane: str | None = None, model: str | None = None) -> dict:
+def start(item_reference: str, host: Host, cwd: Path, lane: str) -> dict:
+    if lane == "L7":
+        raise agent_cli.LaunchError("L7 is for in-session clerical work and cannot open a session.")
+    entry = agent_cli.resolve_lane(host, lane=lane)
+    route = entry.get("handoff")
+    if route:
+        raise agent_cli.LaunchError(f"Lane {lane} routes to {route['host']} {route['lane']}; use --{route['host']}.")
+    model, effort = entry["model"], entry.get("effort")
     card = lifecycle.tj_item("resolve", item_reference, cwd=cwd)
     linked = lifecycle.open_items([card["ref"]], cwd=cwd)
     existing = linked[0].worktree if linked else None
     worktree = existing if existing and Path(existing).is_dir() else create_worktree(cwd, branch_name(card))
     lifecycle.tj_item("progress", card["ref"], "--state", IN_PROGRESS, cwd=cwd)
-    effort = None
-    if lane:
-        model, effort = agent_cli.resolve_lane_model(str(host), lane=lane)
     title = unique_title(f"{lifecycle.repository_name(cwd)}#{card['ref'].rsplit(':', 1)[1]}")
     adapter = agent_cli.host_launch(host)
     directory = Path(worktree)
@@ -89,12 +93,10 @@ def main(argv=None) -> int:
     hosts = parser.add_mutually_exclusive_group()
     hosts.add_argument("--claude", dest="host", action="store_const", const=Host.CLAUDE)
     hosts.add_argument("--codex", dest="host", action="store_const", const=Host.CODEX)
-    selection = parser.add_mutually_exclusive_group()
-    selection.add_argument("--lane", choices=("L1", "L2", "L3", "L4", "L5", "L6"))
-    selection.add_argument("--model")
+    parser.add_argument("--lane", choices=("L1", "L2", "L3", "L4", "L5", "L6"), required=True)
     args = parser.parse_args(argv)
     try:
-        result = start(args.item, args.host or Host.CLAUDE, Path.cwd(), args.lane, args.model)
+        result = start(args.item, args.host or Host.CLAUDE, Path.cwd(), args.lane)
     except agent_cli.LaunchError as error:
         return agent_cli.report_launch_failure(error)
     except (lifecycle.LifecycleError, agent_store.AgentStoreError, KeyError, ValueError) as error:
