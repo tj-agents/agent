@@ -148,27 +148,19 @@ def _lanes_module():
     return module
 
 
-# Lane -> model for a chosen harness, from the canonical lane tables, the repo's only model-name owner.
-# Resolution never picks the lane: a caller that supplies neither a lane nor a model gets the CLI's own
-# configured default, because guessing a lane from a prompt is how an expensive model ends up serving a
-# rename. frontier resolves the tier above the ladder, which no lane resolves to: its selection is the
-# user's explicit request, never task shape.
-def resolve_lane(host, lane=None, frontier=False):
-    if not lane and not frontier:
-        raise LaunchError('resolve_lane needs a lane or frontier.')
-    if lane and frontier:
-        raise LaunchError('A lane and the frontier tier are mutually exclusive.')
+def resolve_lane(host: Host, lane: str) -> dict[str, Any]:
+    if not lane:
+        raise LaunchError('resolve_lane needs a lane.')
     lanes = _lanes_module()
     try:
-        entry = lanes.frontier(host) if frontier else lanes.resolve(host, lane)
+        entry = lanes.resolve(host, lane)
     except SystemExit as exc:
         raise LaunchError(str(exc)) from None
-    return entry
+    return cast(dict[str, Any], entry)
 
 
-def resolve_lane_model(host, lane=None, frontier=False):
-    """(model, effort) for a lane or the frontier tier; effort is None when the table prices none."""
-    entry = resolve_lane(host, lane=lane, frontier=frontier)
+def resolve_lane_model(host: Host, lane: str) -> tuple[str, str | None]:
+    entry = resolve_lane(host, lane=lane)
     return entry['model'], entry.get('effort')
 
 
