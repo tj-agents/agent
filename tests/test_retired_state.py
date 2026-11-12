@@ -257,6 +257,45 @@ def test_tj_watch_retirement_never_stops_a_process_by_name(tmp_path: Path) -> No
         assert by_name not in source
 
 
+def test_a_locked_tj_watch_binary_fails_the_install_and_other_cleanup_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    environ, shortcut, binary = seed_tj_watch(tmp_path)
+    context = install.Context(
+        home=tmp_path, environ=environ, windows=True, run=Recorder()
+    )
+    seed(context.state_directory)
+    unlink = Path.unlink
+
+    def deny_binary(path: Path, missing_ok: bool = False) -> None:
+        if path == binary:
+            raise PermissionError(13, "Access is denied", str(path))
+        unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", deny_binary)
+    monkeypatch.setattr(retired_state, "WindowsProcessTable", lambda: FakeProcesses([]))
+    removal = retired_state.remove(
+        context.state_directory,
+        windows=True,
+        run=Recorder(),
+        environ=environ,
+        processes=FakeProcesses([]),
+    )
+    assert binary.is_file()
+    assert not shortcut.exists()
+    assert str(shortcut) in removal.removed
+    assert len(removal.failures) == 1
+    assert str(binary) in removal.failures[0]
+    assert all(
+        not (context.state_directory / entry).exists()
+        for entry in retired_state.RETIRED_ENTRIES
+    )
+    step = next(item for item in install.STEPS if item.name == "retired state")
+    errors = io.StringIO()
+    assert install.run_steps([step], context, False, io.StringIO(), errors) == 2
+    assert str(binary) in errors.getvalue()
+
+
 def test_tj_watch_is_left_alone_off_windows(tmp_path: Path) -> None:
     environ, shortcut, binary = seed_tj_watch(tmp_path)
     processes = FakeProcesses([retired_state.RunningProcess(41, str(binary))])
