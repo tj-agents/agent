@@ -120,6 +120,7 @@ tj start 461 [--codex] [--lane L4]   worktree via worktrunk, card In Progress, a
 tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
 tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
 tj recover --dry-run                 preview restores and stale sessions to end without changing anything
+tj recover --open [461]              reopen exactly the tabs that were open whose agent is not running
 tj prepare --host claude|codex       prepare this repository's selected plugins and standards index
 ```
 
@@ -160,6 +161,8 @@ warns that the owner must provide routing. Other preparation failures also warn;
 Recovery considers every registered session, including those without a work item. It leaves live sessions
 alone and restores dead sessions whose host transcript changed after the previous boot. Older dead sessions
 are marked ended; `--older` includes them again, and `--ended` includes sessions that ended cleanly.
+`--open` instead reopens the newest launch of each session whose tab `tj run` last recorded as open and whose
+agent is not running; a tab closed by hand is not reopened, and logoff, shutdown or a crash leave a tab open.
 Missing transcripts and directories are reported per session. On Linux, recovery uses the previous boot
 in the systemd journal and opens tmux windows, creating and attaching to `tj-recover` from a plain terminal.
 
