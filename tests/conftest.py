@@ -34,9 +34,11 @@ def loader_package_roots(tmp_path: Path) -> tuple[Path, Path]:
 
 @pytest.fixture(autouse=True)
 def preserve_empty_process_environment() -> Iterator[None]:
+    # Read the platform now: a test's sys.platform patch may outlive this teardown.
+    windows = sys.platform == "win32"
     empty = [key for key, value in os.environ.items() if value == ""]
     yield
-    if sys.platform == "win32" and empty:
+    if windows and empty:
         import ctypes
 
         # Environment mocks can restore Python's map but delete native empty values.
