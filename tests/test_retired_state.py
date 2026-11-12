@@ -22,7 +22,6 @@ LIVE_ENTRIES = (
     "bin/source.json",
     "bin/bot-identity/bot_identity.py",
     "bin/.agents/agent/runtime/agent_cli.py",
-    "plugin-update.json",
     "github-access/profile.json",
 )
 
