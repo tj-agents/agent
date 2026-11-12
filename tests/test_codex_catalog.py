@@ -59,11 +59,14 @@ def converged(home: Path) -> bool:
     return tj_plugins.already_current(Host.CODEX, Digests(home.parent / "state"))
 
 
-def installed(home: Path, version: str) -> Path:
+def installed(home: Path, version: str, *, with_version: bool = True) -> Path:
     root = home / "plugins/cache/tj-agents/agent" / version
     (root / ".codex-plugin").mkdir(parents=True)
+    manifest = {"name": "agent"}
+    if with_version:
+        manifest["version"] = version
     (root / ".codex-plugin/plugin.json").write_text(
-        json.dumps({"name": "agent", "version": version}), encoding="utf-8"
+        json.dumps(manifest), encoding="utf-8"
     )
     return root
 
@@ -139,7 +142,7 @@ def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) ->
     assert converged(home)
 
 
-def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) -> None:
+def test_a_new_mutable_install_with_native_local_version_converges(home: Path) -> None:
     entry = publish(home, "a" * 40, "local")
     present = False
 
@@ -149,7 +152,7 @@ def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) ->
             listing = {"installed": [{**entry, "installed": present}]}
             return subprocess.CompletedProcess(command, 0, json.dumps(listing), "")
         if command[:3] == ["codex", "plugin", "add"]:
-            installed(home, "local")
+            installed(home, "local", with_version=False)
             present = True
         return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -159,6 +162,16 @@ def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) ->
         native.reset_mock()
         assert tj_plugins.main(["update", "--host", "codex"]) == 0
         assert native_installs(native.call_args_list) == []
+
+
+def test_a_local_build_rejects_a_malformed_manifest_version(home: Path) -> None:
+    entry = publish(home, "a" * 40, "local")
+    root = installed(home, "local")
+    (root / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"name": "agent", "version": None}), encoding="utf-8"
+    )
+    catalog.remember([entry], verified_install=True)
+    assert not catalog.current("tj-agents", "agent", Digests(home.parent / "state"))
 
 
 def test_inventory_from_an_old_catalog_cannot_record_a_new_source_pin(
