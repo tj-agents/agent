@@ -6,13 +6,15 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from claude import project_plugins
+from claude import plugins, project_plugins
+import required_plugins
 from tj_agent.host import Host
 from tree_digest import Digests
 
 HOST = Host.CLAUDE
 RELOAD = "type /reload-plugins"
 UPDATE = ("claude", "plugin", "update")
+INSTALL = ("claude", "plugin", "install")
 
 
 def read(path: Path) -> object:
@@ -107,7 +109,32 @@ def pinned(marketplace: str, plugin: str, scope: str | None = None) -> bool:
         if name == plugin and (scope is None or installed_scope == scope)
     ]
     return bool(pin and installations) and all(
-        revision == pin and root.is_dir() for revision, root in installations
+        revision == pin and readable(root, plugin) for revision, root in installations
+    )
+
+
+def readable(root: Path, plugin: str) -> bool:
+    return required_plugins.readable_payload(root, HOST, plugin)
+
+
+def torn(marketplace: str, plugin: str, scope: str) -> bool:
+    """An enabled user install at its pin whose cached payload is incomplete.
+
+    Reinstalling enables the plugin and writes user settings, so only an enabled user
+    install is reinstalled; other scopes keep the plain update.
+    """
+    if (
+        scope != "user"
+        or plugins.user_enabled().get(f"{plugin}@{marketplace}") is not True
+    ):
+        return False
+    pin = pins(marketplace).get(plugin)
+    installation = scoped_installs(marketplace).get((plugin, scope))
+    return (
+        pin is not None
+        and installation is not None
+        and installation[0] == pin
+        and not readable(installation[1], plugin)
     )
 
 
@@ -173,12 +200,13 @@ def refresh(
         print(f"{HOST}: {len(plugins) - len(behind)} plugin(s) already at their pin")
     groups = []
     for plugin, scopes in behind.items():
-        groups.append(
-            [
-                (plugin, [*UPDATE, plugin, "--scope", scope, "--json", "-y"])
-                for scope in scopes
-            ]
-        )
+        name, _, marketplace = plugin.rpartition("@")
+        group = []
+        for scope in scopes:
+            # `update` accepts a torn payload at its pin as current; only `install` rewrites it.
+            verb = INSTALL if torn(marketplace, name, scope) else UPDATE
+            group.append((plugin, [*verb, plugin, "--scope", scope, "--json", "-y"]))
+        groups.append(group)
     report.steps(HOST, groups)
     if report.failures:
         return

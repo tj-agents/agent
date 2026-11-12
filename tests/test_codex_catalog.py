@@ -164,6 +164,41 @@ def test_a_new_mutable_install_with_native_local_version_converges(home: Path) -
         assert native_installs(native.call_args_list) == []
 
 
+def test_a_marketplace_local_plugin_listed_by_absolute_path_converges(
+    home: Path,
+) -> None:
+    clone = home / ".tmp/marketplaces/agents"
+    manifest = clone / ".agents/plugins/marketplace.json"
+    manifest.parent.mkdir(parents=True)
+    (clone / "plugins/concertable").mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "plugins": [
+                    {
+                        "name": "concertable",
+                        "source": {"source": "local", "path": "./plugins/concertable"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    root = home / "plugins/cache/agents/concertable/local"
+    (root / ".codex-plugin").mkdir(parents=True)
+    (root / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"name": "concertable"}), encoding="utf-8"
+    )
+    entry = {
+        "pluginId": "concertable@agents",
+        "version": "local",
+        "installed": True,
+        "source": {"source": "local", "path": str(clone / "plugins" / "concertable")},
+    }
+    catalog.remember([entry], verified_install=True)
+    assert catalog.current("agents", "concertable", Digests(home.parent / "state"))
+
+
 def test_a_local_build_rejects_a_malformed_manifest_version(home: Path) -> None:
     entry = publish(home, "a" * 40, "local")
     root = installed(home, "local")
@@ -261,3 +296,20 @@ def test_immutable_builds_check_metadata_and_reject_a_changed_manifest(
         '{"version":"local"}', encoding="utf-8"
     )
     assert not catalog.current("tj-agents", "agent", digests)
+
+
+def test_an_unconverged_install_names_its_cause(home: Path) -> None:
+    entry = publish(home, "a" * 40, "a" * 12)
+    assert catalog.unconverged("tj-agents", "agent", entry) == (
+        f"no cached build labelled {'a' * 12} at "
+        f"{home / 'plugins/cache/tj-agents/agent' / ('a' * 12)}"
+    )
+    installed(home, "a" * 12)
+    installed(home, "b" * 12)
+    assert catalog.unconverged("tj-agents", "agent", entry) == (
+        f"its cache holds builds {'a' * 12}, {'b' * 12} besides {'a' * 12}"
+    )
+    moved = {**entry, "source": {"source": "git-subdir", "path": "elsewhere"}}
+    assert catalog.unconverged("tj-agents", "agent", moved).startswith(
+        'Codex lists source {"path": "elsewhere"'
+    )

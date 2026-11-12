@@ -193,9 +193,9 @@ def check(project: Path, host: Host, executable: str | None = None,
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(
-            f"Required standards unavailable for {host} in {project}: {', '.join(missing)}. "
-            "Run tj install --step 'plugin setup' in this project to install the required plugins. "
-            "Cached files from another host do not establish activation.", project, missing,
+            f"Required standards unavailable for {host} in {project}; not enabled with a complete "
+            f"cached build: {', '.join(missing)}. Run tj install --step 'plugin setup' "
+            "in this project; it reinstalls missing and incomplete builds.", project, missing,
         )
     return {identity: roots[identity] for identity in required}
 
