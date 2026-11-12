@@ -24,7 +24,7 @@ sys.path.insert(0, str(HERE))
 
 from tj_agent.host import Host
 from launch_contract import Launch
-from launch_errors import LaunchError, LaunchTimeout
+from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 import agent_store
 import work_item
@@ -123,6 +123,11 @@ def report_launch_failure(exc, err=None):
     if err is None:
         err = sys.stderr
     print(str(exc), file=err)
+    failure = exc
+    while failure is not None:
+        for note in getattr(failure, "__notes__", ()):
+            print(note, file=err)
+        failure = failure.__cause__
     if isinstance(exc, LaunchTimeout):
         print('The tab may already have opened; check the terminal before launching another.', file=err)
         return 3
@@ -358,6 +363,34 @@ def launch(
         if IS_WINDOWS or name != "TERM"
     }
     cleared, forced = launch_environment(clear=clear, force=force)
+    prepared = adapter.prepare(directory, title, arguments, tj)
+    dispatched, completed = False, False
+
+    def dispatch(command, **options):
+        nonlocal dispatched
+        if run is subprocess.run and "PYTEST_CURRENT_TEST" in os.environ:
+            raise LaunchError("Refusing to open a real terminal tab under pytest; inject a fake run.")
+        dispatched = True
+        return run(command, **options)
+
+    try:
+        shown = _launch_prepared(
+            host, directory, title, prepared, tj, launch_id, item, parent, want_session,
+            cleared, forced, environ, dispatch, tmux_session,
+        )
+        completed = True
+        return shown
+    finally:
+        if not completed:
+            cleanup_failed_launch(
+                sys.exception(), lambda: adapter.abandon(prepared, launch_id, dispatched)
+            )
+
+
+def _launch_prepared(
+    host, directory, title, prepared, tj, launch_id, item, parent, want_session,
+    cleared, forced, environ, run, tmux_session,
+):
     command = [
         tj,
         "run",
@@ -371,13 +404,24 @@ def launch(
         "--launch-id",
         launch_id,
         *(["--parent", parent] if parent else []),
+        *(["--session", prepared.session] if prepared.session else []),
         "--",
-        adapter.executable(),
-        *arguments,
+        *prepared.command,
     ]
     options = {"tmux_session": tmux_session} if tmux_session else {}
     open_tab(directory, title, command, cleared, forced, environ, run, **options)
-    return await_launch(launch_id, want_session=want_session)
+    shown = await_launch(launch_id, want_session=want_session or prepared.session is not None)
+    record = shown.get("launch")
+    session = shown.get("session")
+    if prepared.session is not None and (
+        not isinstance(record, dict)
+        or record.get("state") == "ended"
+        or not isinstance(session, dict)
+        or session.get("session") != prepared.session
+        or session.get("launch_id") != launch_id
+    ):
+        raise LaunchError(f"Launch {launch_id} did not bind the exact prepared session {prepared.session}")
+    return shown
 
 
 def attach_tmux(

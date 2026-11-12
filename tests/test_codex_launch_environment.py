@@ -4,6 +4,7 @@ from pathlib import Path
 
 import agent_cli
 import pytest
+from launch_contract import PreparedLaunch
 from tj_agent.host import Host
 
 
@@ -19,7 +20,11 @@ def test_codex_launch_removes_inherited_monochrome_environment(
 
     adapter = agent_cli.host_launch(Host.CODEX)
     monkeypatch.setattr(agent_cli.host_launch(Host.CLAUDE), "SESSION_ENVIRONMENT", ())
-    monkeypatch.setattr(adapter, "executable", lambda: "codex")
+    monkeypatch.setattr(
+        adapter,
+        "prepare",
+        lambda directory, title, arguments, cli: PreparedLaunch(("codex", *arguments)),
+    )
     monkeypatch.setattr(agent_cli, "IS_WINDOWS", windows)
     monkeypatch.setattr(shutil, "which", lambda name: name)
     monkeypatch.setattr(agent_cli, "await_launch", lambda *args, **kwargs: {})

@@ -138,8 +138,12 @@ def _git(path: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+def repository_root(path: Path) -> Path:
+    return Path(_git(path, "rev-parse", "--show-toplevel"))
+
+
 def linked_root(path: Path) -> Path | None:
-    root = Path(_git(path, "rev-parse", "--show-toplevel")).resolve(strict=True)
+    root = repository_root(path).resolve(strict=True)
     git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir")).resolve(strict=True)
     common = Path(
         _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")

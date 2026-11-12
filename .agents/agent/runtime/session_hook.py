@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 
 from tj_agent.host import Host
 from tj_agent import worktrees
+from codex import launch as codex_launch
 import agent_cli
 import agent_store
 import owned_launch
@@ -79,22 +80,26 @@ def register(host: Host, session_id: str, cwd: str, root: str | None, arguments:
 
 def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> dict:
     root = worktree(cwd)
+    adapter = agent_cli.host_launch(host)
+    session = codex_launch.registered_session(session_id) if host is Host.CODEX else None
     launch = owned_launch.current()
     environ = {name: value for name, value in environ.items() if name != LAUNCH_ENV}
-    if launch:
-        environ[LAUNCH_ENV] = launch
-        try:
-            session = register(host, session_id, cwd, root, ["--launch-id", launch])
-        except agent_store.AgentStoreError as error:
-            if error.code != "not-found":
-                raise
-            print(f"agent-store: launch {launch} was not recorded; registering {host}:{session_id} by title "
-                  "instead", file=sys.stderr)
-            session = register(host, session_id, cwd, root,
-                                [*terminal(environ), *title_arguments(environ), *wrapper_arguments(environ)])
+    if session is None:
+        if launch:
+            environ[LAUNCH_ENV] = launch
+            try:
+                session = register(host, session_id, cwd, root, ["--launch-id", launch])
+            except agent_store.AgentStoreError as error:
+                if error.code != "not-found":
+                    raise
+                print(f"agent-store: launch {launch} was not recorded; registering {host}:{session_id} by title "
+                      "instead", file=sys.stderr)
+                session = register(host, session_id, cwd, root,
+                                    [*terminal(environ), *title_arguments(environ), *wrapper_arguments(environ)])
+        else:
+            session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
     else:
-        session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
-    adapter = agent_cli.host_launch(host)
+        environ = {host.session_variable: session_id, LAUNCH_ENV: session["launch_id"]}
     try:
         if host is Host.CODEX and session.get("title"):
             adapter.name_session(session_id, session["title"])
