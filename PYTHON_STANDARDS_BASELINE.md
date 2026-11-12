@@ -47,7 +47,6 @@ Reason: preserve exact pre-existing custom-checker findings during the standards
 | .agents/agent/runtime/retired_state.py | PY016 | 2 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/tj_agent/host.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/tj_start.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
-| .agents/agent/runtime/work_items_install.py | PY001 | 2 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/utility/plugins/scripts/machine_paths.py | PY001 | 2 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/utility/plugins/scripts/repo_config.py | PY001 | 3 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/codex/utility/hooks/scripts/hook_control.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
