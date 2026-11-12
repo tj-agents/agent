@@ -193,7 +193,7 @@ def test_prepare_reports_failure_without_replacing_existing_instructions(
     [
         (None, ["install", "disable"]),
         (False, ["install", "disable"]),
-        (True, ["install"]),
+        (True, ["install", "disable"]),
     ],
 )
 def test_claude_installs_once_at_user_scope_leaving_enablement_to_the_repository(
