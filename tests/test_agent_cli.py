@@ -7,14 +7,16 @@ import json
 import os
 import shlex
 import shutil
-from pathlib import Path
 import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 from launch_contract import PreparedLaunch
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
@@ -565,87 +567,10 @@ class LaunchTests(unittest.TestCase):
             CLI.launch(CLI.Host.CODEX, Path('/work'), 'T', [])
 
 
-class ParentTests(unittest.TestCase):
-    def test_an_explicit_parent_overrides_the_calling_session(self):
-        environ = {CLI.Host.CLAUDE.session_variable: 'abc'}
-        with mock.patch.dict(os.environ, environ, clear=True):
-            self.assertEqual('codex:x', CLI.parent_session('codex:x'))
-
-    def test_the_calling_session_is_the_default_parent(self):
-        environ = {CLI.Host.CLAUDE.session_variable: 'abc'}
-        with mock.patch.dict(os.environ, environ, clear=True):
-            self.assertEqual('claude:abc', CLI.parent_session(None))
-
-    def test_outside_any_session_there_is_no_parent(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertIsNone(CLI.parent_session(None))
-
-    def test_a_recorded_launchs_bound_session_wins_over_the_session_variable(self):
-        environ = {CLI.LAUNCH_ID_ENVIRONMENT: 'L1', CLI.Host.CODEX.session_variable: 'thread-9'}
-        shown = {'launch': {}, 'session': {'session': 'claude:abc'}}
-        with mock.patch.dict(os.environ, environ, clear=True), \
-                mock.patch.object(CLI.agent_store, 'run', return_value=shown) as run:
-            self.assertEqual('claude:abc', CLI.parent_session(None))
-        run.assert_called_once_with('show', '--launch-id', 'L1')
-
-    def test_an_unrecorded_launch_falls_back_to_the_session_variable(self):
-        environ = {CLI.LAUNCH_ID_ENVIRONMENT: 'L1', CLI.Host.CODEX.session_variable: 'thread-9'}
-        not_found = CLI.agent_store.AgentStoreError('not-found', 'no launch')
-        with mock.patch.dict(os.environ, environ, clear=True), \
-                mock.patch.object(CLI.agent_store, 'run', side_effect=not_found):
-            self.assertEqual('codex:thread-9', CLI.parent_session(None))
-
-    def test_a_launch_not_yet_bound_to_a_session_falls_back_to_the_session_variable(self):
-        environ = {CLI.LAUNCH_ID_ENVIRONMENT: 'L1', CLI.Host.CLAUDE.session_variable: 'abc'}
-        shown = {'launch': {}, 'session': None}
-        with mock.patch.dict(os.environ, environ, clear=True), \
-                mock.patch.object(CLI.agent_store, 'run', return_value=shown):
-            self.assertEqual('claude:abc', CLI.parent_session(None))
-
-    def test_an_agent_store_failure_other_than_not_found_propagates(self):
-        environ = {CLI.LAUNCH_ID_ENVIRONMENT: 'L1'}
-        boom = CLI.agent_store.AgentStoreError('unexpected', 'boom')
-        with mock.patch.dict(os.environ, environ, clear=True), \
-                mock.patch.object(CLI.agent_store, 'run', side_effect=boom), \
-                self.assertRaises(CLI.LaunchError):
-            CLI.parent_session(None)
-
-    def test_the_standing_rule_names_the_parent_by_title(self):
-        with mock.patch.object(CLI.agent_store, 'run', return_value={'session': {'title': 'agent#98'}}):
-            rule = CLI.parent_rule('claude:p')
-        self.assertIn('"agent#98" (claude:p)', rule)
-        self.assertIn('agent:message', rule)
-        self.assertEqual('', CLI.parent_rule(None))
 
 
-class ResolveItemTests(unittest.TestCase):
-    def test_a_given_item_passes_through_unchanged(self):
-        self.assertEqual('98', CLI.resolve_item('98', 'title', Path('/work'), 'claude:p', []))
 
-    def test_item_fields_with_a_given_item_are_refused(self):
-        with self.assertRaisesRegex(CLI.LaunchError, '--item-field applies only'):
-            CLI.resolve_item('98', 'title', Path('/work'), None, [('attribution', 'Techops')])
 
-    def test_an_absent_item_is_created_under_the_parents_item_with_its_fields(self):
-        with mock.patch.object(CLI.work_item, 'parent_item_ref', return_value='42') as parent_ref, \
-                mock.patch.object(CLI.work_item, 'create', return_value='99') as create:
-            self.assertEqual('99', CLI.resolve_item(None, 'title', Path('/work'), 'claude:p',
-                                                    [('attribution', 'Techops')]))
-        parent_ref.assert_called_once_with('claude:p')
-        create.assert_called_once_with(Path('/work'), 'title', '42', {'attribution': 'Techops'})
-
-    def test_an_absent_item_with_no_parent_is_created_with_no_parent_ref(self):
-        with mock.patch.object(CLI.work_item, 'parent_item_ref') as parent_ref, \
-                mock.patch.object(CLI.work_item, 'create', return_value='7') as create:
-            self.assertEqual('7', CLI.resolve_item(None, 'title', Path('/work'), None, []))
-        parent_ref.assert_not_called()
-        create.assert_called_once_with(Path('/work'), 'title', None, {})
-
-    def test_an_item_field_needs_a_name_and_a_value(self):
-        self.assertEqual(('attribution', 'User Management'), CLI.item_field('attribution=User Management'))
-        for value in ('attribution', '=Techops', 'attribution='):
-            with self.subTest(value=value), self.assertRaises(CLI.argparse.ArgumentTypeError):
-                CLI.item_field(value)
 
 
 @unittest.skipIf(CLI.IS_WINDOWS, 'the POSIX inner command is only ever started on POSIX')
@@ -689,5 +614,135 @@ class PosixInnerCommandExecutionTests(unittest.TestCase):
         self.run_and_check(inner)
 
 
-if __name__ == '__main__':
+def test_an_item_field_needs_a_name_and_a_value() -> None:
+    assert CLI.item_field("attribution=User Management") == (
+        "attribution",
+        "User Management",
+    )
+
+
+@pytest.mark.parametrize("value", ["attribution", "=Techops", "attribution="])
+def test_an_invalid_item_field_is_refused(value: str) -> None:
+    with pytest.raises(CLI.argparse.ArgumentTypeError):
+        CLI.item_field(value)
+
+
+def test_an_explicit_parent_overrides_the_calling_session() -> None:
+    environ = {CLI.Host.CLAUDE.session_variable: "abc"}
+    with mock.patch.dict(os.environ, environ, clear=True):
+        assert CLI.parent_session("codex:x") == "codex:x"
+
+
+def test_the_calling_session_is_the_default_parent() -> None:
+    environ = {CLI.Host.CLAUDE.session_variable: "abc"}
+    with mock.patch.dict(os.environ, environ, clear=True):
+        assert CLI.parent_session(None) == "claude:abc"
+
+
+def test_outside_any_session_there_is_no_parent() -> None:
+    with mock.patch.dict(os.environ, {}, clear=True):
+        assert CLI.parent_session(None) is None
+
+
+def test_a_recorded_launchs_bound_session_wins_over_the_session_variable() -> None:
+    environ = {
+        CLI.LAUNCH_ID_ENVIRONMENT: "L1",
+        CLI.Host.CODEX.session_variable: "thread-9",
+    }
+    shown = {"launch": {}, "session": {"session": "claude:abc"}}
+    with (
+        mock.patch.dict(os.environ, environ, clear=True),
+        mock.patch.object(CLI.agent_store, "run", return_value=shown) as run,
+    ):
+        assert CLI.parent_session(None) == "claude:abc"
+    run.assert_called_once_with("show", "--launch-id", "L1")
+
+
+def test_an_unrecorded_launch_falls_back_to_the_session_variable() -> None:
+    environ = {
+        CLI.LAUNCH_ID_ENVIRONMENT: "L1",
+        CLI.Host.CODEX.session_variable: "thread-9",
+    }
+    not_found = CLI.agent_store.AgentStoreError("not-found", "no launch")
+    with (
+        mock.patch.dict(os.environ, environ, clear=True),
+        mock.patch.object(CLI.agent_store, "run", side_effect=not_found),
+    ):
+        assert CLI.parent_session(None) == "codex:thread-9"
+
+
+def test_a_launch_not_yet_bound_to_a_session_falls_back_to_the_session_variable() -> (
+    None
+):
+    environ = {CLI.LAUNCH_ID_ENVIRONMENT: "L1", CLI.Host.CLAUDE.session_variable: "abc"}
+    shown = {"launch": {}, "session": None}
+    with (
+        mock.patch.dict(os.environ, environ, clear=True),
+        mock.patch.object(CLI.agent_store, "run", return_value=shown),
+    ):
+        assert CLI.parent_session(None) == "claude:abc"
+
+
+def test_an_agent_store_failure_other_than_not_found_propagates() -> None:
+    environ = {CLI.LAUNCH_ID_ENVIRONMENT: "L1"}
+    boom = CLI.agent_store.AgentStoreError("unexpected", "boom")
+    with (
+        mock.patch.dict(os.environ, environ, clear=True),
+        mock.patch.object(CLI.agent_store, "run", side_effect=boom),
+        pytest.raises(CLI.LaunchError),
+    ):
+        CLI.parent_session(None)
+
+
+def test_the_standing_rule_names_the_parent_by_title() -> None:
+    with mock.patch.object(
+        CLI.agent_store, "run", return_value={"session": {"title": "agent#98"}}
+    ):
+        rule = CLI.parent_rule("claude:p")
+    assert '"agent#98" (claude:p)' in rule
+    assert "agent:message" in rule
+    assert CLI.parent_rule(None) == ""
+
+
+def test_a_given_item_passes_through_unchanged() -> None:
+    assert CLI.resolve_item("98", "title", Path("/work"), "claude:p", []) == "98"
+
+
+def test_item_fields_with_a_given_item_are_refused() -> None:
+    with pytest.raises(CLI.LaunchError, match="--item-field applies only"):
+        CLI.resolve_item(
+            "98", "title", Path("/work"), None, [("attribution", "Techops")]
+        )
+
+
+def test_an_absent_item_is_created_under_the_parents_item_with_its_fields() -> None:
+    with (
+        mock.patch.object(
+            CLI.work_item, "parent_item_ref", return_value="42"
+        ) as parent_ref,
+        mock.patch.object(CLI.work_item, "create", return_value="99") as create,
+    ):
+        assert (
+            CLI.resolve_item(
+                None, "title", Path("/work"), "claude:p", [("attribution", "Techops")]
+            )
+            == "99"
+        )
+    parent_ref.assert_called_once_with("claude:p")
+    create.assert_called_once_with(
+        Path("/work"), "title", "42", {"attribution": "Techops"}
+    )
+
+
+def test_an_absent_item_with_no_parent_is_created_with_no_parent_ref() -> None:
+    with (
+        mock.patch.object(CLI.work_item, "parent_item_ref") as parent_ref,
+        mock.patch.object(CLI.work_item, "create", return_value="7") as create,
+    ):
+        assert CLI.resolve_item(None, "title", Path("/work"), None, []) == "7"
+    parent_ref.assert_not_called()
+    create.assert_called_once_with(Path("/work"), "title", None, {})
+
+
+if __name__ == "__main__":
     unittest.main()

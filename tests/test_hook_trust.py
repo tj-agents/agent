@@ -1,11 +1,15 @@
 import json
-from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
-import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from unittest import mock
 from unittest.mock import patch
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
@@ -357,65 +361,206 @@ class HookTrustTests(unittest.TestCase):
         self.assertEqual({}, TRUST.apply_trust("codex", self.cwd, timeout=7))
         self.assertEqual(server_class.call_args.kwargs["timeout"], 7)
 
-    @patch.object(TRUST, "run")
-    @patch.object(TRUST, "AppServer")
-    def test_installed_tj_agents_hooks_are_trusted_in_every_trusted_project_and_others_are_not(self, app, runner):
-        codex_home = self.cwd / "codex-home"
-        build = codex_home / "plugins/cache/tj-agents/base/build-2"
-        (build / ".codex-plugin").mkdir(parents=True)
-        (build / ".codex-plugin/plugin.json").write_text('{"name": "base", "hooks": "./hooks/codex.json"}')
-        (build / "hooks").mkdir()
-        (build / "hooks/codex.json").write_text(
-            '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "python startup.py"}]}]}}')
-        staging = codex_home / "plugins/cache/tj-agents/plugin-install-AbC123/agent/.codex-plugin"
-        staging.mkdir(parents=True)
-        (staging / "plugin.json").write_text('{"name": "agent", "hooks": "./hooks/codex.json"}')
-        project = self.cwd / "project"
-        (project / ".codex").mkdir(parents=True)
-        (project / ".codex/config.toml").write_text("")
-        state = self.cwd / "state"
-        third_party = dict(self.hook, pluginId="other@elsewhere", key="other@elsewhere:hooks.json:stop:0:0",
-                           trustStatus="untrusted")
-        listing = {"data": [{"cwd": str(self.cwd), "errors": [], "hooks": [self.hook]},
-                            {"cwd": str(project), "errors": [], "hooks": [self.hook, third_party]}]}
-        other = {"pluginId": "other@elsewhere", "installed": True, "enabled": True,
-                 "marketplaceSource": {"sourceType": "git", "source": "https://github.com/someone/plugins.git"}}
-        inventory = json.dumps({"installed": [self.plugin, other]})
-        runner.side_effect = lambda arguments, cwd, *_: (
-            inventory if "plugin" in arguments else self.git_result(arguments, cwd))
-        server = app.return_value.__enter__.return_value
-        trusted = {"data": [dict(entry, hooks=[dict(hook, trustStatus="trusted") if hook is self.hook else hook
-                                              for hook in entry["hooks"]]) for entry in listing["data"]]}
-        listings = iter([listing, trusted])
-        server.request.side_effect = lambda method, params: next(listings) if method == "hooks/list" else {}
-        with patch.dict(TRUST.os.environ, {"CODEX_HOME": str(codex_home)}),                 patch.object(TRUST.Path, "home", return_value=self.cwd),                 patch.object(TRUST.projects, "user_config",
-                             return_value={"projects": {str(project): {"trust_level": "trusted"}}}),                 patch.object(TRUST.projects.tempfile, "gettempdir", return_value=str(self.cwd / "elsewhere")):
-            self.assertEqual(["trust base@tj-agents hooks"], TRUST.pending(state))
-            updates = TRUST.trust_installed("codex", state, ("-c", "override"))
-            self.assertEqual([], TRUST.pending(state))
-        self.assertEqual({self.hook["key"]: {"trusted_hash": self.hook["currentHash"]}}, updates)
-        server.request.assert_any_call("hooks/list", {"cwds": [str(self.cwd), str(project.resolve())]})
-        server.request.assert_any_call("config/batchWrite", {
-            "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
-            "reloadUserConfig": True,
-        })
-        self.assertIn((["codex", "-c", "override", "plugin", "list", "--json"], self.cwd, 45),
-                      [call.args for call in runner.call_args_list])
 
-    @patch.object(TRUST, "run")
-    @patch.object(TRUST, "AppServer")
-    def test_hooks_still_untrusted_after_the_write_fail_and_record_nothing(self, app, runner):
-        state = self.cwd / "state"
-        listing = {"data": [{"cwd": str(self.cwd), "errors": [], "hooks": [self.hook]}]}
-        inventory = json.dumps({"installed": [self.plugin]})
-        runner.side_effect = lambda arguments, cwd, *_: (
-            inventory if "plugin" in arguments else self.git_result(arguments, cwd))
-        app.return_value.__enter__.return_value.request.side_effect = (
-            lambda method, params: listing if method == "hooks/list" else {})
-        with patch.object(TRUST.Path, "home", return_value=self.cwd),                 patch.object(TRUST.projects, "user_config", return_value={}):
-            with self.assertRaisesRegex(RuntimeError, "still not trusted"):
-                TRUST.trust_installed("codex", state)
-        self.assertFalse((state / TRUST.RECEIPT).exists())
+@dataclass(frozen=True, slots=True)
+class HookTrustState:
+    cwd: Path
+    plugin: dict[str, Any]
+    hook: dict[str, Any]
+
+    def git_result(self, arguments: list[str], cwd: Path) -> str:
+        if "--show-toplevel" in arguments:
+            return str(self.cwd)
+        if "get-url" in arguments:
+            return "git@github.com:tj-agents/core.git"
+        if "status" in arguments:
+            return ""
+        if "HEAD" in arguments and "rev-parse" in arguments:
+            return "b" * 40
+        if "ls-remote" in arguments:
+            return "b" * 40 + "\trefs/heads/main"
+        raise AssertionError(f"Unexpected Git command: {arguments}")
+
+
+@pytest.fixture
+def hook_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HookTrustState:
+    cwd = tmp_path.resolve()
+    source, cache = cwd / "source", cwd / "cache"
+    for root in (source, cache):
+        (root / ".codex-plugin").mkdir(parents=True)
+        (root / ".codex-plugin/plugin.json").write_text(
+            '{"name":"base"}', encoding="utf-8"
+        )
+        (root / "hooks").mkdir()
+        (root / "hooks/codex.json").write_text('{"hooks":{}}', encoding="utf-8")
+        (root / "hooks/context.py").write_text('print("context")\n', encoding="utf-8")
+    plugin = {
+        "pluginId": "base@tj-agents",
+        "installed": True,
+        "enabled": True,
+        "marketplaceSource": {
+            "sourceType": "git",
+            "source": "https://github.com/tj-agents/core.git",
+        },
+        "source": {"source": "local", "path": str(source)},
+    }
+    hook = {
+        "pluginId": "base@tj-agents",
+        "source": "plugin",
+        "isManaged": False,
+        "enabled": True,
+        "trustStatus": "modified",
+        "sourcePath": str(cache / "hooks/codex.json"),
+        "key": "base@tj-agents:hooks/codex.json:session_start:0:0",
+        "currentHash": "sha256:" + "a" * 64,
+        "eventName": "sessionStart",
+        "matcher": None,
+        "handlerType": "command",
+        "command": "python startup.py",
+    }
+    monkeypatch.setattr(
+        TRUST, "committed_files", lambda *_: TRUST.package_files(source)
+    )
+    return HookTrustState(cwd, plugin, hook)
+
+
+@patch.object(TRUST, "run")
+@patch.object(TRUST, "AppServer")
+def test_installed_hooks_are_trusted_only_in_trusted_projects(
+    app: mock.Mock, runner: mock.Mock, hook_state: HookTrustState
+) -> None:
+    codex_home = hook_state.cwd / "codex-home"
+    build = codex_home / "plugins/cache/tj-agents/base/build-2"
+    (build / ".codex-plugin").mkdir(parents=True)
+    (build / ".codex-plugin/plugin.json").write_text(
+        '{"name": "base", "hooks": "./hooks/codex.json"}'
+    )
+    (build / "hooks").mkdir()
+    (build / "hooks/codex.json").write_text(
+        '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "python startup.py"}]}]}}'
+    )
+    staging = (
+        codex_home / "plugins/cache/tj-agents/plugin-install-AbC123/agent/.codex-plugin"
+    )
+    staging.mkdir(parents=True)
+    (staging / "plugin.json").write_text(
+        '{"name": "agent", "hooks": "./hooks/codex.json"}'
+    )
+    project = hook_state.cwd / "project"
+    (project / ".codex").mkdir(parents=True)
+    (project / ".codex/config.toml").write_text("")
+    state = hook_state.cwd / "state"
+    third_party = dict(
+        hook_state.hook,
+        pluginId="other@elsewhere",
+        key="other@elsewhere:hooks.json:stop:0:0",
+        trustStatus="untrusted",
+    )
+    listing = {
+        "data": [
+            {"cwd": str(hook_state.cwd), "errors": [], "hooks": [hook_state.hook]},
+            {
+                "cwd": str(project),
+                "errors": [],
+                "hooks": [hook_state.hook, third_party],
+            },
+        ]
+    }
+    other = {
+        "pluginId": "other@elsewhere",
+        "installed": True,
+        "enabled": True,
+        "marketplaceSource": {
+            "sourceType": "git",
+            "source": "https://github.com/someone/plugins.git",
+        },
+    }
+    inventory = json.dumps({"installed": [hook_state.plugin, other]})
+    runner.side_effect = lambda arguments, cwd, *_: (
+        inventory if "plugin" in arguments else hook_state.git_result(arguments, cwd)
+    )
+    server = app.return_value.__enter__.return_value
+    trusted = {
+        "data": [
+            dict(
+                entry,
+                hooks=[
+                    dict(hook, trustStatus="trusted")
+                    if hook is hook_state.hook
+                    else hook
+                    for hook in entry["hooks"]
+                ],
+            )
+            for entry in listing["data"]
+        ]
+    }
+    listings = iter([listing, trusted])
+    server.request.side_effect = lambda method, params: (
+        next(listings) if method == "hooks/list" else {}
+    )
+    with (
+        patch.dict(TRUST.os.environ, {"CODEX_HOME": str(codex_home)}),
+        patch.object(TRUST.Path, "home", return_value=hook_state.cwd),
+        patch.object(
+            TRUST.projects,
+            "user_config",
+            return_value={"projects": {str(project): {"trust_level": "trusted"}}},
+        ),
+        patch.object(
+            TRUST.projects.tempfile,
+            "gettempdir",
+            return_value=str(hook_state.cwd / "elsewhere"),
+        ),
+    ):
+        assert TRUST.pending(state) == ["trust base@tj-agents hooks"]
+        updates = TRUST.trust_installed("codex", state, ("-c", "override"))
+        assert TRUST.pending(state) == []
+    assert {
+        hook_state.hook["key"]: {"trusted_hash": hook_state.hook["currentHash"]}
+    } == updates
+    server.request.assert_any_call(
+        "hooks/list", {"cwds": [str(hook_state.cwd), str(project.resolve())]}
+    )
+    server.request.assert_any_call(
+        "config/batchWrite",
+        {
+            "edits": [
+                {"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}
+            ],
+            "reloadUserConfig": True,
+        },
+    )
+    assert (
+        ["codex", "-c", "override", "plugin", "list", "--json"],
+        hook_state.cwd,
+        45,
+    ) in [call.args for call in runner.call_args_list]
+
+
+@patch.object(TRUST, "run")
+@patch.object(TRUST, "AppServer")
+def test_hooks_still_untrusted_after_the_write_fail_and_record_nothing(
+    app: mock.Mock, runner: mock.Mock, hook_state: HookTrustState
+) -> None:
+    state = hook_state.cwd / "state"
+    listing = {
+        "data": [{"cwd": str(hook_state.cwd), "errors": [], "hooks": [hook_state.hook]}]
+    }
+    inventory = json.dumps({"installed": [hook_state.plugin]})
+    runner.side_effect = lambda arguments, cwd, *_: (
+        inventory if "plugin" in arguments else hook_state.git_result(arguments, cwd)
+    )
+    app.return_value.__enter__.return_value.request.side_effect = (
+        lambda method, params: listing if method == "hooks/list" else {}
+    )
+    with (
+        patch.object(TRUST.Path, "home", return_value=hook_state.cwd),
+        patch.object(TRUST.projects, "user_config", return_value={}),
+    ):
+        with pytest.raises(RuntimeError, match="still not trusted"):
+            TRUST.trust_installed("codex", state)
+    assert not (state / TRUST.RECEIPT).exists()
+
 
 if __name__ == "__main__":
     unittest.main()

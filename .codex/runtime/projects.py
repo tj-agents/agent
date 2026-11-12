@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
 from tj_agent.host import Host
@@ -13,11 +14,11 @@ def user_config() -> dict[str, object]:
     path = Host.CODEX.configuration_root / "config.toml"
     try:
         return tomllib.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, tomllib.TOMLDecodeError):
+    except FileNotFoundError:
         return {}
 
 
-def trusted(config: dict[str, object], temporary: Path | None = None) -> list[Path]:
+def trusted(config: Mapping[str, object], temporary: Path | None = None) -> list[Path]:
     projects = config.get("projects", {})
     if not isinstance(projects, dict):
         return []

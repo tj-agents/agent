@@ -47,6 +47,17 @@ def test_parent_item_ref_is_none_when_agent_store_fails() -> None:
         assert work_item.parent_item_ref("claude:p") is None
 
 
+@pytest.mark.parametrize("code", ["missing", "unexpected"])
+def test_parent_store_failures_do_not_create_an_unparented_handoff(code: str) -> None:
+    error = agent_store.AgentStoreError(code, "store unavailable")
+    with (
+        mock.patch.object(agent_store, "run", side_effect=error),
+        pytest.raises(LaunchError, match="parent work item") as raised,
+    ):
+        work_item.parent_item_ref("claude:p")
+    assert raised.value.__cause__ is error
+
+
 def fake_run(
     stdout: str = "", returncode: int = 0
 ) -> Callable[..., subprocess.CompletedProcess[str]]:

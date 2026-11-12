@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from collections import Counter
 import importlib.util
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
 import queue
 import re
 import shutil
@@ -17,12 +15,13 @@ import tarfile
 import tempfile
 import threading
 import time
+from collections import Counter
+from pathlib import Path, PurePosixPath
 
 import required_plugins
 from codex import projects
 from tj_agent.host import Host
 from tj_cli import process
-
 
 GITHUB_SOURCE = re.compile(
     r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)?"
@@ -469,11 +468,18 @@ def pending(state):
 
 def untrusted(listing):
     suffix = "@" + required_plugins.MARKETPLACE_NAME
-    return [(Path(entry["cwd"]).resolve(), hook) for entry in listing.get("data", [])
-            for hook in entry.get("hooks", [])
-            if hook.get("source") == "plugin" and hook.get("enabled") and not hook.get("isManaged")
-            and hook.get("trustStatus") in {"untrusted", "modified"}
-            and str(hook.get("pluginId", "")).endswith(suffix)]
+    found = []
+    for entry in listing.get("data", []):
+        for hook in entry.get("hooks", []):
+            if (
+                hook.get("source") == "plugin"
+                and hook.get("enabled")
+                and not hook.get("isManaged")
+                and hook.get("trustStatus") in {"untrusted", "modified"}
+                and str(hook.get("pluginId", "")).endswith(suffix)
+            ):
+                found.append((Path(entry["cwd"]).resolve(), hook))
+    return found
 
 
 def trust_installed(executable, state, launch_args=(), timeout=TIMEOUT):
