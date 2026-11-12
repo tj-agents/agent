@@ -8,7 +8,7 @@ import shlex
 import subprocess
 from collections.abc import Callable, Mapping
 
-from launch_contract import Liveness
+from launch_contract import Liveness, PreparedLaunch
 from launch_errors import LaunchError
 from native_executable import is_script
 from tj_agent.host import Host
@@ -55,6 +55,14 @@ def resolve_executable(home=None, which: Callable[[str], str | None] = shutil.wh
 
 def executable() -> str:
     return resolve_executable()
+
+
+def prepare(directory: Path, title: str, arguments: list[str], cli: str) -> PreparedLaunch:
+    return PreparedLaunch((executable(), *arguments))
+
+
+def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
+    return None
 
 
 def start_arguments(directory, title, prompt, model, effort):

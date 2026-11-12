@@ -5,11 +5,10 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
-import jobs
-import latest_plugins
 import pytest
 import tj_plugins
 from codex import catalog, launch, plugins
+from fake_machine import recorded_failures
 from tj_agent.host import Host
 from tj_cli import process
 from tree_digest import Digests
@@ -48,27 +47,41 @@ def publish(home: Path, pin: str, version: str) -> dict[str, object]:
     }
 
 
-def installed(home: Path, version: str) -> Path:
+def native_installs(calls: list[mock._Call]) -> list[list[str]]:
+    return [
+        call.args[0]
+        for call in calls
+        if call.args[0][:3] in (["codex", "plugin", "list"], ["codex", "plugin", "add"])
+    ]
+
+
+def converged(home: Path) -> bool:
+    return tj_plugins.already_current(Host.CODEX, Digests(home.parent / "state"))
+
+
+def installed(home: Path, version: str, *, with_version: bool = True) -> Path:
     root = home / "plugins/cache/tj-agents/agent" / version
     (root / ".codex-plugin").mkdir(parents=True)
+    manifest = {"name": "agent"}
+    if with_version:
+        manifest["version"] = version
     (root / ".codex-plugin/plugin.json").write_text(
-        json.dumps({"name": "agent", "version": version}), encoding="utf-8"
+        json.dumps(manifest), encoding="utf-8"
     )
     return root
 
 
-def test_native_inventory_seeds_a_codex_only_fast_path(
-    home: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_native_inventory_seeds_a_codex_only_fast_path(home: Path) -> None:
     entry = publish(home, "a" * 40, "a" * 12)
-    root = installed(home, "a" * 12)
+    installed(home, "a" * 12)
     assert plugins.installations(home, [entry]) == [entry]
-    with mock.patch.object(process, "run") as run:
+    with mock.patch.object(
+        process, "run", return_value=subprocess.CompletedProcess([], 0, "", "")
+    ) as run:
         assert tj_plugins.main(["update", "--host", "codex"]) == 0
-    run.assert_not_called()
-    assert latest_plugins.installed_behind(Host.CODEX) == []
-    monkeypatch.setenv("PLUGIN_ROOT", str(root))
-    assert latest_plugins.running_behind(Host.CODEX) is None
+    assert native_installs(run.call_args_list) == []
+    assert run.call_args.args[0][:4] == ["tj", "update", "--host", "codex"]
+    assert converged(home)
     assert not (home.parent / "absent-claude").exists()
 
 
@@ -95,7 +108,7 @@ def test_missing_or_corrupt_receipts_bootstrap_once_without_reinstalling(
         )
         run.reset_mock()
         assert tj_plugins.main(["update", "--host", "codex"]) == 0
-        run.assert_not_called()
+        assert native_installs(run.call_args_list) == []
 
 
 def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) -> None:
@@ -125,11 +138,11 @@ def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) ->
         )
         native.reset_mock()
         assert tj_plugins.main(["update", "--host", "codex"]) == 0
-        native.assert_not_called()
-    assert latest_plugins.installed_behind(Host.CODEX) == []
+        assert native_installs(native.call_args_list) == []
+    assert converged(home)
 
 
-def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) -> None:
+def test_a_new_mutable_install_with_native_local_version_converges(home: Path) -> None:
     entry = publish(home, "a" * 40, "local")
     present = False
 
@@ -139,7 +152,7 @@ def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) ->
             listing = {"installed": [{**entry, "installed": present}]}
             return subprocess.CompletedProcess(command, 0, json.dumps(listing), "")
         if command[:3] == ["codex", "plugin", "add"]:
-            installed(home, "local")
+            installed(home, "local", with_version=False)
             present = True
         return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -148,7 +161,52 @@ def test_a_new_mutable_install_records_its_post_install_inventory(home: Path) ->
         assert present
         native.reset_mock()
         assert tj_plugins.main(["update", "--host", "codex"]) == 0
-        native.assert_not_called()
+        assert native_installs(native.call_args_list) == []
+
+
+def test_a_marketplace_local_plugin_listed_by_absolute_path_converges(
+    home: Path,
+) -> None:
+    clone = home / ".tmp/marketplaces/agents"
+    manifest = clone / ".agents/plugins/marketplace.json"
+    manifest.parent.mkdir(parents=True)
+    (clone / "plugins/concertable").mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "plugins": [
+                    {
+                        "name": "concertable",
+                        "source": {"source": "local", "path": "./plugins/concertable"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    root = home / "plugins/cache/agents/concertable/local"
+    (root / ".codex-plugin").mkdir(parents=True)
+    (root / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"name": "concertable"}), encoding="utf-8"
+    )
+    entry = {
+        "pluginId": "concertable@agents",
+        "version": "local",
+        "installed": True,
+        "source": {"source": "local", "path": str(clone / "plugins" / "concertable")},
+    }
+    catalog.remember([entry], verified_install=True)
+    assert catalog.current("agents", "concertable", Digests(home.parent / "state"))
+
+
+def test_a_local_build_rejects_a_malformed_manifest_version(home: Path) -> None:
+    entry = publish(home, "a" * 40, "local")
+    root = installed(home, "local")
+    (root / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"name": "agent", "version": None}), encoding="utf-8"
+    )
+    catalog.remember([entry], verified_install=True)
+    assert not catalog.current("tj-agents", "agent", Digests(home.parent / "state"))
 
 
 def test_inventory_from_an_old_catalog_cannot_record_a_new_source_pin(
@@ -192,8 +250,10 @@ def test_a_native_add_cannot_report_success_without_converging(
 
     with mock.patch.object(process, "run", side_effect=run):
         assert tj_plugins.main(["update", "--host", "codex"]) == 1
-    failure = jobs.recent_failure(home.parent / "state", jobs.Job.UPDATE)
-    assert failure is not None and "did not converge" in failure
+    assert any(
+        "did not converge" in failure
+        for failure in recorded_failures(home.parent / "state")
+    )
 
 
 @pytest.mark.parametrize(
@@ -236,3 +296,20 @@ def test_immutable_builds_check_metadata_and_reject_a_changed_manifest(
         '{"version":"local"}', encoding="utf-8"
     )
     assert not catalog.current("tj-agents", "agent", digests)
+
+
+def test_an_unconverged_install_names_its_cause(home: Path) -> None:
+    entry = publish(home, "a" * 40, "a" * 12)
+    assert catalog.unconverged("tj-agents", "agent", entry) == (
+        f"no cached build labelled {'a' * 12} at "
+        f"{home / 'plugins/cache/tj-agents/agent' / ('a' * 12)}"
+    )
+    installed(home, "a" * 12)
+    installed(home, "b" * 12)
+    assert catalog.unconverged("tj-agents", "agent", entry) == (
+        f"its cache holds builds {'a' * 12}, {'b' * 12} besides {'a' * 12}"
+    )
+    moved = {**entry, "source": {"source": "git-subdir", "path": "elsewhere"}}
+    assert catalog.unconverged("tj-agents", "agent", moved).startswith(
+        'Codex lists source {"path": "elsewhere"'
+    )

@@ -8,7 +8,6 @@ Reason: preserve existing implementations during the standards rollout. Each row
 
 | File | Rule | Existing count | Required repair |
 | --- | --- | ---: | --- |
-| `.agents/agent/runtime/latest_plugins.py` | `TID251` | 1 | `sys.path` is banned: Install the declared dependency; do not modify the import search path. |
 | `.agents/agent/runtime/plugins/refresh.py` | `PLR6301` | 1 | Method `run` could be a function, class method, or static method |
 | `.agents/agent/runtime/plugins/refresh.py` | `TID251` | 1 | `sys.path` is banned: Install the declared dependency; do not modify the import search path. |
 | `.agents/agent/runtime/retired_state.py` | `PLR6301` | 2 | Method `listing` could be a function, class method, or static method |
@@ -19,7 +18,6 @@ Reason: preserve existing implementations during the standards rollout. Each row
 | `tests/test_boot_history.py` | `PT006` | 1 | Wrong type passed to first argument of `pytest.mark.parametrize`; expected `tuple` |
 | `tests/test_conflicted_plugin_settings.py` | `PT011` | 1 | `pytest.raises(ValueError)` is too broad, set the `match` parameter or use a more specific exception |
 | `tests/test_conflicted_plugin_settings.py` | `TID251` | 2 | `sys.path` is banned: Install the declared dependency; do not modify the import search path. |
-| `tests/test_latest_plugins.py` | `ANN401` | 2 | Dynamically typed expressions (typing.Any) are disallowed in `hook` |
 | `tests/test_local_codex_refresh.py` | `TID251` | 2 | `sys.path` is banned: Install the declared dependency; do not modify the import search path. |
 | `tests/test_native_runtime.py` | `TID251` | 1 | `sys.path` is banned: Install the declared dependency; do not modify the import search path. |
 | `tests/test_retired_state.py` | `ANN401` | 1 | Dynamically typed expressions (typing.Any) are disallowed in `**options` |
@@ -44,8 +42,6 @@ Reason: preserve exact pre-existing custom-checker findings during the standards
 | .agents/agent/runtime/install.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/runtime/install.py | PY016 | 2 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/jobs.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
-| .agents/agent/runtime/latest_plugins.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
-| .agents/agent/runtime/latest_plugins.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/native_runtime.py | PY016 | 3 | Inject process state or confine the read to an entry-point main. |
 | .agents/agent/runtime/required_plugins.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
 | .agents/agent/runtime/retired_state.py | PY016 | 2 | Inject process state or confine the read to an entry-point main. |
@@ -78,7 +74,6 @@ Reason: preserve exact pre-existing custom-checker findings during the standards
 | tests/test_conflicted_plugin_settings.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
 | tests/test_handoff_launchers.py | PY016 | 3 | Inject process state or confine the read to an entry-point main. |
 | tests/test_hook_trust.py | PY001 | 1 | Rewrite the nested comprehension as named loops or one generator. |
-| tests/test_latest_plugins.py | PY017 | 1 | Inject a controllable clock. |
 | tests/test_local_codex_refresh.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
 | tests/test_native_runtime.py | PY016 | 5 | Inject process state or confine the read to an entry-point main. |
 | tests/test_plugin_modules.py | PY016 | 1 | Inject process state or confine the read to an entry-point main. |
@@ -503,7 +498,6 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | install | type-arg | 14 | Repair the existing type-arg diagnostic and remove this exact override. |
 | install | union-attr | 2 | Repair the existing union-attr diagnostic and remove this exact override. |
 | install | var-annotated | 2 | Repair the existing var-annotated diagnostic and remove this exact override. |
-| latest_plugins | arg-type | 1 | Repair the existing arg-type diagnostic and remove this exact override. |
 | launch_claude | arg-type | 1 | Repair the existing arg-type diagnostic and remove this exact override. |
 | launch_claude | no-untyped-call | 7 | Repair the existing no-untyped-call diagnostic and remove this exact override. |
 | launch_claude | no-untyped-def | 6 | Repair the existing no-untyped-def diagnostic and remove this exact override. |
@@ -625,7 +619,6 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | test_install | no-untyped-def | 79 | Repair the existing no-untyped-def diagnostic and remove this exact override. |
 | test_install | var-annotated | 1 | Repair the existing var-annotated diagnostic and remove this exact override. |
 | test_install_artefacts | attr-defined | 1 | Repair the existing attr-defined diagnostic and remove this exact override. |
-| test_latest_plugins | attr-defined | 2 | Repair the existing attr-defined diagnostic and remove this exact override. |
 | test_lifecycle_commands | no-untyped-call | 7 | Repair the existing no-untyped-call diagnostic and remove this exact override. |
 | test_lifecycle_commands | no-untyped-def | 14 | Repair the existing no-untyped-def diagnostic and remove this exact override. |
 | test_loader_roots | arg-type | 1 | Repair the existing arg-type diagnostic and remove this exact override. |

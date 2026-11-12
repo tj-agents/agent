@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
 import jobs
-import plugin_activation
 import required_plugins
 import standards
 from codex import catalog, hook_trust, launch, user_plugins
@@ -111,29 +111,30 @@ def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
     }
 
 
-def behind(marketplaces: tuple[str, ...]) -> list[str]:
-    digests = Digests(jobs.state_directory())
-    found = []
-    for identity in sorted(refresh_identities(marketplaces)):
-        plugin, _, marketplace = identity.rpartition("@")
-        if not catalog.current(marketplace, plugin, digests):
-            found.append(
-                f"{identity}: installed build does not match its verified Codex catalog version"
-            )
-    digests.save()
-    return found
-
-
 def current(marketplace: str, plugin: str, digests: Digests) -> bool:
     return catalog.current(marketplace, plugin, digests)
 
 
-def running_behind(root: Path) -> str | None:
-    build = catalog.recorded(jobs.state_directory()).get("agent@tj-agents")
-    loaded = catalog.label(root)
-    if build is not None and loaded != build.version:
-        return f"agent@tj-agents: this session loaded build {loaded or 'that was since replaced'}, current {build.version}"
-    return None
+def update_marketplaces(report: Any, marketplaces: tuple[str, ...]) -> None:
+    try:
+        configured = tomllib.loads(read_user_config()).get("marketplaces", {})
+    except tomllib.TOMLDecodeError as error:
+        report.fail(HOST, "marketplaces", f"unreadable config.toml: {error}")
+        return
+    report.steps(
+        HOST,
+        [
+            [
+                (
+                    f"marketplace {marketplace}",
+                    codex_command("plugin", "marketplace", "upgrade", marketplace),
+                )
+            ]
+            for marketplace in marketplaces
+            if marketplace == required_plugins.MARKETPLACE_NAME
+            or marketplace in configured
+        ],
+    )
 
 
 def refresh(
@@ -156,12 +157,6 @@ def refresh(
             HOST, "list", f"no {required_plugins.MARKETPLACE_NAME} plugins installed"
         )
         return
-    for marketplace in sorted({identity.rpartition("@")[2] for identity in candidates}):
-        report.step(
-            HOST,
-            f"marketplace {marketplace}",
-            codex_command("plugin", "marketplace", "upgrade", marketplace),
-        )
     versions = report.step(HOST, "versions", codex_command("plugin", "list", "--json"))
     if versions is None:
         return
@@ -207,16 +202,19 @@ def refresh(
                 verified_install=True,
             )
             digests = Digests(jobs.state_directory())
-            listed_versions = {entry["pluginId"] for entry in verified}
+            reported = {entry["pluginId"]: entry for entry in verified}
             for identity in stale:
                 plugin, _, marketplace = identity.rpartition("@")
-                if identity not in listed_versions or not catalog.current(
-                    marketplace, plugin, digests
-                ):
-                    report.fail(HOST, identity, "native installation did not converge")
+                if identity not in reported:
+                    cause = "codex plugin list does not show it installed"
+                elif catalog.current(marketplace, plugin, digests):
+                    continue
+                else:
+                    cause = catalog.unconverged(marketplace, plugin, reported[identity])
+                report.fail(
+                    HOST, identity, f"native installation did not converge: {cause}"
+                )
             digests.save()
-    if open_sessions and report.failures:
-        reload_open_sessions(report)
 
 
 def cached(marketplaces: tuple[str, ...]) -> set[str]:
@@ -323,12 +321,6 @@ def install_through_daemon(report: Any, identities: list[str]) -> None:
         return
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
-            for directory in loaded_directories(server):
-                plugin_activation.begin(
-                    jobs.state_directory(),
-                    HOST,
-                    required_plugins.project_root(directory),
-                )
             for identity in identities:
                 plugin, _, marketplace = identity.rpartition("@")
                 manifest = (
@@ -347,51 +339,37 @@ def install_through_daemon(report: Any, identities: list[str]) -> None:
         report.fail(HOST, "open sessions", str(error))
 
 
-def reload_open_sessions(report: Any) -> None:
+def activate_open_sessions(report: Any) -> None:
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
             projects = {
                 required_plugins.project_root(directory)
                 for directory in loaded_directories(server)
             }
-            completed = []
-            state = jobs.state_directory()
-            for project in sorted(projects):
-                plugin_activation.begin(state, HOST, project)
-                try:
-                    update_project_standards(project)
-                except (
-                    OSError,
-                    ValueError,
-                    required_plugins.RequiredPluginsError,
-                    standards.StandardsError,
-                ) as error:
-                    report.fail(HOST, "repository standards", str(error))
-                else:
-                    completed.append(project)
-            server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
-            for project in completed:
-                plugin_activation.complete(state, HOST, project)
     except (OSError, RuntimeError) as error:
         report.fail(HOST, "open sessions", str(error))
+        return
+    for project in sorted(projects):
+        try:
+            update_project_standards(project)
+        except (
+            OSError,
+            ValueError,
+            required_plugins.RequiredPluginsError,
+            standards.StandardsError,
+        ) as error:
+            report.fail(HOST, "repository standards", str(error))
 
 
-def repair_hooks(report: Any) -> None:
-    state = jobs.state_directory()
-    if hook_trust.pending(state):
-        plugin_activation.begin(state, HOST, required_plugins.project_root(Path.cwd()))
-    trust_hooks(report)
+def marketplace_root(marketplace: str) -> Path:
+    return HOST.configuration_root / ".tmp/marketplaces" / marketplace
 
 
-def restart(report: Any, managed: bool) -> None:
+def activate(report: Any) -> None:
     try:
         sessions = launch.liveness(strict=True)
     except LaunchError as error:
         report.fail(HOST, "open sessions", str(error))
         return
     if sessions:
-        reload_open_sessions(report)
-        if not report.failures:
-            print("Open Codex sessions reloaded updated plugins in place.")
-    else:
-        print("No loaded Codex sessions need activation.")
+        activate_open_sessions(report)

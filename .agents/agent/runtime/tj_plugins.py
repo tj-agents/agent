@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Update the current host's plugins against its local marketplace pins."""
+"""Update this host's plugins to their marketplace pins and publish the update."""
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 from typing import Protocol
@@ -15,8 +17,6 @@ from typing import Protocol
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import jobs
-import latest_plugins
-import plugin_activation
 import required_plugins
 import standards
 from claude import installed as claude_installed
@@ -27,6 +27,8 @@ from tree_digest import Digests
 
 MARKETPLACES = ("tj-agents", "agents")
 TIMEOUT_SECONDS = 600
+CONCURRENT_STEPS = 4
+REVISION = re.compile(r"[0-9a-f]{40}")
 
 
 class Report:
@@ -62,12 +64,28 @@ class Report:
         print(f"{host}: {label} ok")
         return result
 
+    def steps(
+        self, host: Host, groups: Sequence[Sequence[tuple[str, list[str]]]]
+    ) -> None:
+        with ThreadPoolExecutor(max_workers=CONCURRENT_STEPS) as pool:
+            list(pool.map(partial(self.sequence, host), groups))
+
+    def sequence(self, host: Host, commands: Sequence[tuple[str, list[str]]]) -> None:
+        for label, command in commands:
+            self.step(host, label, command)
+
     def fail(self, host: Host, label: str, detail: str) -> None:
         self.failures.append(f"{host}: {label}: {detail}")
         print(f"{host}: {label} FAILED: {detail}", file=sys.stderr)
 
 
 class Installed(Protocol):
+    RELOAD: str
+
+    def update_marketplaces(
+        self, report: Report, marketplaces: tuple[str, ...]
+    ) -> None: ...
+
     def current(self, marketplace: str, plugin: str, digests: Digests) -> bool: ...
 
     def refresh(
@@ -77,7 +95,9 @@ class Installed(Protocol):
         current: Callable[[str, str], bool],
     ) -> None: ...
 
-    def restart(self, report: Report, managed: bool) -> None: ...
+    def activate(self, report: Report) -> None: ...
+
+    def marketplace_root(self, marketplace: str) -> Path: ...
 
     def refresh_identities(self, marketplaces: tuple[str, ...]) -> set[str]: ...
 
@@ -129,7 +149,7 @@ def update_standards(report: Report, host: Host) -> None:
         return
     try:
         roots = required_plugins.check(directory, host)
-        if roots is not None:
+        if roots is not None and not required_plugins.committed_worktree(project):
             standards.update(project, roots)
     except (
         OSError,
@@ -138,6 +158,48 @@ def update_standards(report: Report, host: Host) -> None:
         standards.StandardsError,
     ) as error:
         report.fail(host, "repository standards", str(error))
+
+
+def marketplace_revision(report: Report, host: Host) -> str | None:
+    root = INSTALLED[host].marketplace_root(required_plugins.MARKETPLACE_NAME)
+    result = report.step(
+        host, "marketplace revision", ["git", "-C", str(root), "rev-parse", "HEAD"]
+    )
+    if result is None:
+        return None
+    revision = result.stdout.strip()
+    if REVISION.fullmatch(revision) is None:
+        report.fail(host, "marketplace revision", f"{root} has no commit")
+        return None
+    return revision
+
+
+def converge(report: Report, host: Host, digests: Digests) -> None:
+    installed = INSTALLED[host]
+    installed.update_marketplaces(report, MARKETPLACES)
+    if report.failures:
+        return
+    if already_current(host, digests):
+        print(f"tj: {host} plugins already match their pins")
+        if host is Host.CODEX:
+            codex_installed.trust_hooks(report)
+    else:
+        installed.refresh(report, MARKETPLACES, partial(current, host, digests))
+    digests.save()
+    if not report.failures:
+        update_standards(report, host)
+    if not report.failures:
+        installed.activate(report)
+    if report.failures:
+        return
+    revision = marketplace_revision(report, host)
+    if revision is None:
+        return
+    report.step(
+        host,
+        "update running sessions",
+        ["tj", "update", "--host", host.value, "--revision", revision],
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -153,43 +215,12 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as error:
         parser.error(str(error))
     state = jobs.state_directory()
-    project = required_plugins.project_root(Path.cwd())
     with jobs.held(state, jobs.Job.UPDATE) as acquired:
         if not acquired:
             print("tj: another plugin update is running")
             return 0
         report = Report()
-        digests = Digests(state)
-        if already_current(host, digests):
-            digests.save()
-            print(f"tj: {host} plugins already match their local pins")
-            if host is Host.CODEX:
-                codex_installed.repair_hooks(report)
-            if plugin_activation.pending(state, host, project) or (
-                os.environ.get(host.plugin_root_variable)
-                and latest_plugins.running_behind(host)
-            ):
-                plugin_activation.begin(state, host, project)
-                update_standards(report, host)
-                if not report.failures:
-                    INSTALLED[host].restart(
-                        report, bool(os.environ.get("TJ_RUN_LAUNCH_ID"))
-                    )
-            if report.failures:
-                plugin_activation.begin(state, host, project)
-            else:
-                plugin_activation.complete(state, host, project)
-            jobs.record(state, jobs.Job.UPDATE, report.failures)
-            return int(bool(report.failures))
-        plugin_activation.begin(state, host, project)
-        INSTALLED[host].refresh(report, MARKETPLACES, partial(current, host, digests))
-        digests.save()
-        if not report.failures:
-            update_standards(report, host)
-        if not report.failures:
-            INSTALLED[host].restart(report, bool(os.environ.get("TJ_RUN_LAUNCH_ID")))
-        if not report.failures:
-            plugin_activation.complete(state, host, project)
+        converge(report, host, Digests(state))
         jobs.record(state, jobs.Job.UPDATE, report.failures)
     if report.failures:
         print(
@@ -199,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
         for failure in report.failures:
             print(f"  {failure}", file=sys.stderr)
         return 1
+    if not os.environ.get("TJ_RUN_LAUNCH_ID"):
+        print(f"Plugins updated: {INSTALLED[host].RELOAD}.")
     print("tj: plugin update done")
     return 0
 

@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -81,17 +82,87 @@ def test_prepare_installs_missing_selection_before_writing_instructions(
     if local:
         with pytest.raises(standards.StandardsError, match="Local-only adoption"):
             tj_prepare.prepare(selected_project, host)
-        assert calls == ["configure", "inventory", "install", "inventory"]
+        assert sorted(calls[:2]) == ["configure", "inventory"]
+        assert calls[2:] == ["install", "inventory"]
         assert not (selected_project / "AGENTS.md").exists()
         return
     assert tj_prepare.prepare(selected_project, host)
-    assert calls == ["configure", "inventory", "install", "inventory"]
+    assert sorted(calls[:2]) == ["configure", "inventory"]
+    assert calls[2:] == ["install", "inventory"]
     assert "python:style" in (selected_project / "AGENTS.md").read_text(
         encoding="utf-8"
     )
     assert (selected_project / "CLAUDE.md").read_text(
         encoding="utf-8"
     ) == "@AGENTS.md\n"
+
+
+def git(directory: Path, *arguments: str) -> None:
+    subprocess.run(["git", *arguments], cwd=directory, check=True, capture_output=True)
+
+
+def test_only_a_linked_worktree_of_a_committed_selection_is_left_alone(
+    tmp_path: Path,
+) -> None:
+    primary = tmp_path / "primary"
+    selection = primary / ".agents/plugins.json"
+    selection.parent.mkdir(parents=True)
+    selection.write_text('{"schema_version": 1, "plugins": []}', encoding="utf-8")
+    git(primary, "init", "-q")
+    git(primary, "add", ".")
+    git(primary, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "s")
+    git(primary, "worktree", "add", "-q", str(tmp_path / "linked"))
+    git(primary, "worktree", "add", "-q", "--orphan", str(tmp_path / "unadopted"))
+    (tmp_path / "unadopted/.agents").mkdir()
+    (tmp_path / "unadopted/.agents/plugins.json").write_text("{}", encoding="utf-8")
+    assert required_plugins.committed_worktree(tmp_path / "linked")
+    assert not required_plugins.committed_worktree(primary)
+    assert not required_plugins.committed_worktree(tmp_path / "unadopted")
+
+
+def test_a_committed_worktree_is_only_checked_and_its_drift_reported(
+    selected_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (selected_project / "AGENTS.md").write_text(
+        "Committed guidance\n", encoding="utf-8"
+    )
+    (selected_project / "CLAUDE.md").write_text("Committed pointer\n", encoding="utf-8")
+    plugin = selected_project / "installed"
+    skill = plugin / ".agents/python/convention/style"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: style\nkind: convention\nprofile: core\n"
+        "applicability: Python projects\n---\nFull style body\n",
+        encoding="utf-8",
+    )
+    modes: list[str] = []
+
+    def configure(
+        command: Sequence[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        modes.append(command[command.index("--mode") + 1])
+        return subprocess.CompletedProcess(
+            command, 1, "Drift in: .claude/settings.json\n", ""
+        )
+
+    monkeypatch.setattr(required_plugins, "committed_worktree", lambda project: True)
+    monkeypatch.setattr(process, "run", configure)
+    monkeypatch.setattr(
+        required_plugins,
+        "check",
+        lambda directory, host, *, inventory_options: {"python@tj-agents": plugin},
+    )
+    assert not tj_prepare.prepare(selected_project, Host.CLAUDE)
+    assert modes == ["check"]
+    assert (selected_project / "AGENTS.md").read_text(encoding="utf-8") == (
+        "Committed guidance\n"
+    )
+    assert (selected_project / "CLAUDE.md").read_text(encoding="utf-8") == (
+        "Committed pointer\n"
+    )
+    assert "left " in capsys.readouterr().err
 
 
 def test_prepare_leaves_unadopted_directories_unchanged(tmp_path: Path) -> None:
@@ -395,3 +466,52 @@ def test_claude_scope_covers_nested_folders_but_not_nested_repositories(
     (tmp_path / ".git").mkdir()
     (nested / ".git").mkdir()
     assert not claude_scope.applies(nested, "project", str(tmp_path))
+
+
+def test_prepare_repeats_the_inventory_after_configuration_changes(
+    selected_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roots = iter([{}, {"python@tj-agents": selected_project}])
+
+    def configure(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, "Updated: .claude/settings.json", "")
+
+    def inventory(
+        directory: Path, host: Host, *, inventory_options: tuple[str, ...]
+    ) -> dict[str, Path]:
+        return next(roots)
+
+    observed: list[dict[str, Path]] = []
+
+    def update(project: Path, found: dict[str, Path], *, check: bool) -> bool:
+        assert not check
+        observed.append(found)
+        return True
+
+    monkeypatch.setattr(process, "run", configure)
+    monkeypatch.setattr(required_plugins, "check", inventory)
+    monkeypatch.setattr(standards, "update", update)
+    assert tj_prepare.prepare(selected_project, Host.CLAUDE)
+    assert observed == [{"python@tj-agents": selected_project}]
+
+
+def test_claude_common_directory_reads_git_metadata_without_a_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    common = tmp_path / "primary/.git"
+    worktree = common / "worktrees/feature"
+    worktree.mkdir(parents=True)
+    (worktree / "HEAD").write_text("ref: refs/heads/feature\n", encoding="utf-8")
+    (worktree / "commondir").write_text("../..\n", encoding="utf-8")
+    checkout = tmp_path / "feature"
+    (checkout / "nested").mkdir(parents=True)
+    (checkout / ".git").write_text(f"gitdir: {worktree}\n", encoding="utf-8")
+
+    def spawn(*args: object, **kwargs: object) -> None:
+        raise AssertionError("unexpected process")
+
+    monkeypatch.setattr(process, "run", spawn)
+    claude_projects.git_common_directory.cache_clear()
+    assert claude_projects.git_common_directory(checkout / "nested") == (
+        os.path.normcase(str(common.resolve()))
+    )

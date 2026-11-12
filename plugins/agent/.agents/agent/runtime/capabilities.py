@@ -86,7 +86,7 @@ class Capability:
 
 
 REVISIONS = {
-    "cli": "174827812f32279a05fe2eb6489195d02fe00c8f",
+    "cli": "b4be95d72c919dfc7b29b5c0d7cc5024f14daf30",
     "personal": "7e0b2a962df9ba1b90284990360cdbd9c49cbe3d",
     "core": "03f99b363e11943cf8918a99b6a7654f5b770edb",
     "work-items": "0d107309e04bedd77d2b1b3834ad92db0a777d0c",
@@ -113,6 +113,28 @@ CAPABILITIES = (
         Support(
             "agent:.codex/runtime/launch.py::executable",
             "agent:tests/test_capability_contracts.py::test_native_executable_selection",
+        ),
+    ),
+    Capability(
+        "managed-launch-preparation",
+        Support(
+            "agent:.claude/runtime/launch.py::prepare",
+            "agent:tests/test_capability_contracts.py::test_claude_preparation_preserves_native_command_without_creating_session",
+        ),
+        Support(
+            "agent:.codex/runtime/launch.py::prepare",
+            "agent:tests/test_codex_startup.py::test_launch_uses_exact_session_and_genuine_native_argv",
+        ),
+    ),
+    Capability(
+        "failed-launch-cleanup",
+        Support(
+            "agent:.claude/runtime/launch.py::abandon",
+            "agent:tests/test_capability_contracts.py::test_claude_abandon_preserves_existing_session_without_external_calls",
+        ),
+        Support(
+            "agent:.codex/runtime/launch.py::abandon",
+            "agent:tests/test_codex_startup.py::test_launch_failure_cleans_only_before_dispatch_without_store_proof",
         ),
     ),
     Capability(
@@ -204,17 +226,6 @@ CAPABILITIES = (
         ),
     ),
     Capability(
-        "stale-plugin-check",
-        Support(
-            "agent:.agents/agent/runtime/latest_plugins.py::main",
-            "agent:tests/test_capability_contracts.py::test_a_stale_prompt_is_reported_and_never_blocked",
-        ),
-        Support(
-            "agent:.agents/agent/runtime/latest_plugins.py::main",
-            "agent:tests/test_capability_contracts.py::test_a_stale_prompt_is_reported_and_never_blocked",
-        ),
-    ),
-    Capability(
         "plugin-refresh",
         Support(
             "agent:.claude/runtime/installed.py::refresh",
@@ -226,14 +237,14 @@ CAPABILITIES = (
         ),
     ),
     Capability(
-        "wrapper-restart",
+        "wrapper-update",
         Support(
-            "cli:src/run/mod.rs::restart",
-            "cli:tests/run.rs::a_requested_restart_resumes_an_idle_claude_in_the_same_launch",
+            "cli:src/run/update.rs::publish",
+            "cli:tests/run.rs::each_claude_update_is_applied_to_an_idle_claude_in_place_once",
         ),
         Support(
-            "cli:src/run/mod.rs::restart",
-            "cli:tests/run.rs::a_requested_restart_resumes_an_idle_codex_in_the_same_launch",
+            "cli:src/run/update.rs::publish",
+            "cli:tests/run.rs::a_codex_update_is_applied_through_its_app_server",
         ),
     ),
     Capability(

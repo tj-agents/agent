@@ -5,60 +5,12 @@
         "hooks": [
           {
             "type": "command",
-            "timeout": 10,
-            "command": "python",
-            "args": [
-              "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/latest_plugins.py",
-              "--host",
-              "claude"
-            ]
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
             "timeout": 30,
             "command": "python",
             "args": [
               "-B",
               "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
               "start",
-              "--host",
-              "claude"
-            ]
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 10,
-            "command": "python",
-            "args": [
-              "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/latest_plugins.py",
-              "--host",
-              "claude"
-            ]
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 10,
-            "command": "python",
-            "args": [
-              "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
-              "prompt",
               "--host",
               "claude"
             ]
@@ -77,42 +29,6 @@
               "-B",
               "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
               "end",
-              "--host",
-              "claude"
-            ]
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 6,
-            "command": "python",
-            "args": [
-              "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
-              "idle",
-              "--host",
-              "claude"
-            ]
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 6,
-            "command": "python",
-            "args": [
-              "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
-              "idle",
               "--host",
               "claude"
             ]

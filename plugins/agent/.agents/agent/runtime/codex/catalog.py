@@ -20,21 +20,24 @@ class Build:
     digest: str | None
 
 
-def source_identity(source: Mapping[str, object]) -> str:
+def source_identity(source: Mapping[str, object], base: Path | None = None) -> str:
     normalized = dict(source)
     path = normalized.get("path")
-    if isinstance(path, str):
+    if isinstance(path, str) and normalized.get("source") == "local":
+        # The manifest names a local plugin relative to its marketplace clone; Codex
+        # lists it by absolute path.
+        located = Path(path)
+        if base is not None and not located.is_absolute():
+            located = base / located
+        normalized["path"] = located.resolve().as_posix()
+    elif isinstance(path, str):
         normalized["path"] = PurePosixPath(path).as_posix()
     return json.dumps(normalized, sort_keys=True)
 
 
 def sources(marketplace: str) -> dict[str, str]:
-    path = (
-        Host.CODEX.configuration_root
-        / ".tmp/marketplaces"
-        / marketplace
-        / ".agents/plugins/marketplace.json"
-    )
+    clone = Host.CODEX.configuration_root / ".tmp/marketplaces" / marketplace
+    path = clone / ".agents/plugins/marketplace.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -47,7 +50,7 @@ def sources(marketplace: str) -> dict[str, str]:
             continue
         name, source = entry.get("name"), entry.get("source")
         if isinstance(name, str) and isinstance(source, dict):
-            found[name] = source_identity(source)
+            found[name] = source_identity(source, Path(clone))
     return found
 
 
@@ -98,8 +101,12 @@ def label(path: Path) -> str | None:
         )
     except (OSError, ValueError):
         return None
-    version = data.get("version") if isinstance(data, dict) else None
-    return version if isinstance(version, str) else None
+    if not isinstance(data, dict):
+        return None
+    version = data.get("version")
+    if isinstance(version, str):
+        return version
+    return "local" if "version" not in data else None
 
 
 def remember(entries: Iterable[object], *, verified_install: bool = False) -> None:
@@ -165,3 +172,23 @@ def current(marketplace: str, plugin: str, digests: Digests) -> bool:
     if re.fullmatch(r"[0-9a-f]{12}", build.version):
         return True
     return build.digest is not None and digests.tree(installed) == build.digest
+
+
+def unconverged(marketplace: str, plugin: str, entry: Mapping[str, object]) -> str:
+    """Why a listed install was not recorded as the marketplace's current build."""
+    version, source = entry.get("version"), entry.get("source")
+    if not isinstance(version, str) or not isinstance(source, dict):
+        return "codex plugin list gave no version and source for it"
+    expected = sources(marketplace).get(plugin)
+    if expected is None:
+        return f"the {marketplace} marketplace clone does not list it"
+    listed = source_identity(source)
+    if listed != expected:
+        return f"Codex lists source {listed}; the marketplace has {expected}"
+    installed = root(marketplace, plugin, version)
+    if installed is None or label(installed) != version:
+        return f"no cached build labelled {version} at {installed}"
+    builds = sorted(path.name for path in installed.parent.iterdir() if path.is_dir())
+    if builds != [version]:
+        return f"its cache holds builds {', '.join(builds)} besides {version}"
+    return "its cached build changed after installing"
