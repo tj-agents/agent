@@ -20,6 +20,7 @@ import jobs
 import required_plugins
 import standards
 from claude import installed as claude_installed
+from codex import catalog as codex_catalog
 from codex import installed as codex_installed
 from tj_agent.host import Host
 from tj_cli import process
@@ -174,6 +175,35 @@ def marketplace_revision(report: Report, host: Host) -> str | None:
     return revision
 
 
+def agent_package(host: Host, state: Path) -> Path | None:
+    package: Path | None
+    if host is Host.CLAUDE:
+        package = claude_installed.pinned_install("tj-agents", "agent")
+        return package
+    build = codex_catalog.recorded(state).get("agent@tj-agents")
+    if build is None:
+        return None
+    package = codex_catalog.root("tj-agents", "agent", build.version)
+    return package
+
+
+def deliver_runtime(report: Report, host: Host, state: Path) -> None:
+    """Install the machine runtime from the agent package this update converged to.
+
+    The runtime under the state directory runs `tj install` too, so only the newly
+    installed package can deliver itself.
+    """
+    package = agent_package(host, state)
+    if package is None:
+        return
+    installer = package / ".agents/agent/runtime/install.py"
+    report.step(
+        host,
+        "agent runtime",
+        [sys.executable, "-B", str(installer), "--step", "launch-check runtime"],
+    )
+
+
 def converge(report: Report, host: Host, digests: Digests) -> None:
     installed = INSTALLED[host]
     installed.update_marketplaces(report, MARKETPLACES)
@@ -190,6 +220,8 @@ def converge(report: Report, host: Host, digests: Digests) -> None:
         update_standards(report, host)
     if not report.failures:
         installed.activate(report)
+    if not report.failures:
+        deliver_runtime(report, host, digests.path.parent)
     if report.failures:
         return
     revision = marketplace_revision(report, host)
