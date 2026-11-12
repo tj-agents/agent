@@ -69,11 +69,10 @@ class EventTests(unittest.TestCase):
         with mock.patch.object(hook, 'start', side_effect=hook.agent_store.AgentStoreError('missing', 'x')):
             self.assertEqual(0, self.main('start', '--host', 'codex'))
 
-    def test_a_prompt_cancels_the_pending_closeout(self):
-        with mock.patch.object(hook.shutil, 'which', return_value='tj'), \
-                mock.patch.object(hook.process, 'run') as run:
-            self.assertEqual(0, self.main('prompt', '--host', 'claude'))
-        self.assertEqual(['tj', 'done', '--cancel'], run.call_args.args[0])
+    def test_prompts_and_tool_uses_are_not_hook_events(self):
+        for event in ('prompt', 'idle'):
+            with self.subTest(event=event), self.assertRaises(SystemExit):
+                self.main(event, '--host', 'claude')
 
     def test_a_payload_without_a_session_records_nothing(self):
         with mock.patch.object(hook.agent_store, 'run') as run:

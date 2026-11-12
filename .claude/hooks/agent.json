@@ -18,24 +18,6 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 10,
-            "command": "python",
-            "args": [
-              "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
-              "prompt",
-              "--host",
-              "claude"
-            ]
-          }
-        ]
-      }
-    ],
     "SessionEnd": [
       {
         "hooks": [
@@ -47,24 +29,6 @@
               "-B",
               "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
               "end",
-              "--host",
-              "claude"
-            ]
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "timeout": 6,
-            "command": "python",
-            "args": [
-              "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py",
-              "idle",
               "--host",
               "claude"
             ]
