@@ -23,6 +23,7 @@ from tj_cli.errors import TjCliError
 
 VERSION = "0.2.0"
 RECEIPT = ".tj-native.json"
+RETIRED = ".tj-retired"
 _REPOSITORY: Final = "tj-agents/cli"
 _MINIMUM_NATIVE_VERSION: Final = (0, 2, 0)
 _VERSION_TIMEOUT: Final = 5.0
@@ -159,6 +160,11 @@ def uninstall_native(directory: Path) -> tuple[str, ...]:
     receipt_path = directory / RECEIPT
     if receipt_path.is_file():
         receipt_path.unlink()
+    retired = directory / RETIRED
+    if retired.is_dir():
+        _prune(retired)
+        if not any(retired.iterdir()):
+            retired.rmdir()
     return tuple(removed)
 
 
@@ -410,15 +416,11 @@ def _replace_pair(
             raise NativeInstallError(
                 f"native install target must be a regular file: {target}"
             )
-        if platform.system() == "Windows" and target.is_file():
-            try:
-                with target.open("r+b"):
-                    pass
-            except OSError as error:
-                raise NativeInstallError(
-                    "native install target is in use or not writable; "
-                    f"retry after it exits: {target}"
-                ) from error
+    # A running Windows executable can be renamed but not deleted, so old binaries
+    # leave through a folder outside the temporary stage and are pruned once free.
+    retired = directory / RETIRED
+    retired.mkdir(exist_ok=True)
+    token = f"{os.getpid()}.{os.urandom(4).hex()}"
     with tempfile.TemporaryDirectory(prefix=".tj-native-", dir=directory) as temporary:
         stage = Path(temporary)
         staged = stage / "new"
@@ -432,15 +434,13 @@ def _replace_pair(
             staged / RECEIPT,
             tool_receipts.Receipt(VERSION, hashes, identity, archive_digest),
         )
-        backups = stage / "old"
-        backups.mkdir()
         moved: list[str] = []
         replaced: list[str] = []
         try:
             for name in (*_binary_names(), RECEIPT):
                 target = directory / name
                 if target.exists():
-                    target.replace(backups / name)
+                    target.replace(retired / f"{name}.{token}")
                     moved.append(name)
             for name in (*_binary_names(), RECEIPT):
                 (staged / name).replace(directory / name)
@@ -449,12 +449,21 @@ def _replace_pair(
             for name in reversed(replaced):
                 (directory / name).unlink(missing_ok=True)
             for name in moved:
-                backup = backups / name
+                backup = retired / f"{name}.{token}"
                 if backup.exists():
                     backup.replace(directory / name)
             raise NativeInstallError(
                 "native pair replacement failed; previous pair restored"
             ) from error
+    _prune(retired)
+
+
+def _prune(retired: Path) -> None:
+    for entry in retired.iterdir():
+        try:
+            entry.unlink()
+        except OSError:
+            continue
 
 
 def _sha256_bytes(contents: bytes) -> str:

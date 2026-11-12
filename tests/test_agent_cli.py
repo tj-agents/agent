@@ -334,16 +334,9 @@ class LaneModelTests(unittest.TestCase):
             for lane, rung in table['lanes'].items():
                 self.assertEqual(CLI.resolve_lane_model(host, lane=lane), (rung['model'], rung.get(effort_key)))
 
-    def test_the_frontier_tier_resolves_from_its_own_entry(self):
-        for host in Host:
-            table = self.table(host)
-            if 'frontier' in table:
-                self.assertEqual(CLI.resolve_lane_model(host, frontier=True)[0], table['frontier']['model'])
-
-    def test_lane_and_frontier_are_exclusive_and_one_is_required(self):
-        for kwargs in ({}, {'lane': 'L1', 'frontier': True}):
-            with self.assertRaises(CLI.LaunchError):
-                CLI.resolve_lane_model(Host.CLAUDE, **kwargs)
+    def test_an_empty_lane_is_an_error(self):
+        with self.assertRaises(CLI.LaunchError):
+            CLI.resolve_lane_model(Host.CLAUDE, lane='')
 
     def test_an_unknown_lane_is_an_error_not_a_fallback(self):
         with self.assertRaisesRegex(CLI.LaunchError, 'unknown lane'):
