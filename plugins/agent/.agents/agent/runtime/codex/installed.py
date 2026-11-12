@@ -193,7 +193,12 @@ def refresh(
         for identity in stale:
             report.step(HOST, identity, codex_command("plugin", "add", identity))
     keep_project_scope(
-        report, [identity for identity in stale if identity not in user_enabled]
+        report,
+        [
+            identity
+            for identity in stale
+            if identity.endswith("@tj-agents") or identity not in user_enabled
+        ],
     )
     trust_hooks(report)
     if stale and not report.failures:

@@ -4,8 +4,9 @@ import threading
 from collections.abc import Mapping
 from pathlib import Path
 
+import jobs
+import plugin_update
 import pytest
-import tj_plugins
 from fake_machine import (
     claude_payload,
     environment,
@@ -13,7 +14,16 @@ from fake_machine import (
     update_claude_plugin,
     write_json,
 )
+from tj_agent.host import Host
 from tj_cli import process
+from tree_digest import Digests
+
+HOSTS = {host.value: host for host in Host}
+
+
+def update_plugins(host: str) -> int:
+    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()))
+    return 1 if outcome.failures else 0
 
 
 def install_scopes(home: Path, project: Path, versions: Mapping[str, str]) -> None:
@@ -35,7 +45,7 @@ def install_scopes(home: Path, project: Path, versions: Mapping[str, str]) -> No
 
 
 @pytest.mark.parametrize("scope", ["project", "local"])
-def test_current_repository_plugins_install_nothing_and_publish(
+def test_current_repository_plugins_install_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
 ) -> None:
     home = tmp_path / "claude"
@@ -53,8 +63,8 @@ def test_current_repository_plugins_install_nothing_and_publish(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(process, "run", run)
-    assert tj_plugins.main(["update", "--host", "claude"]) == 0
-    assert [command[:2] for command in commands] == [["tj", "update"]]
+    assert update_plugins("claude") == 0
+    assert commands == []
 
 
 @pytest.mark.parametrize("stale_scope", ["user", "project", "local"])
@@ -90,7 +100,7 @@ def test_update_changes_only_the_stale_applicable_scope(
         return subprocess.CompletedProcess(command, 0, "{}", "")
 
     monkeypatch.setattr(process, "run", run)
-    assert tj_plugins.main(["update", "--host", "claude"]) == 0
+    assert update_plugins("claude") == 0
     updates = [
         command for command in commands if command[:3] == ["claude", "plugin", "update"]
     ]
@@ -142,7 +152,7 @@ def test_distinct_plugins_update_concurrently(
         return subprocess.CompletedProcess(command, 0, "{}", "")
 
     monkeypatch.setattr(process, "run", run)
-    assert tj_plugins.main(["update", "--host", "claude"]) == 0
+    assert update_plugins("claude") == 0
 
 
 def test_an_update_that_misses_its_pin_fails(
@@ -158,9 +168,11 @@ def test_an_update_that_misses_its_pin_fails(
         return subprocess.CompletedProcess(command, 0, "{}", "")
 
     monkeypatch.setattr(process, "run", run)
-    assert tj_plugins.main(["update", "--host", "claude"]) == 1
+    assert update_plugins("claude") == 1
     error = capsys.readouterr().err
-    assert "rust@tj-agents: user did not reach its marketplace pin" in error
+    assert (
+        "claude: rust@tj-agents FAILED: user did not reach its marketplace pin" in error
+    )
     assert "python@tj-agents" not in error
 
 
@@ -190,7 +202,7 @@ def test_a_torn_payload_at_its_pin_is_reinstalled_only_when_enabled(
 
     monkeypatch.setattr(process, "run", run)
     expected = 0 if enabled else 1
-    assert tj_plugins.main(["update", "--host", "claude"]) == expected
+    assert update_plugins("claude") == expected
     verb = "install" if enabled else "update"
     assert [command for command in commands if command[:2] == ["claude", "plugin"]] == [
         [

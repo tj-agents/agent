@@ -171,5 +171,6 @@ def install(project: Path, identities: Sequence[str]) -> None:
     enabled = user_enabled()
     for identity in identities:
         plugin_command(project, identity, "install")
-        if enabled.get(identity) is not True:
+        # A tj-agents plugin loads only where a repository selects it, never for every project.
+        if identity.endswith("@tj-agents") or enabled.get(identity) is not True:
             plugin_command(project, identity, "disable")

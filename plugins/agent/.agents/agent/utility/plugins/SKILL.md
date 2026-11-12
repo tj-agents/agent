@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: Update the current host's plugins or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, adopting a stack, changing selected packages, or auditing machine plugin settings.
+description: Update this machine's plugins, runtime and tools with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, adopting a stack, changing selected packages, or auditing machine plugin settings.
 
 kind: utility
 domain: agent
@@ -13,22 +13,21 @@ route: infer
 
 # Plugins
 
-Owns plugin updates for the current host and repository plugin selection.
+Owns the one machine install and repository plugin selection.
 
 ```text
-tj plugins update
-tj plugins update --host claude
+tj install
+tj install --check
 tj install --step "Handy"
 ```
 
-`tj run` starts `tj plugins update` in the background at launch when the tj-agents marketplace moved. Run it
-yourself after a plugin PR merged. It detects the current Claude or Codex session; pass `--host` outside a session.
-It fetches the host's marketplaces and updates only plugins behind their pins with native installation, then
-`tj update` makes every `tj run` tab apply the update in place once idle. An unmanaged session receives a reload
-notice. A failed update is reported and publishes nothing.
-
-`tj install` converges machine tools, Handy, profiles, agent settings and command bindings. Use it for
-machine setup or repair. `tj init` remains shell initialization.
+`tj install` is the only update command. It fetches the marketplaces, brings every installed host's plugins
+to their pins with native installation, then continues with the Agent package it converged to, which delivers
+the runtime and native CLI and converges machine tools, Handy, profiles, agent settings and command bindings.
+tj-agents plugins load only where a repository selects them; it disables any enabled for every project. When a
+host's plugins or marketplace moved, `tj update` makes every `tj run` tab apply the update in place once idle.
+Run it after a plugin PR merged; `tj run` also starts it in the background at launch when the marketplace
+moved. A current machine changes nothing and exits 0. `tj init` remains shell initialization.
 
 ## Repository selection
 

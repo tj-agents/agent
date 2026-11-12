@@ -23,7 +23,7 @@ FILE_STEPS = ("launch-check runtime", "tj lifecycle commands", "shell profiles")
 MARKETPLACE_REVISION = "f" * 40
 
 
-def recorded_failures(state: Path, job: jobs.Job = jobs.Job.UPDATE) -> list[str]:
+def recorded_failures(state: Path, job: jobs.Job = jobs.Job.INSTALL) -> list[str]:
     status = json.loads(jobs.status_path(state, job).read_text(encoding="utf-8"))
     return list(status["failures"])
 
