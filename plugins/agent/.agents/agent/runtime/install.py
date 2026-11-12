@@ -38,6 +38,7 @@ from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
 from codex import launch as codex_launch
+from codex import powershell as codex_powershell
 from codex import projects as codex_projects
 import host_permissions
 import jobs
@@ -577,7 +578,16 @@ def codex_agents_installer(context: Context) -> Path | None:
 
 
 def skip_codex_agents(context: Context) -> str | None:
-    if not context.which("pwsh"):
+    user_path = (
+        context.user_environment.get("Path")
+        if context.user_environment is not None
+        else None
+    )
+    if not codex_powershell.executable(
+        context.which("pwsh"), context.environ, user_path, context.windows
+    ):
+        if context.windows:
+            return "unpackaged PowerShell 7 is required; add its directory to process or User PATH to deliver Codex profile agents"
         return "pwsh is not installed; install PowerShell 7 to deliver Codex profile agents"
     if not context.codex_home.is_dir():
         return f"Codex is not set up ({context.codex_home} is missing)"
@@ -587,7 +597,17 @@ def skip_codex_agents(context: Context) -> str | None:
 
 
 def codex_agents_command(context: Context, flag: str) -> list[str]:
-    return [context.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
+    user_path = (
+        context.user_environment.get("Path")
+        if context.user_environment is not None
+        else None
+    )
+    executable = codex_powershell.executable(
+        context.which("pwsh"), context.environ, user_path, context.windows
+    )
+    if executable is None:
+        raise InstallError("PowerShell 7 is unavailable for Codex profile agent delivery")
+    return [executable, "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
             "-CodexHome", str(context.codex_home), flag]
 
 
