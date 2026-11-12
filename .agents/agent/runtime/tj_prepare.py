@@ -2,6 +2,7 @@ import argparse
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import host_plugins
@@ -9,6 +10,34 @@ import required_plugins
 import standards
 from tj_agent.host import Host
 from tj_cli import process
+
+CONFIGURATION = Path(__file__).parent.parent / "utility/plugins/scripts/repo_config.py"
+
+
+def configure(project: Path, mode: str) -> str:
+    configured = process.run(
+        [
+            sys.executable,
+            "-B",
+            str(CONFIGURATION),
+            "--root",
+            str(project),
+            "--mode",
+            mode,
+        ],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    drift = str(configured.stdout).strip()
+    if configured.returncode and not (
+        mode == "check" and drift.startswith("Drift in:")
+    ):
+        raise standards.StandardsError(configured.stderr.strip() or drift)
+    return drift
 
 
 def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> bool:
@@ -22,23 +51,20 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
     selected = required_plugins.selected(project)
     if not selected:
         return False
-    script = Path(__file__).parent.parent / "utility/plugins/scripts/repo_config.py"
-    configured = process.run(
-        [sys.executable, "-B", str(script), "--root", str(project), "--mode", "write"],
-        cwd=project,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=30,
-        check=False,
-    )
-    if configured.returncode:
-        raise standards.StandardsError(
-            configured.stderr.strip() or configured.stdout.strip()
+    frozen = required_plugins.committed_worktree(project)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        inventory = pool.submit(
+            required_plugins.check,
+            directory,
+            host,
+            inventory_options=inventory_options,
         )
+        configured = configure(project, "check" if frozen else "write")
     try:
-        roots = required_plugins.check(
-            directory, host, inventory_options=inventory_options
+        roots = (
+            required_plugins.check(directory, host, inventory_options=inventory_options)
+            if configured and not frozen
+            else inventory.result()
         )
     except required_plugins.MissingRequiredPluginsError as error:
         host_plugins.PLUGINS[host].install(project, error.missing)
@@ -50,10 +76,20 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
             "Local-only adoption preserves this repository's instruction files; "
             "its owner must supply standards routing."
         )
-    host_plugins.PLUGINS[Host.CLAUDE].prepare_instructions(project)
+    if not frozen:
+        host_plugins.PLUGINS[Host.CLAUDE].prepare_instructions(project)
     if host != Host.CLAUDE:
         host_plugins.PLUGINS[host].prepare_instructions(project)
-    return standards.update(project, roots or {})
+    changed = standards.update(project, roots or {}, check=frozen)
+    if not frozen:
+        return changed
+    if configured or changed:
+        print(
+            f"tj prepare: left {project} unchanged; its committed agent "
+            "configuration differs from the installed plugins",
+            file=sys.stderr,
+        )
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:

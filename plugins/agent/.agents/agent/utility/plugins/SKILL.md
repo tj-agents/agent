@@ -21,12 +21,11 @@ tj plugins update --host claude
 tj install --step "Handy"
 ```
 
-Run `tj plugins update` when installed plugins look outdated or a plugin PR merged. It detects the current
-Claude or Codex session; pass `--host` outside a session. Current local pins take a local file check.
-Changed plugins use native installation. Codex reloads through its shared server; Claude sessions managed
-by `tj run` resume the same conversation once idle with no background tasks or scheduled wakeups.
-An unmanaged Claude session receives the native `/reload-plugins` notice. Update failures are reported;
-hooks warn and always allow work to continue.
+`tj run` starts `tj plugins update` in the background at launch when the tj-agents marketplace moved. Run it
+yourself after a plugin PR merged. It detects the current Claude or Codex session; pass `--host` outside a session.
+It fetches the host's marketplaces and updates only plugins behind their pins with native installation, then
+`tj update` makes every `tj run` tab apply the update in place once idle. An unmanaged session receives a reload
+notice. A failed update is reported and publishes nothing.
 
 `tj install` converges machine tools, Handy, profiles, agent settings and command bindings. Use it for
 machine setup or repair. `tj init` remains shell initialization.

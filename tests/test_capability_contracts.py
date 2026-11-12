@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
-import io
 import json
 import subprocess
 import sys
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType, TracebackType
@@ -16,16 +15,17 @@ import agent_cli
 import agent_store
 import host_permissions
 import host_plugins
-import jobs
-import latest_plugins
+import owned_launch
 import pytest
 import session_hook
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from codex import launch as codex_launch
-from fake_machine import CodexPlugins
+from fake_machine import CodexPlugins, write_json
+from launch_contract import PreparedLaunch
 from tj_agent import worktrees
 from tj_agent.host import Host
+from tj_cli import process
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,6 +71,40 @@ def test_launch_preserves_prompt_model_and_effort(
     assert arguments[-1] == prompt
     assert arguments[arguments.index("--model") + 1] == "fixture-model"
     assert "high" in arguments or "model_reasoning_effort=high" in arguments
+
+
+def test_claude_preparation_preserves_native_command_without_creating_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = agent_cli.host_launch(Host.CLAUDE)
+    monkeypatch.setattr(adapter, "executable", lambda: "fixture-claude")
+    arguments = adapter.start_arguments(
+        tmp_path, "parity", "--help", "fixture-model", "high"
+    )
+    original = tuple(arguments)
+    prepared = adapter.prepare(tmp_path, "parity", arguments, "fixture-tj")
+    assert prepared.command == ("fixture-claude", *original)
+    assert tuple(arguments) == original
+    assert prepared.session is None and not prepared.created
+
+
+@pytest.mark.parametrize("dispatched", [False, True])
+def test_claude_abandon_preserves_existing_session_without_external_calls(
+    dispatched: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected_call(*arguments: object, **options: object) -> None:
+        pytest.fail("Claude abandonment must not contact a native process or Store")
+
+    adapter = agent_cli.host_launch(Host.CLAUDE)
+    monkeypatch.setattr(adapter, "executable", unexpected_call)
+    monkeypatch.setattr(process, "run", unexpected_call)
+    monkeypatch.setattr(agent_store, "run", unexpected_call)
+    prepared = PreparedLaunch(
+        ("fixture-claude", "--resume", "existing-session"),
+        session="claude:existing-session",
+    )
+    adapter.abandon(prepared, "exact-launch", dispatched)
+    assert prepared.session == "claude:existing-session" and not prepared.created
 
 
 def test_handoff_preserves_item_parent_and_standing_rule(
@@ -153,11 +187,15 @@ def test_session_start_binds_the_launch(
 
     monkeypatch.setattr(agent_store, "run", store)
     monkeypatch.setattr(session_hook, "worktree", lambda cwd: "/fixture")
+    monkeypatch.setattr(owned_launch, "current", lambda: "launch")
     session_hook.start(host, "native", "/fixture/sub", {"TJ_RUN_LAUNCH_ID": "launch"})
     assert claims == [
         (host, "native", Path("/fixture"), {"TJ_RUN_LAUNCH_ID": "launch"})
     ]
-    assert calls == [
+    expected: list[tuple[str, ...]] = (
+        [("show", "codex:native")] if host is Host.CODEX else []
+    )
+    expected += [
         (
             "register",
             "--session",
@@ -170,6 +208,7 @@ def test_session_start_binds_the_launch(
             "launch",
         )
     ]
+    assert calls == expected
 
 
 def test_session_title_reaches_the_native_host(
@@ -214,37 +253,6 @@ def test_native_liveness_reports_active_sessions(
     assert live["native"].activity in ("busy", "active")
 
 
-def test_a_stale_prompt_is_reported_and_never_blocked(
-    host: Host,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    seen: list[Host] = []
-
-    def notice(selected: Host, state: Path, *, full: bool) -> str:
-        assert state == tmp_path and not full
-        seen.append(selected)
-        return "Updating plugins"
-
-    monkeypatch.setattr(latest_plugins, "reason", notice)
-    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path)
-    monkeypatch.setattr(
-        sys, "stdin", io.StringIO('{"hook_event_name":"UserPromptSubmit"}')
-    )
-    assert latest_plugins.main(["--host", str(host)]) == 0
-    assert seen == [host]
-    output = json.loads(capsys.readouterr().out)
-    assert "decision" not in output
-    assert output == {
-        "systemMessage": "Updating plugins",
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": "Updating plugins",
-        },
-    }
-
-
 @dataclass
 class Report:
     listing: object
@@ -267,6 +275,13 @@ class Report:
         )
         return subprocess.CompletedProcess(command, 0, output, "")
 
+    def steps(
+        self, host: Host, groups: Sequence[Sequence[tuple[str, list[str]]]]
+    ) -> None:
+        for commands in groups:
+            for label, command in commands:
+                self.step(host, label, command)
+
     def fail(self, host: Host, label: str, detail: str) -> None:
         raise AssertionError((host, label, detail))
 
@@ -275,6 +290,10 @@ def test_refresh_updates_selected_plugins(
     host: Host, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    write_json(
+        tmp_path / "claude/plugins/installed_plugins.json",
+        {"plugins": {"agent@tj-agents": [{"scope": "user"}]}},
+    )
     row = {"id": "agent@tj-agents", "scope": "user"}
     report = Report([row])
     installed = claude_installed

@@ -16,6 +16,7 @@ from unittest import mock
 
 import pytest
 
+from fake_machine import recorded_failures
 from git_isolation import isolate_git_config
 
 if sys.version_info < (3, 12):
@@ -420,12 +421,12 @@ class InstallerStepTests(Machine):
     def test_codex_agents_skip_without_pwsh(self):
         out = io.StringIO()
         install.run_steps([step("Codex profile agents")], self.context(), False, out)
-        self.assertIn("n/a    Codex profile agents: pwsh is not installed", out.getvalue())
+        self.assertIn("n/a    Codex profile agents: unpackaged PowerShell 7 is required", out.getvalue())
 
     def test_codex_agents_skip_without_an_installed_engineering_package(self):
         (self.home / ".codex").mkdir()
         out = io.StringIO()
-        install.run_steps([step("Codex profile agents")], self.context(which=lambda name: "pwsh-path"), False, out)
+        install.run_steps([step("Codex profile agents")], self.context(windows=False, which=lambda name: "pwsh-path"), False, out)
         self.assertIn("n/a    Codex profile agents: no installed engineering plugin", out.getvalue())
 
 
@@ -656,16 +657,6 @@ class RuntimeTests(Machine):
         delivery.is_reparse.assert_called_once_with(alias)
 
 
-class AutoUpdateTests(Machine):
-    def test_claude_marketplace_auto_update_converges(self):
-        claude = self.home / ".claude"
-        (claude / "plugins").mkdir(parents=True)
-        (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"base@tj-agents": True}}), encoding="utf-8")
-        (claude / "plugins" / "known_marketplaces.json").write_text(json.dumps({"tj-agents": {"autoUpdate": False}}),
-                                                                       encoding="utf-8")
-        self.converge(step("Claude marketplace auto-update"), self.context(windows=False))
-
-
 class GitLongPathsTests(Machine):
     def test_long_paths_converge_in_the_global_git_config(self):
         config = self.home / ".gitconfig"
@@ -704,7 +695,6 @@ class RunStepsTests(Machine):
         )
         for arguments, expected in cases:
             with mock.patch.object(install, "machine_context", return_value=self.context()), \
-                    mock.patch.object(install.machine_state, "drift", return_value={}), \
                     mock.patch.object(install, "run_steps", return_value=0) as run:
                 self.assertEqual(0, install.main(arguments))
                 self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
@@ -718,8 +708,8 @@ class RunStepsTests(Machine):
             install.main(["--step", "not an install step"])
         self.assertEqual(2, error.exception.code)
         context.assert_not_called()
-        self.assertEqual("install rejected its arguments: --step 'not an install step'",
-                         install.jobs.recent_failure(state, install.jobs.Job.INSTALL))
+        self.assertEqual(["install rejected its arguments: --step 'not an install step'"],
+                         recorded_failures(state, install.jobs.Job.INSTALL))
 
     def legacy_machine(self):
         pass
@@ -774,7 +764,7 @@ class RunStepsTests(Machine):
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
             "retired state", "Git long paths", "native CLI", "native permission defaults", "Codex shared daemon",
-            "Claude marketplace auto-update", "agent-store CLI",
+            "agent-store CLI",
             "tj item CLI", "worktrunk", "Handy",
             "launch-check runtime", "tj lifecycle commands",
             "shell profiles", "hidden Git Bash for Claude",
@@ -876,7 +866,7 @@ def machine_context(home: Path) -> install.Context:
     return install.Context(home=home, environ={}, windows=False)
 
 
-def test_install_records_its_failures_for_the_stale_check(tmp_path: Path) -> None:
+def test_install_records_its_failures(tmp_path: Path) -> None:
     context = machine_context(tmp_path)
     failing = install.Step(
         "plugin copies", mock.Mock(side_effect=RuntimeError("boom")), mock.Mock()
@@ -884,18 +874,13 @@ def test_install_records_its_failures_for_the_stale_check(tmp_path: Path) -> Non
     with (
         mock.patch.object(install, "machine_context", return_value=context),
         mock.patch.object(install, "STEPS", (failing,)),
-        mock.patch.object(install.machine_state, "drift", return_value={}) as drift,
         contextlib.redirect_stdout(io.StringIO()),
         contextlib.redirect_stderr(io.StringIO()),
     ):
         assert install.main(["--step", "plugin copies"]) == 2
     state = context.state_directory
-    assert (
-        install.jobs.recent_failure(state, install.jobs.Job.INSTALL)
-        == "plugin copies: boom"
-    )
+    assert recorded_failures(state, install.jobs.Job.INSTALL) == ["plugin copies: boom"]
     assert not install.jobs.running(state, install.jobs.Job.INSTALL)
-    drift.assert_called_once_with(state)
 
 
 def test_a_running_install_makes_a_second_install_exit_without_running(
@@ -1006,3 +991,96 @@ def test_other_failures_are_not_retried() -> None:
     )
     assert install.run_installer(context, ["installer"]).returncode == 1
     assert calls == [["installer"]]
+
+
+@pytest.mark.parametrize("pinned", [True, False])
+def test_the_managed_runtime_hands_install_to_the_pinned_agent_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: bool
+) -> None:
+    from fake_machine import agent_root, install_plugin, pin_plugin
+
+    context = machine_context(tmp_path)
+    context.which = lambda _name: None
+    managed = context.state_directory / "bin"
+    runtime = managed / ".agents/agent/runtime"
+    monkeypatch.setattr(install, "ROOT", managed)
+    monkeypatch.setattr(install, "RUNTIME", runtime)
+    monkeypatch.setattr(install.machine_state, "RUNTIME", runtime)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    build = agent_root(install_plugin(tmp_path / "claude", "agent", "a" * 40), "new")
+    if pinned:
+        pin_plugin(tmp_path / "claude", "agent", "a" * 40)
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 3)
+
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install.process, "run", run),
+        mock.patch.object(install, "run_steps", return_value=0) as steps,
+    ):
+        code = install.main(["--step", "Handy"])
+    script = build / ".agents/agent/runtime/install.py"
+    if pinned:
+        assert code == 3
+        assert calls == [[sys.executable, "-B", str(script), "--step", "Handy"]]
+        steps.assert_not_called()
+    else:
+        assert code == 0
+        assert calls == []
+        steps.assert_called_once()
+
+
+def test_an_install_outside_the_managed_runtime_runs_its_own_build(
+    tmp_path: Path,
+) -> None:
+    assert install.pinned_installer(tmp_path / "state") is None
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_a_successful_install_publishes_for_running_tabs(
+    tmp_path: Path, returncode: int
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, returncode, "", "no tj")
+
+    context = install.Context(
+        home=tmp_path,
+        environ={},
+        windows=False,
+        run=run,
+        which=lambda name: name if name == "claude" else None,
+    )
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install, "run_steps", return_value=0),
+        contextlib.redirect_stdout(io.StringIO()),
+    ):
+        assert install.main(["--step", "plugin copies"]) == 2 * returncode
+    assert calls == [
+        ["tj", "update", "--host", "claude", "--revision", install.INSTALLED_REVISION]
+    ]
+    assert context.failures == ([] if not returncode else ["claude update: no tj"])
+
+
+def test_install_publishes_once_for_each_host_on_path(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    context = install.Context(
+        home=tmp_path, environ={}, windows=False, run=run, which=lambda name: name
+    )
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert install.publish_update(context) == 0
+    assert calls == [
+        ["tj", "update", "--host", "claude", "--revision", "tj install"],
+        ["tj", "update", "--host", "codex", "--revision", "tj install"],
+    ]

@@ -1,21 +1,31 @@
-"""A fake machine: plugin installs and pins, converged steps, detached starts."""
+"""A fake machine: plugin installs and pins, and converged steps."""
 
 from __future__ import annotations
 
 import io
 import json
 import os
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import install
+import jobs
 from codex import catalog as codex_catalog
 from codex import hook_trust
 
 CONVERGE = {"setup": {"script": "scripts/setup.py", "converge": True}}
 FILE_STEPS = ("launch-check runtime", "tj lifecycle commands", "shell profiles")
+
+
+MARKETPLACE_REVISION = "f" * 40
+
+
+def recorded_failures(state: Path, job: jobs.Job = jobs.Job.UPDATE) -> list[str]:
+    status = json.loads(jobs.status_path(state, job).read_text(encoding="utf-8"))
+    return list(status["failures"])
 
 
 def write_json(path: Path, value: object) -> None:
@@ -119,6 +129,7 @@ def install_plugin(
     )
     (root / "scripts").mkdir(parents=True, exist_ok=True)
     (root / "scripts/setup.py").write_text("", encoding="utf-8")
+    claude_payload(root, plugin)
     registry = claude_home / "plugins/installed_plugins.json"
     rows = (
         json.loads(registry.read_text(encoding="utf-8"))["plugins"]
@@ -131,12 +142,42 @@ def install_plugin(
     return root
 
 
-class Started:
-    def __init__(self) -> None:
-        self.commands: list[list[str]] = []
+CLAUDE_REGISTRY = threading.Lock()
 
-    def __call__(self, command: Sequence[str], **_options: object) -> None:
-        self.commands.append([str(part) for part in command])
+
+def claude_payload(root: Path, plugin: str) -> None:
+    """The smallest cached build Claude can load: its manifest naming the plugin."""
+    write_json(root / ".claude-plugin/plugin.json", {"name": plugin})
+
+
+def update_claude_plugin(claude_home: Path, command: Sequence[str]) -> None:
+    plugin, scope = command[3], command[command.index("--scope") + 1]
+    name, _, marketplace = plugin.rpartition("@")
+    catalog = (
+        claude_home
+        / "plugins/marketplaces"
+        / marketplace
+        / ".claude-plugin/marketplace.json"
+    )
+    with CLAUDE_REGISTRY:
+        pins = (
+            {
+                entry["name"]: entry["source"]["sha"]
+                for entry in json.loads(catalog.read_text(encoding="utf-8"))["plugins"]
+            }
+            if catalog.is_file()
+            else {}
+        )
+        registry = claude_home / "plugins/installed_plugins.json"
+        if name not in pins or not registry.is_file():
+            return
+        document = json.loads(registry.read_text(encoding="utf-8"))
+        root = claude_home / "plugins/cache" / marketplace / name / pins[name][:12]
+        claude_payload(root, name)
+        for row in document["plugins"].get(plugin, []):
+            if row["scope"] == scope:
+                row.update(gitCommitSha=pins[name], installPath=str(root))
+        write_json(registry, document)
 
 
 def environment(home: Path) -> dict[str, str]:

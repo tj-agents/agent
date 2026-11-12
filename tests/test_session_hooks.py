@@ -6,7 +6,7 @@ import unittest
 PACKAGE = Path(__file__).resolve().parents[1] / "plugins" / "agent"
 CLAUDE_ROOT = "${CLAUDE_PLUGIN_ROOT}/"
 CODEX_ROOT = "${PLUGIN_ROOT}/"
-EVENTS = {"SessionStart", "UserPromptSubmit", "SessionEnd"}
+EVENTS = {"SessionStart", "SessionEnd"}
 
 
 def hooks(host):
@@ -25,8 +25,7 @@ class SessionHookTests(unittest.TestCase):
 
     def test_each_lifecycle_event_runs_the_session_hook(self):
         for host in ("claude", "codex"):
-            for event, argument in (("SessionStart", "start"), ("UserPromptSubmit", "prompt"),
-                                    ("SessionEnd", "end")):
+            for event, argument in (("SessionStart", "start"), ("SessionEnd", "end")):
                 with self.subTest(host=host, event=event):
                     command = json.dumps(hooks(host)[event])
                     self.assertRegex(command, rf"session_hook\.py\W+{argument}\W+--host")

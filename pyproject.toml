@@ -64,14 +64,14 @@ raises-require-match-for = ["*"]
 "tests/test_retired_state.py" = ["ANN401", "TID251"]
 "tests/test_native_runtime.py" = ["TID251"]
 "tests/test_local_codex_refresh.py" = ["TID251"]
-"tests/test_latest_plugins.py" = ["ANN401"]
 "tests/test_conflicted_plugin_settings.py" = ["PT011", "TID251"]
+"tests/test_machine_paths.py" = ["TID251"]
+"tests/test_repo_config.py" = ["TID251"]
 "tests/test_boot_history.py" = ["PT006"]
 "tests/fake_machine.py" = ["ANN401"]
 ".agents/agent/utility/plugins/scripts/config_conflicts.py" = ["ANN401"]
 ".agents/agent/runtime/tj_recover.py" = ["TID251"]
 ".agents/agent/runtime/retired_state.py" = ["PLR6301", "TRY300"]
-".agents/agent/runtime/latest_plugins.py" = ["TID251"]
 ".agents/agent/runtime/tj_plugins.py" = ["TID251"]
 
 [[tool.python-standards.exceptions]]
@@ -111,16 +111,6 @@ reason = "Legacy host integration reads process state while resolving native con
 
 [[tool.python-standards.exceptions]]
 path = ".agents/agent/runtime/jobs.py"
-rule = "PY016"
-reason = "Legacy host integration reads process state while resolving native configuration."
-
-[[tool.python-standards.exceptions]]
-path = ".agents/agent/runtime/latest_plugins.py"
-rule = "PY001"
-reason = "Existing host integration traversal flattens nested records."
-
-[[tool.python-standards.exceptions]]
-path = ".agents/agent/runtime/latest_plugins.py"
 rule = "PY016"
 reason = "Legacy host integration reads process state while resolving native configuration."
 
@@ -278,11 +268,6 @@ reason = "Existing test reads or replaces process state at a command boundary."
 path = "tests/test_hook_trust.py"
 rule = "PY001"
 reason = "Existing test flattens nested fixture data for assertions."
-
-[[tool.python-standards.exceptions]]
-path = "tests/test_latest_plugins.py"
-rule = "PY017"
-reason = "Existing test observes the clock while exercising timeout behavior."
 
 [[tool.python-standards.exceptions]]
 path = "tests/test_local_codex_refresh.py"
@@ -535,10 +520,6 @@ module = "install"
 disable_error_code = ["arg-type", "attr-defined", "no-any-return", "no-untyped-def", "type-arg", "union-attr", "var-annotated"]
 
 [[tool.mypy.overrides]]
-module = "latest_plugins"
-disable_error_code = ["arg-type"]
-
-[[tool.mypy.overrides]]
 module = "launch_claude"
 disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
 
@@ -664,10 +645,6 @@ disable_error_code = ["arg-type", "assignment", "attr-defined", "list-item", "no
 
 [[tool.mypy.overrides]]
 module = "test_install_artefacts"
-disable_error_code = ["attr-defined"]
-
-[[tool.mypy.overrides]]
-module = "test_latest_plugins"
 disable_error_code = ["attr-defined"]
 
 [[tool.mypy.overrides]]

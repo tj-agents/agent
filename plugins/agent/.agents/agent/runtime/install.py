@@ -27,7 +27,7 @@ import sys
 import tempfile
 import time
 from types import ModuleType
-from typing import Callable, Sequence
+from typing import Callable
 
 RUNTIME = Path(__file__).resolve().parent
 ROOT = RUNTIME.parents[2]
@@ -38,6 +38,7 @@ from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
 from codex import launch as codex_launch
+from codex import powershell as codex_powershell
 from codex import projects as codex_projects
 import host_permissions
 import jobs
@@ -199,7 +200,6 @@ class Step:
     apply: Callable[[Context], list[str]]
     skip: Callable[[Context], str | None] = lambda context: None
     required: bool = False
-    watch: Callable[[Context], Sequence[Path]] | None = None
 
 
 def documents_directory(home: Path) -> Path:
@@ -578,7 +578,16 @@ def codex_agents_installer(context: Context) -> Path | None:
 
 
 def skip_codex_agents(context: Context) -> str | None:
-    if not context.which("pwsh"):
+    user_path = (
+        context.user_environment.get("Path")
+        if context.user_environment is not None
+        else None
+    )
+    if not codex_powershell.executable(
+        context.which("pwsh"), context.environ, user_path, context.windows
+    ):
+        if context.windows:
+            return "unpackaged PowerShell 7 is required; add its directory to process or User PATH to deliver Codex profile agents"
         return "pwsh is not installed; install PowerShell 7 to deliver Codex profile agents"
     if not context.codex_home.is_dir():
         return f"Codex is not set up ({context.codex_home} is missing)"
@@ -588,7 +597,17 @@ def skip_codex_agents(context: Context) -> str | None:
 
 
 def codex_agents_command(context: Context, flag: str) -> list[str]:
-    return [context.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
+    user_path = (
+        context.user_environment.get("Path")
+        if context.user_environment is not None
+        else None
+    )
+    executable = codex_powershell.executable(
+        context.which("pwsh"), context.environ, user_path, context.windows
+    )
+    if executable is None:
+        raise InstallError("PowerShell 7 is unavailable for Codex profile agent delivery")
+    return [executable, "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
             "-CodexHome", str(context.codex_home), flag]
 
 
@@ -633,32 +652,6 @@ def synchronize_permissions(context: Context, mode: str) -> list[str]:
     return changes
 
 
-def enable_claude_autoupdate(config: Path, apply: bool = True) -> list[str]:
-    settings = read_json(config / "settings.json")
-    enabled = settings.get("enabledPlugins")
-    if not isinstance(enabled, dict):
-        return []
-    wanted = {identity.rsplit("@", 1)[1] for identity, on in enabled.items() if on is True and "@" in identity}
-    path = config / "plugins" / "known_marketplaces.json"
-    known = read_json(path)
-    changed = sorted(name for name in wanted
-                     if isinstance(known.get(name), dict) and known[name].get("autoUpdate") is not True)
-    if changed and apply:
-        for name in changed:
-            known[name]["autoUpdate"] = True
-        write_json(path, known)
-    return changed
-
-
-def check_autoupdate(context: Context) -> list[str]:
-    return [f"enable auto-update for Claude marketplace {name}"
-            for name in enable_claude_autoupdate(context.claude_home, apply=False)]
-
-
-def apply_autoupdate(context: Context) -> list[str]:
-    return [f"Claude marketplace now auto-updates: {name}" for name in enable_claude_autoupdate(context.claude_home)]
-
-
 def runtime_receipt(root: Path) -> dict:
     try:
         contents = runtime_delivery.closure(root, list(RUNTIME_EXPORTS))
@@ -673,11 +666,6 @@ def install_runtime(directory: Path, root: Path) -> None:
     errors = runtime_delivery.apply(directory, root, runtime_receipt(root))
     if errors:
         raise InstallError("; ".join(errors))
-
-
-def watch_runtime(context: Context) -> list[Path]:
-    directory = runtime_bin(context)
-    return [directory / "source.json"] + ([] if context.windows else [directory / "python"])
 
 
 def check_runtime(context: Context) -> list[str]:
@@ -787,10 +775,6 @@ def apply_runtime(context: Context) -> list[str]:
     return [f"installed the Agent runtime in {directory}"]
 
 
-def watch_agent_store(context: Context) -> list[Path]:
-    return [agent_store.receipt_path(), agent_store.executable()]
-
-
 def check_agent_store(context: Context) -> list[str]:
     pending = agent_store.pending()
     return [pending] if pending else []
@@ -816,14 +800,6 @@ def tj_item_drift(context: Context) -> list[str]:
         work_items_install.Pins.load(),
         work_items_install.installed_plugins(),
     )
-
-
-def watch_tj_item(context: Context) -> list[Path]:
-    tools = work_items_install.default_tool_directory(context.environ, context.windows)
-    receipt = tools / work_items_install.Pins.load().tool.package / work_items_install.RECEIPT
-    cache = context.codex_home / "plugins" / "cache"
-    marketplaces = sorted(cache.iterdir()) if cache.is_dir() else []
-    return [receipt, context.claude_home / "plugins" / "installed_plugins.json", cache, *marketplaces]
 
 
 def check_tj_item(context: Context) -> list[str]:
@@ -1010,12 +986,6 @@ def skip_codex_hook_trust(context: Context) -> str | None:
     return None if context.codex_home.is_dir() else f"Codex is not set up ({context.codex_home} is missing)"
 
 
-def watch_codex_hook_trust(context: Context) -> list[Path]:
-    cache = context.codex_home / "plugins" / "cache" / required_plugins.MARKETPLACE_NAME
-    plugins = sorted(cache.iterdir()) if cache.is_dir() else []
-    return [context.state_directory / codex_hook_trust.RECEIPT, cache, *plugins]
-
-
 def check_codex_hook_trust(context: Context) -> list[str]:
     return codex_hook_trust.pending(context.state_directory)
 
@@ -1067,10 +1037,6 @@ def apply_plugin_setup(context: Context) -> list[str]:
     if errors:
         raise InstallError("; ".join(errors))
     return []
-
-
-def watch_plugin_copies(context: Context) -> list[Path]:
-    return [context.state_directory / plugin_copies.MARKER]
 
 
 def check_plugin_copies(context: Context) -> list[str]:
@@ -1154,25 +1120,21 @@ STEPS = (
     Step("Git long paths", check_git_longpaths, apply_git_longpaths, windows_only),
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
     Step("native permission defaults", check_native_permissions, apply_native_permissions),
-    Step("Codex shared daemon", check_codex_daemon, apply_codex_daemon,
-         watch=lambda context: [codex_config_path(context)]),
-    Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
-    Step("agent-store CLI", check_agent_store, apply_agent_store, watch=watch_agent_store),
-    Step("tj item CLI", check_tj_item, apply_tj_item, watch=watch_tj_item),
+    Step("Codex shared daemon", check_codex_daemon, apply_codex_daemon),
+    Step("agent-store CLI", check_agent_store, apply_agent_store),
+    Step("tj item CLI", check_tj_item, apply_tj_item),
     cli_tool_step("worktrunk", worktrunk_install),
     cli_tool_step("Handy", handy_install),
-    Step("launch-check runtime", check_runtime, apply_runtime, watch=watch_runtime),
-    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands,
-         watch=lambda context: list(lifecycle_paths(context))),
-    Step("shell profiles", check_profile, apply_profile, watch=profile_paths),
+    Step("launch-check runtime", check_runtime, apply_runtime),
+    Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands),
+    Step("shell profiles", check_profile, apply_profile),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
-    Step("Codex hook trust", check_codex_hook_trust, apply_codex_hook_trust, skip_codex_hook_trust,
-         watch=watch_codex_hook_trust),
-    Step("plugin copies", check_plugin_copies, apply_plugin_copies, watch=watch_plugin_copies),
+    Step("Codex hook trust", check_codex_hook_trust, apply_codex_hook_trust, skip_codex_hook_trust),
+    Step("plugin copies", check_plugin_copies, apply_plugin_copies),
 )
 
 
@@ -1239,6 +1201,34 @@ def repair(name: str, project: Path) -> list[str]:
     return step.apply(context)
 
 
+INSTALLED_REVISION = "tj install"
+
+
+def publish_update(context: Context) -> int:
+    code = 0
+    for host in (host for host in Host if context.which(host.value)):
+        command = ["tj", "update", "--host", host.value, "--revision", INSTALLED_REVISION]
+        try:
+            result = context.run(command, capture_output=True, text=True, timeout=30, check=False)
+        except (OSError, subprocess.SubprocessError) as error:
+            context.failures.append(f"{host} update: {error}")
+            code = 2
+            continue
+        if result.returncode:
+            context.failures.append(f"{host} update: {result.stderr.strip() or f'exit {result.returncode}'}")
+            code = 2
+            continue
+        print(f"apply  {host} update: published the plugin revision for running tj run tabs")
+    return code
+
+
+def pinned_installer(state: Path) -> Path | None:
+    if ROOT.resolve() != (state / "bin").resolve():
+        return None
+    pinned = machine_state.packaged("install.py")
+    return None if pinned.resolve() == (RUNTIME / "install.py").resolve() else pinned
+
+
 def machine_context() -> Context:
     home = Path.home()
     windows = os.name == "nt"
@@ -1271,6 +1261,9 @@ def main(argv: list[str] | None = None) -> int:
                         [f"install rejected its arguments: {shlex.join(arguments)}"])
         raise
     context = machine_context()
+    installer = pinned_installer(context.state_directory)
+    if installer is not None:
+        return process.run([sys.executable, "-B", str(installer), *arguments]).returncode
     context.onboard = parsed.onboard
     native_runtime.expose()
     context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
@@ -1282,8 +1275,9 @@ def main(argv: list[str] | None = None) -> int:
             print("install: another machine install is running", file=sys.stderr)
             return 2
         code = run_steps(steps, context, False)
+        if not code:
+            code = publish_update(context)
         jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
-    machine_state.drift(context.state_directory)
     return code
 
 

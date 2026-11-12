@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any, Callable
 
-from claude import project_plugins
+from claude import plugins, project_plugins
+import required_plugins
 from tj_agent.host import Host
 from tree_digest import Digests
 
 HOST = Host.CLAUDE
 RELOAD = "type /reload-plugins"
-BUILD = re.compile(r"([0-9a-f]{12})-[0-9a-f]+")
+UPDATE = ("claude", "plugin", "update")
+INSTALL = ("claude", "plugin", "install")
 
 
 def read(path: Path) -> object:
@@ -23,14 +24,13 @@ def read(path: Path) -> object:
         return None
 
 
+def marketplace_root(marketplace: str) -> Path:
+    return HOST.configuration_root / "plugins" / "marketplaces" / marketplace
+
+
 def pins(marketplace: str) -> dict[str, str]:
     catalog = read(
-        HOST.configuration_root
-        / "plugins"
-        / "marketplaces"
-        / marketplace
-        / ".claude-plugin"
-        / "marketplace.json"
+        marketplace_root(marketplace) / ".claude-plugin" / "marketplace.json"
     )
     entries = catalog.get("plugins", []) if isinstance(catalog, dict) else []
     return {
@@ -109,7 +109,32 @@ def pinned(marketplace: str, plugin: str, scope: str | None = None) -> bool:
         if name == plugin and (scope is None or installed_scope == scope)
     ]
     return bool(pin and installations) and all(
-        revision == pin and root.is_dir() for revision, root in installations
+        revision == pin and readable(root, plugin) for revision, root in installations
+    )
+
+
+def readable(root: Path, plugin: str) -> bool:
+    return required_plugins.readable_payload(root, HOST, plugin)
+
+
+def torn(marketplace: str, plugin: str, scope: str) -> bool:
+    """An enabled user install at its pin whose cached payload is incomplete.
+
+    Reinstalling enables the plugin and writes user settings, so only an enabled user
+    install is reinstalled; other scopes keep the plain update.
+    """
+    if (
+        scope != "user"
+        or plugins.user_enabled().get(f"{plugin}@{marketplace}") is not True
+    ):
+        return False
+    pin = pins(marketplace).get(plugin)
+    installation = scoped_installs(marketplace).get((plugin, scope))
+    return (
+        pin is not None
+        and installation is not None
+        and installation[0] == pin
+        and not readable(installation[1], plugin)
     )
 
 
@@ -117,79 +142,81 @@ def current(marketplace: str, plugin: str, digests: Digests) -> bool:
     return pinned(marketplace, plugin)
 
 
-def behind(marketplaces: tuple[str, ...]) -> list[str]:
-    found = []
-    for marketplace in marketplaces:
-        expected = pins(marketplace)
-        for (plugin, _scope), (revision, root) in sorted(
-            scoped_installs(marketplace).items()
-        ):
-            pin = expected.get(plugin)
-            if pin and revision != pin:
-                found.append(
-                    f"{plugin}@{marketplace}: installed {revision[:12]}, marketplace {pin[:12]}"
+def update_marketplaces(report: Any, marketplaces: tuple[str, ...]) -> None:
+    known = read(HOST.configuration_root / "plugins" / "known_marketplaces.json")
+    report.steps(
+        HOST,
+        [
+            [
+                (
+                    f"marketplace {marketplace}",
+                    ["claude", "plugin", "marketplace", "update", marketplace],
                 )
-            elif pin and not root.is_dir():
-                found.append(f"{plugin}@{marketplace}: installed {pin[:12]} is missing")
+            ]
+            for marketplace in marketplaces
+            if isinstance(known, dict) and marketplace in known
+        ],
+    )
+
+
+def registered(marketplaces: tuple[str, ...]) -> dict[str, list[str]]:
+    registry = read(HOST.configuration_root / "plugins" / "installed_plugins.json")
+    plugins = registry.get("plugins", {}) if isinstance(registry, dict) else {}
+    found: dict[str, list[str]] = {}
+    for plugin_id, rows in sorted(plugins.items()):
+        if plugin_id.rpartition("@")[2] not in marketplaces or not isinstance(
+            rows, list
+        ):
+            continue
+        for row in rows:
+            if (
+                isinstance(row, dict)
+                and isinstance(row.get("scope"), str)
+                and project_plugins.applies(
+                    Path.cwd(), row["scope"], row.get("projectPath")
+                )
+                and row["scope"] not in found.get(plugin_id, [])
+            ):
+                found.setdefault(plugin_id, []).append(row["scope"])
     return found
 
 
-def running_behind(root: Path) -> str | None:
-    pin = pins("tj-agents").get("agent")
-    install = installs("tj-agents").get("agent")
-    if not pin or not install or install[0] != pin:
-        return None
-    behind = loaded_build_behind(root, pin, install[1])
-    return f"agent@tj-agents: {behind}" if behind else None
-
-
-def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
-    build = BUILD.fullmatch(root.name)
-    if root.resolve() == install.resolve() or (build and build.group(1) == pin[:12]):
-        return None
-    return f"this session loaded {root.name}, current {install.name}"
+def stale(plugins: dict[str, list[str]]) -> dict[str, list[str]]:
+    found = {}
+    for plugin, scopes in plugins.items():
+        name, _, marketplace = plugin.rpartition("@")
+        behind = [scope for scope in scopes if not pinned(marketplace, name, scope)]
+        if behind:
+            found[plugin] = behind
+    return found
 
 
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
-    for marketplace in marketplaces:
-        report.step(
-            HOST,
-            f"marketplace {marketplace}",
-            ["claude", "plugin", "marketplace", "update", marketplace],
-        )
-    listing = report.step(HOST, "list", ["claude", "plugin", "list", "--json"])
-    if listing is None:
+    plugins = registered(marketplaces)
+    behind = stale(plugins)
+    if len(behind) < len(plugins):
+        print(f"{HOST}: {len(plugins) - len(behind)} plugin(s) already at their pin")
+    groups = []
+    for plugin, scopes in behind.items():
+        name, _, marketplace = plugin.rpartition("@")
+        group = []
+        for scope in scopes:
+            # `update` accepts a torn payload at its pin as current; only `install` rewrites it.
+            verb = INSTALL if torn(marketplace, name, scope) else UPDATE
+            group.append((plugin, [*verb, plugin, "--scope", scope, "--json", "-y"]))
+        groups.append(group)
+    report.steps(HOST, groups)
+    if report.failures:
         return
-    plugins = sorted(
-        {
-            (row["id"], row["scope"])
-            for row in json.loads(listing.stdout)
-            if row["id"].rpartition("@")[2] in marketplaces
-            and project_plugins.applies(
-                Path.cwd(), row["scope"], row.get("projectPath")
+    for plugin, scopes in stale(behind).items():
+        name, _, marketplace = plugin.rpartition("@")
+        if name in pins(marketplace):
+            report.fail(
+                HOST, plugin, f"{', '.join(scopes)} did not reach its marketplace pin"
             )
-        }
-    )
-    stale = [
-        (plugin, scope)
-        for plugin, scope in plugins
-        if not pinned(plugin.rpartition("@")[2], plugin.rpartition("@")[0], scope)
-    ]
-    if len(stale) < len(plugins):
-        print(f"{HOST}: {len(plugins) - len(stale)} plugin(s) already at their pin")
-    for plugin, scope in stale:
-        report.step(
-            HOST,
-            plugin,
-            ["claude", "plugin", "update", plugin, "--scope", scope, "--json", "-y"],
-        )
 
 
-def restart(report: Any, managed: bool) -> None:
-    if managed:
-        revision = json.dumps(pins("tj-agents"), sort_keys=True)
-        report.step(HOST, "resume when idle", ["tj", "restart", "--reason", revision])
-    else:
-        print(f"Plugins updated: {RELOAD}.")
+def activate(report: Any) -> None:
+    return None

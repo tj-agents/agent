@@ -60,6 +60,14 @@ def project_root(project: Path) -> Path:
     return project
 
 
+def committed_worktree(project: Path) -> bool:
+    if not (project / ".git").is_file():
+        return False
+    tracked = process.run(["git", "ls-files", "--error-unmatch", "--", ".agents/plugins.json"],
+                          cwd=project, capture_output=True, timeout=10, check=False)
+    return tracked.returncode == 0
+
+
 def launch_context(project: Path, host: Host, arguments) -> tuple[Path | None, tuple[str, ...]]:
     plugins = host_plugins.PLUGINS[host]
     original_project = project
@@ -185,9 +193,9 @@ def check(project: Path, host: Host, executable: str | None = None,
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(
-            f"Required standards unavailable for {host} in {project}: {', '.join(missing)}. "
-            "Run tj install --step 'plugin setup' in this project to install the required plugins. "
-            "Cached files from another host do not establish activation.", project, missing,
+            f"Required standards unavailable for {host} in {project}; not enabled with a complete "
+            f"cached build: {', '.join(missing)}. Run tj install --step 'plugin setup' "
+            "in this project; it reinstalls missing and incomplete builds.", project, missing,
         )
     return {identity: roots[identity] for identity in required}
 

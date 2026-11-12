@@ -37,7 +37,6 @@ def registered_scripts() -> set[Path]:
 
 def test_every_registered_hook_script_is_checked() -> None:
     assert {path.name for path in registered_scripts()} == {
-        "latest_plugins.py",
         "session_hook.py",
     }
 
@@ -47,9 +46,4 @@ def test_every_registered_hook_script_is_checked() -> None:
 )
 def test_no_registered_hook_can_block(script: Path) -> None:
     source = script.read_text(encoding="utf-8")
-    assert [pattern.pattern for pattern in BLOCKING if pattern.search(source)] == []
-
-
-def test_claude_idle_adapter_cannot_block() -> None:
-    source = (ROOT / ".claude/runtime/idle.py").read_text(encoding="utf-8")
     assert [pattern.pattern for pattern in BLOCKING if pattern.search(source)] == []
