@@ -223,6 +223,17 @@ def plan(
     return results
 
 
+def close_launches(row: Recovery) -> Recovery:
+    try:
+        for launch_id in row.open_launches:
+            agent_store.run("set-open", "--launch-id", launch_id, "--open", "false")
+    except agent_store.AgentStoreError as error:
+        return replace(
+            row, error=f"recovered, but its old tab still reads open: {error}"
+        )
+    return row
+
+
 def restore(row: Recovery) -> Recovery:
     handle = row.session
     if row.action == Action.END:
@@ -231,7 +242,7 @@ def restore(row: Recovery) -> Recovery:
     adapter = agent_cli.host_launch(row.host)
     if row.action == Action.RESPAWN and row.background:
         adapter.respawn(row.background)
-        return replace(row, action=Action.RESPAWNED)
+        return close_launches(replace(row, action=Action.RESPAWNED))
     directory = Path(row.directory)
     if not directory.is_dir():
         raise agent_cli.LaunchError(f"Directory no longer exists: {directory}")
@@ -245,13 +256,13 @@ def restore(row: Recovery) -> Recovery:
         want_session=True,
         tmux_session="tj-recover",
     )
-    for launch_id in row.open_launches:
-        agent_store.run("set-open", "--launch-id", launch_id, "--open", "false")
-    return replace(
-        row,
-        action=Action.RESUMED,
-        launch_id=shown["launch"]["launch_id"],
-        previous_launch_id=row.launch_id,
+    return close_launches(
+        replace(
+            row,
+            action=Action.RESUMED,
+            launch_id=shown["launch"]["launch_id"],
+            previous_launch_id=row.launch_id,
+        )
     )
 
 
