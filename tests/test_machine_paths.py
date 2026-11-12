@@ -18,11 +18,8 @@ RELATIVE = ".codex/config.toml"
 
 @pytest.fixture
 def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    for name in tuple(os.environ):
-        if name == "GIT_CONFIG_COUNT" or name.startswith(
-            ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
-        ):
-            monkeypatch.delenv(name)
+    # A zero count makes git ignore any injected GIT_CONFIG_KEY_n/VALUE_n pairs.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "0")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     git(tmp_path, "init", "--quiet")

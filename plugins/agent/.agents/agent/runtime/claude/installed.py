@@ -27,7 +27,9 @@ def marketplace_root(marketplace: str) -> Path:
 
 
 def pins(marketplace: str) -> dict[str, str]:
-    catalog = read(marketplace_root(marketplace) / ".claude-plugin" / "marketplace.json")
+    catalog = read(
+        marketplace_root(marketplace) / ".claude-plugin" / "marketplace.json"
+    )
     entries = catalog.get("plugins", []) if isinstance(catalog, dict) else []
     return {
         entry["name"]: entry["source"]["sha"]
@@ -169,19 +171,15 @@ def refresh(
     behind = stale(plugins)
     if len(behind) < len(plugins):
         print(f"{HOST}: {len(plugins) - len(behind)} plugin(s) already at their pin")
-    report.steps(
-        HOST,
-        [
+    groups = []
+    for plugin, scopes in behind.items():
+        groups.append(
             [
-                (
-                    plugin,
-                    [*UPDATE, plugin, "--scope", scope, "--json", "-y"],
-                )
+                (plugin, [*UPDATE, plugin, "--scope", scope, "--json", "-y"])
                 for scope in scopes
             ]
-            for plugin, scopes in behind.items()
-        ],
-    )
+        )
+    report.steps(HOST, groups)
     if report.failures:
         return
     for plugin, scopes in stale(behind).items():
