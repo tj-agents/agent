@@ -13,12 +13,23 @@ class Liveness:
     background: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedLaunch:
+    command: tuple[str, ...]
+    session: str | None = None
+    created: bool = False
+
+
 class Launch(Protocol):
     SESSION_ENVIRONMENT: tuple[str, ...]
     TAB_CLEARED: tuple[str, ...]
     TAB_FORCED: Mapping[str, str]
 
     def executable(self) -> str: ...
+
+    def prepare(self, directory: Path, title: str, arguments: list[str], cli: str) -> PreparedLaunch: ...
+
+    def abandon(self, prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None: ...
 
     def start_arguments(self, directory: Path, title: str, prompt: str, model: str | None,
                         effort: str | None) -> list[str]: ...

@@ -116,6 +116,28 @@ CAPABILITIES = (
         ),
     ),
     Capability(
+        "managed-launch-preparation",
+        Support(
+            "agent:.claude/runtime/launch.py::prepare",
+            "agent:tests/test_capability_contracts.py::test_claude_preparation_preserves_native_command_without_creating_session",
+        ),
+        Support(
+            "agent:.codex/runtime/launch.py::prepare",
+            "agent:tests/test_codex_startup.py::test_launch_uses_exact_session_and_genuine_native_argv",
+        ),
+    ),
+    Capability(
+        "failed-launch-cleanup",
+        Support(
+            "agent:.claude/runtime/launch.py::abandon",
+            "agent:tests/test_capability_contracts.py::test_claude_abandon_preserves_existing_session_without_external_calls",
+        ),
+        Support(
+            "agent:.codex/runtime/launch.py::abandon",
+            "agent:tests/test_codex_startup.py::test_launch_failure_cleans_only_before_dispatch_without_store_proof",
+        ),
+    ),
+    Capability(
         "launch-prompt-model-effort",
         Support(
             "agent:.claude/runtime/launch.py::start_arguments",

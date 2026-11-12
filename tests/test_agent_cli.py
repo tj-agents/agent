@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from launch_contract import PreparedLaunch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
@@ -542,6 +543,7 @@ class AwaitLaunchTests(unittest.TestCase):
 class LaunchTests(unittest.TestCase):
     def test_the_tab_root_is_tj_run_carrying_the_launch_identity(self):
         adapter = mock.Mock(TAB_CLEARED=(), TAB_FORCED={}, SESSION_ENVIRONMENT=(), executable=lambda: 'claude')
+        adapter.prepare.return_value = PreparedLaunch(('claude', '--name', 'agent#98', 'go'))
         with mock.patch.object(CLI, 'host_launch', return_value=adapter), \
                 mock.patch.object(CLI.shutil, 'which', return_value='tj'), \
                 mock.patch.object(CLI.uuid, 'uuid4', return_value=mock.Mock(hex='L1')), \
