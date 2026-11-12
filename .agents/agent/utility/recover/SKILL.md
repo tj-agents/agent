@@ -18,6 +18,7 @@ Owns dead Claude and Codex session recovery through `tj recover`.
 tj status
 tj recover --dry-run
 tj recover
+tj recover --open
 tj recover --older
 tj recover --ended
 tj recover --session codex:019a2f72-60d1-7be2-9ef1-8af0ce672013
@@ -26,7 +27,8 @@ tj recover 124
 
 By default, recover every dead, non-ended session whose transcript last changed after the previous boot,
 whether or not it links to a work item. Older dead sessions are automatically marked ended. Live sessions
-are left alone.
+are left alone. `--open` instead reopens exactly the launches whose tab was open, newest per session,
+whose agent is not running; it never ends sessions and ignores the previous boot.
 
 Use `--older` to include older dead sessions and `--ended` to include ended sessions. Narrow selection with
 `--session <host:session-id>` or a positional work item. `--dry-run` reports would-resume, would-respawn,
