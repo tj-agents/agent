@@ -39,10 +39,7 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--working-directory', required=True)
     parser.add_argument('--prompt-path', required=True)
     parser.add_argument('--title', required=True)
-    parser.add_argument('--model')
-    parser.add_argument('--reasoning-effort', choices=('low', 'medium', 'high', 'xhigh', 'max', 'ultra'))
-    parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'))
-    parser.add_argument('--frontier', action='store_true')
+    parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'), required=True)
     parser.add_argument('--minimum-version', default='0.154.0')
     parser.add_argument('--item', help='work item the child is linked to; one is created when omitted')
     parser.add_argument('--parent', help='parent session (host:id); defaults to the calling session')
@@ -52,51 +49,15 @@ def parse_args(argv, agent_cli):
     if not args.title.strip():
         raise agent_cli.LaunchError('--title must name the session; it becomes the tab title.')
 
-    # L7 work stays inside an existing session: rejected before anything else runs, regardless of
-    # whether --model or --frontier is also given, because the lane itself -- not what it would have
-    # paired with -- is what a handoff can never open.
     if args.lane == 'L7':
         raise agent_cli.LaunchError('--lane L7 is for in-session clerical work and cannot open a handoff.')
-
-    # --frontier is the tier no lane resolves to and tolerates no competing selection beside it, so
-    # passing it alongside --lane or --model is a contradiction to reject rather than an ambiguity to
-    # rank. --reasoning-effort is the one flag it still accepts, for a user who named the pace as well as
-    # the tier.
-    if args.frontier and (args.lane or args.model):
-        raise agent_cli.LaunchError(
-            '--frontier rejects --lane and --model beside it: the frontier tier is an explicit user '
-            'request, not one selection among several.'
-        )
 
     return args
 
 
 def resolve_model(args, agent_cli):
-    """(model, effort, tier text for the success message) per this launcher's selection precedence.
-
-    An explicit --model or --reasoning-effort wins for whichever half it names outright. --lane fills
-    whichever half the caller left out, from the same shipped lane table; the lane is never guessed from
-    the prompt. --frontier resolves both halves as a pair from the tier above the ladder, and only an
-    explicit --reasoning-effort still wins over its own effort, for a user who named the pace as well as
-    the tier.
-    """
-    model = args.model
-    effort = args.reasoning_effort
-    tier = ''
-    if args.frontier:
-        tier = 'frontier -> '
-        model, frontier_effort = agent_cli.resolve_lane_model(agent_cli.Host.CODEX, frontier=True)
-        if not effort:
-            effort = frontier_effort
-    elif args.lane and not (model and effort):
-        lane_model, lane_effort = agent_cli.resolve_lane_model(agent_cli.Host.CODEX, lane=args.lane)
-        if not model:
-            model = lane_model
-            tier = f'lane {args.lane} -> '
-        if not effort:
-            effort = lane_effort
-
-    return model, effort, tier
+    model, effort = agent_cli.resolve_lane_model(agent_cli.Host.CODEX, lane=args.lane)
+    return model, effort, f'lane {args.lane} -> '
 
 
 def main(argv=None):
@@ -116,7 +77,7 @@ def main(argv=None):
                                  adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort),
                                  item=item, parent=parent)
 
-        selection = f'{tier}{model}' if model else 'the CLI default model'
+        selection = f'{tier}{model}'
         if effort:
             selection += f' at {effort}'
         print(f"Launched Codex handoff tab '{args.title}' in {working_directory} on {selection} with prompt {prompt_path}")

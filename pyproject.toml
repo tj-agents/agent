@@ -275,11 +275,6 @@ rule = "PY016"
 reason = "Existing test reads or replaces process state at a command boundary."
 
 [[tool.python-standards.exceptions]]
-path = "tests/test_handoff_launchers.py"
-rule = "PY016"
-reason = "Existing test reads or replaces process state at a command boundary."
-
-[[tool.python-standards.exceptions]]
 path = "tests/test_hook_trust.py"
 rule = "PY001"
 reason = "Existing test flattens nested fixture data for assertions."
