@@ -928,9 +928,36 @@ def test_current_plugins_fetch_their_marketplace_and_publish_without_installing(
             "plugin", "marketplace", "upgrade", "tj-agents"
         ),
     }[host]
+    package = {
+        Host.CLAUDE: root,
+        Host.CODEX: tmp_path / "codex/plugins/cache/tj-agents/agent/current",
+    }[host]
+    installer = package / ".agents/agent/runtime/install.py"
     assert commands == [
         fetch,
+        [sys.executable, "-B", str(installer), "--step", "launch-check runtime"],
         ["tj", "update", "--host", host.value, "--revision", MARKETPLACE_REVISION],
+    ]
+
+
+def test_a_failed_runtime_delivery_publishes_nothing(tmp_path: Path) -> None:
+    claude = tmp_path / "claude"
+    pin_plugin(claude, "agent", AGENT_PIN)
+    install_plugin(claude, "agent", AGENT_PIN)
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        failed = command[-2:] == ["--step", "launch-check runtime"]
+        return completed(1 if failed else 0, "", "runtime locked" if failed else "")
+
+    with (
+        _patched_homes(tmp_path),
+        mock.patch.object(REFRESH.process, "run", side_effect=run) as spawned,
+    ):
+        assert REFRESH.main(["update", "--host", "claude"]) == 1
+    assert not [
+        call.args[0]
+        for call in spawned.call_args_list
+        if call.args[0][:2] == ["tj", "update"]
     ]
 
 
