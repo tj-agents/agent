@@ -72,7 +72,7 @@ raises-require-match-for = ["*"]
 ".agents/agent/utility/plugins/scripts/config_conflicts.py" = ["ANN401"]
 ".agents/agent/runtime/tj_recover.py" = ["TID251"]
 ".agents/agent/runtime/retired_state.py" = ["PLR6301", "TRY300"]
-".agents/agent/runtime/tj_plugins.py" = ["TID251"]
+".agents/agent/runtime/plugin_update.py" = ["TID251"]
 
 [[tool.python-standards.exceptions]]
 path = ".agents/agent/resources/lanes/resolve.py"

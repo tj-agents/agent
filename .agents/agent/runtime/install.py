@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Install and converge this machine's tj-agents environment (Python 3.12+).
 
-Runs an ordered list of steps, each with a check and an apply. A step whose check reports no drift is
+A full install first fetches the marketplaces and brings each installed host's plugins to their pins,
+then hands the rest of the install to the Agent package that update converged to, so `tj install`
+always upgrades itself. It then runs an ordered list of steps, each with a check and an apply. A step whose check reports no drift is
 left alone, so rerunning converges and writes nothing once the machine is current. `--check` reports
 drift without writing anything and exits 1 when something would change. Installed launch paths use
 the managed package closure, independently of source checkouts.
@@ -40,10 +42,12 @@ from codex import installed as codex_installed
 from codex import launch as codex_launch
 from codex import powershell as codex_powershell
 from codex import projects as codex_projects
+from codex import user_plugins as codex_user_plugins
 import host_permissions
 import jobs
 import machine_state
 import plugin_copies
+import plugin_update
 import required_plugins
 import retired_state
 import runtime_delivery
@@ -52,6 +56,7 @@ import agent_store
 import work_items_install
 from tj_agent import content
 from tj_cli import handy_install, process, worktrunk_install
+from tree_digest import Digests
 
 INSTALLER_TIMEOUT_SECONDS = 600
 LOCKED = "(os error 5)"
@@ -64,7 +69,7 @@ RUNTIME_EXPORTS = (
 )
 LIFECYCLE_COMMANDS = {
     "start": "tj_start.py", "status": "tj_status.py", "recover": "tj_recover.py",
-    "plugins": "tj_plugins.py", "install": "install.py",
+    "install": "install.py",
     "prepare": "tj_prepare.py", "session": "tj_session.py",
 }
 PROFILE_START = "# >>> tj-agents >>>"
@@ -1039,6 +1044,48 @@ def apply_plugin_setup(context: Context) -> list[str]:
     return []
 
 
+SCOPED_MARKETPLACE = "@tj-agents"
+
+
+def claude_user_enabled(context: Context) -> list[str]:
+    enabled = read_json(context.claude_home / "settings.json").get("enabledPlugins")
+    if not isinstance(enabled, dict):
+        return []
+    return sorted(identity for identity, value in enabled.items()
+                  if identity.endswith(SCOPED_MARKETPLACE) and value is True)
+
+
+def codex_user_enabled(context: Context) -> list[str]:
+    path = codex_config_path(context)
+    text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
+    return sorted(identity for identity in codex_user_plugins.enabled(text) if identity.endswith(SCOPED_MARKETPLACE))
+
+
+def check_plugin_scope(context: Context) -> list[str]:
+    """tj-agents plugins load only where a repository selects them, never for every project."""
+    return [f"stop enabling {identity} for every {host} project"
+            for host, identities in ((Host.CLAUDE, claude_user_enabled(context)), (Host.CODEX, codex_user_enabled(context)))
+            for identity in identities]
+
+
+def apply_plugin_scope(context: Context) -> list[str]:
+    changes = []
+    for identity in claude_user_enabled(context):
+        result = context.run(["claude", "plugin", "disable", identity, "--scope", "user"],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             timeout=120, check=False)
+        if result.returncode:
+            raise InstallError(f"claude plugin disable {identity}: {(result.stderr or result.stdout).strip()}")
+        changes.append(f"claude: {identity} loads only where a repository selects it")
+    identities = codex_user_enabled(context)
+    if identities:
+        path = codex_config_path(context)
+        text = path.read_text(encoding="utf-8-sig")
+        path.write_text(codex_user_plugins.without(text, identities), encoding="utf-8")
+        changes.extend(f"codex: {identity} loads only where a repository selects it" for identity in identities)
+    return changes
+
+
 def check_plugin_copies(context: Context) -> list[str]:
     return plugin_copies.drift(context.state_directory)
 
@@ -1133,6 +1180,7 @@ STEPS = (
     Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
          lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
+    Step("plugin scope", check_plugin_scope, apply_plugin_scope),
     Step("Codex hook trust", check_codex_hook_trust, apply_codex_hook_trust, skip_codex_hook_trust),
     Step("plugin copies", check_plugin_copies, apply_plugin_copies),
 )
@@ -1201,13 +1249,43 @@ def repair(name: str, project: Path) -> list[str]:
     return step.apply(context)
 
 
-INSTALLED_REVISION = "tj install"
+def plugin_hosts(context: Context) -> list[Host]:
+    return [host for host in Host if context.which(host.value)]
 
 
-def publish_update(context: Context) -> int:
+def update_plugins(context: Context, err=sys.stderr) -> dict[Host, plugin_update.Outcome]:
+    """Bring every installed host's tj-agents plugins to their marketplace pins."""
+    digests = Digests(context.state_directory)
+    outcomes = {}
+    for host in plugin_hosts(context):
+        outcome = plugin_update.update(host, digests)
+        for failure in outcome.failures:
+            print(f"failed plugins: {failure}", file=err)
+            context.failures.append(f"plugins: {failure}")
+        outcomes[host] = outcome
+    return outcomes
+
+
+def converged_installer(context: Context) -> Path | None:
+    """The installer of the Agent package the plugin update converged to, when it is not this one."""
+    for host in plugin_hosts(context):
+        package = plugin_update.agent_package(host, context.state_directory)
+        if package is None:
+            continue
+        installer = package / ".agents" / "agent" / "runtime" / "install.py"
+        if installer.is_file() and installer.resolve() != (RUNTIME / "install.py").resolve():
+            return installer
+        return None
+    return None
+
+
+def publish_update(context: Context, outcomes: dict[Host, plugin_update.Outcome]) -> int:
+    """Tell running tj run tabs of each host whose plugins or marketplace moved to reload."""
     code = 0
-    for host in (host for host in Host if context.which(host.value)):
-        command = ["tj", "update", "--host", host.value, "--revision", INSTALLED_REVISION]
+    for host, outcome in outcomes.items():
+        if outcome.failures or not outcome.changed or outcome.revision is None:
+            continue
+        command = ["tj", "update", "--host", host.value, "--revision", outcome.revision]
         try:
             result = context.run(command, capture_output=True, text=True, timeout=30, check=False)
         except (OSError, subprocess.SubprocessError) as error:
@@ -1218,7 +1296,7 @@ def publish_update(context: Context) -> int:
             context.failures.append(f"{host} update: {result.stderr.strip() or f'exit {result.returncode}'}")
             code = 2
             continue
-        print(f"apply  {host} update: published the plugin revision for running tj run tabs")
+        print(f"apply  {host} update: published {outcome.revision[:12]} to running tj run tabs")
     return code
 
 
@@ -1253,6 +1331,7 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument("--onboard", action="store_true", help="allow explicitly requested plugin enrollment")
     parser.add_argument("--step", action="append", choices=[step.name for step in STEPS],
                         help="run named steps with their dependencies and required preconditions; repeat to select several")
+    parser.add_argument("--converged", action="store_true", help=argparse.SUPPRESS)
     try:
         parsed = parser.parse_args(arguments)
     except SystemExit as error:
@@ -1270,15 +1349,25 @@ def main(argv: list[str] | None = None) -> int:
     steps = selected_steps(set(parsed.step or ()))
     if parsed.check:
         return run_steps(steps, context, True)
+    full = not parsed.step and not parsed.converged
+    outcomes: dict[Host, plugin_update.Outcome] = {}
+    successor = None
     with jobs.held(context.state_directory, jobs.Job.INSTALL) as acquired:
         if not acquired:
             print("install: another machine install is running", file=sys.stderr)
             return 2
-        code = run_steps(steps, context, False)
-        if not code:
-            code = publish_update(context)
+        if full:
+            outcomes = update_plugins(context)
+            successor = converged_installer(context)
+        if successor is None:
+            code = run_steps(steps, context, False)
         jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
-    return code
+    if successor is not None:
+        print(f"install: continuing with the converged Agent package at {successor.parents[3]}")
+        code = process.run([sys.executable, "-B", str(successor), *arguments, "--converged"]).returncode
+    if not code:
+        code = publish_update(context, outcomes)
+    return 2 if context.failures and not code else code
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ if sys.version_info < (3, 12):
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import install  # noqa: E402
+from plugin_update import Outcome  # noqa: E402
+from tj_agent.host import Host  # noqa: E402
 import tomllib  # noqa: E402
 
 BOM = b"\xef\xbb\xbf"
@@ -768,7 +770,8 @@ class RunStepsTests(Machine):
             "tj item CLI", "worktrunk", "Handy",
             "launch-check runtime", "tj lifecycle commands",
             "shell profiles", "hidden Git Bash for Claude",
-            "Codex profile agents", "harness permissions", "plugin setup", "Codex hook trust", "plugin copies",
+            "Codex profile agents", "harness permissions", "plugin setup", "plugin scope", "Codex hook trust",
+            "plugin copies",
         ], [item.name for item in install.STEPS])
 
 
@@ -1039,8 +1042,13 @@ def test_an_install_outside_the_managed_runtime_runs_its_own_build(
     assert install.pinned_installer(tmp_path / "state") is None
 
 
+def outcome(*, changed: bool = True, failures: list[str] | None = None,
+            revision: str | None = "f" * 40) -> Outcome:
+    return Outcome(failures or [], changed, revision)
+
+
 @pytest.mark.parametrize("returncode", [0, 1])
-def test_a_successful_install_publishes_for_running_tabs(
+def test_install_publishes_the_marketplace_revision_for_a_host_that_moved(
     tmp_path: Path, returncode: int
 ) -> None:
     calls: list[list[str]] = []
@@ -1049,38 +1057,125 @@ def test_a_successful_install_publishes_for_running_tabs(
         calls.append(command)
         return subprocess.CompletedProcess(command, returncode, "", "no tj")
 
-    context = install.Context(
-        home=tmp_path,
-        environ={},
-        windows=False,
-        run=run,
-        which=lambda name: name if name == "claude" else None,
-    )
-    with (
-        mock.patch.object(install, "machine_context", return_value=context),
-        mock.patch.object(install, "run_steps", return_value=0),
-        contextlib.redirect_stdout(io.StringIO()),
-    ):
-        assert install.main(["--step", "plugin copies"]) == 2 * returncode
-    assert calls == [
-        ["tj", "update", "--host", "claude", "--revision", install.INSTALLED_REVISION]
-    ]
+    context = install.Context(home=tmp_path, environ={}, windows=False, run=run)
+    with contextlib.redirect_stdout(io.StringIO()):
+        code = install.publish_update(context, {Host.CLAUDE: outcome()})
+    assert code == 2 * returncode
+    assert calls == [["tj", "update", "--host", "claude", "--revision", "f" * 40]]
     assert context.failures == ([] if not returncode else ["claude update: no tj"])
 
 
-def test_install_publishes_once_for_each_host_on_path(tmp_path: Path) -> None:
+def test_install_leaves_running_tabs_alone_when_nothing_moved(tmp_path: Path) -> None:
+    run = mock.Mock()
+    context = install.Context(home=tmp_path, environ={}, windows=False, run=run)
+    outcomes = {
+        Host.CLAUDE: outcome(changed=False),
+        Host.CODEX: outcome(failures=["codex: list: boom"]),
+    }
+    assert install.publish_update(context, outcomes) == 0
+    run.assert_not_called()
+
+
+def full_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, successor: Path | None,
+                 arguments: list[str]) -> tuple[int, list[Host], list[list[str]], mock.Mock]:
+    context = machine_context(tmp_path)
+    context.which = lambda name: name
+    updated: list[Host] = []
+
+    def update(host: Host, _digests: object) -> Outcome:
+        updated.append(host)
+        return outcome(changed=False)
+
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(install.plugin_update, "update", update)
+    monkeypatch.setattr(install, "converged_installer", lambda _context: successor)
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install.process, "run", run),
+        mock.patch.object(install, "run_steps", return_value=0) as steps,
+        contextlib.redirect_stdout(io.StringIO()),
+    ):
+        code = install.main(arguments)
+    return code, updated, calls, steps
+
+
+def test_a_full_install_updates_both_hosts_then_hands_over_to_the_converged_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    successor = tmp_path / "agent/new/.agents/agent/runtime/install.py"
+    code, updated, calls, steps = full_install(tmp_path, monkeypatch, successor, [])
+    assert code == 0
+    assert updated == [Host.CLAUDE, Host.CODEX]
+    assert calls == [[sys.executable, "-B", str(successor), "--converged"]]
+    steps.assert_not_called()
+
+
+def test_an_install_already_at_the_converged_agent_runs_its_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, updated, calls, steps = full_install(tmp_path, monkeypatch, None, [])
+    assert code == 0
+    assert updated == [Host.CLAUDE, Host.CODEX]
+    assert calls == []
+    steps.assert_called_once()
+
+
+@pytest.mark.parametrize("arguments", [["--converged"], ["--step", "plugin copies"]])
+def test_a_handed_over_or_single_step_install_does_not_update_plugins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str]
+) -> None:
+    code, updated, calls, steps = full_install(tmp_path, monkeypatch, tmp_path / "x.py", arguments)
+    assert code == 0
+    assert updated == []
+    assert calls == []
+    steps.assert_called_once()
+
+
+def test_tj_plugins_is_no_longer_a_command() -> None:
+    assert "plugins" not in install.LIFECYCLE_COMMANDS
+
+
+def scoped_machine(tmp_path: Path) -> install.Context:
+    context = machine_context(tmp_path)
+    context.environ = {"CLAUDE_CONFIG_DIR": str(tmp_path / "claude"),
+                       "CODEX_HOME": str(tmp_path / "codex")}
+    (tmp_path / "claude").mkdir()
+    (tmp_path / "claude/settings.json").write_text(json.dumps({"enabledPlugins": {
+        "python@tj-agents": True, "rust@tj-agents": False, "clangd-lsp@claude-plugins-official": True,
+    }}), encoding="utf-8")
+    (tmp_path / "codex").mkdir()
+    (tmp_path / "codex/config.toml").write_text(
+        "\n".join([
+            'model = "gpt"', "", '[plugins."work@tj-agents"]', "enabled = true", "",
+            '[plugins."concertable@agents"]', "enabled = true", "",
+        ]),
+        encoding="utf-8",
+    )
+    return context
+
+
+def test_plugin_scope_reports_every_tj_agents_plugin_enabled_for_all_projects(tmp_path: Path) -> None:
+    assert install.check_plugin_scope(scoped_machine(tmp_path)) == [
+        "stop enabling python@tj-agents for every claude project",
+        "stop enabling work@tj-agents for every codex project",
+    ]
+
+
+def test_plugin_scope_disables_only_tj_agents_plugins_at_user_scope(tmp_path: Path) -> None:
+    context = scoped_machine(tmp_path)
     calls: list[list[str]] = []
 
     def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    context = install.Context(
-        home=tmp_path, environ={}, windows=False, run=run, which=lambda name: name
-    )
-    with contextlib.redirect_stdout(io.StringIO()):
-        assert install.publish_update(context) == 0
-    assert calls == [
-        ["tj", "update", "--host", "claude", "--revision", "tj install"],
-        ["tj", "update", "--host", "codex", "--revision", "tj install"],
-    ]
+    context.run = run
+    install.apply_plugin_scope(context)
+    assert calls == [["claude", "plugin", "disable", "python@tj-agents", "--scope", "user"]]
+    codex = tomllib.loads((tmp_path / "codex/config.toml").read_text(encoding="utf-8"))
+    assert codex == {"model": "gpt", "plugins": {"concertable@agents": {"enabled": True}}}
