@@ -116,7 +116,7 @@ installed runtime and reports the update failure.
 ## Lifecycle
 
 ```text
-tj start 461 [--codex] [--lane L4]   worktree via worktrunk, card In Progress, agent in a tj run tab
+tj start 461 --lane L4 [--codex]     worktree via worktrunk, card In Progress, agent in a tj run tab
 tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
 tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
 tj recover --dry-run                 preview restores and stale sessions to end without changing anything
