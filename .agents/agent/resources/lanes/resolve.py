@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Resolve a lane to one harness's model and effort.
 
-  resolve.py --host claude --lane L5          -> {"model": "claude-sonnet-5", "effort": "medium"}
+  resolve.py --host claude --lane L5
   resolve.py --host codex  --lane L7 --format env
   resolve.py --lanes                          -> the rung list, both harnesses, for a diff
 
@@ -52,20 +52,6 @@ def resolve(host, lane):
         out["context_ceiling"] = rung["context_ceiling"]
     if rung.get("handoff") is not None:
         out["handoff"] = rung["handoff"]
-    return out
-
-
-def frontier(host):
-    """The tier above the ladder. No lane resolves to it; only an explicit user request selects it."""
-    data = table(host)
-    tier = data.get("frontier") or {}
-    if not tier.get("model"):
-        raise SystemExit(f"lanes: the {host} table prices no frontier tier")
-    effort_key = data.get("effort_key", "effort")
-    out = {"host": str(host), "model": tier["model"]}
-    if effort_key in tier:
-        out["effort"] = tier[effort_key]
-        out["effort_key"] = effort_key
     return out
 
 

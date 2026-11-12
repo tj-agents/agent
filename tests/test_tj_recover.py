@@ -102,6 +102,14 @@ class Recovery:
                 }
             case ("launches",):
                 return {"launches": self.launches}
+            case ("set-open", "--launch-id", "unwritable", "--open", _):
+                raise agent_store.AgentStoreError("storage", "database is locked")
+            case ("set-open", "--launch-id", launch_id, "--open", value):
+                launch = next(
+                    row for row in self.launches if row["launch_id"] == launch_id
+                )
+                launch["open"] = value == "true"
+                return {"launch": launch}
             case ("end", "--session", handle, "--reason", reason):
                 self.ended.append(handle)
                 row = next(row for row in self.records if row["session"] == handle)
@@ -363,3 +371,93 @@ def test_recover_from_plain_linux_terminal_creates_then_attaches_tmux(
     assert [command[1] for command in commands].count("new-session") == 1
     assert [command[1] for command in commands].count("new-window") == 1
     assert commands[-1][1] == "attach-session"
+
+
+def open_launch(
+    recovery: Recovery, launch_id: str, session: str | None, opened: bool = True
+) -> None:
+    recovery.launches.append(
+        {
+            "launch_id": launch_id,
+            "title": launch_id,
+            "cwd": str(recovery.root),
+            "session": session,
+            "open": opened,
+        }
+    )
+
+
+def test_recover_open_reopens_exactly_the_open_tabs_whose_agent_is_dead(
+    recovery: Recovery,
+) -> None:
+    recovery.session(Host.CLAUDE, "was-open", 1)
+    recovery.session(Host.CLAUDE, "closed")
+    recovery.session(Host.CODEX, "running")
+    recovery.hosts[Host.CODEX].live["running"] = Liveness(True, "busy")
+    open_launch(recovery, "earlier", "claude:was-open")
+    open_launch(recovery, "latest", "claude:was-open")
+    open_launch(recovery, "shut", "claude:closed", opened=False)
+    open_launch(recovery, "live", "codex:running")
+    code, rows = recovery.run("--open")
+    assert code == 0
+    assert [(row["session"], row["action"]) for row in rows] == [
+        ("claude:was-open", "resumed")
+    ]
+    assert recovery.launched[0]["title"] == "latest"
+    assert recovery.launched[0]["arguments"] == ["resume", "was-open"]
+    assert recovery.ended == []
+    assert {launch["launch_id"]: launch["open"] for launch in recovery.launches} == {
+        "earlier": False,
+        "latest": False,
+        "shut": False,
+        "live": True,
+    }
+
+
+def test_recover_open_reports_a_launch_with_no_session(recovery: Recovery) -> None:
+    open_launch(recovery, "never-registered", None)
+    code, rows = recovery.run("--open")
+    assert code == 1
+    assert rows[0]["action"] == "failed"
+    assert "never-registered" in rows[0]["error"]
+    assert recovery.launched == []
+
+
+def test_recover_closes_the_launch_it_reopens(recovery: Recovery) -> None:
+    recovery.session(Host.CODEX, "recent", launch_id="original")
+    open_launch(recovery, "original", "codex:recent")
+    assert recovery.run()[1][0]["action"] == "resumed"
+    assert recovery.launches[0]["open"] is False
+
+
+def test_recover_open_dry_run_changes_nothing(recovery: Recovery) -> None:
+    recovery.session(Host.CLAUDE, "was-open")
+    open_launch(recovery, "tab", "claude:was-open")
+    code, rows = recovery.run("--open", "--dry-run")
+    assert code == 0
+    assert rows[0]["action"] == "resume"
+    assert recovery.launches[0]["open"] is True
+    assert recovery.launched == []
+
+
+def test_recover_open_reports_a_resume_whose_old_tab_could_not_be_closed(
+    recovery: Recovery,
+) -> None:
+    recovery.session(Host.CLAUDE, "was-open")
+    open_launch(recovery, "unwritable", "claude:was-open")
+    code, rows = recovery.run("--open")
+    assert code == 0
+    assert rows[0]["action"] == "resumed"
+    assert rows[0]["launch_id"] == "new-launch"
+    assert "database is locked" in rows[0]["error"]
+
+
+def test_recover_open_respawns_a_background_session_and_closes_its_tab(
+    recovery: Recovery,
+) -> None:
+    recovery.session(Host.CLAUDE, "background")
+    recovery.hosts[Host.CLAUDE].live["background"] = Liveness(False, background="bg")
+    open_launch(recovery, "tab", "claude:background")
+    assert recovery.run("--open")[1][0]["action"] == "respawned"
+    assert recovery.hosts[Host.CLAUDE].respawned == ["bg"]
+    assert recovery.launches[0]["open"] is False

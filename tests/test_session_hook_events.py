@@ -1,6 +1,7 @@
 """session_hook.py: what each host event records in agent-store, with the store and hosts faked."""
 import importlib
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -62,12 +63,6 @@ class EventTests(unittest.TestCase):
         with mock.patch.object(sys, 'stdin', io.StringIO(stdin)), mock.patch.object(sys, 'stderr', io.StringIO()):
             return hook.main(list(argv))
 
-    def test_end_closes_the_session_and_an_unknown_one_is_not_an_error(self):
-        run = mock.Mock(side_effect=hook.agent_store.AgentStoreError('not-found', 'unknown'))
-        with mock.patch.object(hook.agent_store, 'run', run):
-            self.assertEqual(0, self.main('end', '--host', 'claude'))
-        run.assert_called_once_with('end', '--session', 'claude:n1')
-
     def test_a_store_failure_never_stops_the_session(self):
         with mock.patch.object(hook, 'start', side_effect=hook.agent_store.AgentStoreError('missing', 'x')):
             self.assertEqual(0, self.main('start', '--host', 'codex'))
@@ -82,6 +77,28 @@ class EventTests(unittest.TestCase):
         with mock.patch.object(hook.agent_store, 'run') as run:
             self.assertEqual(0, self.main('start', '--host', 'claude', stdin='{}'))
         run.assert_not_called()
+
+
+@pytest.mark.parametrize('reason', ['clear', 'resume', 'logout', 'prompt_input_exit'])
+def test_end_closes_the_session_for_an_explicit_exit_reason(monkeypatch, reason):
+    run = mock.Mock(side_effect=hook.agent_store.AgentStoreError('not-found', 'unknown'))
+    monkeypatch.setattr(hook.agent_store, 'run', run)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({'session_id': 'n1', 'reason': reason})))
+    assert hook.main(['end', '--host', 'claude']) == 0
+    run.assert_called_once_with('end', '--session', 'claude:n1')
+
+
+@pytest.mark.parametrize('stdin', [
+    json.dumps({'session_id': 'n1', 'reason': 'other'}),
+    json.dumps({'session_id': 'n1'}),
+    json.dumps({'session_id': 'n1', 'reason': 'something-unexpected'}),
+])
+def test_end_leaves_the_session_active_for_other_missing_or_unknown_reasons(monkeypatch, stdin):
+    run = mock.Mock()
+    monkeypatch.setattr(hook.agent_store, 'run', run)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(stdin))
+    assert hook.main(['end', '--host', 'claude']) == 0
+    run.assert_not_called()
 
 
 def test_an_unrecorded_launch_registers_by_title_and_reports_it_on_stderr(monkeypatch, capsys):
