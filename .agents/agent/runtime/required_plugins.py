@@ -60,6 +60,14 @@ def project_root(project: Path) -> Path:
     return project
 
 
+def committed_worktree(project: Path) -> bool:
+    if not (project / ".git").is_file():
+        return False
+    tracked = process.run(["git", "ls-files", "--error-unmatch", "--", ".agents/plugins.json"],
+                          cwd=project, capture_output=True, timeout=10, check=False)
+    return tracked.returncode == 0
+
+
 def launch_context(project: Path, host: Host, arguments) -> tuple[Path | None, tuple[str, ...]]:
     plugins = host_plugins.PLUGINS[host]
     original_project = project

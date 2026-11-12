@@ -1,6 +1,5 @@
-"""Session hooks: SessionStart registers this session in agent-store, SessionEnd ends it for an explicit
-user exit and otherwise leaves it active for `tj recover`, and each prompt cancels a pending no-PR
-closeout of the `tj run` tab (`tj done --cancel`).
+"""Session hooks: SessionStart registers this session in agent-store, and SessionEnd ends it for an
+explicit user exit and otherwise leaves it active for `tj recover`.
 
 A session owned by a `tj run` launch, as `tj launch` reports it, binds to that launch and inherits its title,
 parent, terminal, wrapper and work item; a session that only inherited `tj run` environment registers
@@ -15,7 +14,6 @@ from collections.abc import Mapping
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 
@@ -117,30 +115,12 @@ def end(host: Host, session_id: str, reason: str | None) -> None:
             raise
 
 
-def prompt() -> None:
-    tj = shutil.which("tj")
-    if tj:
-        process.run([tj, "done", "--cancel"], capture_output=True, timeout=8, check=False)
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("event", choices=("start", "prompt", "idle", "end"))
+    parser.add_argument("event", choices=("start", "end"))
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     args = parser.parse_args(argv)
     data = payload()
-    if args.event == "idle":
-        if args.host is Host.CLAUDE:
-            from claude import idle
-
-            return idle.run(bool(os.environ.get(LAUNCH_ENV)))
-        return 0
-    if args.event == "prompt":
-        try:
-            prompt()
-        except (OSError, subprocess.SubprocessError) as error:
-            print(f"tj done --cancel: {error}", file=sys.stderr)
-        return 0
     session_id = data.get("session_id") or data.get("sessionId")
     if not isinstance(session_id, str) or not session_id:
         return 0
