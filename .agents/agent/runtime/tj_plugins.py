@@ -149,7 +149,7 @@ def update_standards(report: Report, host: Host) -> None:
         return
     try:
         roots = required_plugins.check(directory, host)
-        if roots is not None:
+        if roots is not None and not required_plugins.committed_worktree(project):
             standards.update(project, roots)
     except (
         OSError,
