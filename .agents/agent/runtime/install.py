@@ -14,7 +14,6 @@ import codecs
 import contextlib
 from dataclasses import dataclass, field
 import hashlib
-import importlib.util
 import io
 import json
 import os
@@ -34,12 +33,9 @@ ROOT = RUNTIME.parents[2]
 sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
-from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
 from codex import launch as codex_launch
-from codex import projects as codex_projects
-import host_permissions
 import jobs
 import machine_state
 import plugin_copies
@@ -106,40 +102,6 @@ def load_toml(path: Path) -> dict:
             return tomllib.load(stream)
     except (OSError, tomllib.TOMLDecodeError):
         return {}
-
-
-def declarations(config: dict) -> list[tuple[Path, dict]]:
-    found = [(Path.home(), config)]
-    user_file = (Host.CODEX.configuration_root / "config.toml").resolve()
-    for project in codex_projects.trusted(config):
-        path = project / ".codex" / "config.toml"
-        if path.resolve() != user_file:
-            found.append((project, load_toml(path)))
-    return found
-
-
-def installed_plugin_roots(plugin: str, claude_config: Path, codex_config: dict) -> list[Path]:
-    roots = []
-    prefix = plugin + "@"
-    settings = read_json(claude_config / "settings.json").get("enabledPlugins")
-    installed = read_json(claude_config / "plugins" / "installed_plugins.json").get("plugins")
-    if isinstance(settings, dict) and isinstance(installed, dict):
-        for identity, on in settings.items():
-            entries = installed.get(identity)
-            if on is True and identity.startswith(prefix) and isinstance(entries, list):
-                roots.extend(Path(entry["installPath"]) for entry in entries
-                             if isinstance(entry, dict) and isinstance(entry.get("installPath"), str))
-    plugins = codex_config.get("plugins")
-    if isinstance(plugins, dict):
-        for identity, settings in plugins.items():
-            if identity.startswith(prefix) and isinstance(settings, dict) and settings.get("enabled") is True:
-                roots.append(Host.CODEX.configuration_root / "plugins" / "cache" / identity.split("@", 1)[1] / plugin / "local")
-    return roots
-
-
-def newest_existing(paths: list[Path]) -> Path | None:
-    existing = [path for path in paths if path.is_file()]
-    return max(existing, key=lambda path: path.stat().st_mtime) if existing else None
 
 
 def console_python() -> str:
@@ -456,27 +418,32 @@ def hidden_bash_plan(context: Context) -> tuple[bool, dict[str, str]]:
     return stale, variables
 
 
-def global_git_config(context: Context) -> Path:
-    return context.path_from("GIT_CONFIG_GLOBAL", context.home / ".gitconfig")
+def skip_git_longpaths(context: Context) -> str | None:
+    if not context.windows:
+        return "Git long paths are only required on Windows"
+    project = plugin_setup_project(context)
+    if not (project / ".git").exists() or not required_plugins.selected(project):
+        return "the target must be a repository with an explicit plugin selection"
+    return None
 
 
 def git_longpaths(context: Context) -> bool:
-    result = context.run(["git", "config", "--file", str(global_git_config(context)), "--type=bool", "--get",
+    result = context.run(["git", "-C", str(plugin_setup_project(context)), "config", "--local", "--type=bool", "--get",
                           "core.longpaths"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                          timeout=30, check=False)
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def check_git_longpaths(context: Context) -> list[str]:
-    return [] if git_longpaths(context) else [f"set core.longpaths in {global_git_config(context)}"]
+    return [] if git_longpaths(context) else [f"set repository core.longpaths in {plugin_setup_project(context)}"]
 
 
 def apply_git_longpaths(context: Context) -> list[str]:
     if git_longpaths(context):
         return []
-    context.run(["git", "config", "--file", str(global_git_config(context)), "core.longpaths", "true"],
+    context.run(["git", "-C", str(plugin_setup_project(context)), "config", "--local", "core.longpaths", "true"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=True)
-    return [f"core.longpaths is true in {global_git_config(context)}"]
+    return [f"repository core.longpaths is true in {plugin_setup_project(context)}"]
 
 
 def check_hidden_bash(context: Context) -> list[str]:
@@ -568,69 +535,6 @@ def run_installer(context: Context, command: list[str]) -> subprocess.CompletedP
 
 def output_lines(result: subprocess.CompletedProcess) -> list[str]:
     return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-
-
-def codex_agents_installer(context: Context) -> Path | None:
-    config = load_toml(context.codex_home / "config.toml")
-    roots = [root for _, declaration in declarations(config)
-             for root in installed_plugin_roots("engineering", context.claude_home, declaration)]
-    return newest_existing([root / "scripts" / "install-codex-agents.ps1" for root in roots])
-
-
-def skip_codex_agents(context: Context) -> str | None:
-    if not context.which("pwsh"):
-        return "pwsh is not installed; install PowerShell 7 to deliver Codex profile agents"
-    if not context.codex_home.is_dir():
-        return f"Codex is not set up ({context.codex_home} is missing)"
-    if codex_agents_installer(context) is None:
-        return "no installed engineering plugin ships scripts/install-codex-agents.ps1"
-    return None
-
-
-def codex_agents_command(context: Context, flag: str) -> list[str]:
-    return [context.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
-            "-CodexHome", str(context.codex_home), flag]
-
-
-def check_codex_agents(context: Context) -> list[str]:
-    result = run_installer(context, codex_agents_command(context, "-Verify"))
-    if result.returncode == 0:
-        return []
-    detail = (result.stderr or result.stdout).strip().splitlines()
-    return [detail[-1] if detail else "Codex profile agents need delivery"]
-
-
-def apply_codex_agents(context: Context) -> list[str]:
-    result = run_installer(context, codex_agents_command(context, "-Apply"))
-    if result.returncode:
-        raise InstallError(f"Codex profile agent delivery failed: {(result.stderr or result.stdout).strip()}")
-    lines = output_lines(result)
-    return [lines[-1] if lines else "delivered Codex profile agents"]
-
-
-def permission_sync(context: Context) -> ModuleType:
-    directory = context.root / ".agents" / "agent" / "utility" / "plugins" / "scripts"
-    path = directory / "harness_permissions_sync.py"
-    if not path.is_file():
-        raise InstallError(f"harness_permissions_sync.py is unavailable in {directory}")
-    if str(directory) not in sys.path:
-        sys.path.insert(0, str(directory))
-    spec = importlib.util.spec_from_file_location("tj_agents_harness_permissions_sync", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def permissions_environment(context: Context) -> dict:
-    return {**context.environ, Host.CLAUDE.home_variable: str(context.claude_home), Host.CODEX.home_variable: str(context.codex_home),
-            "AGENT_STATE_DIRECTORY": str(context.state_directory)}
-
-
-def synchronize_permissions(context: Context, mode: str) -> list[str]:
-    changes, warnings = permission_sync(context).synchronize(permissions_environment(context), mode)
-    for warning in warnings:
-        print(f"warning harness permissions: {warning}", file=sys.stderr)
-    return changes
 
 
 def enable_claude_autoupdate(config: Path, apply: bool = True) -> list[str]:
@@ -983,29 +887,6 @@ def windows_only(context: Context) -> str | None:
     return None if context.windows else WINDOWS_ONLY
 
 
-def codex_config_path(context: Context) -> Path:
-    return context.codex_home / "config.toml"
-
-
-def codex_daemon_text(context: Context) -> tuple[str, str]:
-    path = codex_config_path(context)
-    text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
-    return text, codex_daemon.enabled_text(text)
-
-
-def check_codex_daemon(context: Context) -> list[str]:
-    text, enabled = codex_daemon_text(context)
-    return [] if enabled == text else [f"let Codex launches start its shared daemon in {codex_config_path(context)}"]
-
-
-def apply_codex_daemon(context: Context) -> list[str]:
-    text, enabled = codex_daemon_text(context)
-    if enabled == text:
-        return []
-    write_profile(codex_config_path(context), enabled, "utf-8", False)
-    return [f"removed {codex_daemon.FEATURE} = false from {codex_config_path(context)}"]
-
-
 def skip_codex_hook_trust(context: Context) -> str | None:
     return None if context.codex_home.is_dir() else f"Codex is not set up ({context.codex_home} is missing)"
 
@@ -1024,28 +905,6 @@ def apply_codex_hook_trust(context: Context) -> list[str]:
     trusted = codex_hook_trust.trust_installed(
         codex_launch.executable(), context.state_directory, codex_installed.MARKETPLACE_OVERRIDES)
     return [f"trusted {len(trusted)} tj-agents Codex hook(s)"]
-
-
-def native_permissions_plan(context: Context) -> dict[Path, str]:
-    mode = host_permissions.permissions(plugin_setup_project(context))
-    return host_permissions.plan(context.claude_home / "settings.json", codex_config_path(context), mode)
-
-
-def check_native_permissions(context: Context) -> list[str]:
-    return [f"update native permission defaults in {path}" for path in native_permissions_plan(context)]
-
-
-def apply_native_permissions(context: Context) -> list[str]:
-    targets = native_permissions_plan(context)
-    desktop = codex_config_path(context).parent / ".codex-global-state.json"
-    if desktop in targets:
-        if host_permissions.desktop_running():
-            raise InstallError("Close Codex Desktop, run install --step 'native permission defaults' "
-                               "from a terminal, then reopen the app to load the configured defaults")
-        targets = native_permissions_plan(context)
-    for path, text in targets.items():
-        write_profile(path, text, "utf-8", False)
-    return [f"updated native permission defaults in {path}" for path in targets]
 
 
 def plugin_setup_project(context: Context) -> Path:
@@ -1151,11 +1010,8 @@ def apply_native_cli(context: Context) -> list[str]:
 
 STEPS = (
     Step("retired state", check_retired_state, apply_retired_state),
-    Step("Git long paths", check_git_longpaths, apply_git_longpaths, windows_only),
+    Step("Git long paths", check_git_longpaths, apply_git_longpaths, skip_git_longpaths),
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
-    Step("native permission defaults", check_native_permissions, apply_native_permissions),
-    Step("Codex shared daemon", check_codex_daemon, apply_codex_daemon,
-         watch=lambda context: [codex_config_path(context)]),
     Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
     Step("agent-store CLI", check_agent_store, apply_agent_store, watch=watch_agent_store),
     Step("tj item CLI", check_tj_item, apply_tj_item, watch=watch_tj_item),
@@ -1166,9 +1022,6 @@ STEPS = (
          watch=lambda context: list(lifecycle_paths(context))),
     Step("shell profiles", check_profile, apply_profile, watch=profile_paths),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
-    Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
-    Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
-         lambda context: synchronize_permissions(context, "apply")),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
     Step("Codex hook trust", check_codex_hook_trust, apply_codex_hook_trust, skip_codex_hook_trust,
          watch=watch_codex_hook_trust),
@@ -1184,9 +1037,6 @@ def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys
     for step in steps:
         if "native CLI" in failed_steps:
             print(f"n/a    {step.name}: native CLI prerequisite unavailable", file=out)
-            continue
-        if step.name == "plugin setup" and failed_steps & {"harness permissions"}:
-            print("n/a    plugin setup: prerequisite install step failed", file=out)
             continue
         try:
             reason = step.skip(context)
@@ -1222,8 +1072,6 @@ def selected_steps(names: set[str]) -> tuple[Step, ...]:
     selected = set(names)
     if selected & {"shell profiles", "tj lifecycle commands"}:
         selected.add("launch-check runtime")
-    if "plugin setup" in selected:
-        selected.add("harness permissions")
     return tuple(step for step in STEPS if not selected or step.required or step.name in selected)
 
 

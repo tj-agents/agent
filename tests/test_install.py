@@ -24,7 +24,6 @@ if sys.version_info < (3, 12):
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import install  # noqa: E402
-import tomllib  # noqa: E402
 
 BOM = b"\xef\xbb\xbf"
 
@@ -386,81 +385,8 @@ class HiddenBashTests(Machine):
         self.assertIn("n/a", out.getvalue())
 
 
-class InstallerStepTests(Machine):
-    def installed_engineering(self):
-        package = self.root / "cache" / "tj-agents" / "engineering" / "1"
-        installer = package / "scripts" / "install-codex-agents.ps1"
-        installer.parent.mkdir(parents=True)
-        installer.write_text("", encoding="utf-8")
-        claude = self.home / ".claude"
-        (claude / "plugins").mkdir(parents=True)
-        (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"engineering@tj-agents": True}}),
-                                              encoding="utf-8")
-        (claude / "plugins" / "installed_plugins.json").write_text(json.dumps(
-            {"plugins": {"engineering@tj-agents": [{"installPath": str(package)}]}}), encoding="utf-8")
-        return installer
-
-    def test_codex_agents_are_delivered_with_pwsh_from_the_installed_engineering_package(self):
-        installer = self.installed_engineering()
-        codex = self.home / ".codex"
-        codex.mkdir()
-        state = {"installed": False}
-
-        def run(command, **kwargs):
-            self.assertEqual(["pwsh-path", "-NoProfile", "-NonInteractive", "-File", str(installer), "-CodexHome", str(codex)],
-                             command[:-1])
-            if command[-1] == "-Verify":
-                return completed(0 if state["installed"] else 1, "", "Profile verification failed: missing")
-            state["installed"] = True
-            return completed(0, "INSTALLED: 12 change(s)\n")
-
-        context = self.context(windows=False, run=run, which=lambda name: "pwsh-path" if name == "pwsh" else None)
-        self.converge(step("Codex profile agents"), context)
-
-    def test_codex_agents_skip_without_pwsh(self):
-        out = io.StringIO()
-        install.run_steps([step("Codex profile agents")], self.context(), False, out)
-        self.assertIn("n/a    Codex profile agents: pwsh is not installed", out.getvalue())
-
-    def test_codex_agents_skip_without_an_installed_engineering_package(self):
-        (self.home / ".codex").mkdir()
-        out = io.StringIO()
-        install.run_steps([step("Codex profile agents")], self.context(which=lambda name: "pwsh-path"), False, out)
-        self.assertIn("n/a    Codex profile agents: no installed engineering plugin", out.getvalue())
 
 
-class PermissionStepTests(Machine):
-    def test_dead_owned_rules_converge(self):
-        claude = self.home / ".claude"
-        state = self.home / ".agents-state"
-        package = self.root / "cache" / "tj-agents" / "engineering" / "1"
-        package.mkdir(parents=True)
-        (package / "harness.json").write_text(json.dumps({"schema_version": 1, "plugin": "tj-agents/engineering",
-            "source_roots": [], "requires": {"marketplaces": [], "plugins": [], "hooks": [],
-            "permissions": {"claude_allow": ["Bash(shipped)"], "codex_prefix_rules": []}}}), encoding="utf-8")
-        (claude / "plugins").mkdir(parents=True)
-        (claude / "plugins" / "installed_plugins.json").write_text(json.dumps(
-            {"plugins": {"engineering@tj-agents": [{"installPath": str(package)}]}}), encoding="utf-8")
-        (claude / "plugins" / "known_marketplaces.json").write_text(json.dumps(
-            {"tj-agents": {"source": {"source": "github", "repo": "tj-agents/marketplace"}}}), encoding="utf-8")
-        dead = "Bash(python -B C:/x/.claude/plugins/cache/base-agents/engineering/1/hooks/gate.py)"
-        settings = claude / "settings.json"
-        settings.write_text(json.dumps({"permissions": {"allow": ["Bash(mine)", dead]}}), encoding="utf-8")
-        state.mkdir()
-        (state / "harness-permissions.json").write_text(json.dumps(
-            {"schema_version": 2, "claude": {str(settings): [dead]}, "codex": {}}), encoding="utf-8")
-
-        self.converge(step("harness permissions"), self.context(windows=False))
-
-        self.assertEqual(["Bash(mine)", "Bash(shipped)"], json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"])
-
-    def test_a_missing_permission_sync_module_is_reported(self):
-        context = install.Context(home=self.home, project=self.checkout, environ={}, windows=False,
-                                run=self.unexpected_run, which=lambda name: None, documents=self.documents,
-                                root=self.root / "no such runtime root")
-
-        with self.assertRaises(install.InstallError):
-            install.permission_sync(context)
 
 
 class RuntimeTests(Machine):
@@ -506,14 +432,6 @@ class RuntimeTests(Machine):
         self.assertNotIn(str(source), result.stdout + result.stderr)
         self.assertEqual([], install.check_profile(context))
 
-    def test_native_permission_defaults_do_not_require_an_installer_checkout(self):
-        context = self.context(windows=False)
-        context.project = self.root / "consumer"
-        context.project.mkdir()
-        with mock.patch.object(install.host_permissions, "permissions", return_value="standard") as mode:
-            planned = install.native_permissions_plan(context)
-        mode.assert_called_once_with(context.project)
-        self.assertTrue(planned)
 
     def test_installed_runtime_preserves_the_agent_package_closure_without_source_checkout(self):
         context = self.context(windows=False)
@@ -666,24 +584,6 @@ class AutoUpdateTests(Machine):
         self.converge(step("Claude marketplace auto-update"), self.context(windows=False))
 
 
-class GitLongPathsTests(Machine):
-    def test_long_paths_converge_in_the_global_git_config(self):
-        config = self.home / ".gitconfig"
-        self.converge(step("Git long paths"), self.context(run=subprocess.run))
-        result = subprocess.run(["git", "config", "--file", str(config), "--get", "core.longpaths"],
-                                capture_output=True, text=True, timeout=30, check=True)
-        self.assertEqual("true", result.stdout.strip())
-
-    def test_an_explicit_global_config_file_is_the_one_written(self):
-        config = self.root / "explicit gitconfig"
-        self.converge(step("Git long paths"), self.context(run=subprocess.run, GIT_CONFIG_GLOBAL=str(config)))
-        self.assertFalse((self.home / ".gitconfig").exists())
-        self.assertIn("longpaths = true", config.read_text(encoding="utf-8"))
-
-    def test_long_paths_are_windows_only(self):
-        out = io.StringIO()
-        self.assertEqual(0, install.run_steps([step("Git long paths")], self.context(windows=False), True, out))
-        self.assertIn("n/a    Git long paths", out.getvalue())
 
 
 class RunStepsTests(Machine):
@@ -695,7 +595,7 @@ class RunStepsTests(Machine):
             (["--check", "--step", "shell profiles", "--step", "launch-check runtime"],
              ["native CLI", "launch-check runtime", "shell profiles"]),
             (["--step", "plugin setup"],
-             ["native CLI", "harness permissions", "plugin setup"]),
+             ["native CLI", "plugin setup"]),
             (["--step", "tj lifecycle commands"],
              ["native CLI", "launch-check runtime", "tj lifecycle commands"]),
             (["--step", "tj item CLI"], ["native CLI", "tj item CLI"]),
@@ -725,7 +625,7 @@ class RunStepsTests(Machine):
         pass
 
     def file_steps(self):
-        return [step(name) for name in ("shell profiles", "harness permissions")]
+        return [step(name) for name in ("shell profiles",)]
 
     def test_check_writes_nothing_and_reports_drift_until_converged(self):
         self.legacy_machine()
@@ -757,14 +657,6 @@ class RunStepsTests(Machine):
                                             io.StringIO(), io.StringIO()))
         later.assert_not_called()
 
-    def test_failed_prerequisite_skips_plugin_setup_even_when_scoped(self):
-        permissions = install.Step("harness permissions", mock.Mock(side_effect=RuntimeError("offline")), mock.Mock())
-        plugin = install.Step("plugin setup", mock.Mock(return_value=["needed"]), mock.Mock())
-        out, err = io.StringIO(), io.StringIO()
-        self.assertEqual(2, install.run_steps([permissions, plugin], self.context(), False, out, err))
-        plugin.check.assert_not_called()
-        plugin.apply.assert_not_called()
-        self.assertIn("prerequisite install step failed", out.getvalue())
 
     def test_windows_only_steps_skip_on_linux_without_running_anything(self):
         out = io.StringIO()
@@ -773,12 +665,12 @@ class RunStepsTests(Machine):
 
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
-            "retired state", "Git long paths", "native CLI", "native permission defaults", "Codex shared daemon",
+            "retired state", "Git long paths", "native CLI",
             "Claude marketplace auto-update", "agent-store CLI",
             "tj item CLI", "worktrunk", "Handy",
             "launch-check runtime", "tj lifecycle commands",
             "shell profiles", "hidden Git Bash for Claude",
-            "Codex profile agents", "harness permissions", "plugin setup", "Codex hook trust", "plugin copies",
+            "plugin setup", "Codex hook trust", "plugin copies",
         ], [item.name for item in install.STEPS])
 
 
@@ -821,55 +713,6 @@ class RepairTests(Machine):
         context.assert_not_called()
 
 
-class NativePermissionsTests(Machine):
-    @mock.patch.object(install.host_permissions, "desktop_running", return_value=False)
-    def test_native_permissions_follow_portable_mode_and_converge_for_both_platforms(self, _desktop):
-        settings = self.checkout / ".agents/settings.json"
-        settings.parent.mkdir()
-        for windows in (True, False):
-            context = self.context(windows=windows)
-            for mode in ("bypass", "standard", "bypass"):
-                with self.subTest(windows=windows, mode=mode):
-                    settings.write_text(json.dumps({"configuration": {"core": {"permissions": mode}}}), encoding="utf-8")
-                    app_state = context.codex_home / ".codex-global-state.json"
-                    app_state.parent.mkdir(parents=True, exist_ok=True)
-                    app_state.write_text(json.dumps({"electron-persisted-atom-state": {
-                        "agent-mode-by-host-id": {"local": "guardian-approvals", "remote": "read-only"}}}), encoding="utf-8")
-                    before = snapshot(self.root)
-                    install.check_native_permissions(context)
-                    self.assertEqual(before, snapshot(self.root))
-                    install.apply_native_permissions(context)
-                    self.assertEqual([], install.check_native_permissions(context))
-                    converged = snapshot(self.root)
-                    self.assertEqual([], install.apply_native_permissions(context))
-                    self.assertEqual(converged, snapshot(self.root))
-                    claude = json.loads((context.claude_home / "settings.json").read_text(encoding="utf-8"))
-                    codex = tomllib.loads((context.codex_home / "config.toml").read_text(encoding="utf-8"))
-                    self.assertEqual("bypassPermissions" if mode == "bypass" else "default", claude["permissions"]["defaultMode"])
-                    self.assertEqual(":danger-full-access" if mode == "bypass" else ":workspace", codex["default_permissions"])
-                    app = json.loads(app_state.read_text(encoding="utf-8"))
-                    self.assertEqual({"remote": "read-only"}, app["electron-persisted-atom-state"]["agent-mode-by-host-id"])
-
-    def test_open_app_blocks_all_writes_and_closed_app_state_is_read_again(self):
-        context = self.context()
-        app = context.codex_home / ".codex-global-state.json"
-        app.parent.mkdir(parents=True, exist_ok=True)
-        state = {"electron-persisted-atom-state": {"agent-mode-by-host-id": {"local": "guardian-approvals"}}}
-        app.write_text(json.dumps(state), encoding="utf-8")
-        before = snapshot(self.root)
-        with mock.patch.object(install.host_permissions, "desktop_running", return_value=True):
-            with self.assertRaisesRegex(install.InstallError, "Close Codex Desktop"):
-                install.apply_native_permissions(context)
-        self.assertEqual(before, snapshot(self.root))
-
-        def closed():
-            state["saved-during-shutdown"] = True
-            app.write_text(json.dumps(state), encoding="utf-8")
-            return False
-
-        with mock.patch.object(install.host_permissions, "desktop_running", side_effect=closed):
-            install.apply_native_permissions(context)
-        self.assertTrue(json.loads(app.read_text(encoding="utf-8"))["saved-during-shutdown"])
 
 
 def machine_context(home: Path) -> install.Context:

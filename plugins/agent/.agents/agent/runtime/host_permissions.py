@@ -5,19 +5,13 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 import tomllib
 
-from tj_cli import process
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from claude import permissions as claude_permissions  # noqa: E402
-from codex import permissions as codex_permissions  # noqa: E402
-from tj_agent.host import Host  # noqa: E402
 
 CODEX_KEYS = frozenset({"approval_policy", "default_permissions", "sandbox_mode", "sandbox_workspace_write"})
 MODES = {
@@ -54,8 +48,6 @@ def claude_settings(text: str, mode: str, *, project: bool = False) -> str:
         permissions.pop("defaultMode", None)
     else:
         permissions["defaultMode"] = MODES[mode][0]
-    if not project:
-        claude_permissions.deny(permissions)
     return json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -94,93 +86,3 @@ def codex_settings(text: str, mode: str) -> str:
     if tomllib.loads(result) != expected:
         raise ValueError("Cannot update Codex permission settings without changing unrelated configuration")
     return result
-
-
-def desktop_executables() -> list[Path]:
-    if os.name == "nt":
-        command = (
-            "$ErrorActionPreference = 'Stop'; "
-            "[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); "
-            "Get-CimInstance Win32_Process -Filter \"Name = 'Codex.exe'\" | "
-            "Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"
-        )
-        result = process.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True, text=True, encoding="utf-8", check=True, timeout=15,
-        )
-        rows = json.loads(result.stdout) if result.stdout.strip() else []
-        rows = [rows] if isinstance(rows, dict) else rows
-        if any(not row.get("ExecutablePath") for row in rows):
-            raise ValueError("Cannot verify that Codex Desktop is closed: a process path is unavailable")
-        return [Path(row["ExecutablePath"]) for row in rows]
-    if sys.platform == "linux":
-        paths = []
-        for entry in Path("/proc").iterdir():
-            if not entry.name.isdigit():
-                continue
-            try:
-                if (entry / "comm").read_text(encoding="utf-8", errors="replace").strip().casefold() != Host.CODEX.value:
-                    continue
-                paths.append((entry / "exe").resolve(strict=True))
-            except FileNotFoundError:
-                continue
-        return paths
-    result = process.run(["ps", "-axo", "comm="], capture_output=True, text=True,
-                         encoding="utf-8", check=True, timeout=15)
-    return [Path(line.strip()) for line in result.stdout.splitlines()
-            if Path(line.strip()).name.casefold() == Host.CODEX.value]
-
-
-def desktop_running(executables=None) -> bool:
-    try:
-        paths = desktop_executables() if executables is None else executables
-    except (OSError, subprocess.SubprocessError) as error:
-        raise ValueError("Cannot verify that Codex Desktop is closed") from error
-    return any((path.parent / "resources/app.asar").is_file()
-               or path.parent.name == "MacOS" and (path.parent.parent / "Resources/app.asar").is_file()
-               for path in paths)
-
-
-def codex_app_settings(text: str) -> str:
-    settings = json.loads(text)
-    if not isinstance(settings, dict):
-        raise ValueError("Codex app state must be an object")
-    if "electron-persisted-atom-state" not in settings:
-        return text
-    atoms = settings["electron-persisted-atom-state"]
-    if not isinstance(atoms, dict):
-        raise ValueError("Codex app atom state must be an object")
-    if "agent-mode-by-host-id" not in atoms:
-        return text
-    modes = atoms["agent-mode-by-host-id"]
-    if not isinstance(modes, dict):
-        raise ValueError("Codex app host modes must be an object")
-    if "local" not in modes:
-        return text
-    del modes["local"]
-    return json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
-
-
-def plan(claude: Path, codex: Path, mode: str) -> dict[Path, str]:
-    targets = {}
-    for path, render in ((claude, claude_settings), (codex, codex_settings)):
-        if path.is_symlink() or path.exists() and not path.is_file():
-            raise ValueError(f"Native settings must be regular files: {path}")
-        text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
-        updated = render(text, mode)
-        if updated != text:
-            targets[path] = updated
-    rules = codex_permissions.rules_path(codex)
-    if rules.is_symlink() or rules.exists() and not rules.is_file():
-        raise ValueError(f"Native settings must be regular files: {rules}")
-    if (rules.read_text(encoding="utf-8-sig") if rules.is_file() else None) != codex_permissions.TEXT:
-        targets[rules] = codex_permissions.TEXT
-    desktop = codex.parent / ".codex-global-state.json"
-    if desktop.is_symlink() or desktop.exists() and not desktop.is_file():
-        raise ValueError(f"Native settings must be regular files: {desktop}")
-    if desktop.is_file():
-        text = desktop.read_text(encoding="utf-8-sig")
-        updated = codex_app_settings(text)
-        if updated != text:
-            targets[desktop] = updated
-    return targets

@@ -332,12 +332,12 @@ CAPABILITIES = (
     Capability(
         "install",
         Support(
-            "agent:.agents/agent/runtime/install.py::apply_native_permissions",
-            "agent:tests/test_install.py::NativePermissionsTests.test_native_permissions_follow_portable_mode_and_converge_for_both_platforms",
+            "agent:.agents/agent/runtime/install.py::apply_runtime",
+            "agent:tests/test_install.py::RuntimeTests.test_installed_runtime_preserves_the_agent_package_closure_without_source_checkout",
         ),
         Support(
-            "agent:.agents/agent/runtime/install.py::apply_native_permissions",
-            "agent:tests/test_install.py::NativePermissionsTests.test_native_permissions_follow_portable_mode_and_converge_for_both_platforms",
+            "agent:.agents/agent/runtime/install.py::apply_runtime",
+            "agent:tests/test_install.py::RuntimeTests.test_installed_runtime_preserves_the_agent_package_closure_without_source_checkout",
         ),
     ),
     Capability(

@@ -1,6 +1,6 @@
 ---
 name: hooks
-description: Safely disable or restore Codex hooks while preserving the previous canonical feature gate.
+description: Disable or restore Codex hooks for one repository while preserving its previous feature gate.
 kind: utility
 domain: agent
 profile: core

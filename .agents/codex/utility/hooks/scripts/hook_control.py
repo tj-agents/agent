@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -15,8 +17,11 @@ from typing import Any
 try:
     import tomllib
 except ModuleNotFoundError:
-    print("hook-control requires Python 3.11 or newer", file=sys.stderr)
+    print("hook-control requires Python 3.12 or newer", file=sys.stderr)
     raise SystemExit(2)
+
+if sys.version_info < (3, 12):  # noqa: UP036
+    raise SystemExit("hook-control requires Python 3.12 or newer")
 
 
 SIDECAR_SUFFIX = ".hook-control.json"
@@ -39,11 +44,29 @@ def default_codex_home() -> Path:
 
 
 def target_config(arguments: argparse.Namespace) -> Path:
-    if arguments.scope == "global":
-        return (arguments.codex_home or default_codex_home()) / "config.toml"
-    if arguments.project is None:
-        raise ControlError("--project is required when --scope project")
-    return arguments.project / ".codex" / "config.toml"
+    return repository_config(arguments.project / ".codex" / "config.toml")
+
+
+def repository_config(config: Path) -> Path:
+    config = config.absolute()
+    if config.name != "config.toml" or config.parent.name != ".codex":
+        raise ControlError("hook control requires a repository .codex/config.toml")
+    root = config.parent.parent
+    for path in (config, sidecar_path(config), lock_path(config)):
+        reject_redirected(path)
+    if config.resolve() == (default_codex_home() / "config.toml").resolve():
+        raise ControlError("hook control cannot change the global Codex configuration")
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ControlError(f"cannot verify repository {root}: {error}") from error
+    if result.returncode or Path(result.stdout.strip()).resolve() != root.resolve():
+        raise ControlError("hook control requires the exact Git repository root")
+    return config
 
 
 def sidecar_path(config: Path) -> Path:
@@ -54,9 +77,17 @@ def lock_path(config: Path) -> Path:
     return config.with_name(config.name + LOCK_SUFFIX)
 
 
-def reject_symlink(path: Path) -> None:
-    if path.exists() and path.is_symlink():
-        raise ControlError(f"refusing symlinked path: {path}")
+def reject_redirected(path: Path) -> None:
+    for candidate in (path, *path.parents):
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        attributes = getattr(metadata, "st_file_attributes", 0)
+        if stat.S_ISLNK(metadata.st_mode) or attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+            raise ControlError(f"refusing redirected path: {candidate}")
+        if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink > 1:
+            raise ControlError(f"refusing hard-linked path: {candidate}")
 
 
 class ExclusiveLock:
@@ -65,8 +96,8 @@ class ExclusiveLock:
         self.handle: Any = None
 
     def __enter__(self) -> "ExclusiveLock":
+        reject_redirected(self.path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        reject_symlink(self.path)
         deadline = time.monotonic() + 10
         while True:
             handle: Any = None
@@ -107,7 +138,7 @@ class ExclusiveLock:
 
 
 def read_config(path: Path) -> tuple[bytes, dict[str, Any]]:
-    reject_symlink(path)
+    reject_redirected(path)
     if not path.exists():
         return b"", {}
     try:
@@ -121,7 +152,7 @@ def read_config(path: Path) -> tuple[bytes, dict[str, Any]]:
 
 
 def atomic_write(path: Path, data: bytes) -> None:
-    reject_symlink(path)
+    reject_redirected(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(name)
@@ -153,7 +184,7 @@ def retry_windows_sharing_violation(action: Any, timeout: float = 2) -> Any:
 
 
 def load_snapshot(path: Path) -> dict[str, Any] | None:
-    reject_symlink(path)
+    reject_redirected(path)
     if not path.exists():
         return None
     try:
@@ -308,13 +339,13 @@ def feature_table_exists(text: str) -> bool:
     return any(NORMAL_HEADER.match(line) for line in text.splitlines(keepends=True))
 
 
-def snapshot_for(scope: str, config: Path, raw: bytes, parsed: dict[str, Any]) -> dict[str, Any]:
+def snapshot_for(config: Path, raw: bytes, parsed: dict[str, Any]) -> dict[str, Any]:
     separator = ""
     if raw and not raw.endswith((b"\n", b"\r")) and parsed.get("features") is None:
         separator = line_ending(raw.decode("utf-8"))
     return {
         "version": 1,
-        "scope": scope,
+        "scope": "project",
         "config": str(config.resolve(strict=False)),
         "original": canonical_value(parsed),
         "config_existed": config.exists(),
@@ -325,14 +356,15 @@ def snapshot_for(scope: str, config: Path, raw: bytes, parsed: dict[str, Any]) -
     }
 
 
-def validate_snapshot(snapshot: dict[str, Any], scope: str, config: Path) -> None:
+def validate_snapshot(snapshot: dict[str, Any], config: Path) -> None:
     if type(snapshot.get("scope")) is not str or type(snapshot.get("config")) is not str:
         raise ControlError("invalid scope ownership in hook-control snapshot")
-    if snapshot["scope"] != scope or snapshot["config"] != str(config.resolve(strict=False)):
+    if snapshot["scope"] != "project" or snapshot["config"] != str(config.resolve(strict=False)):
         raise ControlError("hook-control snapshot belongs to a different scope or config path")
 
 
-def disable(scope: str, config: Path) -> dict[str, Any]:
+def disable(config: Path) -> dict[str, Any]:
+    config = repository_config(config)
     sidecar = sidecar_path(config)
     with ExclusiveLock(lock_path(config)):
         raw, parsed = read_config(config)
@@ -342,9 +374,9 @@ def disable(scope: str, config: Path) -> dict[str, Any]:
         if current is not False:
             updated = edit_value(raw, parsed, False)
         if snapshot is None:
-            snapshot = snapshot_for(scope, config, raw, parsed)
+            snapshot = snapshot_for(config, raw, parsed)
         else:
-            validate_snapshot(snapshot, scope, config)
+            validate_snapshot(snapshot, config)
             original = snapshot["original"]
             if current != False and current != original:
                 raise ControlError("features.hooks changed since hook-control disabled it; refusing to overwrite it")
@@ -363,20 +395,21 @@ def disable(scope: str, config: Path) -> dict[str, Any]:
         return {"action": "off", "changed": True, "config": str(config), "saved": snapshot["original"]}
 
 
-def restore(scope: str, config: Path) -> dict[str, Any]:
+def restore(config: Path) -> dict[str, Any]:
+    config = repository_config(config)
     sidecar = sidecar_path(config)
     with ExclusiveLock(lock_path(config)):
         snapshot = load_snapshot(sidecar)
         if snapshot is None:
             raise ControlError("hook-control on only restores this utility's saved state; no off snapshot exists")
-        validate_snapshot(snapshot, scope, config)
+        validate_snapshot(snapshot, config)
         raw, parsed = read_config(config)
         current = canonical_value(parsed)
         original = snapshot["original"]
         if current is not False:
             raise ControlError("features.hooks changed while disabled; refusing to overwrite the user value")
         if original is False:
-            reject_symlink(sidecar)
+            reject_redirected(sidecar)
             retry_windows_sharing_violation(sidecar.unlink)
             return {"action": "on", "changed": False, "config": str(config), "restored": original}
         updated = edit_value(raw, parsed, original)
@@ -396,7 +429,7 @@ def restore(scope: str, config: Path) -> dict[str, Any]:
                 atomic_write(config, updated)
         else:
             atomic_write(config, updated)
-        reject_symlink(sidecar)
+        reject_redirected(sidecar)
         retry_windows_sharing_violation(sidecar.unlink)
         return {"action": "on", "changed": True, "config": str(config), "restored": original}
 
@@ -415,14 +448,15 @@ def disabled_entries(parsed: dict[str, Any]) -> int:
     return 0
 
 
-def status(scope: str, config: Path) -> dict[str, Any]:
+def status(config: Path) -> dict[str, Any]:
+    config = repository_config(config)
     raw, parsed = read_config(config)
     snapshot = load_snapshot(sidecar_path(config))
     if snapshot is not None:
-        validate_snapshot(snapshot, scope, config)
+        validate_snapshot(snapshot, config)
     legacy = parsed.get("features", {}).get("codex_hooks", "absent") if isinstance(parsed.get("features", {}), dict) else "invalid"
     return {
-        "scope": scope,
+        "scope": "project",
         "config": str(config),
         "canonical_features_hooks": canonical_value(parsed),
         "legacy_features_codex_hooks": legacy,
@@ -430,7 +464,7 @@ def status(scope: str, config: Path) -> dict[str, Any]:
         "effective_state": "not verified",
         "individually_disabled_entries": disabled_entries(parsed),
         "override_note": "project, profile, command-line, or administrator settings can override this saved layer",
-        "project_trust_note": "a project .codex/config.toml applies only when Codex trusts that repository" if scope == "project" else None,
+        "project_trust_note": "a project .codex/config.toml applies only when Codex trusts that repository",
         "lifecycle_note": "the gate covers ordinary native lifecycle hooks; builtin cleanup and legacy notify behavior are outside it",
         "restart_note": "restart Codex; no proven hot reload exists",
     }
@@ -439,9 +473,7 @@ def status(scope: str, config: Path) -> dict[str, Any]:
 def parser() -> argparse.ArgumentParser:
     command = argparse.ArgumentParser(description="Safely disable or restore Codex hooks with features.hooks")
     command.add_argument("action", choices=("status", "off", "on"))
-    command.add_argument("--scope", choices=("global", "project"), default="global")
-    command.add_argument("--project", type=Path)
-    command.add_argument("--codex-home", type=Path)
+    command.add_argument("--project", type=Path, required=True)
     return command
 
 
@@ -450,11 +482,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = target_config(arguments)
         if arguments.action == "status":
-            result = status(arguments.scope, config)
+            result = status(config)
         elif arguments.action == "off":
-            result = disable(arguments.scope, config)
+            result = disable(config)
         else:
-            result = restore(arguments.scope, config)
+            result = restore(config)
     except ControlError as error:
         print(f"hook-control: {error}", file=sys.stderr)
         return 2

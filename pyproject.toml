@@ -393,7 +393,6 @@ reason = "Existing test flattens nested fixture data for assertions."
 "tests/test_codex_config_writers.py" = ["E501", "I001", "PT009", "TID251", "UP036"]
 "tests/test_credential_deny_rules.py" = ["E501", "I001", "PT009", "TID251", "UP036"]
 "tests/test_handoff_launchers.py" = ["E501", "I001", "PT009", "RUF059", "TID251"]
-"tests/test_harness_permissions_sync.py" = ["E501", "I001", "PT009", "SIM117", "TID251"]
 "tests/test_history.py" = ["C408", "E501", "I001", "PT009", "PTH201", "TID251"]
 "tests/test_hook_control.py" = ["BLE001", "E501", "I001", "PT009", "SIM117", "TID251"]
 "tests/test_hook_trust.py" = ["E402", "E501", "I001", "N812", "PT009", "RET503", "SIM117", "TID251"]
@@ -463,7 +462,6 @@ exclude = [
   "tests/test_codex_config_writers.py",
   "tests/test_credential_deny_rules.py",
   "tests/test_handoff_launchers.py",
-  "tests/test_harness_permissions_sync.py",
   "tests/test_history.py",
   "tests/test_hook_control.py",
   "tests/test_hook_trust.py",
@@ -511,9 +509,6 @@ disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-at
 module = "harness_permissions"
 disable_error_code = ["type-arg", "union-attr"]
 
-[[tool.mypy.overrides]]
-module = "harness_permissions_sync"
-disable_error_code = ["arg-type", "attr-defined", "index", "return-value", "type-arg"]
 
 [[tool.mypy.overrides]]
 module = "history"
@@ -647,9 +642,6 @@ disable_error_code = ["no-untyped-def"]
 module = "test_handoff_launchers"
 disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "union-attr"]
 
-[[tool.mypy.overrides]]
-module = "test_harness_permissions_sync"
-disable_error_code = ["arg-type", "no-untyped-call", "no-untyped-def", "type-arg", "union-attr"]
 
 [[tool.mypy.overrides]]
 module = "test_history"

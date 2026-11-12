@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -7,6 +8,8 @@ import tempfile
 import threading
 import unittest
 from unittest import mock
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,8 +26,13 @@ class HookControlTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
-    def config(self, name='profile'):
-        path = self.root / name / 'config.toml'
+    def config(self, name='project'):
+        project = self.root / name
+        subprocess.run(
+            ['git', 'init', '--quiet', str(project)],
+            check=True, capture_output=True, timeout=30,
+        )
+        path = project / '.codex' / 'config.toml'
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -39,12 +47,12 @@ class HookControlTests(unittest.TestCase):
             'trusted_hash = "unchanged"\n'
         )
         config.write_text(original, encoding='utf-8')
-        result = CONTROL.disable('global', config)
+        result = CONTROL.disable(config)
         self.assertTrue(result['changed'])
         self.assertIn('hooks = false # retain', config.read_text(encoding='utf-8'))
         snapshot = json.loads(CONTROL.sidecar_path(config).read_text(encoding='utf-8'))
         self.assertIs(snapshot['original'], True)
-        result = CONTROL.restore('global', config)
+        result = CONTROL.restore(config)
         self.assertTrue(result['changed'])
         self.assertEqual(config.read_text(encoding='utf-8'), original)
         self.assertFalse(CONTROL.sidecar_path(config).exists())
@@ -53,32 +61,32 @@ class HookControlTests(unittest.TestCase):
         config = self.config()
         original = '[features]\nhooks = false\n'
         config.write_text(original, encoding='utf-8')
-        self.assertFalse(CONTROL.disable('global', config)['changed'])
-        self.assertFalse(CONTROL.restore('global', config)['changed'])
+        self.assertFalse(CONTROL.disable(config)['changed'])
+        self.assertFalse(CONTROL.restore(config)['changed'])
         self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_absent_value_and_introduced_table_are_removed(self):
         config = self.config()
         original = '[plugins]\ntrusted_hash = "kept"\n'
         config.write_text(original, encoding='utf-8')
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
         self.assertIn('[features]', config.read_text(encoding='utf-8'))
-        CONTROL.restore('global', config)
+        CONTROL.restore(config)
         self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_missing_config_is_removed_after_absent_restore(self):
         config = self.config()
         config.unlink(missing_ok=True)
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
         self.assertTrue(config.exists())
-        CONTROL.restore('global', config)
+        CONTROL.restore(config)
         self.assertFalse(config.exists())
 
     def test_existing_empty_config_survives_absent_restore(self):
         config = self.config()
         config.write_text('', encoding='utf-8')
-        CONTROL.disable('global', config)
-        CONTROL.restore('global', config)
+        CONTROL.disable(config)
+        CONTROL.restore(config)
         self.assertTrue(config.exists())
         self.assertEqual(config.read_text(encoding='utf-8'), '')
 
@@ -86,65 +94,52 @@ class HookControlTests(unittest.TestCase):
         config = self.config()
         original = '[features]\n'
         config.write_text(original, encoding='utf-8')
-        CONTROL.disable('global', config)
-        CONTROL.restore('global', config)
+        CONTROL.disable(config)
+        CONTROL.restore(config)
         self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_no_final_newline_round_trips(self):
         config = self.config()
         original = '[features]\nhooks = true'
         config.write_text(original, encoding='utf-8')
-        CONTROL.disable('global', config)
-        CONTROL.restore('global', config)
+        CONTROL.disable(config)
+        CONTROL.restore(config)
         self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_absent_hook_no_final_newline_round_trips_exactly(self):
         config = self.config()
         original = 'model = "x"'
         config.write_text(original, encoding='utf-8')
-        CONTROL.disable('global', config)
-        CONTROL.restore('global', config)
+        CONTROL.disable(config)
+        CONTROL.restore(config)
         self.assertEqual(config.read_bytes(), original.encode('utf-8'))
 
     def test_crlf_round_trip_preserves_bytes(self):
         config = self.config()
         original = b'[features]\r\nhooks = true # keep\r\n[plugins]\r\nenabled = true\r\n'
         config.write_bytes(original)
-        CONTROL.disable('global', config)
-        CONTROL.restore('global', config)
+        CONTROL.disable(config)
+        CONTROL.restore(config)
         self.assertEqual(config.read_bytes(), original)
 
-    def test_project_and_global_snapshots_are_isolated(self):
-        global_config = self.root / 'home' / 'config.toml'
-        global_config.parent.mkdir(parents=True)
-        global_config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-        project = self.root / 'project'
-        project_config = project / '.codex' / 'config.toml'
-        project_config.parent.mkdir(parents=True)
-        project_config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-        CONTROL.disable('global', global_config)
-        CONTROL.disable('project', project_config)
-        CONTROL.restore('global', global_config)
-        self.assertIn('hooks = true', global_config.read_text(encoding='utf-8'))
-        self.assertIn('hooks = false', project_config.read_text(encoding='utf-8'))
 
     def test_repeated_off_keeps_original_restoration_value(self):
         config = self.config()
         config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-        CONTROL.disable('global', config)
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
+        CONTROL.disable(config)
         snapshot = json.loads(CONTROL.sidecar_path(config).read_text(encoding='utf-8'))
         self.assertIs(snapshot['original'], True)
-        CONTROL.restore('global', config)
+        CONTROL.restore(config)
         self.assertIn('hooks = true', config.read_text(encoding='utf-8'))
 
     def test_restore_rejects_user_change_and_retains_snapshot(self):
         config = self.config()
         config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
         config.write_text('[features]\nhooks = true\n', encoding='utf-8')
         with self.assertRaisesRegex(CONTROL.ControlError, 'changed while disabled'):
-            CONTROL.restore('global', config)
+            CONTROL.restore(config)
         self.assertTrue(CONTROL.sidecar_path(config).exists())
 
     def test_corrupted_original_values_do_not_edit_disabled_config(self):
@@ -152,7 +147,7 @@ class HookControlTests(unittest.TestCase):
             with self.subTest(original=original):
                 config = self.config(f'corrupt-original-{original}')
                 config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-                CONTROL.disable('global', config)
+                CONTROL.disable(config)
                 sidecar = CONTROL.sidecar_path(config)
                 snapshot = json.loads(sidecar.read_text(encoding='utf-8'))
                 snapshot['original'] = original
@@ -160,7 +155,7 @@ class HookControlTests(unittest.TestCase):
                 disabled = config.read_bytes()
                 corrupted = sidecar.read_bytes()
                 with self.assertRaisesRegex(CONTROL.ControlError, 'invalid original'):
-                    CONTROL.restore('global', config)
+                    CONTROL.restore(config)
                 self.assertEqual(config.read_bytes(), disabled)
                 self.assertEqual(sidecar.read_bytes(), corrupted)
 
@@ -170,7 +165,7 @@ class HookControlTests(unittest.TestCase):
                 with self.subTest(field=field, value=value):
                     config = self.config(f'corrupt-ownership-{field}-{value}')
                     config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-                    CONTROL.disable('global', config)
+                    CONTROL.disable(config)
                     sidecar = CONTROL.sidecar_path(config)
                     snapshot = json.loads(sidecar.read_text(encoding='utf-8'))
                     snapshot[field] = value
@@ -178,14 +173,14 @@ class HookControlTests(unittest.TestCase):
                     disabled = config.read_bytes()
                     corrupted = sidecar.read_bytes()
                     with self.assertRaisesRegex(CONTROL.ControlError, f'invalid {field}'):
-                        CONTROL.restore('global', config)
+                        CONTROL.restore(config)
                     self.assertEqual(config.read_bytes(), disabled)
                     self.assertEqual(sidecar.read_bytes(), corrupted)
 
     def test_unknown_separator_does_not_edit_disabled_config(self):
         config = self.config()
         config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
         sidecar = CONTROL.sidecar_path(config)
         snapshot = json.loads(sidecar.read_text(encoding='utf-8'))
         snapshot['owned_separator'] = '\x0b'
@@ -193,7 +188,7 @@ class HookControlTests(unittest.TestCase):
         disabled = config.read_bytes()
         corrupted = sidecar.read_bytes()
         with self.assertRaisesRegex(CONTROL.ControlError, 'invalid owned_separator'):
-            CONTROL.restore('global', config)
+            CONTROL.restore(config)
         self.assertEqual(config.read_bytes(), disabled)
         self.assertEqual(sidecar.read_bytes(), corrupted)
 
@@ -201,9 +196,9 @@ class HookControlTests(unittest.TestCase):
         config = self.config()
         original = 'features.hooks = true # canonical\n[plugins]\ntrusted_hash = "kept"\n'
         config.write_text(original, encoding='utf-8')
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
         self.assertIn('features.hooks = false # canonical', config.read_text(encoding='utf-8'))
-        CONTROL.restore('global', config)
+        CONTROL.restore(config)
         self.assertEqual(config.read_text(encoding='utf-8'), original)
 
     def test_restore_preserves_hook_and_plugin_changes_made_while_off(self):
@@ -219,12 +214,12 @@ class HookControlTests(unittest.TestCase):
             '[plugins.example]\n'
             'enabled = true\n',
             encoding='utf-8')
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
         changed = config.read_text(encoding='utf-8').replace('trusted_hash = "old"', 'trusted_hash = "updated"').replace(
             '[plugins.example]\nenabled = true', '[plugins.example]\nenabled = false')
         changed += '[hooks.state.new_identity]\nenabled = true\ntrusted_hash = "new"\n'
         config.write_text(changed, encoding='utf-8')
-        CONTROL.restore('global', config)
+        CONTROL.restore(config)
         restored = config.read_text(encoding='utf-8')
         self.assertIn('hooks = true', restored)
         self.assertIn('async = false', restored)
@@ -239,7 +234,7 @@ class HookControlTests(unittest.TestCase):
             '[features]\nhooks = true\n[hooks]\nasync = false\n'
             '[hooks.state.one]\nenabled = false\n'
             '[hooks.state.two]\nenabled = true\n', encoding='utf-8')
-        result = CONTROL.status('global', config)
+        result = CONTROL.status(config)
         self.assertEqual(result['individually_disabled_entries'], 1)
 
     def test_unfamiliar_value_is_rejected_before_edit(self):
@@ -247,7 +242,7 @@ class HookControlTests(unittest.TestCase):
         original = '[features]\nhooks = "false"\n'
         config.write_text(original, encoding='utf-8')
         with self.assertRaisesRegex(CONTROL.ControlError, 'true or false'):
-            CONTROL.disable('global', config)
+            CONTROL.disable(config)
         self.assertEqual(config.read_text(encoding='utf-8'), original)
         self.assertFalse(CONTROL.sidecar_path(config).exists())
 
@@ -255,20 +250,20 @@ class HookControlTests(unittest.TestCase):
         config = self.config()
         config.write_text('features = { hooks = true }\n', encoding='utf-8')
         with self.assertRaisesRegex(CONTROL.ControlError, 'unfamiliar TOML syntax'):
-            CONTROL.disable('global', config)
+            CONTROL.disable(config)
         self.assertFalse(CONTROL.sidecar_path(config).exists())
 
     def test_concurrent_off_preserves_single_original_for_restore(self):
         config = self.config()
         config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-        commands = [[sys.executable, '-B', str(SCRIPT), 'off', '--scope', 'global', '--codex-home', str(config.parent)]] * 2
+        commands = [[sys.executable, '-B', str(SCRIPT), 'off', '--project', str(config.parent.parent)]] * 2
         processes = [subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for command in commands]
         outputs = [process.communicate() for process in processes]
         self.assertEqual([process.returncode for process in processes], [0, 0], outputs)
         snapshot = json.loads(CONTROL.sidecar_path(config).read_text(encoding='utf-8'))
         self.assertIs(snapshot['original'], True)
         restored = subprocess.run(
-            [sys.executable, '-B', str(SCRIPT), 'on', '--scope', 'global', '--codex-home', str(config.parent)],
+            [sys.executable, '-B', str(SCRIPT), 'on', '--project', str(config.parent.parent)],
             capture_output=True, text=True, check=False)
         self.assertEqual(restored.returncode, 0, restored.stderr)
         self.assertIn('hooks = true', config.read_text(encoding='utf-8'))
@@ -277,7 +272,7 @@ class HookControlTests(unittest.TestCase):
     def test_snapshot_read_and_write_tolerate_an_open_reader(self):
         config = self.config()
         config.write_text('[features]\nhooks = true\n', encoding='utf-8')
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
         sidecar = CONTROL.sidecar_path(config)
         original = CONTROL.load_snapshot(sidecar)
         replacement = dict(original, disabled_sha256='a' * 64)
@@ -328,7 +323,7 @@ class HookControlTests(unittest.TestCase):
     def test_snapshot_restore_tolerates_an_open_reader(self):
         config = self.config()
         config.write_text('[features]\nhooks = false\n', encoding='utf-8')
-        CONTROL.disable('global', config)
+        CONTROL.disable(config)
         sidecar = CONTROL.sidecar_path(config)
         attempted = threading.Event()
         errors = []
@@ -342,7 +337,7 @@ class HookControlTests(unittest.TestCase):
 
         def restore():
             try:
-                restored.append(CONTROL.restore('global', config))
+                restored.append(CONTROL.restore(config))
             except BaseException as error:
                 errors.append(error)
 
@@ -404,3 +399,93 @@ class HookControlTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@pytest.fixture
+def repository_config(tmp_path: Path) -> Path:
+    project = tmp_path / "repository"
+    subprocess.run(["git", "init", "--quiet", str(project)], check=True, capture_output=True, timeout=30)
+    config = project / ".codex/config.toml"
+    config.parent.mkdir()
+    config.write_text("[features]\nhooks = true\n", encoding="utf-8")
+    return config
+
+
+def test_repository_hook_control_preserves_global_and_other_repository(
+    repository_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    global_config = tmp_path / "global/config.toml"
+    other_config = tmp_path / "other/.codex/config.toml"
+    for path in (global_config, other_config):
+        path.parent.mkdir(parents=True)
+        path.write_text("[features]\nhooks = true\n", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(global_config.parent))
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in (global_config, other_config)}
+    CONTROL.disable(repository_config)
+    assert "hooks = false" in repository_config.read_text(encoding="utf-8")
+    CONTROL.restore(repository_config)
+    assert {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before} == before
+    assert not CONTROL.sidecar_path(global_config).exists()
+
+
+def test_repository_hook_control_rejects_global_alias_before_writing(
+    repository_config: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(repository_config.parent))
+    before = repository_config.read_bytes()
+    with pytest.raises(CONTROL.ControlError, match="global Codex"):
+        CONTROL.disable(repository_config)
+    assert repository_config.read_bytes() == before
+    assert not CONTROL.lock_path(repository_config).exists()
+
+
+def test_repository_hook_control_rejects_subdirectory_as_checkout(
+    repository_config: Path,
+) -> None:
+    nested = repository_config.parent.parent / "child/.codex/config.toml"
+    with pytest.raises(CONTROL.ControlError, match="exact Git"):
+        CONTROL.disable(nested)
+    assert not nested.parent.exists()
+
+
+def test_repository_hook_control_rejects_hard_link_before_writing(
+    repository_config: Path, tmp_path: Path,
+) -> None:
+    target = tmp_path / "global.toml"
+    repository_config.rename(target)
+    os.link(target, repository_config)
+    before = target.read_bytes()
+    with pytest.raises(CONTROL.ControlError, match="hard-linked"):
+        CONTROL.disable(repository_config)
+    assert target.read_bytes() == before
+    assert not CONTROL.lock_path(repository_config).exists()
+
+
+def test_repository_hook_control_rejects_redirected_parent_before_writing(
+    repository_config: Path, tmp_path: Path,
+) -> None:
+    target = tmp_path / "global"
+    repository_config.parent.rename(target)
+    try:
+        repository_config.parent.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"Directory symlinks are unavailable: {error}")
+    before = (target / "config.toml").read_bytes()
+    with pytest.raises(CONTROL.ControlError, match="redirected"):
+        CONTROL.disable(repository_config)
+    assert (target / "config.toml").read_bytes() == before
+    assert not (target / "config.toml.hook-control.lock").exists()
+
+
+def test_repository_hook_control_rejects_old_global_snapshot(
+    repository_config: Path,
+) -> None:
+    CONTROL.disable(repository_config)
+    sidecar = CONTROL.sidecar_path(repository_config)
+    snapshot = json.loads(sidecar.read_text(encoding="utf-8"))
+    snapshot["scope"] = "global"
+    sidecar.write_text(json.dumps(snapshot), encoding="utf-8")
+    before = repository_config.read_bytes()
+    with pytest.raises(CONTROL.ControlError, match="different scope"):
+        CONTROL.restore(repository_config)
+    assert repository_config.read_bytes() == before
