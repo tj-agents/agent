@@ -92,6 +92,8 @@ class Recovery:
                 }
             case ("launches",):
                 return {"launches": self.launches}
+            case ("set-open", "--launch-id", "unwritable", "--open", _):
+                raise agent_store.AgentStoreError("storage", "database is locked")
             case ("set-open", "--launch-id", launch_id, "--open", value):
                 launch = next(
                     row for row in self.launches if row["launch_id"] == launch_id
@@ -426,3 +428,26 @@ def test_recover_open_dry_run_changes_nothing(recovery: Recovery) -> None:
     assert rows[0]["action"] == "resume"
     assert recovery.launches[0]["open"] is True
     assert recovery.launched == []
+
+
+def test_recover_open_reports_a_resume_whose_old_tab_could_not_be_closed(
+    recovery: Recovery,
+) -> None:
+    recovery.session(Host.CLAUDE, "was-open")
+    open_launch(recovery, "unwritable", "claude:was-open")
+    code, rows = recovery.run("--open")
+    assert code == 0
+    assert rows[0]["action"] == "resumed"
+    assert rows[0]["launch_id"] == "new-launch"
+    assert "database is locked" in rows[0]["error"]
+
+
+def test_recover_open_respawns_a_background_session_and_closes_its_tab(
+    recovery: Recovery,
+) -> None:
+    recovery.session(Host.CLAUDE, "background")
+    recovery.hosts[Host.CLAUDE].live["background"] = Liveness(False, background="bg")
+    open_launch(recovery, "tab", "claude:background")
+    assert recovery.run("--open")[1][0]["action"] == "respawned"
+    assert recovery.hosts[Host.CLAUDE].respawned == ["bg"]
+    assert recovery.launches[0]["open"] is False
