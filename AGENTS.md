@@ -12,7 +12,7 @@ Selected plugins: `agent-store@tj-agents`, `agent@tj-agents`, `base@tj-agents`, 
 
 - GitHub Actions projects: `github-actions:build`, `github-actions:domain-design`, `github-actions:errors`, `github-actions:explanation`, `github-actions:libraries`, `github-actions:security`, `github-actions:structure`, `github-actions:style`, `github-actions:testing`
 - Python projects: `python:build`, `python:dispatch`, `python:domain-design`, `python:enums`, `python:errors`, `python:explanation`, `python:imports`, `python:libraries`, `python:modules`, `python:structure`, `python:style`, `python:testing`
-- When relevant to this task: `base:agent-files`, `base:project-setup`, `base:solution-assessment`, `base:task-routing`, `engineering:branching`, `engineering:committing`, `engineering:docs`, `engineering:failure-provenance`, `engineering:git-auth`, `engineering:guide`, `engineering:merging`, `engineering:plans`, `engineering:pr-screenshots`, `engineering:remote-validation`, `engineering:review-lifecycle`, `engineering:session`, `workflow:plan-artifacts`, `workflow:session`
+- When relevant to this task: `base:agent-files`, `base:project-setup`, `base:solution-assessment`, `engineering:branching`, `engineering:committing`, `engineering:docs`, `engineering:failure-provenance`, `engineering:git-auth`, `engineering:merging`, `engineering:plans`, `engineering:remote-validation`, `engineering:review-lifecycle`, `engineering:session`, `workflow:plan-artifacts`, `workflow:session`
 - agent sessions: `agent:lanes`
 - material Tommy revises or rehearses: `personal:revision`
 - projects explicitly selecting personal: `personal:rules`

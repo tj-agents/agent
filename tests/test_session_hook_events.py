@@ -163,6 +163,33 @@ def test_a_launch_lookup_failure_other_than_not_found_propagates(monkeypatch):
         hook.start(Host.CLAUDE, 'n1', '/repo/sub', {hook.LAUNCH_ENV: 'L1'})
 
 
+def unanswered_probe() -> None:
+    raise hook.owned_launch.OwnedLaunchError('tj launch did not answer: timed out')
+
+
+def test_a_launched_session_is_never_registered_unbound_when_tj_launch_cannot_answer(monkeypatch, capsys):
+    calls = AgentStoreCalls()
+    monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook.owned_launch, 'current', unanswered_probe)
+    monkeypatch.setattr(hook, 'worktree', lambda cwd: '/repo')
+    monkeypatch.setenv(hook.LAUNCH_ENV, 'L1')
+    monkeypatch.setenv(hook.TITLE_ENV, 'standards loading')
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{"session_id": "n1", "cwd": "/repo/sub"}'))
+    assert hook.main(['start', '--host', 'claude']) == 0
+    assert calls.calls == []
+    assert 'tj launch did not answer' in capsys.readouterr().err
+
+
+def test_a_session_outside_tj_run_registers_without_asking_tj_launch(monkeypatch):
+    calls = AgentStoreCalls({'session': {'title': None}})
+    monkeypatch.setattr(hook.agent_store, 'run', calls)
+    monkeypatch.setattr(hook.owned_launch, 'current', unanswered_probe)
+    monkeypatch.setattr(hook, 'worktree', lambda cwd: None)
+    monkeypatch.setattr(hook, 'terminal', lambda environ: [])
+    hook.start(Host.CLAUDE, 'n1', '/repo/sub', {})
+    assert calls.calls == [('register', '--session', 'claude:n1', '--cwd', '/repo/sub')]
+
+
 def test_main_reads_the_process_environment_and_passes_it_to_start(monkeypatch):
     captured = {}
 
