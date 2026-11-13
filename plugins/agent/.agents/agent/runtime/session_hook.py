@@ -3,7 +3,8 @@ explicit user exit and otherwise leaves it active for `tj recover`.
 
 A session owned by a `tj run` launch, as `tj launch` reports it, binds to that launch and inherits its title,
 parent, terminal, wrapper and work item; a session that only inherited `tj run` environment registers
-unbound. A Codex thread is also named after its title, so it is addressable by name. Exit 0 always:
+unbound. When `tj launch` cannot answer, the session is left unregistered and the failure reported, never
+registered unbound beside the launch it may own. A Codex thread is also named after its title, so it is addressable by name. Exit 0 always:
 bookkeeping never stops a session.
 """
 
@@ -82,7 +83,7 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
     root = worktree(cwd)
     adapter = agent_cli.host_launch(host)
     session = codex_launch.registered_session(session_id) if host is Host.CODEX else None
-    launch = owned_launch.current()
+    launch = owned_launch.current() if session is None and environ.get(LAUNCH_ENV) else None
     environ = {name: value for name, value in environ.items() if name != LAUNCH_ENV}
     if session is None:
         if launch:
