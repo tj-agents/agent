@@ -44,5 +44,7 @@ session; it injects the text into that conversation.
 when you start work that another session may have answered, and before reporting that you are waiting.
 
 A parent that needs a child's result runs `tj feed --wait --timeout <seconds>` as a background command through
-`agent:listen`, then keeps working; the child's final message returns as that task's completion. Exit 1
-means the wait timed out with no message, so check the child before assuming it failed.
+`agent:listen`, then keeps working. The wait returns with the first unread message from any session and marks
+it read, so check the sender: act on a message from someone else and wait again for the child. A plain
+`tj feed` while the wait runs takes whatever arrives, so read the child's result there instead. Exit 1 means
+the wait timed out with no message, so check the child before assuming it failed.
