@@ -626,3 +626,72 @@ def test_launch_keeps_primary_failure_and_timeout_exit_after_cleanup_failure(
     ) in output.getvalue()
     if phase == "timeout":
         assert "check the terminal before launching another" in output.getvalue()
+
+
+REFUSED = "Error: this Windows launcher prevents background processes from outliving it"
+
+
+def daemon_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    start: subprocess.CompletedProcess[str],
+    up_after: int,
+) -> list[list[str]]:
+    calls: list[list[str]] = []
+    versions = iter([1] * up_after + [0])
+
+    def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[-1] == "start" and command[0] == "fixture-codex":
+            return start
+        if command[-1] == "version":
+            return subprocess.CompletedProcess(command, next(versions), "", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(process, "run", run)
+    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}")
+    monkeypatch.setattr(startup, "IS_WINDOWS", True)
+    return calls
+
+
+def test_start_daemon_opens_a_terminal_tab_when_the_callers_job_refuses_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    refused = subprocess.CompletedProcess(["start"], 1, "", REFUSED)
+    calls = daemon_runs(monkeypatch, refused, up_after=2)
+    waits: list[float] = []
+    startup.start_daemon(
+        "fixture-codex", tmp_path, clock=lambda: 0.0, wait=waits.append
+    )
+    tab = ["C:/bin/wt.exe", "-w", "0", "nt", "--title", "Codex daemon"]
+    assert calls[1] == [*tab, "fixture-codex", "app-server", "daemon", "start"]
+    assert [call[-1] for call in calls[2:]] == ["version", "version", "version"]
+    assert waits == [1, 1]
+
+
+def test_start_daemon_reports_a_tab_that_never_brings_it_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    refused = subprocess.CompletedProcess(["start"], 1, "", REFUSED)
+    daemon_runs(monkeypatch, refused, up_after=100)
+    ticks = iter(range(0, 1000, 10))
+    with pytest.raises(LaunchError, match="did not start from a Windows Terminal tab"):
+        startup.start_daemon(
+            "fixture-codex",
+            tmp_path,
+            clock=lambda: float(next(ticks)),
+            wait=lambda _: None,
+        )
+
+
+@pytest.mark.parametrize("windows", [True, False])
+def test_start_daemon_reports_other_failures_without_a_tab(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, windows: bool
+) -> None:
+    error = REFUSED if not windows else "Error: config is invalid"
+    calls = daemon_runs(
+        monkeypatch, subprocess.CompletedProcess(["start"], 1, "", error), 0
+    )
+    monkeypatch.setattr(startup, "IS_WINDOWS", windows)
+    with pytest.raises(LaunchError, match="Cannot start the configured Codex daemon"):
+        startup.start_daemon("fixture-codex", tmp_path)
+    assert len(calls) == 1
