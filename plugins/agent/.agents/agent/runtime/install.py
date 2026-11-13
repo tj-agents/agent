@@ -1253,11 +1253,14 @@ def plugin_hosts(context: Context) -> list[Host]:
     return [host for host in Host if context.which(host.value)]
 
 
-def update_plugins(context: Context, err=sys.stderr) -> dict[Host, plugin_update.Outcome]:
+def update_plugins(context: Context, out=sys.stdout, err=sys.stderr) -> dict[Host, plugin_update.Outcome]:
     """Bring every installed host's tj-agents plugins to their marketplace pins."""
     digests = Digests(context.state_directory)
     outcomes = {}
     for host in plugin_hosts(context):
+        if not plugin_update.INSTALLED[host].refresh_identities(plugin_update.MARKETPLACES):
+            print(f"n/a    {host} plugins: none installed yet; plugin setup installs the selected ones", file=out)
+            continue
         outcome = plugin_update.update(host, digests)
         for failure in outcome.failures:
             print(f"failed plugins: {failure}", file=err)
@@ -1371,6 +1374,11 @@ def main(argv: list[str] | None = None) -> int:
             print("install: another machine install is running", file=sys.stderr)
             return 2
         if full:
+            # Native plugin commands run through tj_hook, which the native CLI step delivers.
+            native = tuple(step for step in STEPS if step.required)
+            if run_steps(native, context, False):
+                jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
+                return 2
             outcomes = update_plugins(context)
             successor = converged_installer(context)
         if successor is None:
