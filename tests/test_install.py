@@ -1117,6 +1117,8 @@ def full_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, successor: Pat
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(install.plugin_update, "update", update)
+    for adapter in install.plugin_update.INSTALLED.values():
+        monkeypatch.setattr(adapter, "refresh_identities", lambda _marketplaces: {"agent@tj-agents"})
     monkeypatch.setattr(install, "converged_installer", lambda _context: successor)
     with (
         mock.patch.object(install, "machine_context", return_value=context),
@@ -1136,7 +1138,7 @@ def test_a_full_install_updates_both_hosts_then_hands_over_to_the_converged_agen
     assert code == 0
     assert updated == [Host.CLAUDE, Host.CODEX]
     assert calls == [[sys.executable, "-B", str(successor), "--converged"]]
-    steps.assert_not_called()
+    assert steps.call_count == 1  # the native CLI step before the plugin update
 
 
 def test_an_install_already_at_the_converged_agent_runs_its_steps(
@@ -1146,7 +1148,7 @@ def test_an_install_already_at_the_converged_agent_runs_its_steps(
     assert code == 0
     assert updated == [Host.CLAUDE, Host.CODEX]
     assert calls == []
-    steps.assert_called_once()
+    assert steps.call_count == 2  # the native CLI step, then every step
 
 
 @pytest.mark.parametrize("arguments", [["--converged"], ["--step", "plugin copies"]])
@@ -1158,6 +1160,50 @@ def test_a_handed_over_or_single_step_install_does_not_update_plugins(
     assert updated == []
     assert calls == []
     steps.assert_called_once()
+
+
+def test_a_full_install_delivers_the_native_cli_before_updating_plugins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    order: list[str] = []
+
+    def deliver(_context: install.Context) -> list[str]:
+        order.append("native CLI")
+        return []
+
+    def update(host: Host, _digests: object) -> Outcome:
+        order.append(host.value)
+        return outcome(changed=False)
+
+    native = install.Step("native CLI", lambda _context: ["install"], deliver, required=True)
+    monkeypatch.setattr(install, "STEPS", (native,))
+    monkeypatch.setattr(install.plugin_update, "update", update)
+    for adapter in install.plugin_update.INSTALLED.values():
+        monkeypatch.setattr(adapter, "refresh_identities", lambda _marketplaces: {"agent@tj-agents"})
+    monkeypatch.setattr(install, "converged_installer", lambda _context: None)
+    context = machine_context(tmp_path)
+    context.which = lambda name: name
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        contextlib.redirect_stdout(io.StringIO()),
+    ):
+        install.main([])
+    assert order[:3] == ["native CLI", "claude", "codex"]
+
+
+def test_a_blank_machine_leaves_plugin_installation_to_plugin_setup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = machine_context(tmp_path)
+    context.which = lambda name: name
+    for adapter in install.plugin_update.INSTALLED.values():
+        monkeypatch.setattr(adapter, "refresh_identities", lambda _marketplaces: set())
+    update = mock.Mock()
+    monkeypatch.setattr(install.plugin_update, "update", update)
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert install.update_plugins(context) == {}
+    update.assert_not_called()
+    assert context.failures == []
 
 
 def test_tj_plugins_is_no_longer_a_command() -> None:
