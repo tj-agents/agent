@@ -18,7 +18,7 @@
     },
     {
       "customType": "regex",
-      "description": "The tj-work-items CLI and work-item profile packages Agent installs",
+      "description": "The tj-work-items CLI Agent installs",
       "managerFilePatterns": [
         "/^\\.agents/agent/runtime/work-items\\.json$/"
       ],
