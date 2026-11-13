@@ -71,9 +71,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {failure}", file=sys.stderr)
         return 1
     if outcome.changed and outcome.revision:
-        failure = publish(host, outcome.revision)
-        if failure:
-            print(f"{host}: tj update failed: {failure}", file=sys.stderr)
+        problem = publish(host, outcome.revision)
+        if problem:
+            print(f"{host}: tj update failed: {problem}", file=sys.stderr)
             return 1
     print("tj: plugin update done")
     return 0
