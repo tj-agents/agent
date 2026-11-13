@@ -52,9 +52,12 @@ source, so no Codex launch asks to trust them) and plugin copies. It is idempote
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
 `tj item` is `tj-work-items`, installed with `uv tool install` (uv is required) together with the work-item
-profile package of each employer profile plugin installed on this machine, such as `infonetica@tj-agents`.
-Their revisions are pinned in `.agents/agent/runtime/work-items.json`, which Renovate bumps; the step is a
-no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned `tj-cli`'s own installers.
+profile package each specific profile plugin installed on this machine declares in its own payload
+(a `work-items.json` naming its package and subdirectory). Its repository comes from the marketplace
+snapshot Agent already carries and its revision is the exact commit that plugin was installed from, so no
+separate pin needs renewal. The tool's own pin is in `.agents/agent/runtime/work-items.json`, which Renovate
+bumps; the step is a no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned
+`tj-cli`'s own installers.
 
 `tj run` checks the tj-agents marketplace once at launch, in repositories that select tj-agents plugins, and
 starts `tj install` in the background when it moved; nothing checks per prompt or polls. `tj install` fetches the
