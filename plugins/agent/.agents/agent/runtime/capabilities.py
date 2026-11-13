@@ -205,7 +205,9 @@ CAPABILITIES = (
     ),
     Capability(
         "codex-feed-read",
-        Support(reason="A Claude session receives tj message natively in its inbox and has no feed."),
+        Support(
+            reason="A Claude session gets tj message in its native inbox; no feed."
+        ),
         Support(
             "cli:src/feed.rs::run",
             "cli:tests/message.rs::feed_wait_returns_when_a_message_arrives",
