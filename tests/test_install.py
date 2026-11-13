@@ -1697,8 +1697,8 @@ def test_a_blank_machine_leaves_plugin_installation_to_plugin_setup(
     assert context.failures == []
 
 
-def test_tj_plugins_is_no_longer_a_command() -> None:
-    assert "plugins" not in install.LIFECYCLE_COMMANDS
+def test_tj_plugins_is_the_fast_plugin_only_refresh() -> None:
+    assert install.LIFECYCLE_COMMANDS["plugins"] == "tj_plugins.py"
 
 
 def scoped_machine(tmp_path: Path) -> install.Context:

@@ -71,7 +71,7 @@ LIFECYCLE_COMMANDS = {
     "start": "tj_start.py",
     "status": "tj_status.py",
     "recover": "tj_recover.py",
-    "install": "install.py",
+    "plugins": "tj_plugins.py", "install": "install.py",
     "prepare": "tj_prepare.py",
     "session": "tj_session.py",
 }
