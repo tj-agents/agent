@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tomllib
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -169,7 +170,7 @@ def refresh(
     catalog.remember(entries)
     unlisted = candidates - listed
     try:
-        published = published_plugins(report) if unlisted else set()
+        published = published_plugins(report, marketplaces) if unlisted else set()
     except InventoryError as error:
         report.fail(HOST, "publication", str(error))
         return
@@ -247,12 +248,14 @@ def cached(marketplaces: tuple[str, ...]) -> set[str]:
     return found
 
 
-def published_plugins(report: Any) -> set[str]:
+def published_plugins(report: Any, marketplaces: Collection[str]) -> set[str]:
     roots = marketplace_roots(report)
     if roots is None:
         raise InventoryError("Could not determine marketplace roots")
     found = set()
     for marketplace, root in roots.items():
+        if marketplace not in marketplaces:
+            continue
         try:
             manifest = json.loads(
                 (root / ".agents" / "plugins" / "marketplace.json").read_text(
