@@ -275,14 +275,14 @@ class CodexExecutableTests(unittest.TestCase):
     def test_skips_the_windows_desktop_cache_elsewhere(self):
         executable(self.base / 'appdata' / 'OpenAI' / 'Codex' / 'bin' / 'h' / 'codex.exe')
         self.assertEqual(
-            CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [], local_app_data=str(self.base / 'appdata'), npm_prefix=lambda: None),
+            CLI.host_launch(Host.CODEX).candidate_paths(on_path=list, local_app_data=str(self.base / 'appdata'), npm_prefix=lambda: None),
             [],
         )
 
     def test_falls_back_to_the_npm_prefix_when_the_shim_is_off_path(self):
         shim, binary = self.vendored(self.base / 'npm global', '0.160.0')
         self.assertEqual(
-            CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [], npm_prefix=lambda: str(self.base / 'npm global')),
+            CLI.host_launch(Host.CODEX).candidate_paths(on_path=list, npm_prefix=lambda: str(self.base / 'npm global')),
             [str(binary)],
         )
 
@@ -303,7 +303,7 @@ class CodexExecutableTests(unittest.TestCase):
 
     def test_a_missing_npm_prefix_binary_is_not_fatal(self):
         self.assertEqual(
-            CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [], npm_prefix=lambda: str(self.base / 'no such prefix')),
+            CLI.host_launch(Host.CODEX).candidate_paths(on_path=list, npm_prefix=lambda: str(self.base / 'no such prefix')),
             [],
         )
 
@@ -311,7 +311,7 @@ class CodexExecutableTests(unittest.TestCase):
     def test_npm_prefix_is_not_consulted_on_windows(self):
         calls = []
         self.vendored(self.base / 'npm global', '0.160.0')
-        CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [], npm_prefix=lambda: calls.append(1) or str(self.base / 'npm global'))
+        CLI.host_launch(Host.CODEX).candidate_paths(on_path=list, npm_prefix=lambda: calls.append(1) or str(self.base / 'npm global'))
         self.assertEqual(calls, [])
 
     def test_picks_the_newest_answering_candidate(self):
