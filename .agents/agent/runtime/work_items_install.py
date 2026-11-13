@@ -1,31 +1,30 @@
-"""Pin the `tj item` CLI and the work-item profiles this machine selects."""
+"""Pin the `tj item` CLI and install the work-item profiles its plugins declare."""
 
 from __future__ import annotations
 
 import json
 import tomllib
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 from urllib.parse import parse_qs, urlsplit
 
-from claude import installed as claude_installed
-from codex import installed as codex_installed
 from tj_agent.host import Host
 
 PINS = Path(__file__).resolve().with_name("work-items.json")
+MARKETPLACE_LOCK = (
+    Path(__file__).resolve().parents[1]
+    / "utility"
+    / "plugins"
+    / "scripts"
+    / "marketplace_plugins.lock.json"
+)
+DECLARATION_NAME = "work-items.json"
 RECEIPT = "uv-receipt.toml"
 
 
-class Installed(Protocol):
-    def identities(self) -> set[str]: ...
-
-
-INSTALLED: Mapping[Host, Installed] = {
-    Host.CLAUDE: claude_installed,
-    Host.CODEX: codex_installed,
-}
+class WorkItemsError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,28 +45,101 @@ class Pin:
 @dataclass(frozen=True, slots=True)
 class Pins:
     tool: Pin
-    profiles: Mapping[str, Pin]
 
     @classmethod
     def load(cls, path: Path = PINS) -> Pins:
         document = json.loads(path.read_text(encoding="utf-8"))
-        return cls(
-            Pin(**document["tool"]),
-            {plugin: Pin(**pin) for plugin, pin in document["profiles"].items()},
-        )
-
-    def selected(self, plugins: Iterable[str]) -> tuple[Pin, ...]:
-        present = set(plugins)
-        return tuple(
-            pin for plugin, pin in sorted(self.profiles.items()) if plugin in present
-        )
+        if set(document) != {"tool"}:
+            raise WorkItemsError(f"{path}: must contain exactly tool")
+        return cls(Pin(**document["tool"]))
 
 
-def installed_plugins() -> set[str]:
-    found = set()
-    for host in Host:
-        found.update(INSTALLED[host].identities())
-    return found
+def _read_json(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def repository_names(path: Path | None = None) -> dict[str, str]:
+    """Map each marketplace plugin name to its `tj-agents` GitHub repository."""
+    marketplace = _read_json(MARKETPLACE_LOCK if path is None else path).get(
+        "marketplace"
+    )
+    entries = marketplace.get("plugins") if isinstance(marketplace, dict) else None
+    if not isinstance(entries, list):
+        return {}
+    return {
+        entry["name"]: f"tj-agents/{entry['repository']}"
+        for entry in entries
+        if isinstance(entry, dict)
+        and isinstance(entry.get("name"), str)
+        and isinstance(entry.get("repository"), str)
+    }
+
+
+def _declared_profile(root: Path) -> tuple[str, str] | None:
+    """A plugin's own work-item declaration, when its installed payload ships one."""
+    document = _read_json(root / DECLARATION_NAME)
+    package, subdirectory = document.get("package"), document.get("subdirectory")
+    if (
+        document.get("schema_version") != 1
+        or not isinstance(package, str)
+        or not isinstance(subdirectory, str)
+    ):
+        return None
+    return package, subdirectory
+
+
+def discovered_profiles(
+    claude_config: Path | None = None, repositories: Mapping[str, str] | None = None
+) -> tuple[Pin, ...]:
+    """Work-item profile packages this machine's installed plugins declare.
+
+    A specific profile plugin ships its package and subdirectory in its own
+    installed payload (`work-items.json`); the repository comes from the
+    marketplace snapshot Agent already carries, and the revision is the exact
+    commit Claude installed that plugin from, so no separate pin needs renewal
+    here. Only Claude's installed-plugin inventory records that revision today;
+    a profile enabled only in Codex is not discovered.
+    """
+    claude_config = (
+        Host.CLAUDE.configuration_root if claude_config is None else claude_config
+    )
+    repositories = repository_names() if repositories is None else repositories
+    settings = _read_json(claude_config / "settings.json").get("enabledPlugins")
+    registry = _read_json(claude_config / "plugins" / "installed_plugins.json").get(
+        "plugins"
+    )
+    if not isinstance(settings, dict) or not isinstance(registry, dict):
+        return ()
+    found: dict[str, Pin] = {}
+    for identity, enabled in settings.items():
+        if enabled is not True:
+            continue
+        entries = registry.get(identity)
+        if not isinstance(entries, list):
+            continue
+        name = identity.split("@", 1)[0]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            install_path, revision = entry.get("installPath"), entry.get("gitCommitSha")
+            if not isinstance(install_path, str) or not isinstance(revision, str):
+                continue
+            declared = _declared_profile(Path(install_path))
+            if declared is None:
+                continue
+            repository = repositories.get(name)
+            if repository is None:
+                raise WorkItemsError(
+                    f"{identity} declares a work-items profile but {name} is not a "
+                    "known marketplace plugin"
+                )
+            found[identity] = Pin(declared[0], repository, declared[1], revision)
+            break
+    return tuple(found[identity] for identity in sorted(found))
 
 
 def default_tool_directory(environ: Mapping[str, str], windows: bool) -> Path:
@@ -126,8 +198,8 @@ def receipt(path: Path) -> dict[str, Pin]:
     }
 
 
-def drift(tool_directory: Path, pins: Pins, plugins: Iterable[str]) -> list[str]:
-    wanted = {pin.package: pin for pin in (pins.tool, *pins.selected(plugins))}
+def drift(tool_directory: Path, pins: Pins, profiles: Sequence[Pin]) -> list[str]:
+    wanted = {pin.package: pin for pin in (pins.tool, *profiles)}
     actual = receipt(tool_directory / pins.tool.package / RECEIPT)
     found = []
     for package in sorted(wanted.keys() | actual.keys()):
