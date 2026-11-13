@@ -1,13 +1,13 @@
 ---
 name: message
-description: Send a message to another Claude or Codex session addressed by its tab title, or get one notice when a Codex child next goes idle or exits. Use when asked to message, tell, update, correct or follow up with another session, when reporting back to the session that started you, or when waiting to hear that a child session finished.
+description: Post a message to another Claude or Codex session's feed, read your own feed, or wait for a child session's result. Use when you must tell another session your final result, a blocker you cannot resolve or an approval Tommy must give, when asked to message, tell or correct another session, or when waiting to hear from a child session.
 kind: utility
 domain: agent
 profile: core
 applicability: agent sessions
 provenance: house
 requires: tj
-allowed-tools: Bash(tj message:*), Bash(tj subscribe:*)
+allowed-tools: Bash(tj message:*), Bash(tj feed:*)
 ---
 
 # Message a session
