@@ -1279,11 +1279,23 @@ def converged_installer(context: Context) -> Path | None:
     return None
 
 
+def published_path(context: Context, host: Host) -> Path:
+    return context.state_directory / f"published-{host.value}.txt"
+
+
 def publish_update(context: Context, outcomes: dict[Host, plugin_update.Outcome]) -> int:
-    """Tell running tj run tabs of each host whose plugins or marketplace moved to reload."""
+    """Tell running tj run tabs of a host to reload when its plugins moved or its published revision is stale.
+
+    `tj run`'s launch check compares the marketplace HEAD with the last published revision, so a host whose
+    published revision is behind is republished even when nothing else changed.
+    """
     code = 0
     for host, outcome in outcomes.items():
-        if outcome.failures or not outcome.changed or outcome.revision is None:
+        if outcome.failures or outcome.revision is None:
+            continue
+        record = published_path(context, host)
+        published = record.read_text(encoding="utf-8").strip() if record.is_file() else None
+        if not outcome.changed and published == outcome.revision:
             continue
         command = ["tj", "update", "--host", host.value, "--revision", outcome.revision]
         try:
@@ -1296,6 +1308,8 @@ def publish_update(context: Context, outcomes: dict[Host, plugin_update.Outcome]
             context.failures.append(f"{host} update: {result.stderr.strip() or f'exit {result.returncode}'}")
             code = 2
             continue
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(outcome.revision, encoding="utf-8")
         print(f"apply  {host} update: published {outcome.revision[:12]} to running tj run tabs")
     return code
 
