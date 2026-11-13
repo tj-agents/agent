@@ -1,6 +1,6 @@
 ---
 name: message
-description: Post a message to another Claude or Codex session's feed, read your own feed, or wait for a child session's result. Use when you must tell another session your final result, a blocker you cannot resolve or an approval Tommy must give, when asked to message, tell or correct another session, or when waiting to hear from a child session.
+description: Send another Claude or Codex session a message with tj message, or, in a Codex session, read or wait for your own messages with tj feed. Use when you must tell another session your final result, a blocker you cannot resolve or an approval Tommy must give, when asked to message, tell or correct another session, or when a Codex parent waits for a child.
 kind: utility
 domain: agent
 profile: core
