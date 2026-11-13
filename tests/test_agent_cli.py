@@ -700,7 +700,8 @@ def test_the_standing_rule_names_the_parent_by_title() -> None:
     ):
         rule = CLI.parent_rule("claude:p")
     assert '"agent#98" (claude:p)' in rule
-    assert "agent:message" in rule
+    assert 'agent:message (tj message claude:p "<text>")' in rule
+    assert "never send it status updates" in rule
     assert CLI.parent_rule(None) == ""
 
 

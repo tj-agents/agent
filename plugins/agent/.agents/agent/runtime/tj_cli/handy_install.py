@@ -141,31 +141,51 @@ def _run(
     )
 
 
-def _install_windows() -> Path:
-    winget = shutil.which("winget")
-    if winget is None:
-        raise HandyInstallError(
-            "install Windows App Installer (winget), then rerun setup"
-        )
+WINDOWS_RUNTIMES = (
+    ("KhronosGroup.VulkanRT", "vulkan-1.dll"),
+    ("Microsoft.VCRedist.2015+.x64", "vcruntime140.dll"),
+)
+
+
+def _system_library_installed(system_directory: Path, library: str) -> bool:
+    return (system_directory / library).is_file()
+
+
+def _winget_install(winget: str, package: str, *options: str) -> None:
     _run(
         [
             winget,
             "install",
             "--id",
-            "cjpais.Handy",
+            package,
             "--exact",
-            "--version",
-            VERSION,
             "--source",
             "winget",
-            "--scope",
-            "user",
+            *options,
             "--silent",
-            "--force",
             "--disable-interactivity",
             "--accept-source-agreements",
             "--accept-package-agreements",
+            "--skip-dependencies",
         ]
+    )
+
+
+def _install_windows(system_directory: Path) -> Path:
+    winget = shutil.which("winget")
+    if winget is None:
+        raise HandyInstallError(
+            "install Windows App Installer (winget), then rerun setup"
+        )
+    for package, library in WINDOWS_RUNTIMES:
+        if not _system_library_installed(system_directory, library):
+            _winget_install(winget, package)
+            if not _system_library_installed(system_directory, library):
+                raise HandyInstallError(
+                    f"installer finished but {package} runtime {library} is missing"
+                )
+    _winget_install(
+        winget, "cjpais.Handy", "--version", VERSION, "--scope", "user", "--force"
     )
     installed = _registered_windows_handy(version=VERSION)
     if installed is None:
@@ -348,7 +368,10 @@ def main(argv: list[str] | None = None) -> int:
                     f"Handy {VERSION} requires interactive setup; "
                     "rerun without --no-escalate"
                 )
-            installed = _install_windows()
+            system_directory = (
+                Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32"
+            )
+            installed = _install_windows(system_directory)
         else:
             installed = _install_linux(
                 no_escalate=arguments.no_escalate,
