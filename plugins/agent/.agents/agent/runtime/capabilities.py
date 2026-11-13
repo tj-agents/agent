@@ -193,36 +193,25 @@ CAPABILITIES = (
         ),
     ),
     Capability(
-        "message-to-codex",
+        "message-feed-post",
         Support(
             "cli:src/message.rs::run",
-            "cli:tests/message.rs::claude_to_codex_queues_with_a_reply_route",
+            "cli:tests/message.rs::a_message_to_a_claude_session_goes_to_its_feed_from_either_host",
         ),
         Support(
             "cli:src/message.rs::run",
-            "cli:tests/message.rs::codex_to_codex_queues_by_handle",
+            "cli:tests/message.rs::a_message_to_a_codex_session_lands_in_its_feed_with_the_sender",
         ),
     ),
     Capability(
-        "message-to-claude",
+        "message-feed-read",
         Support(
-            "cli:src/message.rs::run",
-            "cli:tests/message.rs::claude_to_claude_defers_to_native_send_message",
+            "cli:src/feed.rs::run",
+            "cli:tests/message.rs::feed_shows_unread_messages_once_with_a_reply_route",
         ),
         Support(
-            "cli:src/bridge.rs::post",
-            "cli:tests/message.rs::codex_to_claude_goes_through_the_session_relay_with_its_token",
-        ),
-    ),
-    Capability(
-        "codex-child-idle-notice",
-        Support(
-            "cli:src/subscribe.rs::run",
-            "cli:tests/message.rs::a_claude_parent_hears_through_its_own_inbox",
-        ),
-        Support(
-            "cli:src/subscribe.rs::run",
-            "cli:tests/message.rs::a_codex_parent_hears_once_when_its_child_goes_idle",
+            "cli:src/feed.rs::run",
+            "cli:tests/message.rs::feed_wait_returns_when_a_message_arrives",
         ),
     ),
     Capability(
