@@ -85,6 +85,10 @@ def update_project_standards(directory: Path) -> None:
     standards.update(project, roots)
 
 
+class InventoryError(Exception):
+    pass
+
+
 def codex_command(*arguments: str) -> list[str]:
     return ["codex", *arguments, *MARKETPLACE_OVERRIDES]
 
@@ -92,15 +96,16 @@ def codex_command(*arguments: str) -> list[str]:
 def identities() -> set[str]:
     cache = HOST.configuration_root / "plugins" / "cache"
     try:
-        return {
-            f"{plugin.name}@{marketplace.name}"
-            for marketplace in cache.iterdir()
-            if marketplace.is_dir()
-            for plugin in marketplace.iterdir()
-            if plugin.is_dir() and any(build.is_dir() for build in plugin.iterdir())
-        }
-    except OSError:
+        marketplaces = list(cache.iterdir())
+    except FileNotFoundError:
         return set()
+    return {
+        f"{plugin.name}@{marketplace.name}"
+        for marketplace in marketplaces
+        if marketplace.is_dir()
+        for plugin in marketplace.iterdir()
+        if plugin.is_dir() and any(build.is_dir() for build in plugin.iterdir())
+    }
 
 
 def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
@@ -163,7 +168,11 @@ def refresh(
     entries = json.loads(versions.stdout)["installed"]
     catalog.remember(entries)
     unlisted = candidates - listed
-    published = published_plugins(report) if unlisted else set()
+    try:
+        published = published_plugins(report) if unlisted else set()
+    except InventoryError as error:
+        report.fail(HOST, "publication", str(error))
+        return
     installed = sorted(listed | (unlisted & published))
     for identity in sorted(unlisted - published):
         print(
@@ -184,7 +193,12 @@ def refresh(
         for identity in stale:
             report.step(HOST, identity, codex_command("plugin", "add", identity))
     keep_project_scope(
-        report, [identity for identity in stale if identity not in user_enabled]
+        report,
+        [
+            identity
+            for identity in stale
+            if identity.endswith("@tj-agents") or identity not in user_enabled
+        ],
     )
     trust_hooks(report)
     if stale and not report.failures:
@@ -234,7 +248,9 @@ def cached(marketplaces: tuple[str, ...]) -> set[str]:
 
 
 def published_plugins(report: Any) -> set[str]:
-    roots = marketplace_roots(report) or {}
+    roots = marketplace_roots(report)
+    if roots is None:
+        raise InventoryError("Could not determine marketplace roots")
     found = set()
     for marketplace, root in roots.items():
         try:
@@ -243,8 +259,10 @@ def published_plugins(report: Any) -> set[str]:
                     encoding="utf-8"
                 )
             )
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as error:
+            raise InventoryError(
+                f"unreadable manifest for {marketplace}: {error}"
+            ) from error
         found.update(
             f"{entry['name']}@{marketplace}"
             for entry in manifest.get("plugins", [])

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tomllib
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from pathlib import Path
 
 from tj_agent.host import Host
@@ -56,7 +56,7 @@ def without(text: str, identities: Collection[str]) -> str:
     return result
 
 
-def table_identity(value: dict[str, object]) -> str | None:
+def table_identity(value: Mapping[str, object]) -> str | None:
     plugins = value.get("plugins")
     if len(value) != 1 or not isinstance(plugins, dict) or len(plugins) != 1:
         return None

@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
-"""Update this host's plugins to their marketplace pins and publish the update."""
+"""Update one host's tj-agents plugins to their marketplace pins for tj install."""
 
 from __future__ import annotations
 
-import argparse
-import os
 import re
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import jobs
 import required_plugins
 import standards
 from claude import installed as claude_installed
@@ -113,24 +111,6 @@ def current(host: Host, digests: Digests, marketplace: str, plugin: str) -> bool
     return INSTALLED[host].current(marketplace, plugin, digests)
 
 
-def host_argument(value: str) -> Host:
-    try:
-        return {host.value: host for host in Host}[value]
-    except KeyError as error:
-        raise argparse.ArgumentTypeError("Choose claude or codex") from error
-
-
-def selected_host(explicit: Host | None, environ: Mapping[str, str]) -> Host:
-    if explicit is not None:
-        return explicit
-    hosts = [host for host in Host if environ.get(host.session_variable)]
-    if len(hosts) != 1:
-        raise ValueError(
-            "Pass --host claude or --host codex outside an unambiguous agent session"
-        )
-    return hosts[0]
-
-
 def already_current(host: Host, digests: Digests) -> bool:
     identities = {
         identity
@@ -161,18 +141,14 @@ def update_standards(report: Report, host: Host) -> None:
         report.fail(host, "repository standards", str(error))
 
 
-def marketplace_revision(report: Report, host: Host) -> str | None:
+def marketplace_revision(host: Host) -> str | None:
     root = INSTALLED[host].marketplace_root(required_plugins.MARKETPLACE_NAME)
-    result = report.step(
-        host, "marketplace revision", ["git", "-C", str(root), "rev-parse", "HEAD"]
-    )
-    if result is None:
+    try:
+        result = Report.run(["git", "-C", str(root), "rev-parse", "HEAD"])
+    except (OSError, subprocess.TimeoutExpired):
         return None
     revision = result.stdout.strip()
-    if REVISION.fullmatch(revision) is None:
-        report.fail(host, "marketplace revision", f"{root} has no commit")
-        return None
-    return revision
+    return revision if not result.returncode and REVISION.fullmatch(revision) else None
 
 
 def agent_package(host: Host, state: Path) -> Path | None:
@@ -187,30 +163,24 @@ def agent_package(host: Host, state: Path) -> Path | None:
     return package
 
 
-def deliver_runtime(report: Report, host: Host, state: Path) -> None:
-    """Install the machine runtime from the agent package this update converged to.
-
-    The runtime under the state directory runs `tj install` too, so only the newly
-    installed package can deliver itself.
-    """
-    package = agent_package(host, state)
-    if package is None:
-        return
-    installer = package / ".agents/agent/runtime/install.py"
-    report.step(
-        host,
-        "agent runtime",
-        [sys.executable, "-B", str(installer), "--step", "launch-check runtime"],
-    )
+@dataclass(frozen=True, slots=True)
+class Outcome:
+    failures: list[str]
+    changed: bool
+    revision: str | None
 
 
-def converge(report: Report, host: Host, digests: Digests) -> None:
+def update(host: Host, digests: Digests) -> Outcome:
+    """Fetch the marketplaces, then bring this host's plugins to their pins."""
+    report = Report()
     installed = INSTALLED[host]
+    before = marketplace_revision(host)
     installed.update_marketplaces(report, MARKETPLACES)
     if report.failures:
-        return
-    if already_current(host, digests):
-        print(f"tj: {host} plugins already match their pins")
+        return Outcome(report.failures, False, before)
+    pins_current = already_current(host, digests)
+    if pins_current:
+        print(f"{host}: plugins already match their pins")
         if host is Host.CODEX:
             codex_installed.trust_hooks(report)
     else:
@@ -220,53 +190,9 @@ def converge(report: Report, host: Host, digests: Digests) -> None:
         update_standards(report, host)
     if not report.failures:
         installed.activate(report)
-    if not report.failures:
-        deliver_runtime(report, host, digests.path.parent)
-    if report.failures:
-        return
-    revision = marketplace_revision(report, host)
-    if revision is None:
-        return
-    report.step(
-        host,
-        "update running sessions",
-        ["tj", "update", "--host", host.value, "--revision", revision],
-    )
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="tj plugins", description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    update = commands.add_parser(
-        "update", help="Update and activate this host's plugins"
-    )
-    update.add_argument("--host", type=host_argument, choices=list(Host))
-    arguments = parser.parse_args(argv)
-    try:
-        host = selected_host(arguments.host, os.environ)
-    except ValueError as error:
-        parser.error(str(error))
-    state = jobs.state_directory()
-    with jobs.held(state, jobs.Job.UPDATE) as acquired:
-        if not acquired:
-            print("tj: another plugin update is running")
-            return 0
-        report = Report()
-        converge(report, host, Digests(state))
-        jobs.record(state, jobs.Job.UPDATE, report.failures)
-    if report.failures:
-        print(
-            f"{len(report.failures)} step(s) failed; every other step completed:",
-            file=sys.stderr,
+    revision = marketplace_revision(host)
+    if revision is None and not report.failures:
+        report.fail(
+            host, "marketplace revision", "the tj-agents marketplace has no commit"
         )
-        for failure in report.failures:
-            print(f"  {failure}", file=sys.stderr)
-        return 1
-    if not os.environ.get("TJ_RUN_LAUNCH_ID"):
-        print(f"Plugins updated: {INSTALLED[host].RELOAD}.")
-    print("tj: plugin update done")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    return Outcome(report.failures, not pins_current or revision != before, revision)

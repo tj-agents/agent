@@ -5,13 +5,20 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
+import jobs
+import plugin_update
 import pytest
-import tj_plugins
 from codex import catalog, launch, plugins
-from fake_machine import recorded_failures
 from tj_agent.host import Host
 from tj_cli import process
 from tree_digest import Digests
+
+HOSTS = {host.value: host for host in Host}
+
+
+def update_plugins(host: str) -> int:
+    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()))
+    return 1 if outcome.failures else 0
 
 
 @pytest.fixture
@@ -56,7 +63,7 @@ def native_installs(calls: list[mock._Call]) -> list[list[str]]:
 
 
 def converged(home: Path) -> bool:
-    return tj_plugins.already_current(Host.CODEX, Digests(home.parent / "state"))
+    return plugin_update.already_current(Host.CODEX, Digests(home.parent / "state"))
 
 
 def installed(home: Path, version: str, *, with_version: bool = True) -> Path:
@@ -78,11 +85,11 @@ def test_native_inventory_seeds_a_codex_only_fast_path(home: Path) -> None:
     with mock.patch.object(
         process, "run", return_value=subprocess.CompletedProcess([], 0, "", "")
     ) as run:
-        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        outcome = plugin_update.update(Host.CODEX, Digests(jobs.state_directory()))
+    assert not outcome.failures
+    assert not outcome.changed
     assert native_installs(run.call_args_list) == []
-    assert run.call_args.args[0][:4] == ["tj", "update", "--host", "codex"]
     assert converged(home)
-    assert not (home.parent / "absent-claude").exists()
 
 
 @pytest.mark.parametrize("corrupt", [False, True])
@@ -101,13 +108,13 @@ def test_missing_or_corrupt_receipts_bootstrap_once_without_reinstalling(
         "run",
         return_value=subprocess.CompletedProcess([], 0, listing, ""),
     ) as run:
-        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        assert update_plugins("codex") == 0
         assert not any(
             call.args[0][:3] == ["codex", "plugin", "add"]
             for call in run.call_args_list
         )
         run.reset_mock()
-        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        assert update_plugins("codex") == 0
         assert native_installs(run.call_args_list) == []
 
 
@@ -128,7 +135,7 @@ def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) ->
         return subprocess.CompletedProcess(command, 0, "", "")
 
     with mock.patch.object(process, "run", side_effect=run) as native:
-        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        assert update_plugins("codex") == 0
         assert (
             sum(
                 call.args[0][:3] == ["codex", "plugin", "add"]
@@ -137,7 +144,7 @@ def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) ->
             == 1
         )
         native.reset_mock()
-        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        assert update_plugins("codex") == 0
         assert native_installs(native.call_args_list) == []
     assert converged(home)
 
@@ -157,10 +164,10 @@ def test_a_new_mutable_install_with_native_local_version_converges(home: Path) -
         return subprocess.CompletedProcess(command, 0, "", "")
 
     with mock.patch.object(process, "run", side_effect=run) as native:
-        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        assert update_plugins("codex") == 0
         assert present
         native.reset_mock()
-        assert tj_plugins.main(["update", "--host", "codex"]) == 0
+        assert update_plugins("codex") == 0
         assert native_installs(native.call_args_list) == []
 
 
@@ -220,10 +227,10 @@ def test_inventory_from_an_old_catalog_cannot_record_a_new_source_pin(
 
 
 @pytest.mark.parametrize(
-    "outcome", ["uninstalled", "error", "omitted", "missing-cache"]
+    "scenario", ["uninstalled", "error", "omitted", "missing-cache"]
 )
 def test_a_native_add_cannot_report_success_without_converging(
-    home: Path, outcome: str
+    home: Path, scenario: str
 ) -> None:
     entry = publish(home, "a" * 40, "a" * 12)
     changed = False
@@ -233,27 +240,24 @@ def test_a_native_add_cannot_report_success_without_converging(
         if command[:3] == ["codex", "plugin", "list"]:
             rows = [entry]
             if changed:
-                if outcome == "uninstalled":
+                if scenario == "uninstalled":
                     rows = [{**entry, "installed": False}]
-                elif outcome == "error":
+                elif scenario == "error":
                     rows = [{**entry, "error": "unusable"}]
-                elif outcome == "omitted":
+                elif scenario == "omitted":
                     rows = []
             return subprocess.CompletedProcess(
                 command, 0, json.dumps({"installed": rows}), ""
             )
         if command[:3] == ["codex", "plugin", "add"]:
             changed = True
-            if outcome != "missing-cache":
+            if scenario != "missing-cache":
                 installed(home, "a" * 12)
         return subprocess.CompletedProcess(command, 0, "", "")
 
     with mock.patch.object(process, "run", side_effect=run):
-        assert tj_plugins.main(["update", "--host", "codex"]) == 1
-    assert any(
-        "did not converge" in failure
-        for failure in recorded_failures(home.parent / "state")
-    )
+        result = plugin_update.update(Host.CODEX, Digests(home.parent / "state"))
+    assert any("did not converge" in failure for failure in result.failures)
 
 
 @pytest.mark.parametrize(

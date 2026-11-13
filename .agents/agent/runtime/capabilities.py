@@ -241,7 +241,8 @@ CAPABILITIES = (
         Support(reason="Claude does not require per-hook hash trust."),
         Support(
             "agent:.codex/runtime/hook_trust.py::trust_installed",
-            "agent:tests/test_hook_trust.py::HookTrustTests.test_installed_tj_agents_hooks_are_trusted_in_every_trusted_project_and_others_are_not",
+            "agent:tests/test_hook_trust.py::"
+            "test_installed_hooks_are_trusted_only_in_trusted_projects",
         ),
     ),
     Capability(

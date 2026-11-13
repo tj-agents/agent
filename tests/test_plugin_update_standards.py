@@ -4,32 +4,39 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import jobs
+import plugin_update
 import pytest
 import required_plugins
 import standards
-import tj_plugins
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from codex import launch as codex_launch
-from fake_machine import recorded_failures
 from launch_contract import Liveness
 from launch_errors import LaunchError
 from tj_agent.host import Host
+from tree_digest import Digests
+
+HOSTS = {host.value: host for host in Host}
+
+
+def update_plugins(host: str) -> int:
+    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()))
+    return 1 if outcome.failures else 0
 
 
 @pytest.fixture(autouse=True)
-def published(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+def report_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Every native command Report.run dispatches while plugin_update.update() runs."""
     commands: list[list[str]] = []
 
     def run(command: list[str]) -> subprocess.CompletedProcess[str]:
         commands.append(command)
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr(tj_plugins.Report, "run", staticmethod(run))
+    monkeypatch.setattr(plugin_update.Report, "run", staticmethod(run))
     for adapter in (claude_installed, codex_installed):
         monkeypatch.setattr(adapter, "update_marketplaces", lambda *_arguments: None)
     monkeypatch.setattr(codex_installed, "trust_hooks", lambda _report: True)
-    monkeypatch.setattr(tj_plugins, "agent_package", lambda *_arguments: None)
     return commands
 
 
@@ -60,7 +67,7 @@ def test_plugin_updates_rebuild_standards_before_activation(
     events: list[str] = []
 
     def download(
-        report: tj_plugins.Report,
+        report: plugin_update.Report,
         marketplaces: tuple[str, ...],
         current: Callable[[str, str], bool],
     ) -> None:
@@ -73,19 +80,19 @@ def test_plugin_updates_rebuild_standards_before_activation(
             raise required_plugins.RequiredPluginsError("native inventory failed")
         return {"python@tj-agents": installed}
 
-    def activate(report: tj_plugins.Report) -> None:
+    def activate(report: plugin_update.Report) -> None:
         assert "python:modules" in instructions.read_text(encoding="utf-8")
         assert "python:style" not in instructions.read_text(encoding="utf-8")
         events.append("activate")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
-    monkeypatch.setattr(tj_plugins, "already_current", lambda *args: False)
+    monkeypatch.setattr(plugin_update, "already_current", lambda *args: False)
     adapter = claude_installed if host is Host.CLAUDE else codex_installed
     monkeypatch.setattr(adapter, "refresh", download)
     monkeypatch.setattr(adapter, "activate", activate)
     monkeypatch.setattr(required_plugins, "check", roots)
-    assert tj_plugins.main(["update", "--host", host.value]) == int(failed)
+    assert update_plugins(host.value) == int(failed)
     assert events == (
         ["download", "inventory"] if failed else ["download", "inventory", "activate"]
     )
@@ -93,8 +100,8 @@ def test_plugin_updates_rebuild_standards_before_activation(
     if failed:
         assert instructions.read_text(encoding="utf-8") == original
         failed = False
-        monkeypatch.setattr(tj_plugins, "already_current", lambda *args: True)
-        assert tj_plugins.main(["update", "--host", host.value]) == 0
+        monkeypatch.setattr(plugin_update, "already_current", lambda *args: True)
+        assert update_plugins(host.value) == 0
         assert events == ["download", "inventory", "inventory", "activate"]
 
 
@@ -117,15 +124,15 @@ def test_loaded_repository_standards_require_verified_installed_builds(
     assert instructions.read_text(encoding="utf-8") == "Existing instructions\n"
 
 
-def test_an_interrupted_update_is_activated_and_published_by_the_next_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[list[str]]
+def test_an_interrupted_update_still_activates_on_the_next_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report_commands: list[list[str]]
 ) -> None:
+    state = tmp_path / "state"
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
-    monkeypatch.setattr(tj_plugins, "already_current", lambda *args: False)
+    monkeypatch.setattr(plugin_update, "already_current", lambda *args: False)
 
     def interrupted(
-        report: tj_plugins.Report,
+        report: plugin_update.Report,
         marketplaces: tuple[str, ...],
         current: Callable[[str, str], bool],
     ) -> None:
@@ -133,28 +140,26 @@ def test_an_interrupted_update_is_activated_and_published_by_the_next_one(
 
     monkeypatch.setattr(claude_installed, "refresh", interrupted)
     with pytest.raises(RuntimeError, match="process interrupted"):
-        tj_plugins.main(["update", "--host", "claude"])
-    assert published == []
+        plugin_update.update(Host.CLAUDE, Digests(state))
+    assert report_commands == []
     events: list[str] = []
-    monkeypatch.setattr(tj_plugins, "already_current", lambda *args: True)
+    monkeypatch.setattr(plugin_update, "already_current", lambda *args: True)
     monkeypatch.setattr(required_plugins, "check", lambda *args: None)
     monkeypatch.setattr(
         claude_installed, "activate", lambda *args: events.append("activated")
     )
-    assert tj_plugins.main(["update", "--host", "claude"]) == 0
+    outcome = plugin_update.update(Host.CLAUDE, Digests(state))
+    assert not outcome.failures
     assert events == ["activated"]
-    assert [command[:4] for command in published] == [
-        ["tj", "update", "--host", "claude"]
-    ]
+    assert report_commands == []
 
 
-def test_an_unreadable_codex_daemon_publishes_nothing_until_it_answers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[list[str]]
+def test_a_liveness_check_failure_is_reported_until_it_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report_commands: list[list[str]]
 ) -> None:
     state = tmp_path / "state"
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(jobs, "state_directory", lambda: state)
-    monkeypatch.setattr(tj_plugins, "already_current", lambda *args: True)
+    monkeypatch.setattr(plugin_update, "already_current", lambda *args: True)
     monkeypatch.setattr(required_plugins, "check", lambda *args: None)
     failed = True
 
@@ -165,14 +170,13 @@ def test_an_unreadable_codex_daemon_publishes_nothing_until_it_answers(
         return {}
 
     monkeypatch.setattr(codex_launch, "liveness", liveness)
-    assert tj_plugins.main(["update", "--host", "codex"]) == 1
-    assert published == []
-    assert any("connection failed" in failure for failure in recorded_failures(state))
+    outcome = plugin_update.update(Host.CODEX, Digests(state))
+    assert any("connection failed" in failure for failure in outcome.failures)
+    assert report_commands == []
     failed = False
-    assert tj_plugins.main(["update", "--host", "codex"]) == 0
-    assert [command[:4] for command in published] == [
-        ["tj", "update", "--host", "codex"]
-    ]
+    outcome = plugin_update.update(Host.CODEX, Digests(state))
+    assert not outcome.failures
+    assert report_commands == []
 
 
 @pytest.mark.parametrize("broken", [False, True])
