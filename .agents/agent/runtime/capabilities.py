@@ -86,7 +86,7 @@ class Capability:
 
 
 REVISIONS = {
-    "cli": "1de275b8d100a5d73284e87efca75b2a627be11b",
+    "cli": "04665b47e51a733dcb0afdd9a6b16a901821e217",
     "personal": "7e0b2a962df9ba1b90284990360cdbd9c49cbe3d",
     "core": "03f99b363e11943cf8918a99b6a7654f5b770edb",
     "work-items": "0d107309e04bedd77d2b1b3834ad92db0a777d0c",
@@ -193,10 +193,10 @@ CAPABILITIES = (
         ),
     ),
     Capability(
-        "message-feed-post",
+        "message-post",
         Support(
             "cli:src/message.rs::run",
-            "cli:tests/message.rs::a_message_to_a_claude_session_goes_to_its_feed_from_either_host",
+            "cli:tests/message.rs::a_message_to_a_claude_session_reaches_its_native_inbox_from_either_host",
         ),
         Support(
             "cli:src/message.rs::run",
@@ -204,11 +204,8 @@ CAPABILITIES = (
         ),
     ),
     Capability(
-        "message-feed-read",
-        Support(
-            "cli:src/feed.rs::run",
-            "cli:tests/message.rs::feed_shows_unread_messages_once_with_a_reply_route",
-        ),
+        "codex-feed-read",
+        Support(reason="A Claude session receives tj message natively in its inbox and has no feed."),
         Support(
             "cli:src/feed.rs::run",
             "cli:tests/message.rs::feed_wait_returns_when_a_message_arrives",
