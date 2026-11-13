@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,11 @@ from package_root import find_package_root
 from tj_cli import process
 
 MINIMUM_VERSION = "0.167.1"
+IS_WINDOWS = os.name == "nt"
+# Codex refuses to start its daemon in a job that would end it with the caller,
+# such as an agent's tool shell; a Windows Terminal tab is outside that job.
+JOB_REFUSAL = "prevents background processes from outliving it"
+DAEMON_WAIT_SECONDS = 30
 
 
 class Server(Protocol):
@@ -143,6 +150,67 @@ def create(
             )
 
 
+def daemon_command(
+    native: str, action: str, directory: Path
+) -> subprocess.CompletedProcess[str]:
+    return process.run(
+        [native, "app-server", "daemon", action],
+        cwd=directory,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+def start_daemon(
+    native: str,
+    directory: Path,
+    clock: Callable[[], float] = time.monotonic,
+    wait: Callable[[float], None] = time.sleep,
+) -> None:
+    """Start the shared Codex daemon, from a terminal tab if this job forbids it."""
+    started = daemon_command(native, "start", directory)
+    if not started.returncode:
+        return
+    if not IS_WINDOWS or JOB_REFUSAL not in started.stderr:
+        raise LaunchError(
+            f"Cannot start the configured Codex daemon: {started.stderr.strip()}"
+        )
+    terminal = shutil.which("wt.exe")
+    if not terminal:
+        raise LaunchError(
+            "Cannot start the Codex daemon here and wt.exe is not on PATH"
+        )
+    process.run(
+        [
+            terminal,
+            "-w",
+            "0",
+            "nt",
+            "--title",
+            "Codex daemon",
+            native,
+            "app-server",
+            "daemon",
+            "start",
+        ],
+        cwd=directory,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    deadline = clock() + DAEMON_WAIT_SECONDS
+    while daemon_command(native, "version", directory).returncode:
+        if clock() >= deadline:
+            raise LaunchError(
+                "The Codex daemon did not start from a Windows Terminal tab "
+                f"within {DAEMON_WAIT_SECONDS} seconds"
+            )
+        wait(1)
+
+
 def prepare(
     directory: Path, title: str, arguments: list[str], cli: str, native: str
 ) -> PreparedLaunch:
@@ -159,18 +227,7 @@ def prepare(
             raise LaunchError(
                 "Codex shared daemon startup is disabled in the user configuration"
             )
-        started = process.run(
-            [native, "app-server", "daemon", "start"],
-            cwd=directory,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        if started.returncode:
-            raise LaunchError(
-                f"Cannot start the configured Codex daemon: {started.stderr.strip()}"
-            )
+        start_daemon(native, directory)
         with connection(native, directory) as server:
             document = server.request(
                 "config/read", {"cwd": str(directory), "includeLayers": True}
