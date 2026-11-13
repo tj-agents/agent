@@ -23,7 +23,7 @@ Choose `--lane L1`–`L6` using `agent:lanes`; the launcher resolves both model 
 For L1, use `--host codex` because Claude L1 routes there.
 
 - `--title` is required, short and unique: it becomes the tab title and the session's native name, so other sessions address the child by it.
-- `--parent` defaults to the calling session; pass `--parent <host:id>` to override it. The child's prompt then gains a standing rule to post to the parent's feed with `agent:message` only for its final result, a blocker it cannot resolve or an approval Tommy must give, never status updates. A parent that needs the result waits with `tj feed --wait` through `agent:listen`.
+- `--parent` defaults to the calling session; pass `--parent <host:id>` to override it. The child's prompt then gains a standing rule to report to the parent with `agent:message` only for its final result, a blocker it cannot resolve or an approval Tommy must give, never status updates. A Claude parent receives it in its inbox; a Codex parent waits with `tj feed --wait` through `agent:listen`.
 - `--item` links the child to a work item, so it appears in `tj status` and `tj recover`. Without it, `tj item create` makes one titled after `--title`, under the parent's item; pass profile-required fields with `--item-field NAME=VALUE`.
 
 Success prints the launch as JSON once `tj run` has recorded it. Exit 3 means the tab may have opened without being confirmed: check the tab before launching again.

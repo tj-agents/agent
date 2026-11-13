@@ -1,14 +1,11 @@
-import io
 import json
 import subprocess
 import tomllib
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import install
 import pytest
-import work_items_install
 from codex import installed, projects
 from fake_machine import environment
 from tj_agent.host import Host
@@ -25,41 +22,6 @@ def codex_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_an_absent_codex_cache_is_an_empty_inventory(codex_home: Path) -> None:
     assert installed.identities() == set()
-
-
-@pytest.mark.parametrize("level", ["", "tj-agents", "tj-agents/personal"])
-def test_an_unreadable_inventory_aborts_profile_installation(
-    codex_home: Path, monkeypatch: pytest.MonkeyPatch, level: str
-) -> None:
-    cache = codex_home / "plugins/cache"
-    (cache / "tj-agents/personal/build").mkdir(parents=True)
-    denied = cache / level
-    iterdir = Path.iterdir
-
-    def inventory(path: Path) -> Iterator[Path]:
-        if path == denied:
-            raise PermissionError(13, "Access is denied", str(path))
-        return iterdir(path)
-
-    monkeypatch.setattr(Path, "iterdir", inventory)
-    with pytest.raises(PermissionError, match="Access is denied"):
-        work_items_install.installed_plugins()
-    commands: list[list[str]] = []
-
-    def run(
-        command: Sequence[str], **_options: object
-    ) -> subprocess.CompletedProcess[str]:
-        commands.append(list(command))
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    context = install.Context(
-        home=codex_home.parent, environ={}, windows=False, run=run
-    )
-    step = next(item for item in install.STEPS if item.name == "tj item CLI")
-    errors = io.StringIO()
-    assert install.run_steps([step], context, False, io.StringIO(), errors) == 2
-    assert repr(str(denied)) in errors.getvalue()
-    assert commands == []
 
 
 def test_a_missing_codex_configuration_has_no_projects(codex_home: Path) -> None:

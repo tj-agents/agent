@@ -68,9 +68,12 @@ RUNTIME_EXPORTS = (
     ".agents/agent/utility/plugins/scripts",
 )
 LIFECYCLE_COMMANDS = {
-    "start": "tj_start.py", "status": "tj_status.py", "recover": "tj_recover.py",
+    "start": "tj_start.py",
+    "status": "tj_status.py",
+    "recover": "tj_recover.py",
     "install": "install.py",
-    "prepare": "tj_prepare.py", "session": "tj_session.py",
+    "prepare": "tj_prepare.py",
+    "session": "tj_session.py",
 }
 PROFILE_START = "# >>> tj-agents >>>"
 PROFILE_END = "# <<< tj-agents <<<"
@@ -124,22 +127,41 @@ def declarations(config: dict) -> list[tuple[Path, dict]]:
     return found
 
 
-def installed_plugin_roots(plugin: str, claude_config: Path, codex_config: dict) -> list[Path]:
+def installed_plugin_roots(
+    plugin: str, claude_config: Path, codex_config: dict
+) -> list[Path]:
     roots = []
     prefix = plugin + "@"
     settings = read_json(claude_config / "settings.json").get("enabledPlugins")
-    installed = read_json(claude_config / "plugins" / "installed_plugins.json").get("plugins")
+    installed = read_json(claude_config / "plugins" / "installed_plugins.json").get(
+        "plugins"
+    )
     if isinstance(settings, dict) and isinstance(installed, dict):
         for identity, on in settings.items():
             entries = installed.get(identity)
             if on is True and identity.startswith(prefix) and isinstance(entries, list):
-                roots.extend(Path(entry["installPath"]) for entry in entries
-                             if isinstance(entry, dict) and isinstance(entry.get("installPath"), str))
+                roots.extend(
+                    Path(entry["installPath"])
+                    for entry in entries
+                    if isinstance(entry, dict)
+                    and isinstance(entry.get("installPath"), str)
+                )
     plugins = codex_config.get("plugins")
     if isinstance(plugins, dict):
         for identity, settings in plugins.items():
-            if identity.startswith(prefix) and isinstance(settings, dict) and settings.get("enabled") is True:
-                roots.append(Host.CODEX.configuration_root / "plugins" / "cache" / identity.split("@", 1)[1] / plugin / "local")
+            if (
+                identity.startswith(prefix)
+                and isinstance(settings, dict)
+                and settings.get("enabled") is True
+            ):
+                roots.append(
+                    Host.CODEX.configuration_root
+                    / "plugins"
+                    / "cache"
+                    / identity.split("@", 1)[1]
+                    / plugin
+                    / "local"
+                )
     return roots
 
 
@@ -192,11 +214,16 @@ class Context:
 
     @property
     def claude_home(self) -> Path:
-        return self.path_from(Host.CLAUDE.home_variable, self.home / Host.CLAUDE.home_directory)
+        return self.path_from(
+            Host.CLAUDE.home_variable, self.home / Host.CLAUDE.home_directory
+        )
 
     @property
     def codex_home(self) -> Path:
-        return self.path_from(Host.CODEX.home_variable, self.home / Host.CODEX.home_directory)
+        return self.path_from(
+            Host.CODEX.home_variable, self.home / Host.CODEX.home_directory
+        )
+
 
 @dataclass(frozen=True)
 class Step:
@@ -216,9 +243,16 @@ def documents_directory(home: Path) -> Path:
     class Guid(ctypes.Structure):
         _fields_ = [("data", ctypes.c_ubyte * 16)]
 
-    folder = Guid.from_buffer_copy(uuid.UUID("{FDD39AD0-238F-46AF-ADB4-6C85480369C7}").bytes_le)
+    folder = Guid.from_buffer_copy(
+        uuid.UUID("{FDD39AD0-238F-46AF-ADB4-6C85480369C7}").bytes_le
+    )
     path = ctypes.c_wchar_p()
-    if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(folder), 0, None, ctypes.byref(path)) != 0:
+    if (
+        ctypes.windll.shell32.SHGetKnownFolderPath(
+            ctypes.byref(folder), 0, None, ctypes.byref(path)
+        )
+        != 0
+    ):
         return Path(os.environ.get("USERPROFILE") or home) / "Documents"
     try:
         return Path(path.value)
@@ -229,6 +263,7 @@ def documents_directory(home: Path) -> Path:
 class WindowsUserEnvironment:
     def get(self, name: str) -> str | None:
         import winreg
+
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
                 value, _ = winreg.QueryValueEx(key, name)
@@ -238,21 +273,50 @@ class WindowsUserEnvironment:
 
     def set(self, name: str, value: str) -> None:
         import winreg
-        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, "Environment", 0,
-                                winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE) as key:
+
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER,
+            "Environment",
+            0,
+            winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE,
+        ) as key:
             try:
                 _, kind = winreg.QueryValueEx(key, name)
             except FileNotFoundError:
                 kind = winreg.REG_SZ
-            winreg.SetValueEx(key, name, 0, kind if kind in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) else winreg.REG_SZ, value)
+            winreg.SetValueEx(
+                key,
+                name,
+                0,
+                kind
+                if kind in (winreg.REG_SZ, winreg.REG_EXPAND_SZ)
+                else winreg.REG_SZ,
+                value,
+            )
 
     def broadcast(self) -> None:
         import ctypes
         from ctypes import wintypes
+
         send = ctypes.windll.user32.SendMessageTimeoutW
-        send.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPCWSTR, wintypes.UINT,
-                         wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
-        send(wintypes.HWND(0xFFFF), 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(ctypes.c_size_t()))
+        send.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        send(
+            wintypes.HWND(0xFFFF),
+            0x001A,
+            0,
+            "Environment",
+            0x0002,
+            5000,
+            ctypes.byref(ctypes.c_size_t()),
+        )
 
 
 PROFILE_BOMS = (
@@ -270,7 +334,7 @@ def read_profile(path: Path) -> tuple[str, str, bool] | None:
         return None
     for bom, encoding in PROFILE_BOMS:
         if raw.startswith(bom):
-            return raw[len(bom):].decode(encoding), encoding, True
+            return raw[len(bom) :].decode(encoding), encoding, True
     return raw.decode("utf-8"), "utf-8", False
 
 
@@ -285,9 +349,9 @@ def write_profile(path: Path, text: str, encoding: str, bom: bool) -> None:
 
 
 def without_trailing_newline_span(text: str, finish: int) -> int:
-    if text[finish:finish + 2] == "\r\n":
+    if text[finish : finish + 2] == "\r\n":
         return finish + 2
-    if text[finish:finish + 1] == "\n":
+    if text[finish : finish + 1] == "\n":
         return finish + 1
     return finish
 
@@ -310,9 +374,15 @@ def block_spans(text: str, start: str, end: str) -> list[tuple[int, int]]:
 def profile_paths(context: Context) -> list[Path]:
     if context.windows:
         documents = context.documents or documents_directory(context.home)
-        return [documents / name / "Microsoft.PowerShell_profile.ps1" for name in PROFILE_NAMES]
-    return [context.home / ".bashrc", context.home / ".zshrc",
-            context.home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1"]
+        return [
+            documents / name / "Microsoft.PowerShell_profile.ps1"
+            for name in PROFILE_NAMES
+        ]
+    return [
+        context.home / ".bashrc",
+        context.home / ".zshrc",
+        context.home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1",
+    ]
 
 
 def powershell_block(loader: Path | None, newline: str) -> str:
@@ -335,7 +405,13 @@ def powershell_block(loader: Path | None, newline: str) -> str:
 
 
 def posix_block(runtime_bin: Path) -> str:
-    return "\n".join([PROFILE_START, f'export PATH={shlex.quote(str(runtime_bin))}:"$PATH"', PROFILE_END])
+    return "\n".join(
+        [
+            PROFILE_START,
+            f'export PATH={shlex.quote(str(runtime_bin))}:"$PATH"',
+            PROFILE_END,
+        ]
+    )
 
 
 def wired_profile(text: str, block: str, newline: str) -> str:
@@ -346,7 +422,7 @@ def wired_profile(text: str, block: str, newline: str) -> str:
     if not spans:
         prefix = text.rstrip()
         return (prefix + newline * 2 if prefix else "") + block + newline
-    result = text[:spans[0][0]] + block
+    result = text[: spans[0][0]] + block
     cursor = spans[0][1]
     for begin, finish in spans[1:]:
         result += text[cursor:begin]
@@ -354,21 +430,30 @@ def wired_profile(text: str, block: str, newline: str) -> str:
     return result + text[cursor:]
 
 
-def shell_profile_updates(paths: list[Path], runtime_bin: Path, loader: Path | None,
-                          windows: bool) -> tuple[list[tuple[Path, str, str, bool]], list[str]]:
-    targets = paths if windows else [path for path in paths if path.is_file()] or paths[:1]
+def shell_profile_updates(
+    paths: list[Path], runtime_bin: Path, loader: Path | None, windows: bool
+) -> tuple[list[tuple[Path, str, str, bool]], list[str]]:
+    targets = (
+        paths if windows else [path for path in paths if path.is_file()] or paths[:1]
+    )
     updates = []
     warnings = []
     for path in targets:
         try:
             current = read_profile(path)
         except UnicodeDecodeError as error:
-            warnings.append(f"{path}: cannot decode as UTF-8 or UTF-16 ({error}); leaving this profile untouched")
+            warnings.append(
+                f"{path}: cannot decode as UTF-8 or UTF-16 ({error}); leaving this profile untouched"
+            )
             continue
         powershell = path.suffix.casefold() == ".ps1"
-        text, encoding, bom = current if current is not None else ("", "utf-8", windows and powershell)
+        text, encoding, bom = (
+            current if current is not None else ("", "utf-8", windows and powershell)
+        )
         if powershell:
-            newline = "\r\n" if "\r\n" in text or ("\n" not in text and windows) else "\n"
+            newline = (
+                "\r\n" if "\r\n" in text or ("\n" not in text and windows) else "\n"
+            )
             block = powershell_block(loader, newline)
         else:
             newline = "\n"
@@ -389,9 +474,15 @@ def runtime_bin(context: Context) -> Path:
     return context.state_directory / "bin"
 
 
-def profile_updates(context: Context) -> tuple[list[tuple[Path, str, str, bool]], list[str]]:
-    return shell_profile_updates(profile_paths(context), runtime_bin(context), profile_loader(context),
-                                 context.windows)
+def profile_updates(
+    context: Context,
+) -> tuple[list[tuple[Path, str, str, bool]], list[str]]:
+    return shell_profile_updates(
+        profile_paths(context),
+        runtime_bin(context),
+        profile_loader(context),
+        context.windows,
+    )
 
 
 def check_profile(context: Context) -> list[str]:
@@ -413,12 +504,16 @@ def apply_profile(context: Context) -> list[str]:
 
 
 def same_path(left: str | Path, right: str | Path) -> bool:
-    return os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(os.path.abspath(str(right)))
+    return os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(
+        os.path.abspath(str(right))
+    )
 
 
 def hidden_bash_paths(context: Context) -> tuple[Path, Path]:
-    return (context.root / ".agents/agent/resources/shell/hidden-bash.c",
-            context.state_directory / "bin" / "hidden-bash.exe")
+    return (
+        context.root / ".agents/agent/resources/shell/hidden-bash.c",
+        context.state_directory / "bin" / "hidden-bash.exe",
+    )
 
 
 def real_git_bash(context: Context, proxy: Path) -> str:
@@ -430,16 +525,24 @@ def real_git_bash(context: Context, proxy: Path) -> str:
             real = existing
     real = real or DEFAULT_GIT_BASH
     if same_path(real, proxy):
-        raise InstallError("The real Git Bash path cannot point to the hidden proxy itself")
+        raise InstallError(
+            "The real Git Bash path cannot point to the hidden proxy itself"
+        )
     if not Path(real).is_file():
-        raise InstallError(f"Git Bash not found: {real}; set the user TJ_AGENTS_REAL_GIT_BASH variable to its path")
+        raise InstallError(
+            f"Git Bash not found: {real}; set the user TJ_AGENTS_REAL_GIT_BASH variable to its path"
+        )
     return real
 
 
 def hidden_bash_inputs(context: Context, real: str) -> dict[str, str]:
     source, _ = hidden_bash_paths(context)
     compiler = context.which("clang.exe") or context.which("gcc.exe") or ""
-    return {"source": hashlib.sha256(source.read_bytes()).hexdigest(), "compiler": compiler, "real": real}
+    return {
+        "source": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "compiler": compiler,
+        "real": real,
+    }
 
 
 def hidden_bash_receipt(proxy: Path) -> Path:
@@ -448,8 +551,11 @@ def hidden_bash_receipt(proxy: Path) -> Path:
 
 def hidden_bash_current(context: Context, proxy: Path, real: str) -> bool:
     receipt = read_json(hidden_bash_receipt(proxy))
-    return (proxy.is_file() and receipt.get("inputs") == hidden_bash_inputs(context, real)
-            and receipt.get("proxy") == hashlib.sha256(proxy.read_bytes()).hexdigest())
+    return (
+        proxy.is_file()
+        and receipt.get("inputs") == hidden_bash_inputs(context, real)
+        and receipt.get("proxy") == hashlib.sha256(proxy.read_bytes()).hexdigest()
+    )
 
 
 def hidden_bash_plan(context: Context) -> tuple[bool, dict[str, str]]:
@@ -457,7 +563,11 @@ def hidden_bash_plan(context: Context) -> tuple[bool, dict[str, str]]:
     real = real_git_bash(context, proxy)
     stale = not hidden_bash_current(context, proxy, real)
     wanted = {"TJ_AGENTS_REAL_GIT_BASH": real, "CLAUDE_CODE_GIT_BASH_PATH": str(proxy)}
-    variables = {name: value for name, value in wanted.items() if context.user_environment.get(name) != value}
+    variables = {
+        name: value
+        for name, value in wanted.items()
+        if context.user_environment.get(name) != value
+    }
     return stale, variables
 
 
@@ -466,27 +576,61 @@ def global_git_config(context: Context) -> Path:
 
 
 def git_longpaths(context: Context) -> bool:
-    result = context.run(["git", "config", "--file", str(global_git_config(context)), "--type=bool", "--get",
-                          "core.longpaths"], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                         timeout=30, check=False)
+    result = context.run(
+        [
+            "git",
+            "config",
+            "--file",
+            str(global_git_config(context)),
+            "--type=bool",
+            "--get",
+            "core.longpaths",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
     return result.returncode == 0 and result.stdout.strip() == "true"
 
 
 def check_git_longpaths(context: Context) -> list[str]:
-    return [] if git_longpaths(context) else [f"set core.longpaths in {global_git_config(context)}"]
+    return (
+        []
+        if git_longpaths(context)
+        else [f"set core.longpaths in {global_git_config(context)}"]
+    )
 
 
 def apply_git_longpaths(context: Context) -> list[str]:
     if git_longpaths(context):
         return []
-    context.run(["git", "config", "--file", str(global_git_config(context)), "core.longpaths", "true"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, check=True)
+    context.run(
+        [
+            "git",
+            "config",
+            "--file",
+            str(global_git_config(context)),
+            "core.longpaths",
+            "true",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=True,
+    )
     return [f"core.longpaths is true in {global_git_config(context)}"]
 
 
 def check_hidden_bash(context: Context) -> list[str]:
     stale, variables = hidden_bash_plan(context)
-    return (["build shell/hidden-bash.exe"] if stale else []) + [f"set user {name}" for name in variables]
+    return (["build shell/hidden-bash.exe"] if stale else []) + [
+        f"set user {name}" for name in variables
+    ]
 
 
 def hidden_bash_stale_asides(proxy: Path) -> list[Path]:
@@ -501,7 +645,9 @@ def install_hidden_bash(build: Path, proxy: Path) -> None:
             pass
     aside = None
     if proxy.exists():
-        aside = proxy.with_name(f"{proxy.stem}.stale-{secrets.token_hex(4)}{proxy.suffix}")
+        aside = proxy.with_name(
+            f"{proxy.stem}.stale-{secrets.token_hex(4)}{proxy.suffix}"
+        )
         os.replace(proxy, aside)
     try:
         os.replace(build, proxy)
@@ -512,11 +658,24 @@ def install_hidden_bash(build: Path, proxy: Path) -> None:
 
 
 def gui_flags(context: Context, compiler: str) -> list[str]:
-    target = context.run([compiler, "-dumpmachine"], capture_output=True, text=True, encoding="utf-8",
-                         errors="replace", timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
+    target = context.run(
+        [compiler, "-dumpmachine"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=INSTALLER_TIMEOUT_SECONDS,
+        check=False,
+    )
     if target.returncode:
-        raise InstallError(f"{compiler} -dumpmachine failed: {(target.stderr or target.stdout).strip()}")
-    return ["-Wl,/subsystem:windows"] if "msvc" in target.stdout else ["-municode", "-mwindows"]
+        raise InstallError(
+            f"{compiler} -dumpmachine failed: {(target.stderr or target.stdout).strip()}"
+        )
+    return (
+        ["-Wl,/subsystem:windows"]
+        if "msvc" in target.stdout
+        else ["-municode", "-mwindows"]
+    )
 
 
 def build_hidden_bash(context: Context, real: str) -> None:
@@ -524,24 +683,51 @@ def build_hidden_bash(context: Context, real: str) -> None:
     proxy.parent.mkdir(parents=True, exist_ok=True)
     compiler = context.which("clang.exe") or context.which("gcc.exe")
     if not compiler:
-        raise InstallError("clang.exe or gcc.exe is required to build the Windows GUI Bash proxy")
+        raise InstallError(
+            "clang.exe or gcc.exe is required to build the Windows GUI Bash proxy"
+        )
     build = proxy.with_name("hidden-bash.build.exe")
     try:
-        compiled = context.run([compiler, "-O2", *gui_flags(context, compiler), str(source), "-o", str(build)],
-                               capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
+        compiled = context.run(
+            [
+                compiler,
+                "-O2",
+                *gui_flags(context, compiler),
+                str(source),
+                "-o",
+                str(build),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=INSTALLER_TIMEOUT_SECONDS,
+            check=False,
+        )
         if compiled.returncode or not build.is_file():
             raise InstallError(f"Failed to build {build}: {compiled.stderr.strip()}")
-        probe = context.run([str(build), *HIDDEN_BASH_PROBE], capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", timeout=10, check=False,
-                            env={**context.environ, "TJ_AGENTS_REAL_GIT_BASH": real})
+        probe = context.run(
+            [str(build), *HIDDEN_BASH_PROBE],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+            env={**context.environ, "TJ_AGENTS_REAL_GIT_BASH": real},
+        )
         if probe.returncode != 73 or probe.stdout != "HIDDEN_BASH_OK":
-            raise InstallError("The hidden Bash proxy did not preserve Bash output and exit status")
+            raise InstallError(
+                "The hidden Bash proxy did not preserve Bash output and exit status"
+            )
         install_hidden_bash(build, proxy)
-        write_json(hidden_bash_receipt(proxy), {
-            "inputs": hidden_bash_inputs(context, real),
-            "proxy": hashlib.sha256(proxy.read_bytes()).hexdigest(),
-        })
+        write_json(
+            hidden_bash_receipt(proxy),
+            {
+                "inputs": hidden_bash_inputs(context, real),
+                "proxy": hashlib.sha256(proxy.read_bytes()).hexdigest(),
+            },
+        )
     finally:
         build.unlink(missing_ok=True)
 
@@ -550,7 +736,9 @@ def apply_hidden_bash(context: Context) -> list[str]:
     stale, variables = hidden_bash_plan(context)
     changes = []
     if stale:
-        build_hidden_bash(context, real_git_bash(context, hidden_bash_paths(context)[1]))
+        build_hidden_bash(
+            context, real_git_bash(context, hidden_bash_paths(context)[1])
+        )
         changes.append("built shell/hidden-bash.exe")
     for name, value in variables.items():
         context.user_environment.set(name, value)
@@ -562,8 +750,15 @@ def apply_hidden_bash(context: Context) -> list[str]:
 
 def run_installer(context: Context, command: list[str]) -> subprocess.CompletedProcess:
     for attempt in range(LOCKED_ATTEMPTS):
-        result = context.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                             timeout=INSTALLER_TIMEOUT_SECONDS, check=False)
+        result = context.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=INSTALLER_TIMEOUT_SECONDS,
+            check=False,
+        )
         if not result.returncode or LOCKED not in f"{result.stdout}{result.stderr}":
             return result
         if attempt + 1 < LOCKED_ATTEMPTS:
@@ -577,9 +772,16 @@ def output_lines(result: subprocess.CompletedProcess) -> list[str]:
 
 def codex_agents_installer(context: Context) -> Path | None:
     config = load_toml(context.codex_home / "config.toml")
-    roots = [root for _, declaration in declarations(config)
-             for root in installed_plugin_roots("engineering", context.claude_home, declaration)]
-    return newest_existing([root / "scripts" / "install-codex-agents.ps1" for root in roots])
+    roots = [
+        root
+        for _, declaration in declarations(config)
+        for root in installed_plugin_roots(
+            "engineering", context.claude_home, declaration
+        )
+    ]
+    return newest_existing(
+        [root / "scripts" / "install-codex-agents.ps1" for root in roots]
+    )
 
 
 def skip_codex_agents(context: Context) -> str | None:
@@ -611,9 +813,19 @@ def codex_agents_command(context: Context, flag: str) -> list[str]:
         context.which("pwsh"), context.environ, user_path, context.windows
     )
     if executable is None:
-        raise InstallError("PowerShell 7 is unavailable for Codex profile agent delivery")
-    return [executable, "-NoProfile", "-NonInteractive", "-File", str(codex_agents_installer(context)),
-            "-CodexHome", str(context.codex_home), flag]
+        raise InstallError(
+            "PowerShell 7 is unavailable for Codex profile agent delivery"
+        )
+    return [
+        executable,
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        str(codex_agents_installer(context)),
+        "-CodexHome",
+        str(context.codex_home),
+        flag,
+    ]
 
 
 def check_codex_agents(context: Context) -> list[str]:
@@ -627,7 +839,9 @@ def check_codex_agents(context: Context) -> list[str]:
 def apply_codex_agents(context: Context) -> list[str]:
     result = run_installer(context, codex_agents_command(context, "-Apply"))
     if result.returncode:
-        raise InstallError(f"Codex profile agent delivery failed: {(result.stderr or result.stdout).strip()}")
+        raise InstallError(
+            f"Codex profile agent delivery failed: {(result.stderr or result.stdout).strip()}"
+        )
     lines = output_lines(result)
     return [lines[-1] if lines else "delivered Codex profile agents"]
 
@@ -639,19 +853,27 @@ def permission_sync(context: Context) -> ModuleType:
         raise InstallError(f"harness_permissions_sync.py is unavailable in {directory}")
     if str(directory) not in sys.path:
         sys.path.insert(0, str(directory))
-    spec = importlib.util.spec_from_file_location("tj_agents_harness_permissions_sync", path)
+    spec = importlib.util.spec_from_file_location(
+        "tj_agents_harness_permissions_sync", path
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
 def permissions_environment(context: Context) -> dict:
-    return {**context.environ, Host.CLAUDE.home_variable: str(context.claude_home), Host.CODEX.home_variable: str(context.codex_home),
-            "AGENT_STATE_DIRECTORY": str(context.state_directory)}
+    return {
+        **context.environ,
+        Host.CLAUDE.home_variable: str(context.claude_home),
+        Host.CODEX.home_variable: str(context.codex_home),
+        "AGENT_STATE_DIRECTORY": str(context.state_directory),
+    }
 
 
 def synchronize_permissions(context: Context, mode: str) -> list[str]:
-    changes, warnings = permission_sync(context).synchronize(permissions_environment(context), mode)
+    changes, warnings = permission_sync(context).synchronize(
+        permissions_environment(context), mode
+    )
     for warning in warnings:
         print(f"warning harness permissions: {warning}", file=sys.stderr)
     return changes
@@ -661,10 +883,19 @@ def runtime_receipt(root: Path) -> dict:
     try:
         contents = runtime_delivery.closure(root, list(RUNTIME_EXPORTS))
     except (OSError, runtime_delivery.DeliveryError) as error:
-        raise InstallError(f"the Agent runtime in {root} is unavailable: {error}") from error
+        raise InstallError(
+            f"the Agent runtime in {root} is unavailable: {error}"
+        ) from error
     digest = content.digest(contents)
-    return {"repository": runtime_delivery.REPOSITORY, "revision": f"local:{digest}", "exports": list(RUNTIME_EXPORTS),
-            "sha256": digest, "files": {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}}
+    return {
+        "repository": runtime_delivery.REPOSITORY,
+        "revision": f"local:{digest}",
+        "exports": list(RUNTIME_EXPORTS),
+        "sha256": digest,
+        "files": {
+            name: hashlib.sha256(body).hexdigest() for name, body in contents.items()
+        },
+    }
 
 
 def install_runtime(directory: Path, root: Path) -> None:
@@ -675,8 +906,12 @@ def install_runtime(directory: Path, root: Path) -> None:
 
 def check_runtime(context: Context) -> list[str]:
     directory = context.state_directory / "bin"
-    changes = [f"install Agent runtime: {error}"
-               for error in runtime_delivery.check(directory, context.root, runtime_receipt(context.root))]
+    changes = [
+        f"install Agent runtime: {error}"
+        for error in runtime_delivery.check(
+            directory, context.root, runtime_receipt(context.root)
+        )
+    ]
     if not context.windows:
         alias = python_alias_status(context, directory)
         if alias:
@@ -684,28 +919,45 @@ def check_runtime(context: Context) -> list[str]:
     return changes
 
 
-PYTHON_ALIAS_MARKER = '# tj-agents-managed-python-alias '
+PYTHON_ALIAS_MARKER = "# tj-agents-managed-python-alias "
 
 
 def python_alias(interpreter: str | None = None) -> str:
     interpreter = console_python() if interpreter is None else interpreter
-    marker = json.dumps({'interpreter': interpreter}, separators=(',', ':'), sort_keys=True)
-    return '#!/bin/sh\n' + PYTHON_ALIAS_MARKER + marker + '\nexec ' + shlex.quote(interpreter) + ' "$@"\n'
+    marker = json.dumps(
+        {"interpreter": interpreter}, separators=(",", ":"), sort_keys=True
+    )
+    return (
+        "#!/bin/sh\n"
+        + PYTHON_ALIAS_MARKER
+        + marker
+        + "\nexec "
+        + shlex.quote(interpreter)
+        + ' "$@"\n'
+    )
 
 
 def managed_python_alias(value: str) -> str | None:
-    prefix = '#!/bin/sh\n' + PYTHON_ALIAS_MARKER
+    prefix = "#!/bin/sh\n" + PYTHON_ALIAS_MARKER
     if not value.startswith(prefix):
         return None
-    marker, separator, _ = value[len(prefix):].partition('\n')
+    marker, separator, _ = value[len(prefix) :].partition("\n")
     if not separator:
         return None
     try:
         metadata = json.loads(marker)
     except json.JSONDecodeError:
         return None
-    interpreter = metadata.get('interpreter') if isinstance(metadata, dict) and set(metadata) == {'interpreter'} else None
-    if not isinstance(interpreter, str) or not interpreter or python_alias(interpreter) != value:
+    interpreter = (
+        metadata.get("interpreter")
+        if isinstance(metadata, dict) and set(metadata) == {"interpreter"}
+        else None
+    )
+    if (
+        not isinstance(interpreter, str)
+        or not interpreter
+        or python_alias(interpreter) != value
+    ):
         return None
     return interpreter
 
@@ -714,7 +966,7 @@ def python_alias_path(context: Context, directory: Path) -> Path:
     for path in (context.state_directory, directory):
         if os.path.lexists(path) and runtime_delivery.is_reparse(path):
             raise InstallError(f"Claude hook interpreter parent is a link: {path}")
-    alias = directory / 'python'
+    alias = directory / "python"
     if os.path.lexists(alias) and runtime_delivery.is_reparse(alias):
         raise InstallError(f"Claude hook interpreter is a link: {alias}")
     if alias.exists():
@@ -726,14 +978,14 @@ def python_alias_path(context: Context, directory: Path) -> Path:
 def python_alias_status(context: Context, directory: Path) -> str | None:
     alias = python_alias_path(context, directory)
     if not alias.exists():
-        return f'install Claude hook interpreter {alias}'
-    value = alias.read_text(encoding='utf-8')
+        return f"install Claude hook interpreter {alias}"
+    value = alias.read_text(encoding="utf-8")
     if managed_python_alias(value) is None:
-        return f'refuse unowned Claude hook interpreter {alias}'
+        return f"refuse unowned Claude hook interpreter {alias}"
     if value != python_alias():
-        return f'install Claude hook interpreter {alias}'
-    if os.name != 'nt' and not os.access(alias, os.X_OK):
-        return f'install Claude hook interpreter {alias}'
+        return f"install Claude hook interpreter {alias}"
+    if os.name != "nt" and not os.access(alias, os.X_OK):
+        return f"install Claude hook interpreter {alias}"
     return None
 
 
@@ -742,33 +994,33 @@ def install_python_alias(context: Context, directory: Path) -> None:
     status = python_alias_status(context, directory)
     if status is None:
         return
-    if status.startswith('refuse '):
+    if status.startswith("refuse "):
         raise InstallError(status)
     if not alias.exists():
         try:
-            with alias.open('x', encoding='utf-8', newline='\n') as stream:
+            with alias.open("x", encoding="utf-8", newline="\n") as stream:
                 stream.write(python_alias())
         except FileExistsError:
             return install_python_alias(context, directory)
-    value = alias.read_text(encoding='utf-8')
+    value = alias.read_text(encoding="utf-8")
     if managed_python_alias(value) is None:
-        raise InstallError(f'refuse unowned Claude hook interpreter {alias}')
+        raise InstallError(f"refuse unowned Claude hook interpreter {alias}")
     if value != python_alias():
-        temporary = alias.with_name(f'.{alias.name}.{secrets.token_hex(12)}.tmp')
+        temporary = alias.with_name(f".{alias.name}.{secrets.token_hex(12)}.tmp")
         created = False
         try:
-            with temporary.open('x', encoding='utf-8', newline='\n') as stream:
+            with temporary.open("x", encoding="utf-8", newline="\n") as stream:
                 created = True
                 stream.write(python_alias())
             alias = python_alias_path(context, directory)
-            if alias.read_text(encoding='utf-8') != value:
-                raise InstallError(f'refuse changed Claude hook interpreter {alias}')
+            if alias.read_text(encoding="utf-8") != value:
+                raise InstallError(f"refuse changed Claude hook interpreter {alias}")
             os.replace(temporary, alias)
         finally:
             if created and temporary.exists():
                 temporary.unlink()
-    if alias.read_text(encoding='utf-8') != python_alias():
-        raise InstallError(f'refuse changed Claude hook interpreter {alias}')
+    if alias.read_text(encoding="utf-8") != python_alias():
+        raise InstallError(f"refuse changed Claude hook interpreter {alias}")
     alias.chmod(0o755)
 
 
@@ -786,7 +1038,9 @@ def check_agent_store(context: Context) -> list[str]:
 
 
 def apply_agent_store(context: Context) -> list[str]:
-    return [f"installed agent-store {agent_store.install()} into {agent_store.executable().parent}"]
+    return [
+        f"installed agent-store {agent_store.install()} into {agent_store.executable().parent}"
+    ]
 
 
 def uv_executable(context: Context) -> str:
@@ -803,7 +1057,7 @@ def tj_item_drift(context: Context) -> list[str]:
     return work_items_install.drift(
         work_items_install.default_tool_directory(context.environ, context.windows),
         work_items_install.Pins.load(),
-        work_items_install.installed_plugins(),
+        work_items_install.discovered_profiles(),
     )
 
 
@@ -815,7 +1069,7 @@ def check_tj_item(context: Context) -> list[str]:
 def apply_tj_item(context: Context) -> list[str]:
     uv = uv_executable(context)
     pins = work_items_install.Pins.load()
-    profiles = pins.selected(work_items_install.installed_plugins())
+    profiles = work_items_install.discovered_profiles()
     command = work_items_install.install_command(uv, pins, profiles)
     result = run_installer(context, command)
     if result.returncode:
@@ -945,7 +1199,11 @@ def shim_current(path: Path, text: str) -> bool:
 
 
 def check_lifecycle_commands(context: Context) -> list[str]:
-    return [f"write {path}" for path, text in lifecycle_shims(context).items() if not shim_current(path, text)]
+    return [
+        f"write {path}"
+        for path, text in lifecycle_shims(context).items()
+        if not shim_current(path, text)
+    ]
 
 
 def apply_lifecycle_commands(context: Context) -> list[str]:
@@ -976,7 +1234,13 @@ def codex_daemon_text(context: Context) -> tuple[str, str]:
 
 def check_codex_daemon(context: Context) -> list[str]:
     text, enabled = codex_daemon_text(context)
-    return [] if enabled == text else [f"let Codex launches start its shared daemon in {codex_config_path(context)}"]
+    return (
+        []
+        if enabled == text
+        else [
+            f"let Codex launches start its shared daemon in {codex_config_path(context)}"
+        ]
+    )
 
 
 def apply_codex_daemon(context: Context) -> list[str]:
@@ -988,7 +1252,11 @@ def apply_codex_daemon(context: Context) -> list[str]:
 
 
 def skip_codex_hook_trust(context: Context) -> str | None:
-    return None if context.codex_home.is_dir() else f"Codex is not set up ({context.codex_home} is missing)"
+    return (
+        None
+        if context.codex_home.is_dir()
+        else f"Codex is not set up ({context.codex_home} is missing)"
+    )
 
 
 def check_codex_hook_trust(context: Context) -> list[str]:
@@ -997,17 +1265,25 @@ def check_codex_hook_trust(context: Context) -> list[str]:
 
 def apply_codex_hook_trust(context: Context) -> list[str]:
     trusted = codex_hook_trust.trust_installed(
-        codex_launch.executable(), context.state_directory, codex_installed.MARKETPLACE_OVERRIDES)
+        codex_launch.executable(),
+        context.state_directory,
+        codex_installed.MARKETPLACE_OVERRIDES,
+    )
     return [f"trusted {len(trusted)} tj-agents Codex hook(s)"]
 
 
 def native_permissions_plan(context: Context) -> dict[Path, str]:
     mode = host_permissions.permissions(plugin_setup_project(context))
-    return host_permissions.plan(context.claude_home / "settings.json", codex_config_path(context), mode)
+    return host_permissions.plan(
+        context.claude_home / "settings.json", codex_config_path(context), mode
+    )
 
 
 def check_native_permissions(context: Context) -> list[str]:
-    return [f"update native permission defaults in {path}" for path in native_permissions_plan(context)]
+    return [
+        f"update native permission defaults in {path}"
+        for path in native_permissions_plan(context)
+    ]
 
 
 def apply_native_permissions(context: Context) -> list[str]:
@@ -1015,8 +1291,10 @@ def apply_native_permissions(context: Context) -> list[str]:
     desktop = codex_config_path(context).parent / ".codex-global-state.json"
     if desktop in targets:
         if host_permissions.desktop_running():
-            raise InstallError("Close Codex Desktop, run install --step 'native permission defaults' "
-                               "from a terminal, then reopen the app to load the configured defaults")
+            raise InstallError(
+                "Close Codex Desktop, run install --step 'native permission defaults' "
+                "from a terminal, then reopen the app to load the configured defaults"
+            )
         targets = native_permissions_plan(context)
     for path, text in targets.items():
         write_profile(path, text, "utf-8", False)
@@ -1034,11 +1312,18 @@ def plugin_setup_executables(context: Context) -> dict[Host, str | None]:
 def check_plugin_setup(context: Context) -> list[str]:
     if native_runtime.pending():
         return check_native_cli(context)
-    return required_plugins.check_setup(plugin_setup_project(context), tuple(Host), plugin_setup_executables(context))
+    return required_plugins.check_setup(
+        plugin_setup_project(context), tuple(Host), plugin_setup_executables(context)
+    )
 
 
 def apply_plugin_setup(context: Context) -> list[str]:
-    errors = required_plugins.converge_setup(plugin_setup_project(context), tuple(Host), plugin_setup_executables(context), context.onboard)
+    errors = required_plugins.converge_setup(
+        plugin_setup_project(context),
+        tuple(Host),
+        plugin_setup_executables(context),
+        context.onboard,
+    )
     if errors:
         raise InstallError("; ".join(errors))
     return []
@@ -1051,38 +1336,61 @@ def claude_user_enabled(context: Context) -> list[str]:
     enabled = read_json(context.claude_home / "settings.json").get("enabledPlugins")
     if not isinstance(enabled, dict):
         return []
-    return sorted(identity for identity, value in enabled.items()
-                  if identity.endswith(SCOPED_MARKETPLACE) and value is True)
+    return sorted(
+        identity
+        for identity, value in enabled.items()
+        if identity.endswith(SCOPED_MARKETPLACE) and value is True
+    )
 
 
 def codex_user_enabled(context: Context) -> list[str]:
     path = codex_config_path(context)
     text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
-    return sorted(identity for identity in codex_user_plugins.enabled(text) if identity.endswith(SCOPED_MARKETPLACE))
+    return sorted(
+        identity
+        for identity in codex_user_plugins.enabled(text)
+        if identity.endswith(SCOPED_MARKETPLACE)
+    )
 
 
 def check_plugin_scope(context: Context) -> list[str]:
     """tj-agents plugins load only where a repository selects them, never for every project."""
-    return [f"stop enabling {identity} for every {host} project"
-            for host, identities in ((Host.CLAUDE, claude_user_enabled(context)), (Host.CODEX, codex_user_enabled(context)))
-            for identity in identities]
+    return [
+        f"stop enabling {identity} for every {host} project"
+        for host, identities in (
+            (Host.CLAUDE, claude_user_enabled(context)),
+            (Host.CODEX, codex_user_enabled(context)),
+        )
+        for identity in identities
+    ]
 
 
 def apply_plugin_scope(context: Context) -> list[str]:
     changes = []
     for identity in claude_user_enabled(context):
-        result = context.run(["claude", "plugin", "disable", identity, "--scope", "user"],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace",
-                             timeout=120, check=False)
+        result = context.run(
+            ["claude", "plugin", "disable", identity, "--scope", "user"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=False,
+        )
         if result.returncode:
-            raise InstallError(f"claude plugin disable {identity}: {(result.stderr or result.stdout).strip()}")
+            raise InstallError(
+                f"claude plugin disable {identity}: {(result.stderr or result.stdout).strip()}"
+            )
         changes.append(f"claude: {identity} loads only where a repository selects it")
     identities = codex_user_enabled(context)
     if identities:
         path = codex_config_path(context)
         text = path.read_text(encoding="utf-8-sig")
         path.write_text(codex_user_plugins.without(text, identities), encoding="utf-8")
-        changes.extend(f"codex: {identity} loads only where a repository selects it" for identity in identities)
+        changes.extend(
+            f"codex: {identity} loads only where a repository selects it"
+            for identity in identities
+        )
     return changes
 
 
@@ -1117,7 +1425,9 @@ def apply_plugin_copies(context: Context) -> list[str]:
             errors.append(f"{source.identity}: converge failed: {detail}")
             continue
         converged.append(source)
-        changes.append(f"converged {source.identity} copies from {source.revision[:12]}")
+        changes.append(
+            f"converged {source.identity} copies from {source.revision[:12]}"
+        )
     plugin_copies.record(context.state_directory, converged)
     if errors:
         raise InstallError("; ".join(errors))
@@ -1143,7 +1453,9 @@ def check_retired_state(context: Context) -> list[str]:
 
 
 def apply_retired_state(context: Context) -> list[str]:
-    removal = retired_state.remove(context.state_directory, **retired_state_options(context))
+    removal = retired_state.remove(
+        context.state_directory, **retired_state_options(context)
+    )
     if removal.failures:
         raise InstallError("; ".join(removal.failures))
     return [f"removed {item}" for item in removal.removed]
@@ -1158,15 +1470,23 @@ def check_native_cli(context: Context) -> list[str]:
 
 def apply_native_cli(context: Context) -> list[str]:
     changed = native_runtime.prepare(revision=native_runtime.NATIVE_REVISION)
-    context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
-    return ["installed native CLI binaries: " + ", ".join(changed)] if changed else ["native CLI available on PATH"]
+    context.environ["PATH"] = native_runtime.search_path(
+        context.environ.get("PATH", os.defpath)
+    )
+    return (
+        ["installed native CLI binaries: " + ", ".join(changed)]
+        if changed
+        else ["native CLI available on PATH"]
+    )
 
 
 STEPS = (
     Step("retired state", check_retired_state, apply_retired_state),
     Step("Git long paths", check_git_longpaths, apply_git_longpaths, windows_only),
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
-    Step("native permission defaults", check_native_permissions, apply_native_permissions),
+    Step(
+        "native permission defaults", check_native_permissions, apply_native_permissions
+    ),
     Step("Codex shared daemon", check_codex_daemon, apply_codex_daemon),
     Step("agent-store CLI", check_agent_store, apply_agent_store),
     Step("tj item CLI", check_tj_item, apply_tj_item),
@@ -1175,18 +1495,35 @@ STEPS = (
     Step("launch-check runtime", check_runtime, apply_runtime),
     Step("tj lifecycle commands", check_lifecycle_commands, apply_lifecycle_commands),
     Step("shell profiles", check_profile, apply_profile),
-    Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
-    Step("Codex profile agents", check_codex_agents, apply_codex_agents, skip_codex_agents),
-    Step("harness permissions", lambda context: synchronize_permissions(context, "check"),
-         lambda context: synchronize_permissions(context, "apply")),
+    Step(
+        "hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only
+    ),
+    Step(
+        "Codex profile agents",
+        check_codex_agents,
+        apply_codex_agents,
+        skip_codex_agents,
+    ),
+    Step(
+        "harness permissions",
+        lambda context: synchronize_permissions(context, "check"),
+        lambda context: synchronize_permissions(context, "apply"),
+    ),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
     Step("plugin scope", check_plugin_scope, apply_plugin_scope),
-    Step("Codex hook trust", check_codex_hook_trust, apply_codex_hook_trust, skip_codex_hook_trust),
+    Step(
+        "Codex hook trust",
+        check_codex_hook_trust,
+        apply_codex_hook_trust,
+        skip_codex_hook_trust,
+    ),
     Step("plugin copies", check_plugin_copies, apply_plugin_copies),
 )
 
 
-def run_steps(steps, context: Context, check_only: bool, out=sys.stdout, err=sys.stderr) -> int:
+def run_steps(
+    steps, context: Context, check_only: bool, out=sys.stdout, err=sys.stderr
+) -> int:
     print(f"package root: {context.root}", file=out)
     drift = False
     failed = False
@@ -1234,7 +1571,9 @@ def selected_steps(names: set[str]) -> tuple[Step, ...]:
         selected.add("launch-check runtime")
     if "plugin setup" in selected:
         selected.add("harness permissions")
-    return tuple(step for step in STEPS if not selected or step.required or step.name in selected)
+    return tuple(
+        step for step in STEPS if not selected or step.required or step.name in selected
+    )
 
 
 def repair(name: str, project: Path) -> list[str]:
@@ -1253,13 +1592,20 @@ def plugin_hosts(context: Context) -> list[Host]:
     return [host for host in Host if context.which(host.value)]
 
 
-def update_plugins(context: Context, out=sys.stdout, err=sys.stderr) -> dict[Host, plugin_update.Outcome]:
+def update_plugins(
+    context: Context, out=sys.stdout, err=sys.stderr
+) -> dict[Host, plugin_update.Outcome]:
     """Bring every installed host's tj-agents plugins to their marketplace pins."""
     digests = Digests(context.state_directory)
     outcomes = {}
     for host in plugin_hosts(context):
-        if not plugin_update.INSTALLED[host].refresh_identities(plugin_update.MARKETPLACES):
-            print(f"n/a    {host} plugins: none installed yet; plugin setup installs the selected ones", file=out)
+        if not plugin_update.INSTALLED[host].refresh_identities(
+            plugin_update.MARKETPLACES
+        ):
+            print(
+                f"n/a    {host} plugins: none installed yet; plugin setup installs the selected ones",
+                file=out,
+            )
             continue
         outcome = plugin_update.update(host, digests)
         for failure in outcome.failures:
@@ -1276,7 +1622,10 @@ def converged_installer(context: Context) -> Path | None:
         if package is None:
             continue
         installer = package / ".agents" / "agent" / "runtime" / "install.py"
-        if installer.is_file() and installer.resolve() != (RUNTIME / "install.py").resolve():
+        if (
+            installer.is_file()
+            and installer.resolve() != (RUNTIME / "install.py").resolve()
+        ):
             return installer
         return None
     return None
@@ -1286,7 +1635,9 @@ def published_path(context: Context, host: Host) -> Path:
     return context.state_directory / f"published-{host.value}.txt"
 
 
-def publish_update(context: Context, outcomes: dict[Host, plugin_update.Outcome]) -> int:
+def publish_update(
+    context: Context, outcomes: dict[Host, plugin_update.Outcome]
+) -> int:
     """Tell running tj run tabs of a host to reload when its plugins moved or its published revision is stale.
 
     `tj run`'s launch check compares the marketplace HEAD with the last published revision, so a host whose
@@ -1297,23 +1648,31 @@ def publish_update(context: Context, outcomes: dict[Host, plugin_update.Outcome]
         if outcome.failures or outcome.revision is None:
             continue
         record = published_path(context, host)
-        published = record.read_text(encoding="utf-8").strip() if record.is_file() else None
+        published = (
+            record.read_text(encoding="utf-8").strip() if record.is_file() else None
+        )
         if not outcome.changed and published == outcome.revision:
             continue
         command = ["tj", "update", "--host", host.value, "--revision", outcome.revision]
         try:
-            result = context.run(command, capture_output=True, text=True, timeout=30, check=False)
+            result = context.run(
+                command, capture_output=True, text=True, timeout=30, check=False
+            )
         except (OSError, subprocess.SubprocessError) as error:
             context.failures.append(f"{host} update: {error}")
             code = 2
             continue
         if result.returncode:
-            context.failures.append(f"{host} update: {result.stderr.strip() or f'exit {result.returncode}'}")
+            context.failures.append(
+                f"{host} update: {result.stderr.strip() or f'exit {result.returncode}'}"
+            )
             code = 2
             continue
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(outcome.revision, encoding="utf-8")
-        print(f"apply  {host} update: published {outcome.revision[:12]} to running tj run tabs")
+        print(
+            f"apply  {host} update: published {outcome.revision[:12]} to running tj run tabs"
+        )
     return code
 
 
@@ -1342,27 +1701,48 @@ def main(argv: list[str] | None = None) -> int:
         print("install requires Python 3.12 or newer", file=sys.stderr)
         return 2
     arguments = list(argv if argv is not None else sys.argv[1:])
-    parser = argparse.ArgumentParser(prog="tj install", description=__doc__, allow_abbrev=False)
+    parser = argparse.ArgumentParser(
+        prog="tj install", description=__doc__, allow_abbrev=False
+    )
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--check", action="store_true", help="report drift, write nothing, exit 1 on drift")
-    modes.add_argument("--onboard", action="store_true", help="allow explicitly requested plugin enrollment")
-    parser.add_argument("--step", action="append", choices=[step.name for step in STEPS],
-                        help="run named steps with their dependencies and required preconditions; repeat to select several")
+    modes.add_argument(
+        "--check",
+        action="store_true",
+        help="report drift, write nothing, exit 1 on drift",
+    )
+    modes.add_argument(
+        "--onboard",
+        action="store_true",
+        help="allow explicitly requested plugin enrollment",
+    )
+    parser.add_argument(
+        "--step",
+        action="append",
+        choices=[step.name for step in STEPS],
+        help="run named steps with their dependencies and required preconditions; repeat to select several",
+    )
     parser.add_argument("--converged", action="store_true", help=argparse.SUPPRESS)
     try:
         parsed = parser.parse_args(arguments)
     except SystemExit as error:
         if error.code:
-            jobs.record(jobs.state_directory(), jobs.Job.INSTALL,
-                        [f"install rejected its arguments: {shlex.join(arguments)}"])
+            jobs.record(
+                jobs.state_directory(),
+                jobs.Job.INSTALL,
+                [f"install rejected its arguments: {shlex.join(arguments)}"],
+            )
         raise
     context = machine_context()
     installer = pinned_installer(context.state_directory)
     if installer is not None:
-        return process.run([sys.executable, "-B", str(installer), *arguments]).returncode
+        return process.run(
+            [sys.executable, "-B", str(installer), *arguments]
+        ).returncode
     context.onboard = parsed.onboard
     native_runtime.expose()
-    context.environ["PATH"] = native_runtime.search_path(context.environ.get("PATH", os.defpath))
+    context.environ["PATH"] = native_runtime.search_path(
+        context.environ.get("PATH", os.defpath)
+    )
     steps = selected_steps(set(parsed.step or ()))
     if parsed.check:
         return run_steps(steps, context, True)
@@ -1385,8 +1765,12 @@ def main(argv: list[str] | None = None) -> int:
             code = run_steps(steps, context, False)
         jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
     if successor is not None:
-        print(f"install: continuing with the converged Agent package at {successor.parents[3]}")
-        code = process.run([sys.executable, "-B", str(successor), *arguments, "--converged"]).returncode
+        print(
+            f"install: continuing with the converged Agent package at {successor.parents[3]}"
+        )
+        code = process.run(
+            [sys.executable, "-B", str(successor), *arguments, "--converged"]
+        ).returncode
     if not code:
         code = publish_update(context, outcomes)
     return 2 if context.failures and not code else code
