@@ -614,7 +614,8 @@ class ParentTests(unittest.TestCase):
         with mock.patch.object(CLI.agent_store, 'run', return_value={'session': {'title': 'agent#98'}}):
             rule = CLI.parent_rule('claude:p')
         self.assertIn('"agent#98" (claude:p)', rule)
-        self.assertIn('agent:message', rule)
+        self.assertIn('agent:message (tj message claude:p "<text>")', rule)
+        self.assertIn('never send it status updates', rule)
         self.assertEqual('', CLI.parent_rule(None))
 
 
