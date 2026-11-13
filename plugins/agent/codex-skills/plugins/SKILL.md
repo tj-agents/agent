@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: Update the current host's plugins or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, adopting a stack, changing selected packages, or auditing machine plugin settings.
+description: Update this machine's plugins, runtime and tools with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, adopting a stack, changing selected packages, or auditing machine plugin settings.
 
 kind: utility
 domain: agent

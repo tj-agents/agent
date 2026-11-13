@@ -159,6 +159,8 @@ RETIRED_ENTRIES = (
     "plugin-pins",
     "plugin-refresh.json",
     "plugin-refresh.log",
+    "plugin-update.json",
+    "plugin-update.lock",
     "plugin-update.log",
     "publish-update-owner-setup-result.json",
     "published-manifest.json",
@@ -253,7 +255,7 @@ def _tj_watch_binary(environ: Mapping[str, str]) -> Path | None:
 
 def _retire_tj_watch(
     environ: Mapping[str, str], processes: ProcessTable | None
-) -> list[str]:
+) -> Removal:
     removed = []
     shortcut = _tj_watch_shortcut(environ)
     if shortcut is not None and shortcut.is_file():
@@ -261,7 +263,7 @@ def _retire_tj_watch(
         removed.append(str(shortcut))
     binary = _tj_watch_binary(environ)
     if binary is None or not binary.is_file():
-        return removed
+        return Removal(removed, [])
     table = processes or WindowsProcessTable()
     for running in table.listing():
         if running.executable.casefold() != str(binary).casefold():
@@ -270,10 +272,10 @@ def _retire_tj_watch(
             removed.append(f"tj-watch process {running.pid}")
     try:
         binary.unlink()
-    except PermissionError:
-        return removed
+    except PermissionError as error:
+        return Removal(removed, [f"could not remove {binary}: {error}"])
     removed.append(str(binary))
-    return removed
+    return Removal(removed, [])
 
 
 def _retry_writable(
@@ -314,11 +316,13 @@ def remove(
     """Repeats on purpose: older cached Agent builds re-create some entries until
     they age out."""
     removed = _remove_watcher(state_directory, windows, home, run)
+    failures = []
     if windows:
-        removed += _retire_tj_watch(
+        retired = _retire_tj_watch(
             os.environ if environ is None else environ, processes
         )
-    failures = []
+        removed += retired.removed
+        failures += retired.failures
     for entry in RETIRED_ENTRIES:
         path = state_directory / entry
         if not (path.is_symlink() or path.exists()):

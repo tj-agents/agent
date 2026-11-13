@@ -43,11 +43,11 @@ Install [TJ CLI](https://github.com/tj-agents/cli#install) first and keep `tj_ho
 Generated Claude and Codex command hooks run through this native launcher. Template's generator owns
 the wrapping; authored hook manifests keep the payload executable and arguments.
 
-`./install.ps1` on Windows or `./install.sh` on Linux converges this machine: retired state, native permission defaults,
+`./install.ps1` on Windows or `./install.sh` on Linux converges this machine: the plugins of every installed host, retired state, native permission defaults,
 Codex's shared daemon auto-start (a `daemon_auto_start = false` override is removed so refresh can reload open
 Codex sessions in place),
 the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
-profile agents, plugin catch-up, harness permissions, plugin setup, Codex trust for tj-agents plugin hooks (verified against their published
+profile agents, harness permissions, plugin setup, plugin scope, Codex trust for tj-agents plugin hooks (verified against their published
 source, so no Codex launch asks to trust them) and plugin copies. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
@@ -57,22 +57,23 @@ Their revisions are pinned in `.agents/agent/runtime/work-items.json`, which Ren
 no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned `tj-cli`'s own installers.
 
 `tj run` checks the tj-agents marketplace once at launch, in repositories that select tj-agents plugins, and
-starts `tj plugins update` in the background when it moved; nothing checks per prompt or polls. `tj plugins update`
-fetches the calling host's marketplaces, then updates only plugins behind their pins with the host's native
-commands. It detects Claude or Codex from the session; use `--host claude` or `--host codex` outside a session.
-A successful update publishes the marketplace commit it converged to with `tj update`, which every `tj run` tab
-applies in place once idle; a failed one publishes nothing. An unmanaged session receives a reload notice.
+starts `tj install` in the background when it moved; nothing checks per prompt or polls. `tj install` fetches the
+marketplaces, then updates only plugins behind their pins with each installed host's native commands. For each
+host whose plugins or marketplace moved it publishes the marketplace commit with `tj update`, which every
+`tj run` tab applies in place once idle; a failed update publishes nothing. An unmanaged session receives a
+reload notice.
 Updates regenerate the calling repository's standards index before activation. Codex also reconciles
 the adopted repositories of loaded threads from verified installed builds before publishing.
 Local-only adoption preserves owner-supplied instruction files. Failed verification retains existing
 instructions and reports the update failure.
 
-`tj install` owns machine setup and repair, including Handy, profiles, agent settings and command bindings.
-Run from the managed runtime, it hands over to the pinned Agent build's installer; a successful run ends by
-publishing with `tj update`.
+`tj install` owns plugin updates, machine setup and repair, including Handy, profiles, agent settings and
+command bindings. Run from the managed runtime, it hands over to the pinned Agent build's installer, and after
+updating plugins it hands over again to the Agent build that update converged to, so it always upgrades itself.
+tj-agents plugins are never enabled for every project; each repository's selection enables its own.
 
-Managed launches repair only the failing install step and retry readiness once: a failed
-plugin update (catch-up) or missing required plugins (plugin setup).
+Managed launches repair only the failing install step and retry readiness once: missing required plugins
+(plugin setup).
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
 
