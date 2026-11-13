@@ -12,7 +12,15 @@ import work_items_install
 ROOT = Path(__file__).resolve().parents[1]
 PINS_FILE = ROOT / ".agents/agent/runtime/work-items.json"
 PINS = json.loads(PINS_FILE.read_text(encoding="utf-8"))
+LOCK_FILE = ROOT / ".agents/agent/utility/plugins/scripts/marketplace_plugins.lock.json"
 UV = "uv-executable"
+PROFILE_PIN = {
+    "package": "tj-example-employer-profile",
+    "repository": "tj-agents/example-employer",
+    "subdirectory": "packages/tj-example-employer-profile",
+    "revision": "a" * 40,
+}
+PROFILE_IDENTITY = "example-employer@tj-agents"
 
 
 def requirement(pin: dict[str, str]) -> str:
@@ -36,8 +44,11 @@ def write_receipt(tools: Path, pins: list[dict[str, str]]) -> None:
 
 
 class FakeUv:
-    def __init__(self, tools: Path) -> None:
+    def __init__(
+        self, tools: Path, profiles: list[dict[str, str]] | None = None
+    ) -> None:
         self.tools = tools
+        self.profiles = profiles or []
         self.installs: list[list[str]] = []
 
     def __call__(
@@ -45,7 +56,7 @@ class FakeUv:
     ) -> subprocess.CompletedProcess[str]:
         assert command[:3] == [UV, "tool", "install"], command
         self.installs.append(command)
-        pins = [PINS["tool"], *PINS["profiles"].values()]
+        pins = [PINS["tool"], *self.profiles]
         write_receipt(self.tools, [pin for pin in pins if requirement(pin) in command])
         return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -57,13 +68,45 @@ def machine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def install_claude_plugins(machine: Path, *identities: str) -> None:
+def install_claude_plugin(
+    machine: Path,
+    identity: str,
+    *,
+    declaration: dict[str, object] | None = None,
+    revision: str = "a" * 40,
+) -> Path:
+    """Record `identity` as an enabled Claude plugin with an optional declaration."""
+    root = (
+        machine
+        / "claude"
+        / "plugins"
+        / "cache"
+        / identity.split("@", 1)[1]
+        / identity.split("@", 1)[0]
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    if declaration is not None:
+        (root / "work-items.json").write_text(json.dumps(declaration), encoding="utf-8")
+    settings = machine / "claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    enabled = (
+        json.loads(settings.read_text(encoding="utf-8"))
+        if settings.is_file()
+        else {"enabledPlugins": {}}
+    )
+    enabled["enabledPlugins"][identity] = True
+    settings.write_text(json.dumps(enabled), encoding="utf-8")
     registry = machine / "claude" / "plugins" / "installed_plugins.json"
-    registry.parent.mkdir(parents=True, exist_ok=True)
-    rows = {
-        identity: [{"scope": "local", "installPath": "x"}] for identity in identities
-    }
-    registry.write_text(json.dumps({"plugins": rows}), encoding="utf-8")
+    rows = (
+        json.loads(registry.read_text(encoding="utf-8"))
+        if registry.is_file()
+        else {"plugins": {}}
+    )
+    rows["plugins"][identity] = [
+        {"scope": "local", "installPath": str(root), "gitCommitSha": revision}
+    ]
+    registry.write_text(json.dumps(rows), encoding="utf-8")
+    return root
 
 
 def tj_item_step(machine: Path, uv: FakeUv) -> int:
@@ -78,17 +121,41 @@ def tj_item_step(machine: Path, uv: FakeUv) -> int:
     return int(install.run_steps([step], context, False, io.StringIO(), io.StringIO()))
 
 
-def test_tj_item_installs_exactly_the_pinned_command_with_selected_profiles(
+def test_tj_item_installs_the_declared_profile_of_an_installed_plugin(
     machine: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    install_claude_plugins(machine, "agent@tj-agents", *PINS["profiles"])
-    uv = FakeUv(machine / "uv-tools")
+    install_claude_plugin(
+        machine,
+        PROFILE_IDENTITY,
+        declaration={
+            "schema_version": 1,
+            "package": PROFILE_PIN["package"],
+            "subdirectory": PROFILE_PIN["subdirectory"],
+        },
+        revision=PROFILE_PIN["revision"],
+    )
+    repositories = {"example-employer": PROFILE_PIN["repository"]}
+    pins = work_items_install.discovered_profiles(
+        machine / "claude", repositories=repositories
+    )
+    assert pins == (work_items_install.Pin(**PROFILE_PIN),)
+    lock = machine / "marketplace_plugins.lock.json"
+    lock.write_text(
+        json.dumps(
+            {
+                "marketplace": {
+                    "plugins": [
+                        {"name": "example-employer", "repository": "example-employer"}
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(work_items_install, "MARKETPLACE_LOCK", lock)
+    uv = FakeUv(machine / "uv-tools", profiles=[PROFILE_PIN])
     assert tj_item_step(machine, uv) == 0
-    profiles = [
-        argument
-        for pin in PINS["profiles"].values()
-        for argument in ("--with", requirement(pin))
-    ]
     assert uv.installs == [
         [
             UV,
@@ -97,41 +164,48 @@ def test_tj_item_installs_exactly_the_pinned_command_with_selected_profiles(
             "--force",
             "--from",
             requirement(PINS["tool"]),
-            *profiles,
+            "--with",
+            requirement(PROFILE_PIN),
             "tj-work-items",
         ]
     ]
 
 
 def test_tj_item_is_a_no_op_when_the_receipt_matches_the_pins(machine: Path) -> None:
-    install_claude_plugins(machine, *PINS["profiles"])
     tools = machine / "uv-tools"
-    write_receipt(tools, [PINS["tool"], *PINS["profiles"].values()])
+    write_receipt(tools, [PINS["tool"]])
     uv = FakeUv(tools)
     assert tj_item_step(machine, uv) == 0
     assert uv.installs == []
 
 
-def test_tj_item_installs_no_profile_the_machine_has_not_selected(
+def test_tj_item_installs_no_profile_without_a_declared_plugin(
     machine: Path,
 ) -> None:
-    install_claude_plugins(machine, "agent@tj-agents", "personal@tj-agents")
     tools = machine / "uv-tools"
-    write_receipt(tools, [PINS["tool"], *PINS["profiles"].values()])
+    write_receipt(tools, [PINS["tool"]])
     uv = FakeUv(tools)
     assert tj_item_step(machine, uv) == 0
-    assert len(uv.installs) == 1
-    assert "--with" not in uv.installs[0]
+    assert len(uv.installs) == 0
 
 
-def test_a_codex_profile_install_selects_its_package(machine: Path) -> None:
-    plugin = next(iter(PINS["profiles"]))
-    name, _, marketplace = plugin.partition("@")
-    (machine / "codex/plugins/cache" / marketplace / name / "local").mkdir(parents=True)
-    pins = work_items_install.Pins.load(PINS_FILE)
-    assert pins.selected(work_items_install.installed_plugins()) == (
-        pins.profiles[plugin],
+def test_a_plugin_without_a_declaration_selects_no_profile(machine: Path) -> None:
+    install_claude_plugin(machine, "personal@tj-agents")
+    assert work_items_install.discovered_profiles(machine / "claude") == ()
+
+
+def test_an_undeclared_marketplace_plugin_raises(machine: Path) -> None:
+    install_claude_plugin(
+        machine,
+        PROFILE_IDENTITY,
+        declaration={
+            "schema_version": 1,
+            "package": PROFILE_PIN["package"],
+            "subdirectory": PROFILE_PIN["subdirectory"],
+        },
     )
+    with pytest.raises(work_items_install.WorkItemsError, match="example-employer"):
+        work_items_install.discovered_profiles(machine / "claude", repositories={})
 
 
 def test_tj_item_fails_without_uv(machine: Path) -> None:
@@ -169,6 +243,11 @@ def test_cli_tool_steps_run_tj_clis_own_installer(
     assert f"apply  {name}: installed" in output.getvalue()
 
 
+def test_repository_names_reads_the_marketplace_snapshot() -> None:
+    repositories = work_items_install.repository_names(LOCK_FILE)
+    assert repositories["agent"] == "tj-agents/agent"
+
+
 def test_every_pin_is_matched_by_the_renovate_manager() -> None:
     renovate = json.loads((ROOT / ".github/renovate.json").read_text(encoding="utf-8"))
     path = PINS_FILE.relative_to(ROOT).as_posix()
@@ -187,6 +266,4 @@ def test_every_pin_is_matched_by_the_renovate_manager() -> None:
         for pattern in managers[0]["matchStrings"]
         for match in re.finditer(pattern.replace("(?<", "(?P<"), text)
     }
-    pins = [PINS["tool"], *PINS["profiles"].values()]
-    assert found == {(pin["repository"], pin["revision"]) for pin in pins}
-    assert len(found) == len(pins)
+    assert found == {(PINS["tool"]["repository"], PINS["tool"]["revision"])}

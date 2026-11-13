@@ -119,29 +119,36 @@ def npm_global_prefix():
     return prefix or None
 
 
+def path_executables():
+    """Every `codex` on PATH in PATH order, so a stale copy early on PATH cannot hide a newer one later."""
+    found = []
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if directory and (hit := shutil.which("codex", path=directory)):
+            found.append(hit)
+    return found
+
+
 def candidate_paths(
-    which=shutil.which, local_app_data=None, npm_prefix=npm_global_prefix
+    on_path=path_executables, local_app_data=None, npm_prefix=npm_global_prefix
 ):
     name = "codex.exe" if IS_WINDOWS else "codex"
     candidates = []
 
-    shim = which("codex")
+    shims = on_path()
 
-    if not shim and not IS_WINDOWS:
+    if not shims and not IS_WINDOWS:
         prefix = npm_prefix()
         if prefix:
             direct = Path(prefix) / "bin" / name
             if direct.is_file():
-                shim = str(direct)
+                shims = [str(direct)]
 
-    if shim and (
-        (IS_WINDOWS and Path(shim).suffix.casefold() == ".exe")
-        or (not IS_WINDOWS and not is_script(os.path.realpath(shim)))
-    ):
-        candidates.append(shim)
-        candidates.append(os.path.realpath(shim))
-
-    if shim:
+    for shim in shims:
+        if (IS_WINDOWS and Path(shim).suffix.casefold() == ".exe") or (
+            not IS_WINDOWS and not is_script(os.path.realpath(shim))
+        ):
+            candidates.append(shim)
+            candidates.append(os.path.realpath(shim))
         roots = [
             Path(shim).parent / "node_modules" / "@openai" / "codex",
             Path(os.path.realpath(shim)).parent.parent,

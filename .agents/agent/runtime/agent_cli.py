@@ -486,6 +486,6 @@ def parent_rule(parent):
     except agent_store.AgentStoreError:
         title = None
     name = f'"{title}" ({parent})' if title else parent
-    return (f' Standing rule: the session {name} started you. Post to its feed with agent:message '
+    return (f' Standing rule: the session {name} started you. Report to it with agent:message '
             f'(tj message {parent} "<text>") only for your final result, a blocker you cannot resolve or an '
             "approval Tommy must give; never send it status updates.")
