@@ -260,29 +260,29 @@ class CodexExecutableTests(unittest.TestCase):
 
     def test_finds_the_vendored_binary_behind_a_posix_npm_symlink(self):
         shim, binary = self.vendored(self.base / 'npm global', '0.160.0')
-        self.assertEqual(CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: str(shim)), [str(binary)])
+        self.assertEqual(CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [str(shim)]), [str(binary)])
 
     def test_a_native_executable_directly_on_path_is_a_candidate_with_no_npm_package(self):
         native = executable(self.base / 'standalone' / 'codex', '\x7fELFnot a script\n')
-        self.assertEqual(CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: str(native)), [str(native)])
+        self.assertEqual(CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [str(native)]), [str(native)])
 
     def test_an_npm_shim_on_path_is_not_itself_a_candidate(self):
         shim, binary = self.vendored(self.base / 'npm global', '0.160.0')
-        candidates = CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: str(shim))
+        candidates = CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [str(shim)])
         self.assertNotIn(str(shim), candidates)
         self.assertEqual(candidates, [str(binary)])
 
     def test_skips_the_windows_desktop_cache_elsewhere(self):
         executable(self.base / 'appdata' / 'OpenAI' / 'Codex' / 'bin' / 'h' / 'codex.exe')
         self.assertEqual(
-            CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: None, local_app_data=str(self.base / 'appdata'), npm_prefix=lambda: None),
+            CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [], local_app_data=str(self.base / 'appdata'), npm_prefix=lambda: None),
             [],
         )
 
     def test_falls_back_to_the_npm_prefix_when_the_shim_is_off_path(self):
         shim, binary = self.vendored(self.base / 'npm global', '0.160.0')
         self.assertEqual(
-            CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: None, npm_prefix=lambda: str(self.base / 'npm global')),
+            CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [], npm_prefix=lambda: str(self.base / 'npm global')),
             [str(binary)],
         )
 
@@ -290,13 +290,20 @@ class CodexExecutableTests(unittest.TestCase):
         self.vendored(self.base / 'npm global', '0.160.0')
         other_shim, other_binary = self.vendored(self.base / 'other npm', '0.161.0')
         self.assertEqual(
-            CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: str(other_shim), npm_prefix=lambda: str(self.base / 'npm global')),
+            CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [str(other_shim)], npm_prefix=lambda: str(self.base / 'npm global')),
             [str(other_binary)],
         )
 
+    def test_every_codex_on_path_is_searched_so_a_stale_copy_first_cannot_hide_a_newer_one(self):
+        stale = executable(self.base / 'stale runtime' / 'codex', '#!/bin/sh\necho "codex-cli 0.163.0-alpha.1"\n')
+        shim, binary = self.vendored(self.base / 'npm global', '0.169.0')
+        launch = CLI.host_launch(Host.CODEX)
+        candidates = launch.candidate_paths(on_path=lambda: [str(stale), str(shim)])
+        self.assertEqual(launch.resolve_executable(candidates=candidates)[0], str(binary))
+
     def test_a_missing_npm_prefix_binary_is_not_fatal(self):
         self.assertEqual(
-            CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: None, npm_prefix=lambda: str(self.base / 'no such prefix')),
+            CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [], npm_prefix=lambda: str(self.base / 'no such prefix')),
             [],
         )
 
@@ -304,7 +311,7 @@ class CodexExecutableTests(unittest.TestCase):
     def test_npm_prefix_is_not_consulted_on_windows(self):
         calls = []
         self.vendored(self.base / 'npm global', '0.160.0')
-        CLI.host_launch(Host.CODEX).candidate_paths(which=lambda _: None, npm_prefix=lambda: calls.append(1) or str(self.base / 'npm global'))
+        CLI.host_launch(Host.CODEX).candidate_paths(on_path=lambda: [], npm_prefix=lambda: calls.append(1) or str(self.base / 'npm global'))
         self.assertEqual(calls, [])
 
     def test_picks_the_newest_answering_candidate(self):
