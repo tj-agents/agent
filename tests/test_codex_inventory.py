@@ -102,20 +102,23 @@ def test_unknown_publication_is_not_reported_as_a_retired_plugin(
 def test_failed_marketplace_discovery_is_not_an_empty_publication_list() -> None:
     report = MarketplaceReport("invalid json")
     with pytest.raises(installed.InventoryError, match="marketplace roots"):
-        installed.published_plugins(report)
+        installed.published_plugins(report, ["tj-agents"])
     assert len(report.failures) == 1
 
 
-def test_valid_marketplaces_still_identify_published_plugins(tmp_path: Path) -> None:
+def test_only_tj_agents_marketplaces_identify_published_plugins(tmp_path: Path) -> None:
     path = tmp_path / ".agents/plugins/marketplace.json"
     path.parent.mkdir(parents=True)
     path.write_text('{"plugins": [{"name": "agent"}]}', encoding="utf-8")
     report = MarketplaceReport(
         json.dumps(
             {
-                "marketplaces": [{"name": "tj-agents", "root": str(tmp_path)}],
+                "marketplaces": [
+                    {"name": "tj-agents", "root": str(tmp_path)},
+                    {"name": "claude-plugins-official", "root": str(tmp_path / "gone")},
+                ],
             }
         )
     )
-    assert installed.published_plugins(report) == {"agent@tj-agents"}
+    assert installed.published_plugins(report, ["tj-agents"]) == {"agent@tj-agents"}
     assert report.failures == []
