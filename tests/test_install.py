@@ -1103,6 +1103,10 @@ def full_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, successor: Pat
                  arguments: list[str]) -> tuple[int, list[Host], list[list[str]], mock.Mock]:
     context = machine_context(tmp_path)
     context.which = lambda name: name
+    published: list[list[str]] = []
+    context.run = lambda command, **_options: (
+        published.append(command) or subprocess.CompletedProcess(command, 0, "", "")
+    )
     updated: list[Host] = []
 
     def update(host: Host, _digests: object) -> Outcome:
