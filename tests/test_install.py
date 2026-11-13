@@ -1068,12 +1068,35 @@ def test_install_publishes_the_marketplace_revision_for_a_host_that_moved(
 def test_install_leaves_running_tabs_alone_when_nothing_moved(tmp_path: Path) -> None:
     run = mock.Mock()
     context = install.Context(home=tmp_path, environ={}, windows=False, run=run)
+    install.published_path(context, Host.CLAUDE).parent.mkdir(parents=True)
+    install.published_path(context, Host.CLAUDE).write_text("f" * 40, encoding="utf-8")
     outcomes = {
         Host.CLAUDE: outcome(changed=False),
         Host.CODEX: outcome(failures=["codex: list: boom"]),
     }
     assert install.publish_update(context, outcomes) == 0
     run.assert_not_called()
+
+
+@pytest.mark.parametrize("published", [None, "e" * 40, "tj install"])
+def test_install_republishes_a_stale_revision_even_when_nothing_moved(
+    tmp_path: Path, published: str | None
+) -> None:
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    context = install.Context(home=tmp_path, environ={}, windows=False, run=run)
+    record = install.published_path(context, Host.CLAUDE)
+    if published is not None:
+        record.parent.mkdir(parents=True)
+        record.write_text(published, encoding="utf-8")
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert install.publish_update(context, {Host.CLAUDE: outcome(changed=False)}) == 0
+    assert calls == [["tj", "update", "--host", "claude", "--revision", "f" * 40]]
+    assert record.read_text(encoding="utf-8") == "f" * 40
 
 
 def full_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, successor: Path | None,
