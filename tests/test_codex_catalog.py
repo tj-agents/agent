@@ -467,3 +467,38 @@ def test_a_direct_replacement_that_cannot_verify_is_reported_and_left_native(
         "agent plugin with a usable version label; using native install"
     ) in capsys.readouterr().err
     assert [build.name for build in previous.parent.iterdir()] == ["a" * 12]
+
+
+def test_a_project_only_plugin_updated_outside_any_project_converges(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = publish(home, "b" * 40, "b" * 12)
+    installed(home, "a" * 12)
+    config = home / "config.toml"
+    config.write_text("", encoding="utf-8")
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        # Outside a project Codex lists only plugins the user config enables.
+        if command[:3] == ["codex", "plugin", "list"]:
+            listed = [entry] if "agent@tj-agents" in config.read_text("utf-8") else []
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps({"installed": listed}), ""
+            )
+        if command[:4] == ["codex", "plugin", "marketplace", "list"]:
+            root = home / ".tmp/marketplaces/tj-agents"
+            listing = {"marketplaces": [{"name": "tj-agents", "root": str(root)}]}
+            return subprocess.CompletedProcess(command, 0, json.dumps(listing), "")
+        if command[:3] == ["codex", "plugin", "add"]:
+            for build in (home / "plugins/cache/tj-agents/agent").iterdir():
+                build.rename(home / build.name)
+            installed(home, "b" * 12)
+            config.write_text(
+                '[plugins."agent@tj-agents"]\nenabled = true\n', encoding="utf-8"
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(process, "run", run)
+
+    assert update_plugins("codex") == 0
+    assert config.read_text(encoding="utf-8") == ""
+    assert converged(home)
