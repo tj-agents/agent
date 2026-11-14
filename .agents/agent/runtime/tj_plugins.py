@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import install
 import jobs
 import plugin_update
 from tj_agent.host import Host
@@ -55,6 +56,19 @@ def publish(host: Host, revision: str) -> str | None:
     )
 
 
+def refresh_runtime(host: Host) -> str | None:
+    """Run the tj lifecycle commands from the Agent package this host now has."""
+    state = jobs.state_directory()
+    package = plugin_update.agent_package(host, state)
+    if package is None:
+        return None
+    try:
+        install.install_runtime(state / "bin", package)
+    except install.InstallError as error:
+        return str(error)
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tj plugins", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -69,6 +83,10 @@ def main(argv: list[str] | None = None) -> int:
     if outcome.failures:
         for failure in outcome.failures:
             print(f"  {failure}", file=sys.stderr)
+        return 1
+    problem = refresh_runtime(host)
+    if problem:
+        print(f"{host}: tj commands runtime failed: {problem}", file=sys.stderr)
         return 1
     if outcome.changed and outcome.revision:
         problem = publish(host, outcome.revision)
