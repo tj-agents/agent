@@ -1367,21 +1367,35 @@ def check_plugin_scope(context: Context) -> list[str]:
 
 def apply_plugin_scope(context: Context) -> list[str]:
     changes = []
-    for identity in claude_user_enabled(context):
-        result = context.run(
-            ["claude", "plugin", "disable", identity, "--scope", "user"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=120,
-            check=False,
-        )
-        if result.returncode:
-            raise InstallError(
-                f"claude plugin disable {identity}: {(result.stderr or result.stdout).strip()}"
+    # Claude refuses to disable a plugin another enabled one requires, so each pass
+    # retries the refusals until a pass disables nothing.
+    pending = claude_user_enabled(context)
+    while pending:
+        refused = {}
+        for identity in pending:
+            result = context.run(
+                ["claude", "plugin", "disable", identity, "--scope", "user"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+                check=False,
             )
-        changes.append(f"claude: {identity} loads only where a repository selects it")
+            if result.returncode:
+                refused[identity] = (result.stderr or result.stdout).strip()
+            else:
+                changes.append(
+                    f"claude: {identity} loads only where a repository selects it"
+                )
+        if len(refused) == len(pending):
+            raise InstallError(
+                "; ".join(
+                    f"claude plugin disable {identity}: {error}"
+                    for identity, error in refused.items()
+                )
+            )
+        pending = list(refused)
     identities = codex_user_enabled(context)
     if identities:
         path = codex_config_path(context)

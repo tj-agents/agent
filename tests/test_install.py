@@ -1768,3 +1768,41 @@ def test_plugin_scope_disables_only_tj_agents_plugins_at_user_scope(
         "model": "gpt",
         "plugins": {"concertable@agents": {"enabled": True}},
     }
+
+
+def test_plugin_scope_disables_a_dependency_after_the_plugin_requiring_it(
+    tmp_path: Path,
+) -> None:
+    context = scoped_machine(tmp_path)
+    (tmp_path / "claude/settings.json").write_text(
+        json.dumps(
+            {"enabledPlugins": {"base@tj-agents": True, "dotnet@tj-agents": True}}
+        ),
+        encoding="utf-8",
+    )
+    enabled = {"base@tj-agents", "dotnet@tj-agents"}
+    calls: list[str] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        identity = command[3]
+        calls.append(identity)
+        if identity == "base@tj-agents" and "dotnet@tj-agents" in enabled:
+            return subprocess.CompletedProcess(
+                command, 1, "", "base is still required by dotnet"
+            )
+        enabled.discard(identity)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    context.run = run
+    install.apply_plugin_scope(context)
+    assert enabled == set()
+    assert calls == ["base@tj-agents", "dotnet@tj-agents", "base@tj-agents"]
+
+
+def test_plugin_scope_reports_plugins_claude_will_not_disable(tmp_path: Path) -> None:
+    context = scoped_machine(tmp_path)
+    context.run = lambda command, **_options: subprocess.CompletedProcess(
+        command, 1, "", "settings are locked"
+    )
+    with pytest.raises(install.InstallError, match="python@tj-agents: settings"):
+        install.apply_plugin_scope(context)
