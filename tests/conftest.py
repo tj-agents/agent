@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -19,6 +20,30 @@ def marketplace_at_a_known_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         plugin_update, "marketplace_revision", lambda *_arguments: MARKETPLACE_REVISION
     )
+
+
+@pytest.fixture
+def plugin_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A local git repository of plugin sources; git ignores machine configuration."""
+    for name in tuple(os.environ):
+        if name == "GIT_CONFIG_COUNT" or name.startswith(
+            ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+        ):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    repository = tmp_path / "source"
+    repository.mkdir()
+    for arguments in (
+        ("init", "--quiet"),
+        ("config", "user.name", "Fixture"),
+        ("config", "user.email", "fixture@example.invalid"),
+        ("config", "commit.gpgsign", "false"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(repository), *arguments], check=True, timeout=15
+        )
+    return repository
 
 
 @pytest.fixture

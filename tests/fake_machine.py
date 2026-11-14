@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -86,6 +87,35 @@ class CodexPlugins:
                 ]
             },
         )
+
+
+def commit_plugin(repository: Path, plugin: str, files: Mapping[str, str]) -> str:
+    """Commit files under `plugins/<plugin>` of a source repository; return HEAD."""
+    for relative, text in files.items():
+        path = repository / "plugins" / plugin / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    git = ["git", "-C", str(repository)]
+    subprocess.run([*git, "add", "--all"], check=True, timeout=15)
+    subprocess.run([*git, "commit", "--quiet", "-m", plugin], check=True, timeout=15)
+    head = subprocess.run(
+        [*git, "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=15,
+    )
+    return head.stdout.strip()
+
+
+def git_subdir(repository: Path, plugin: str, revision: str) -> dict[str, str]:
+    """The marketplace source for `plugins/<plugin>` of a repository at a commit."""
+    return {
+        "source": "git-subdir",
+        "url": str(repository),
+        "path": f"./plugins/{plugin}",
+        "sha": revision,
+    }
 
 
 def pin_plugin(claude_home: Path, plugin: str, pin: str) -> None:
