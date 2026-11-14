@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import sys
+import tempfile
 import tomllib
 from collections.abc import Collection
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
 import jobs
+import plugin_payload
 import required_plugins
 import standards
 from codex import catalog, hook_trust, launch, user_plugins
@@ -143,9 +146,112 @@ def update_marketplaces(report: Any, marketplaces: tuple[str, ...]) -> None:
     )
 
 
+def direct_update(
+    marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
+) -> list[str]:
+    """Replace recorded builds behind a git-subdir pin without `codex plugin add`.
+
+    Checks out the pinned payload, swaps it in as the plugin's only cached build as Codex
+    does, records it, then verifies it is current. Returns the identities it updated;
+    anything it cannot write or verify stays for the native refresh, with the reason on
+    stderr.
+    """
+    recorded = catalog.recorded(jobs.state_directory())
+    installed = cached(marketplaces)
+    declared: dict[str, dict[str, object]] = {}
+    sources: dict[str, plugin_payload.Source] = {}
+    for marketplace in marketplaces:
+        identities = catalog.sources(marketplace)
+        for name, source in catalog.declared(marketplace).items():
+            identity = f"{name}@{marketplace}"
+            pinned = plugin_payload.Source.parse(source)
+            build = recorded.get(identity)
+            if (
+                pinned is not None
+                and identity in installed
+                and build is not None
+                and build.source != identities[name]
+            ):
+                declared[identity] = source
+                sources[identity] = pinned
+    if not sources:
+        return []
+    entries: list[dict[str, object]] = []
+    with tempfile.TemporaryDirectory(
+        prefix=".tj-update-",
+        dir=HOST.configuration_root / "plugins",
+        ignore_cleanup_errors=True,
+    ) as staging:
+        exported = plugin_payload.export(sources, Path(staging))
+        problems = dict(exported.problems)
+        for identity, payload in exported.payloads.items():
+            try:
+                version = replace_build(identity, payload, Path(staging) / "retired")
+            except (OSError, ValueError) as error:
+                problems[identity] = str(error)
+            else:
+                entries.append(
+                    {
+                        "pluginId": identity,
+                        "version": version,
+                        "source": declared[identity],
+                        "installed": True,
+                    }
+                )
+    catalog.remember(entries, verified_install=True)
+    updated = []
+    for entry in entries:
+        identity = str(entry["pluginId"])
+        plugin, _, marketplace = identity.rpartition("@")
+        if current(marketplace, plugin):
+            print(f"{HOST}: {identity} ok (direct)")
+            updated.append(identity)
+        else:
+            problems[identity] = catalog.unconverged(marketplace, plugin, entry)
+    for identity, problem in sorted(problems.items()):
+        print(
+            f"{HOST}: {identity} direct update failed: {problem}; using native install",
+            file=sys.stderr,
+        )
+    return updated
+
+
+def replace_build(identity: str, payload: Path, retired: Path) -> str:
+    """Make `payload` the plugin's only cached build; return its version label."""
+    plugin, _, marketplace = identity.rpartition("@")
+    version = catalog.label(payload)
+    target = catalog.root(marketplace, plugin, version) if version is not None else None
+    if version is None or target is None or manifest_name(payload) != plugin:
+        raise ValueError(
+            f"the pinned payload is not the {plugin} plugin with a usable version label"
+        )
+    aside = retired / identity
+    aside.mkdir(parents=True)
+    if target.is_dir():
+        target.rename(aside / target.name)
+        try:
+            payload.rename(target)
+        except OSError:
+            (aside / target.name).rename(target)
+            raise
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload.rename(target)
+    for build in target.parent.iterdir():
+        if build.is_dir() and build.name != target.name:
+            build.rename(aside / build.name)
+    return version
+
+
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
+    if direct_update(marketplaces, current) and all(
+        current(identity.rpartition("@")[2], identity.rpartition("@")[0])
+        for identity in refresh_identities(marketplaces)
+    ):
+        trust_hooks(report)
+        return
     listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
     if listing is None:
         return
