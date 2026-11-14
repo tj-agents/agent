@@ -13,8 +13,9 @@ allowed-tools: Bash(tj message:*), Bash(tj feed:*)
 # Message a session
 
 Owns messaging between sessions through one command on either host. `tj message` delivers natively into a
-Claude session's inbox. Codex has no native messaging, so a Codex session gets the message in its feed and
-reads it with `tj feed`.
+Claude session's inbox. Codex's native queue (`codex queue`) does not yet deliver reliably: an interrupted
+thread can hold it indefinitely and an embedded thread is out of reach. So a Codex session gets the message
+in its feed and reads it with `tj feed`.
 
 ```text
 tj message "agent#461" "<text>"                                   by tab title
