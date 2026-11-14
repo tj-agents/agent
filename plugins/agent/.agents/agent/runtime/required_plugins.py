@@ -272,6 +272,13 @@ class Target:
     converge: bool
 
 
+@dataclass(frozen=True, slots=True)
+class CollectionResult:
+    targets: list[Target]
+    errors: list[str]
+    missing: dict[Host, MissingRequiredPluginsError]
+
+
 def bounded(result: subprocess.CompletedProcess) -> str:
     return ((result.stderr or result.stdout or f"exit {result.returncode}").strip()[:MAX_OUTPUT])
 
@@ -398,14 +405,16 @@ def targets(project: Path, host: Host, executable: str | None) -> list[Target]:
     return found
 
 
-def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None]) -> tuple[list[Target], list[str]]:
-    discovered, errors = {}, []
+def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None]) -> CollectionResult:
+    discovered, errors, missing = {}, [], {}
     for host in hosts:
         try:
             discovered[host] = {target.identity: target for target in targets(project, host, executables.get(host))}
+        except MissingRequiredPluginsError as error:
+            missing[host] = error
         except (RequiredPluginsError, PluginSetupError, RuntimeError, OSError) as error:
             errors.append(f"{host}: {error}")
-    if not errors and discovered:
+    if not errors and not missing and discovered:
         reference_host = next(iter(discovered))
         reference = discovered[reference_host]
         for host, current in discovered.items():
@@ -421,7 +430,17 @@ def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str
                 )
                 if disagree:
                     errors.append(f"{identity}: native host runtimes disagree on its setup declaration")
-    return ([] if errors else [reference[key] for key in sorted(reference)]), errors
+    if errors or missing or not discovered:
+        return CollectionResult([], errors, missing)
+    return CollectionResult([reference[key] for key in sorted(reference)], errors, missing)
+
+
+def install_and_recheck(project: Path, host: Host, error: MissingRequiredPluginsError,
+                        executable: str | None = None, inventory_options: tuple[str, ...] = ()) -> dict[str, Path] | None:
+    host_plugins.PLUGINS[host].install(error.project, error.missing)
+    if executable is None:
+        return check(project, host, inventory_options=inventory_options)
+    return check(project, host, executable, inventory_options=inventory_options)
 
 
 def invoke(target: Target, arguments: list[str], timeout: int, project: Path,
@@ -470,8 +489,10 @@ def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host,
         return [str(error)]
     if drift:
         return drift
-    targets_found, errors = collect(project, hosts, executables)
-    for target in targets_found:
+    collected = collect(project, hosts, executables)
+    errors = collected.errors
+    errors.extend(f"{host}: {error}" for host, error in collected.missing.items())
+    for target in collected.targets:
         try:
             result = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if result.returncode:
@@ -480,15 +501,29 @@ def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host,
             errors.append(f"{target.identity}: setup --check could not run: {error}")
     return errors
 
-
 def converge_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None], onboard: bool = False) -> list[str]:
     project = project_root(project)
     try:
         reconcile_selection(project)
     except RequiredPluginsError as error:
         return [str(error)]
-    targets_found, errors = collect(project, hosts, executables)
-    for target in targets_found:
+    collected = collect(project, hosts, executables)
+    errors, missing = collected.errors, collected.missing
+    if errors:
+        errors.extend(f"{host}: {error}" for host, error in missing.items())
+        return errors
+    for host, missing_error in missing.items():
+        try:
+            install_and_recheck(project, host, missing_error, executables.get(host))
+        except (RequiredPluginsError, RuntimeError, OSError) as repair_error:
+            errors.append(f"{host}: {repair_error}")
+    if errors:
+        return errors
+    if missing:
+        collected = collect(project, hosts, executables)
+        errors = collected.errors
+    errors.extend(f"{host}: {error}" for host, error in collected.missing.items())
+    for target in collected.targets:
         try:
             checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if checked.returncode:

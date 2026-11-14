@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from threading import Event
 import unittest
 from pathlib import Path
 from typing import Any
@@ -407,6 +408,71 @@ def test_codex_refresh_fails_with_no_tj_agents_rows_after_listing(
 OLD_PIN = "a" * 40
 NEW_PIN = "b" * 40
 AGENT_PIN = "c" * 40
+
+
+def test_refresh_overlaps_pin_checks_with_remote_freshness_probes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pin_check_started = Event()
+    probe_saw_pin_check = Event()
+
+    def current(_host: Host, _digests: Digests) -> bool:
+        pin_check_started.set()
+        assert probe_saw_pin_check.wait(timeout=1)
+        return True
+
+    def behind(_host: Host, _marketplace: str) -> bool:
+        assert pin_check_started.wait(timeout=1)
+        probe_saw_pin_check.set()
+        return False
+
+    monkeypatch.setattr(plugin_update, "already_current", current)
+    monkeypatch.setattr(plugin_update, "behind_remote", behind)
+    monkeypatch.setattr(plugin_update, "marketplace_revision", lambda _host: OLD_PIN)
+    monkeypatch.setattr(plugin_update, "update_standards", lambda *_args: None)
+
+    outcome = plugin_update.update(Host.CLAUDE, Digests(tmp_path / "state"))
+
+    assert not outcome.failures
+    assert probe_saw_pin_check.is_set()
+
+
+def test_refresh_rechecks_pins_after_a_marketplace_moves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checks = []
+
+    class Installed:
+        @staticmethod
+        def update_marketplaces(_report, marketplaces):
+            assert marketplaces == ("tj-agents",)
+
+        @staticmethod
+        def refresh(_report, marketplaces, _current):
+            assert marketplaces == plugin_update.MARKETPLACES
+
+        @staticmethod
+        def activate(_report):
+            return None
+
+    def current(_host: Host, _digests: Digests) -> bool:
+        checks.append("checked")
+        return len(checks) == 1
+
+    monkeypatch.setitem(plugin_update.INSTALLED, Host.CLAUDE, Installed())
+    monkeypatch.setattr(plugin_update, "already_current", current)
+    monkeypatch.setattr(
+        plugin_update,
+        "behind_remote",
+        lambda _host, marketplace: marketplace == "tj-agents",
+    )
+    monkeypatch.setattr(plugin_update, "marketplace_revision", lambda _host: OLD_PIN)
+    monkeypatch.setattr(plugin_update, "update_standards", lambda *_args: None)
+
+    outcome = plugin_update.update(Host.CLAUDE, Digests(tmp_path / "state"))
+
+    assert not outcome.failures
+    assert checks == ["checked", "checked"]
 
 
 def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None:

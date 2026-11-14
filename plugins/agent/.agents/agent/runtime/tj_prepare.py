@@ -67,9 +67,8 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
             else inventory.result()
         )
     except required_plugins.MissingRequiredPluginsError as error:
-        host_plugins.PLUGINS[host].install(project, error.missing)
-        roots = required_plugins.check(
-            directory, host, inventory_options=inventory_options
+        roots = required_plugins.install_and_recheck(
+            directory, host, error, inventory_options=inventory_options
         )
     if (project / ".agents/repo-capabilities.local.json").is_file():
         raise standards.StandardsError(
