@@ -180,7 +180,14 @@ def claude_payload(root: Path, plugin: str) -> None:
     write_json(root / ".claude-plugin/plugin.json", {"name": plugin})
 
 
+def claude_plugin_arguments(command: Sequence[str]) -> list[str]:
+    if list(command[:3]) == ["claude", "--setting-sources", "user"]:
+        return ["claude", *command[3:]]
+    return list(command)
+
+
 def update_claude_plugin(claude_home: Path, command: Sequence[str]) -> None:
+    command = claude_plugin_arguments(command)
     plugin, scope = command[3], command[command.index("--scope") + 1]
     name, _, marketplace = plugin.rpartition("@")
     catalog = (

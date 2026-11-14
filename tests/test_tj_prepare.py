@@ -222,14 +222,23 @@ def test_claude_installs_once_at_user_scope_leaving_enablement_to_the_repository
         command: Sequence[str], **kwargs: object
     ) -> subprocess.CompletedProcess[str]:
         calls.append((command, kwargs.get("cwd")))
+        configuration.mkdir(exist_ok=True)
+        (configuration / "settings.json").write_text(
+            json.dumps(
+                {"enabledPlugins": {"python@tj-agents": command[4] == "install"}}
+            ),
+            encoding="utf-8",
+        )
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(claude_projects.process, "run", run)
     claude_projects.install(project, ["python@tj-agents"])
-    assert [command[2] for command, _ in calls] == actions
+    assert [command[4] for command, _ in calls] == actions
     for command, directory in calls:
-        assert directory == project
-        assert command[3] == "python@tj-agents"
+        assert list(command[:4]) == ["claude", "--setting-sources", "user", "plugin"]
+        if command[4] == "install":
+            assert directory == project
+        assert command[5] == "python@tj-agents"
         assert command[command.index("--scope") + 1] == "user"
 
 
