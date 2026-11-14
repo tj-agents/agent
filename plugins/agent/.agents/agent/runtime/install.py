@@ -71,7 +71,8 @@ LIFECYCLE_COMMANDS = {
     "start": "tj_start.py",
     "status": "tj_status.py",
     "recover": "tj_recover.py",
-    "plugins": "tj_plugins.py", "install": "install.py",
+    "plugins": "tj_plugins.py",
+    "install": "install.py",
     "prepare": "tj_prepare.py",
     "session": "tj_session.py",
 }
@@ -582,6 +583,7 @@ def git_longpaths(context: Context) -> bool:
             "config",
             "--file",
             str(global_git_config(context)),
+            "--includes",
             "--type=bool",
             "--get",
             "core.longpaths",
