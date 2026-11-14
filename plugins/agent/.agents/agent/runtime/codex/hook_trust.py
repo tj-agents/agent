@@ -425,10 +425,12 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
             require_ready(listing, cwd, required)
             return {}
         if not launch_args and not environment:
-            inventory = json.loads(run([*command(executable), "plugin", "list", "--json"], cwd, limit))
+            inventory = json.loads(run([*command(executable), "plugin", "list", "--marketplace",
+                                        required_plugins.MARKETPLACE_NAME, "--json"], cwd, limit))
         else:
             completed = process.run(
-                [*command(executable), *launch_args, "plugin", "list", "--json"], cwd=cwd,
+                [*command(executable), *launch_args, "plugin", "list", "--marketplace",
+                 required_plugins.MARKETPLACE_NAME, "--json"], cwd=cwd,
                 env=dict(os.environ, **(environment or {})), check=True, capture_output=True,
                 text=True, encoding="utf-8", timeout=limit,
             )
@@ -539,7 +541,8 @@ def trust_installed(executable, state, launch_args=(), timeout=TIMEOUT):
         rows = {}
         for cwd, hook in untrusted(listing):
             if hook["pluginId"] not in rows:
-                found = json.loads(run([*command(executable), *launch_args, "plugin", "list", "--json"],
+                found = json.loads(run([*command(executable), *launch_args, "plugin", "list", "--marketplace",
+                                        required_plugins.MARKETPLACE_NAME, "--json"],
                                        cwd, timeout)).get("installed", [])
                 rows.update({row["pluginId"]: row for row in found
                              if isinstance(row, dict) and row.get("pluginId") not in rows})

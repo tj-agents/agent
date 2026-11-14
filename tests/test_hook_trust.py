@@ -463,6 +463,39 @@ def hook_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HookTrustStat
     return HookTrustState(cwd, plugin, hook)
 
 
+@pytest.mark.parametrize("with_options", [False, True])
+def test_apply_trust_scopes_native_inventory_with_and_without_launch_options(
+    hook_state: HookTrustState, monkeypatch: pytest.MonkeyPatch, with_options: bool
+) -> None:
+    server = mock.MagicMock()
+    server.__enter__.return_value = server
+    server.request.side_effect = lambda method, _params: (
+        {"config": {}} if method == "config/read" else
+        {"data": [{"cwd": str(hook_state.cwd), "hooks": [hook_state.hook], "errors": []}]}
+    )
+    monkeypatch.setattr(TRUST, "AppServer", lambda *_args, **_kwargs: server)
+    monkeypatch.setattr(TRUST, "trust_updates", lambda *_args: {})
+    calls = []
+
+    def scoped(arguments, cwd, *_args, **kwargs):
+        if "--marketplace" not in arguments:
+            raise RuntimeError("unfiltered native inventory is unavailable")
+        calls.append(arguments)
+        assert arguments[arguments.index("--marketplace") + 1] == "tj-agents"
+        assert cwd == hook_state.cwd
+        if with_options:
+            assert kwargs["env"]["SCOPE_FIXTURE"] == "present"
+            return subprocess.CompletedProcess(arguments, 0, '{"installed": []}', "")
+        return '{"installed": []}'
+
+    monkeypatch.setattr(TRUST, "run", scoped)
+    monkeypatch.setattr(TRUST.process, "run", scoped)
+    options = ("-c", "override") if with_options else ()
+    environment = {"SCOPE_FIXTURE": "present"} if with_options else None
+    assert TRUST.apply_trust("codex", hook_state.cwd, preview=True, launch_args=options, environment=environment) == {}
+    assert calls == [["codex", *options, "plugin", "list", "--marketplace", "tj-agents", "--json"]]
+
+
 @patch.object(TRUST, "run")
 @patch.object(TRUST, "AppServer")
 def test_installed_hooks_are_trusted_only_in_trusted_projects(
@@ -515,9 +548,14 @@ def test_installed_hooks_are_trusted_only_in_trusted_projects(
         },
     }
     inventory = json.dumps({"installed": [hook_state.plugin, other]})
-    runner.side_effect = lambda arguments, cwd, *_: (
-        inventory if "plugin" in arguments else hook_state.git_result(arguments, cwd)
-    )
+    def scoped_inventory(arguments, cwd, *_):
+        if "plugin" not in arguments:
+            return hook_state.git_result(arguments, cwd)
+        if arguments[arguments.index("list") + 1 : arguments.index("list") + 3] != ["--marketplace", "tj-agents"]:
+            raise RuntimeError("unfiltered native inventory is unavailable")
+        return json.dumps({"installed": []}) if cwd == hook_state.cwd else inventory
+
+    runner.side_effect = scoped_inventory
     server = app.return_value.__enter__.return_value
     trusted = {
         "data": [
@@ -570,8 +608,8 @@ def test_installed_hooks_are_trusted_only_in_trusted_projects(
         },
     )
     assert (
-        ["codex", "-c", "override", "plugin", "list", "--json"],
-        hook_state.cwd,
+        ["codex", "-c", "override", "plugin", "list", "--marketplace", "tj-agents", "--json"],
+        project.resolve(),
         45,
     ) in [call.args for call in runner.call_args_list]
 

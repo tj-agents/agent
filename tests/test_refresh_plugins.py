@@ -66,6 +66,169 @@ def completed(
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
+@pytest.mark.parametrize("failed_marketplace", [None, "agents"])
+def test_codex_refresh_uses_only_selected_marketplace_inventories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_marketplace: str | None
+) -> None:
+    report = plugin_update.Report()
+    inventory = {
+        "tj-agents": {"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"},
+        "agents": {"pluginId": "base@agents", "marketplaceName": "agents"},
+    }
+    calls: list[str] = []
+    remembered: list[dict[str, object]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command[:3] == ["codex", "plugin", "list"]
+        if "--marketplace" not in command:
+            raise RuntimeError("unfiltered native inventory is unavailable")
+        marketplace = command[command.index("--marketplace") + 1]
+        calls.append(marketplace)
+        assert (
+            tuple(command[-len(codex_installed.MARKETPLACE_OVERRIDES) :])
+            == codex_installed.MARKETPLACE_OVERRIDES
+        )
+        if marketplace == failed_marketplace:
+            return completed(1, stderr="selected inventory failed")
+        return completed(stdout=json.dumps({"installed": [inventory[marketplace]]}))
+
+    monkeypatch.setattr(codex_installed, "direct_update", lambda *_args: [])
+    monkeypatch.setattr(
+        codex_installed,
+        "cached",
+        lambda _marketplaces: {"agent@tj-agents", "base@agents"},
+    )
+    monkeypatch.setattr(
+        codex_installed, "refresh_identities", lambda _marketplaces: set()
+    )
+    monkeypatch.setattr(codex_installed, "read_user_config", lambda: "")
+    monkeypatch.setattr(codex_installed, "trust_hooks", lambda _report: False)
+    monkeypatch.setattr(
+        codex_installed.catalog,
+        "remember",
+        lambda entries, **_kwargs: remembered.extend(entries),
+    )
+    monkeypatch.setattr(process, "run", run)
+    codex_installed.refresh(
+        report, ("tj-agents", "agents"), lambda _marketplace, _plugin: True
+    )
+
+    assert calls == ["tj-agents", "agents"]
+    if failed_marketplace:
+        assert report.failures == ["codex: list agents: selected inventory failed"]
+        assert remembered == []
+    else:
+        assert report.failures == []
+        assert {entry["pluginId"] for entry in remembered} == {
+            "agent@tj-agents",
+            "base@agents",
+        }
+
+
+@pytest.mark.parametrize("user_enabled", [False, True])
+def test_codex_refresh_skips_unselected_marketplaces_and_preserves_user_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, user_enabled: bool
+) -> None:
+    report = plugin_update.Report()
+    listing = {"tj-agents": "agent@tj-agents", "agents": "base@agents"}
+    calls: list[str] = []
+    config = '[plugins."base@agents"]\nenabled = true\n' if user_enabled else ""
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command[:3] == ["codex", "plugin", "list"]
+        marketplace = command[command.index("--marketplace") + 1]
+        calls.append(marketplace)
+        return completed(
+            stdout=json.dumps(
+                {
+                    "installed": [
+                        {
+                            "pluginId": listing[marketplace],
+                            "marketplaceName": marketplace,
+                        }
+                    ]
+                }
+            )
+        )
+
+    monkeypatch.setattr(codex_installed, "direct_update", lambda *_args: [])
+    monkeypatch.setattr(
+        codex_installed, "cached", lambda _marketplaces: {"agent@tj-agents"}
+    )
+    monkeypatch.setattr(
+        codex_installed, "refresh_identities", lambda _marketplaces: set()
+    )
+    monkeypatch.setattr(codex_installed, "read_user_config", lambda: config)
+    monkeypatch.setattr(codex_installed, "trust_hooks", lambda _report: False)
+    monkeypatch.setattr(
+        codex_installed.catalog, "remember", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(process, "run", run)
+    codex_installed.refresh(
+        report, ("tj-agents", "agents"), lambda _marketplace, _plugin: True
+    )
+    assert not report.failures
+    assert calls == (["tj-agents", "agents"] if user_enabled else ["tj-agents"])
+
+
+def test_codex_post_install_verification_scopes_each_marketplace_and_keeps_global_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = plugin_update.Report()
+    rows = {
+        "tj-agents": {"pluginId": "agent@tj-agents", "marketplaceName": "tj-agents"},
+        "agents": {"pluginId": "base@agents", "marketplaceName": "agents"},
+    }
+    calls: list[str] = []
+    verified: list[str] = []
+    scoped: list[str] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[:3] == ["codex", "plugin", "list"]:
+            assert "--marketplace" in command
+            marketplace = command[command.index("--marketplace") + 1]
+            calls.append(marketplace)
+            return completed(stdout=json.dumps({"installed": [rows[marketplace]]}))
+        assert command[:3] == ["codex", "plugin", "add"]
+        return completed()
+
+    def remember(entries, *, verified_install=False):
+        if verified_install:
+            verified.extend(entry["pluginId"] for entry in entries)
+
+    monkeypatch.setattr(codex_installed, "direct_update", lambda *_args: [])
+    monkeypatch.setattr(
+        codex_installed,
+        "cached",
+        lambda _marketplaces: {rows[m]["pluginId"] for m in rows},
+    )
+    monkeypatch.setattr(
+        codex_installed, "refresh_identities", lambda _marketplaces: set()
+    )
+    monkeypatch.setattr(
+        codex_installed,
+        "read_user_config",
+        lambda: '[plugins."base@agents"]\nenabled = true\n',
+    )
+    monkeypatch.setattr(
+        codex_installed,
+        "keep_project_scope",
+        lambda _report, identities: scoped.extend(identities),
+    )
+    monkeypatch.setattr(codex_installed, "trust_hooks", lambda _report: False)
+    monkeypatch.setattr(codex_installed.catalog, "remember", remember)
+    monkeypatch.setattr(codex_installed.catalog, "current", lambda *_args: True)
+    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
+    monkeypatch.setattr(process, "run", run)
+    codex_installed.refresh(
+        report, ("tj-agents", "agents"), lambda _marketplace, _plugin: False
+    )
+    assert not report.failures
+    assert calls == ["tj-agents", "agents", "tj-agents", "agents"]
+    assert set(verified) == {"agent@tj-agents", "base@agents"}
+    assert scoped == ["agent@tj-agents"]
+
+
 class RefreshPluginsTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -253,6 +416,7 @@ class RefreshPluginsTests(unittest.TestCase):
                 ("agent@tj-agents", "base@agents", "other@elsewhere"), "local"
             ),
         )
+        inventory.install("base@agents")
 
         def run(command, **_kwargs):
             command = claude_plugin_arguments(command)
