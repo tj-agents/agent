@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 import functools
 import json
 import os
@@ -150,9 +151,53 @@ def user_enabled() -> Mapping[str, object]:
     return enabled if isinstance(enabled, dict) else {}
 
 
+def user_command(*arguments: str) -> list[str]:
+    return ["claude", "--setting-sources", "user", "plugin", *arguments]
+
+
+def disable_user(identities: Sequence[str], run: Callable | None = None) -> list[str]:
+    run = process.run if run is None else run
+    pending = list(identities)
+    disabled = []
+    while pending:
+        refused = {}
+        for identity in pending:
+            result = run(
+                user_command("disable", identity, "--scope", "user", "--json"),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120, check=False,
+            )
+            if result.returncode:
+                refused[identity] = (result.stderr or result.stdout).strip()
+            else:
+                disabled.append(identity)
+        if len(refused) == len(pending):
+            raise required_plugins.RequiredPluginsError("; ".join(
+                f"claude plugin disable {identity}: {error}"
+                for identity, error in refused.items()
+            ))
+        pending = list(refused)
+    return disabled
+
+
+@contextmanager
+def preserve_user_scope() -> Iterator[None]:
+    enabled = dict(user_enabled())
+    try:
+        yield
+    finally:
+        disable_user(sorted(
+            identity for identity, value in user_enabled().items()
+            if value is True and (identity.endswith("@tj-agents") or enabled.get(identity) is not True)
+        ))
+
+
 def plugin_command(project: Path, identity: str, *arguments: str) -> None:
+    command = user_command(*arguments, identity, "--scope", "user", "--json")
+    if arguments[0] in {"install", "update"}:
+        command.append("-y")
     result = process.run(
-        ["claude", "plugin", *arguments, identity, "--scope", "user", "--json", "-y"],
+        command,
         cwd=project,
         capture_output=True,
         text=True,
@@ -168,9 +213,6 @@ def plugin_command(project: Path, identity: str, *arguments: str) -> None:
 
 
 def install(project: Path, identities: Sequence[str]) -> None:
-    enabled = user_enabled()
-    for identity in identities:
-        plugin_command(project, identity, "install")
-        # A tj-agents plugin loads only where a repository selects it, never for every project.
-        if identity.endswith("@tj-agents") or enabled.get(identity) is not True:
-            plugin_command(project, identity, "disable")
+    with preserve_user_scope():
+        for identity in identities:
+            plugin_command(project, identity, "install")

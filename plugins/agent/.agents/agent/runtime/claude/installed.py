@@ -290,11 +290,11 @@ def place(sources: dict[str, plugin_payload.Source], builds: dict[str, registry.
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
-    plugins = registered(marketplaces)
-    direct_update(stale(plugins))
-    behind = stale(plugins)
-    if len(behind) < len(plugins):
-        print(f"{HOST}: {len(plugins) - len(behind)} plugin(s) already at their pin")
+    registrations = registered(marketplaces)
+    direct_update(stale(registrations))
+    behind = stale(registrations)
+    if len(behind) < len(registrations):
+        print(f"{HOST}: {len(registrations) - len(behind)} plugin(s) already at their pin")
     groups = []
     for plugin, scopes in behind.items():
         name, _, marketplace = plugin.rpartition("@")
@@ -302,9 +302,16 @@ def refresh(
         for scope in scopes:
             # `update` accepts a torn payload at its pin as current; only `install` rewrites it.
             verb = INSTALL if torn(marketplace, name, scope) else UPDATE
-            group.append((plugin, [*verb, plugin, "--scope", scope, "--json", "-y"]))
+            command = [*verb, plugin, "--scope", scope, "--json", "-y"]
+            if scope == "user":
+                command = plugins.user_command(*command[2:])
+            group.append((plugin, command))
         groups.append(group)
-    report.steps(HOST, groups)
+    try:
+        with plugins.preserve_user_scope():
+            report.steps(HOST, groups)
+    except required_plugins.RequiredPluginsError as error:
+        report.fail(HOST, "plugin scope", str(error))
     if report.failures:
         return
     for plugin, scopes in stale(behind).items():
