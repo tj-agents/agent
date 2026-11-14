@@ -182,6 +182,8 @@ def start_daemon(
         raise LaunchError(
             "Cannot start the Codex daemon here and wt.exe is not on PATH"
         )
+    # Run through cmd with output to NUL: as the tab's own process, the daemon
+    # Codex spawns dies when the tab closes.
     process.run(
         [
             terminal,
@@ -190,10 +192,16 @@ def start_daemon(
             "nt",
             "--title",
             "Codex daemon",
+            "cmd.exe",
+            "/d",
+            "/c",
             native,
             "app-server",
             "daemon",
             "start",
+            ">",
+            "NUL",
+            "2>&1",
         ],
         cwd=directory,
         capture_output=True,
