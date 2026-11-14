@@ -65,6 +65,10 @@ def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
     return None
 
 
+def confirm(prepared: PreparedLaunch, arguments: list[str]) -> None:
+    return None
+
+
 def start_arguments(directory, title, prompt, model, effort):
     arguments = ["--name", title]
     if model:
