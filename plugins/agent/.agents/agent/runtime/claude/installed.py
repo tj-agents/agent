@@ -52,6 +52,7 @@ def scoped_installs(marketplace: str) -> dict[tuple[str, str], tuple[str, Path]]
     registry = read(HOST.configuration_root / "plugins" / "installed_plugins.json")
     plugins = registry.get("plugins", {}) if isinstance(registry, dict) else {}
     found = {}
+    applies = project_plugins.matcher(Path.cwd())
     for plugin_id, rows in plugins.items():
         name, _, source = plugin_id.rpartition("@")
         if source != marketplace or not isinstance(rows, list):
@@ -61,9 +62,7 @@ def scoped_installs(marketplace: str) -> dict[tuple[str, str], tuple[str, Path]]
                 isinstance(row, dict)
                 and isinstance(row.get("scope"), str)
                 and isinstance(row.get("gitCommitSha"), str)
-                and project_plugins.applies(
-                    Path.cwd(), row.get("scope"), row.get("projectPath")
-                )
+                and applies(row["scope"], row.get("projectPath"))
             ):
                 found[name, row["scope"]] = (
                     row["gitCommitSha"],

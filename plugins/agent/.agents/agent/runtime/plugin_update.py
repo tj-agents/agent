@@ -151,6 +151,23 @@ def marketplace_revision(host: Host) -> str | None:
     return revision if not result.returncode and REVISION.fullmatch(revision) else None
 
 
+def behind_remote(host: Host, marketplace: str) -> bool:
+    """Whether this host's clone of `marketplace` may be behind its remote's default branch."""
+    root = str(INSTALLED[host].marketplace_root(marketplace))
+    try:
+        local = Report.run(["git", "-C", root, "rev-parse", "HEAD"])
+        remote = Report.run(["git", "-C", root, "ls-remote", "origin", "HEAD"])
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    head = local.stdout.strip()
+    return bool(
+        local.returncode
+        or remote.returncode
+        or not REVISION.fullmatch(head)
+        or remote.stdout.split()[:1] != [head]
+    )
+
+
 def agent_package(host: Host, state: Path) -> Path | None:
     package: Path | None
     if host is Host.CLAUDE:
@@ -175,7 +192,12 @@ def update(host: Host, digests: Digests) -> Outcome:
     report = Report()
     installed = INSTALLED[host]
     before = marketplace_revision(host)
-    installed.update_marketplaces(report, MARKETPLACES)
+    with ThreadPoolExecutor(max_workers=CONCURRENT_STEPS) as pool:
+        behind = list(pool.map(partial(behind_remote, host), MARKETPLACES))
+    installed.update_marketplaces(
+        report,
+        tuple(name for name, stale in zip(MARKETPLACES, behind, strict=True) if stale),
+    )
     if report.failures:
         return Outcome(report.failures, False, before)
     pins_current = already_current(host, digests)
@@ -188,9 +210,18 @@ def update(host: Host, digests: Digests) -> Outcome:
     digests.save()
     if not report.failures:
         update_standards(report, host)
-    if not report.failures:
-        installed.activate(report)
     revision = marketplace_revision(host)
+    # Activation repeats until it succeeds once for the plugins at this revision.
+    activated = digests.path.parent / f"activated-{host}.txt"
+    try:
+        settled = pins_current and activated.read_text(encoding="utf-8") == revision
+    except OSError:
+        settled = False
+    if not report.failures and not settled:
+        installed.activate(report)
+        if not report.failures and revision is not None:
+            activated.parent.mkdir(parents=True, exist_ok=True)
+            activated.write_text(revision, encoding="utf-8")
     if revision is None and not report.failures:
         report.fail(
             host, "marketplace revision", "the tj-agents marketplace has no commit"
