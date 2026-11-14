@@ -127,6 +127,17 @@ CAPABILITIES = (
         ),
     ),
     Capability(
+        "managed-launch-confirmation",
+        Support(
+            "agent:.claude/runtime/launch.py::confirm",
+            "agent:tests/test_capability_contracts.py::test_claude_preparation_preserves_native_command_without_creating_session",
+        ),
+        Support(
+            "agent:.codex/runtime/launch.py::confirm",
+            "agent:tests/test_codex_startup.py::test_launch_reports_first_turn_mismatch_and_preserves_the_running_session",
+        ),
+    ),
+    Capability(
         "failed-launch-cleanup",
         Support(
             "agent:.claude/runtime/launch.py::abandon",

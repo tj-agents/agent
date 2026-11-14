@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,9 +14,10 @@ from typing import Protocol, cast
 from uuid import UUID
 
 import agent_store
+import transcripts
 from codex import daemon, hook_trust, permissions, projects
 from launch_contract import PreparedLaunch
-from launch_errors import LaunchError, cleanup_failed_launch
+from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 from tj_cli import process
 
@@ -259,6 +260,9 @@ def prepare(
                     str(directory),
                     "resume",
                     thread_id,
+                    *arguments[2:-1],
+                    "--remote",
+                    "unix://",
                     "--",
                     options.prompt,
                 ),
@@ -275,6 +279,95 @@ def prepare(
     finally:
         if prepared is not None and not completed:
             cleanup_failed_launch(sys.exception(), lambda: abandon(prepared, "", False))
+
+
+def first_turn(path: Path) -> dict[str, object] | None:
+    if not path.is_file():
+        return None
+    read_records = cast(
+        Callable[[Path], Iterator[tuple[int, dict[str, object]]]], transcripts.records
+    )
+    for _number, event in read_records(path):
+        if event.get("type") == "turn_context":
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                raise LaunchError("Codex recorded an invalid first turn")
+            return cast(dict[str, object], payload)
+    return None
+
+
+def confirm(
+    prepared: PreparedLaunch,
+    arguments: list[str],
+    *,
+    timeout: float = 180,
+    clock: Callable[[], float] = time.monotonic,
+    wait: Callable[[float], None] = time.sleep,
+) -> None:
+    if not prepared.created:
+        return
+    directory = Path(prepared.command[2])
+    options = start_options(directory, arguments)
+    thread_id = native_id(str(prepared.session).removeprefix("codex:"))
+    deadline = clock() + timeout
+    try:
+        with connection(prepared.command[0], directory) as server:
+            response = server.request(
+                "thread/read", {"threadId": thread_id, "includeTurns": False}
+            )
+        thread = response.get("thread")
+        if (
+            not isinstance(thread, dict)
+            or thread.get("id") != thread_id
+            or not isinstance(thread.get("path"), str)
+        ):
+            raise LaunchError(
+                "Codex did not supply the prepared session's rollout path"
+            )
+        path = Path(thread["path"])
+        while (turn := first_turn(path)) is None:
+            if clock() >= deadline:
+                raise LaunchTimeout(
+                    f"Codex {thread_id} did not record its first turn within "
+                    f"{timeout:g} seconds; check its tab"
+                )
+            wait(0.5)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise LaunchError(
+            f"Cannot verify Codex first turn for {thread_id}: {error}"
+        ) from error
+    mode = turn.get("collaboration_mode")
+    settings = mode.get("settings") if isinstance(mode, dict) else None
+    effort = settings.get("reasoning_effort") if isinstance(settings, dict) else None
+    if (options.model is not None and turn.get("model") != options.model) or (
+        options.effort is not None and effort != options.effort
+    ):
+        raise LaunchError(
+            f"Codex {thread_id} first turn used model={turn.get('model')!r}, "
+            f"effort={effort!r}; requested model={options.model!r}, "
+            f"effort={options.effort!r}. Check its tab before continuing"
+        )
+    try:
+        with connection(prepared.command[0], directory) as server:
+            response = server.request(
+                "thread/read", {"threadId": thread_id, "includeTurns": False}
+            )
+    except (OSError, ValueError, RuntimeError) as error:
+        raise LaunchError(
+            f"Cannot verify Codex daemon attachment for {thread_id}: {error}"
+        ) from error
+    thread = response.get("thread")
+    status = thread.get("status") if isinstance(thread, dict) else None
+    if (
+        not isinstance(thread, dict)
+        or thread.get("id") != thread_id
+        or not isinstance(status, dict)
+        or status.get("type") not in {"idle", "active"}
+    ):
+        raise LaunchError(
+            f"Codex {thread_id} first turn is not attached to the shared daemon; "
+            "check its tab"
+        )
 
 
 def not_started(

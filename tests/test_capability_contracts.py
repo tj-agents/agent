@@ -83,6 +83,7 @@ def test_claude_preparation_preserves_native_command_without_creating_session(
     )
     original = tuple(arguments)
     prepared = adapter.prepare(tmp_path, "parity", arguments, "fixture-tj")
+    adapter.confirm(prepared, arguments)
     assert prepared.command == ("fixture-claude", *original)
     assert tuple(arguments) == original
     assert prepared.session is None and not prepared.created
