@@ -33,6 +33,7 @@ class Native:
     result_id: object = THREAD
     model: str = "fixture-model"
     effort: str = "high"
+    status: str = "idle"
 
     def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
         self.events.append((method, params))
@@ -51,7 +52,11 @@ class Native:
             return {}
         if method == "thread/read":
             return {
-                "thread": {"id": THREAD, "path": str(self.directory / "rollout.jsonl")}
+                "thread": {
+                    "id": THREAD,
+                    "path": str(self.directory / "rollout.jsonl"),
+                    "status": {"type": self.status},
+                }
             }
         pytest.fail(f"Unexpected native request: {method}")
 
@@ -148,6 +153,8 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
             "fixture-model",
             "-c",
             "model_reasoning_effort=high",
+            "--remote",
+            "unix://",
             "--",
             'Read "file"; $value λ',
         ),
@@ -275,6 +282,18 @@ def test_confirm_rejects_first_turn_settings_even_after_correct_thread_creation(
         native.directory, "Title", "Prompt", "fixture-model", "high"
     )
     with pytest.raises(LaunchError, match="first turn used"):
+        startup.confirm(prepared, arguments)
+
+
+def test_confirm_rejects_a_correct_turn_running_outside_the_shared_daemon(
+    native: Native,
+) -> None:
+    prepared = prepare(native)
+    native.status = "notLoaded"
+    arguments = launch.start_arguments(
+        native.directory, "Title", "Prompt", "fixture-model", "high"
+    )
+    with pytest.raises(LaunchError, match="not attached to the shared daemon"):
         startup.confirm(prepared, arguments)
 
 
@@ -419,7 +438,7 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
     call_launch(Host.CODEX, native.directory, "Actual title", arguments, run=run)
     command = commands[0]
     assert command[command.index("--session") + 1] == f"codex:{THREAD}"
-    assert command[-11:] == [
+    assert command[-13:] == [
         "fixture-codex",
         "--cd",
         str(native.directory),
@@ -429,6 +448,8 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
         "fixture-model",
         "-c",
         "model_reasoning_effort=high",
+        "--remote",
+        "unix://",
         "--",
         prompt,
     ]
