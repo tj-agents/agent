@@ -60,6 +60,9 @@ class FakeHost:
     ) -> None:
         pass
 
+    def confirm(self, prepared: PreparedLaunch, arguments: list[str]) -> None:
+        pass
+
 
 @dataclass
 class Recovery:
