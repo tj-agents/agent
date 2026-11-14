@@ -1732,6 +1732,9 @@ def scoped_machine(tmp_path: Path) -> install.Context:
                 '[plugins."concertable@agents"]',
                 "enabled = true",
                 "",
+                '[plugins."browser@openai-bundled"]',
+                "enabled = true",
+                "",
             ]
         ),
         encoding="utf-8",
@@ -1739,16 +1742,18 @@ def scoped_machine(tmp_path: Path) -> install.Context:
     return context
 
 
-def test_plugin_scope_reports_every_tj_agents_plugin_enabled_for_all_projects(
+def test_plugin_scope_reports_every_plugin_enabled_for_all_projects(
     tmp_path: Path,
 ) -> None:
     assert install.check_plugin_scope(scoped_machine(tmp_path)) == [
+        "stop enabling clangd-lsp@claude-plugins-official for every claude project",
         "stop enabling python@tj-agents for every claude project",
+        "stop enabling concertable@agents for every codex project",
         "stop enabling work@tj-agents for every codex project",
     ]
 
 
-def test_plugin_scope_disables_only_tj_agents_plugins_at_user_scope(
+def test_plugin_scope_disables_every_user_plugin_but_codex_built_ins(
     tmp_path: Path,
 ) -> None:
     context = scoped_machine(tmp_path)
@@ -1761,12 +1766,20 @@ def test_plugin_scope_disables_only_tj_agents_plugins_at_user_scope(
     context.run = run
     install.apply_plugin_scope(context)
     assert calls == [
-        ["claude", "plugin", "disable", "python@tj-agents", "--scope", "user"]
+        [
+            "claude",
+            "plugin",
+            "disable",
+            "clangd-lsp@claude-plugins-official",
+            "--scope",
+            "user",
+        ],
+        ["claude", "plugin", "disable", "python@tj-agents", "--scope", "user"],
     ]
     codex = tomllib.loads((tmp_path / "codex/config.toml").read_text(encoding="utf-8"))
     assert codex == {
         "model": "gpt",
-        "plugins": {"concertable@agents": {"enabled": True}},
+        "plugins": {"browser@openai-bundled": {"enabled": True}},
     }
 
 
