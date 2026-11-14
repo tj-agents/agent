@@ -10,6 +10,7 @@
     "agent@tj-agents",
     "base@tj-agents",
     "cli@tj-agents",
+    "docs@tj-agents",
     "engineering@tj-agents",
     "github-actions@tj-agents",
     "personal@tj-agents",

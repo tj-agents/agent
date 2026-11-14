@@ -1,4 +1,5 @@
 import json
+import queue
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,44 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 from codex import hook_trust as TRUST
+
+
+def test_batch_replies_are_routed_by_id_and_preserve_duplicate_entries():
+    server = TRUST.AppServer.__new__(TRUST.AppServer)
+    server.sequence = 0
+    server.timeout = 1
+    server.messages = queue.Queue()
+    server.send = mock.Mock()
+    paths = [Path("a"), Path("b"), Path("a"), Path("c"), Path("d"), Path("e")]
+    entries = [{"cwd": str(path), "hooks": [{"key": str(index)}], "errors": []}
+               for index, path in enumerate(paths)]
+    server.messages.put({"method": "notification"})
+    server.messages.put({"id": 2, "method": "server/request", "params": {}})
+    for request_id, data in ((3, entries[4:]), (1, entries[:2]), (2, entries[2:4])):
+        server.messages.put({"id": request_id, "result": {"data": data}})
+
+    assert TRUST.list_installed_hooks(server, paths) == {"data": entries}
+    assert [call.args[0]["id"] for call in server.send.call_args_list] == [1, 2, 3]
+
+
+@pytest.mark.parametrize(("response", "message"), [({"id": 2, "error": "bad"}, "failed"), (None, "timed out")])
+def test_batch_error_or_timeout_fails(response, message):
+    server = TRUST.AppServer.__new__(TRUST.AppServer)
+    server.sequence = 0
+    server.timeout = 0
+    server.messages = queue.Queue()
+    server.send = mock.Mock()
+    if response is not None:
+        server.messages.put(response)
+    with pytest.raises(RuntimeError, match=message):
+        server.requests("hooks/list", [{"cwds": ["a"]}, {"cwds": ["b"]}])
+
+
+def test_batch_rejects_wrong_directory_even_when_entry_count_matches():
+    server = mock.Mock()
+    server.request.return_value = {"data": [{"cwd": "other", "hooks": [], "errors": []}]}
+    with pytest.raises(RuntimeError, match="does not match"):
+        TRUST.list_installed_hooks(server, [Path("expected")])
 
 
 class HookTrustTests(unittest.TestCase):
@@ -560,6 +599,41 @@ def test_hooks_still_untrusted_after_the_write_fail_and_record_nothing(
         with pytest.raises(RuntimeError, match="still not trusted"):
             TRUST.trust_installed("codex", state)
     assert not (state / TRUST.RECEIPT).exists()
+
+
+def test_batched_readback_covers_every_project_before_receipt(tmp_path, monkeypatch):
+    cwds = [tmp_path / str(index) for index in range(6)]
+    hook = {"source": "plugin", "enabled": True, "isManaged": False,
+            "trustStatus": "untrusted", "pluginId": "base@tj-agents", "key": "key"}
+    server = mock.MagicMock()
+    server.__enter__.return_value = server
+    calls = []
+
+    def batches(method, parameters):
+        calls.append(parameters)
+        result = [{"data": [{"cwd": cwd, "hooks": [], "errors": []} for cwd in batch["cwds"]]}
+                  for batch in parameters]
+        if len(calls) == 1:
+            result[0]["data"][0]["hooks"] = [hook]
+        else:
+            result[-1]["data"][-1]["errors"] = ["load failed"]
+        return result
+
+    server.requests.side_effect = batches
+    monkeypatch.setattr(TRUST, "AppServer", lambda *args, **kwargs: server)
+    monkeypatch.setattr(TRUST, "published_hooks", lambda: {"base@tj-agents": "digest"})
+    monkeypatch.setattr(TRUST.Path, "home", lambda: cwds[0])
+    monkeypatch.setattr(TRUST.projects, "user_config", dict)
+    monkeypatch.setattr(TRUST.projects, "trusted", lambda config: cwds[1:])
+    monkeypatch.setattr(TRUST, "run", lambda *args: '{"installed": [{"pluginId": "base@tj-agents"}]}')
+    monkeypatch.setattr(TRUST, "trust_updates", lambda *args: {"key": {"trusted_hash": "hash"}})
+
+    with pytest.raises(RuntimeError, match="could not load"):
+        TRUST.trust_installed("codex", tmp_path / "state")
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert [cwd for batch in calls[1] for cwd in batch["cwds"]] == [str(cwd) for cwd in cwds]
+    assert not (tmp_path / "state" / TRUST.RECEIPT).exists()
 
 
 if __name__ == "__main__":

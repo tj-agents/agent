@@ -59,12 +59,8 @@ separate pin needs renewal. The tool's own pin is in `.agents/agent/runtime/work
 bumps; the step is a no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned
 `tj-cli`'s own installers.
 
-`tj run` checks the tj-agents marketplace once at launch, in repositories that select tj-agents plugins, and
-starts `tj install` in the background when it moved; nothing checks per prompt or polls. `tj install` fetches the
-marketplaces, then updates only plugins behind their pins with each installed host's native commands. For each
-host whose plugins or marketplace moved it publishes the marketplace commit with `tj update`, which every
-`tj run` tab applies in place once idle; a failed update publishes nothing. An unmanaged session receives a
-reload notice.
+See [plugin updates](https://github.com/tj-agents/cli/blob/main/docs/plugin-updates.md) for update commands,
+automatic checks and session reloads.
 Updates regenerate the calling repository's standards index before activation. Codex also reconciles
 the adopted repositories of loaded threads from verified installed builds before publishing.
 Local-only adoption preserves owner-supplied instruction files. Failed verification retains existing

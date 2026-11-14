@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -20,6 +21,7 @@ from tj_cli import process
 
 DONE = "Done"
 COMMAND_TIMEOUT_SECONDS = 60
+LOOKUP_WORKERS = 8
 
 
 class LifecycleError(RuntimeError):
@@ -94,8 +96,7 @@ def open_items(refs: list[str] | None = None, cwd: Path | None = None) -> list[I
         except (LifecycleError, ValueError):
             mine = []
         refs = list(dict.fromkeys([*linked, *mine]))
-    items = []
-    for ref in refs:
+    def resolve(ref: str) -> Item:
         sessions = agent_store.run("sessions", "--item", ref)
         canonical = sessions["item"]["ref"]
         agents = [Agent(session, live[Host(session["host"])].get(session["native_id"]))
@@ -105,9 +106,11 @@ def open_items(refs: list[str] | None = None, cwd: Path | None = None) -> list[I
             item.card = tj_item("resolve", canonical, cwd=Path(item.worktree) if item.worktree else cwd)
         except (LifecycleError, ValueError):
             item.card = None
-        if not item.card or item.card.get("state") != DONE:
-            items.append(item)
-    return items
+        return item
+
+    with ThreadPoolExecutor(max_workers=LOOKUP_WORKERS) as pool:
+        items = list(pool.map(resolve, refs))
+    return [item for item in items if not item.card or item.card.get("state") != DONE]
 
 
 def branch(worktree: str | None) -> str | None:

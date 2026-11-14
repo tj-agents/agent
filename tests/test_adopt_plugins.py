@@ -56,6 +56,33 @@ class RemovePluginTests(unittest.TestCase):
         self.assertEqual(["base@tj-agents"], self.selected())
         self.assertEqual([], ADOPT.run(self.root, [], [], "check", removals=["cli"]))
 
+    def test_selected_marketplace_keeps_auto_update_while_removed_marketplaces_drop(self):
+        self.write_selection(["base@tj-agents"])
+        settings = self.root / ".claude/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"extraKnownMarketplaces": {
+            "tj-agents": {"source": {"source": "github", "repo": "tj-agents/marketplace"}, "autoUpdate": True},
+            "retired": {"source": {"source": "github", "repo": "tj-agents/retired"}, "autoUpdate": True},
+        }}), encoding="utf-8")
+
+        ADOPT.run(self.root, [], [], "write")
+
+        self.assertEqual({"tj-agents": {
+            "source": {"source": "github", "repo": "tj-agents/marketplace"}, "autoUpdate": True,
+        }}, json.loads(settings.read_text(encoding="utf-8"))["extraKnownMarketplaces"])
+
+    def test_selected_marketplace_keeps_auto_update_false(self):
+        self.write_selection(["base@tj-agents"])
+        settings = self.root / ".claude/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"extraKnownMarketplaces": {
+            "tj-agents": {"source": {"source": "github", "repo": "tj-agents/marketplace"}, "autoUpdate": False},
+        }}), encoding="utf-8")
+
+        ADOPT.run(self.root, [], [], "write")
+
+        self.assertFalse(json.loads(settings.read_text(encoding="utf-8"))["extraKnownMarketplaces"]["tj-agents"]["autoUpdate"])
+
     def test_unpublished_selections_converge_away_without_a_removal_request(self):
         self.write_selection(["agent@tj-agents", "agent-store@tj-agents", "base@tj-agents", "cli@tj-agents",
                               "kit@tj-agents", "machine@tj-agents"])
