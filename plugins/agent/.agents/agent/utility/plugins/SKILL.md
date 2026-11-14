@@ -21,13 +21,15 @@ tj install --check
 tj install --step "Handy"
 ```
 
-`tj install` is the only update command. It fetches the marketplaces, brings every installed host's plugins
-to their pins with native installation, then continues with the Agent package it converged to, which delivers
-the runtime and native CLI and converges machine tools, Handy, profiles, agent settings and command bindings.
-tj-agents plugins load only where a repository selects them; it disables any enabled for every project. When a
-host's plugins or marketplace moved, `tj update` makes every `tj run` tab apply the update in place once idle.
-Run it after a plugin PR merged; `tj run` also starts it in the background at launch when the marketplace
-moved. A current machine changes nothing and exits 0. `tj init` remains shell initialization.
+`tj install` performs the full machine installation, including plugins, runtime, CLI, machine tools, Handy,
+profiles, agent settings and command bindings. After a plugin PR merges, run `tj plugins update --host <host>`
+for a host-only plugin refresh, or `tj install` for the full machine installation. After a successful changed
+installation, the internal `tj update --host <host> --revision <revision>` publishes the installed revision so
+`tj run` tabs apply it in place once idle. `tj run` checks for marketplace updates at launch and periodically.
+See the [canonical plugin update flow](https://github.com/tj-agents/cli/blob/main/docs/plugin-updates.md)
+for details. A current machine changes nothing and exits 0. `tj init` remains shell initialization.
+tj-agents plugins load only where a repository selects them; machine installation disables any enabled for
+every project.
 
 ## Repository selection
 

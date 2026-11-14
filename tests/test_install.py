@@ -976,6 +976,20 @@ class RuntimeTests(Machine):
 
 
 class GitLongPathsTests(Machine):
+    def test_an_included_long_paths_setting_does_not_rewrite_the_global_wrapper(self):
+        included = self.root / "original gitconfig"
+        included.write_text("[core]\n\tlongpaths = true\n", encoding="utf-8")
+        config = self.root / "managed gitconfig"
+        config.write_text(
+            f"[include]\n\tpath = {json.dumps(included.as_posix(), ensure_ascii=False)}\n",
+            encoding="utf-8",
+        )
+        context = self.context(run=subprocess.run, GIT_CONFIG_GLOBAL=str(config))
+        before = snapshot(self.root)
+        self.assertEqual([], install.check_git_longpaths(context))
+        self.assertEqual([], install.apply_git_longpaths(context))
+        self.assertEqual(before, snapshot(self.root))
+
     def test_long_paths_converge_in_the_global_git_config(self):
         config = self.home / ".gitconfig"
         self.converge(step("Git long paths"), self.context(run=subprocess.run))

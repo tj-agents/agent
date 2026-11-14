@@ -31,6 +31,7 @@ GITHUB_SOURCE = re.compile(
 TRUSTED_OWNER = "tj-agents"
 RECEIPT = "codex-hook-trust.json"
 TIMEOUT = 45
+HOOK_LIST_BATCHES = 4
 
 
 def github_repository(source):
@@ -120,11 +121,34 @@ class AppServer:
                 raise RuntimeError(f"Codex {method} timed out") from error
             if message is None or isinstance(message, Exception):
                 raise RuntimeError(f"Codex app server stopped during {method}")
-            if message.get("id") != request_id:
+            if "method" in message or message.get("id") != request_id:
                 continue
             if "error" in message:
                 raise RuntimeError(f"Codex {method} failed: {message['error']}")
             return message["result"]
+
+    def requests(self, method, parameters):
+        pending = {}
+        for index, params in enumerate(parameters):
+            self.sequence += 1
+            pending[self.sequence] = index
+            self.send({"id": self.sequence, "method": method, "params": params})
+        results = [None] * len(pending)
+        deadline = time.monotonic() + self.timeout
+        while pending:
+            try:
+                message = self.messages.get(timeout=max(0, deadline - time.monotonic()))
+            except queue.Empty as error:
+                raise RuntimeError(f"Codex {method} timed out") from error
+            if message is None or isinstance(message, Exception):
+                raise RuntimeError(f"Codex app server stopped during {method}")
+            request_id = message.get("id")
+            if "method" in message or request_id not in pending:
+                continue
+            if "error" in message:
+                raise RuntimeError(f"Codex {method} failed: {message['error']}")
+            results[pending.pop(request_id)] = message["result"]
+        return results
 
     def __enter__(self):
         try:
@@ -482,14 +506,36 @@ def untrusted(listing):
     return found
 
 
+def list_installed_hooks(server, cwds):
+    size = len(cwds) if len(cwds) <= HOOK_LIST_BATCHES else (
+        len(cwds) + HOOK_LIST_BATCHES - 1
+    ) // HOOK_LIST_BATCHES
+    requests = [{"cwds": [str(cwd) for cwd in cwds[index:index + size]]}
+                for index in range(0, len(cwds), size)]
+    listings = ([server.request("hooks/list", requests[0])] if len(requests) == 1
+                else server.requests("hooks/list", requests))
+    entries = []
+    for request, listing in zip(requests, listings, strict=True):
+        data = listing.get("data")
+        if not isinstance(data, list) or len(data) != len(request["cwds"]):
+            raise RuntimeError("Codex hook inventory is incomplete")
+        if any(not isinstance(entry, dict) or not isinstance(entry.get("cwd"), str)
+               or Path(entry["cwd"]).resolve() != Path(cwd).resolve()
+               for entry, cwd in zip(data, request["cwds"], strict=True)):
+            raise RuntimeError("Codex hook inventory does not match requested directories")
+        entries.extend(data)
+    if any(entry.get("errors") for entry in entries):
+        raise RuntimeError("Codex could not load all hook definitions")
+    return {"data": entries}
+
+
 def trust_installed(executable, state, launch_args=(), timeout=TIMEOUT):
     """Trust the hooks of every installed tj-agents plugin, in every project Codex trusts."""
     hooks = published_hooks()
     cwds = [Path.home().resolve(), *projects.trusted(projects.user_config())]
-    request = {"cwds": [str(cwd) for cwd in cwds]}
     updates = {}
     with AppServer(executable, cwds[0], launch_args, timeout=timeout) as server:
-        listing = server.request("hooks/list", request)
+        listing = list_installed_hooks(server, cwds)
         rows = {}
         for cwd, hook in untrusted(listing):
             if hook["pluginId"] not in rows:
@@ -504,7 +550,7 @@ def trust_installed(executable, state, launch_args=(), timeout=TIMEOUT):
                 "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
                 "reloadUserConfig": True,
             })
-            listing = server.request("hooks/list", request)
+            listing = list_installed_hooks(server, cwds)
         remaining = sorted({hook["key"] for _, hook in untrusted(listing)})
         if remaining:
             raise RuntimeError("tj-agents hooks are still not trusted: " + ", ".join(remaining))
