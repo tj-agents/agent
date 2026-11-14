@@ -39,7 +39,6 @@ class StartOptions:
     prompt: str
 
 
-
 def inside_wsl() -> bool:
     # platform.release() queries WMI on Windows, which can hang.
     if sys.platform == "win32":
@@ -47,6 +46,7 @@ def inside_wsl() -> bool:
     else:
         inside = "microsoft" in os.uname().release.lower()
     return inside
+
 
 def native_id(value: object) -> str:
     if isinstance(value, str):
