@@ -10,6 +10,7 @@ import plugin_update
 import pytest
 from fake_machine import (
     claude_payload,
+    claude_plugin_arguments,
     commit_plugin,
     environment,
     git_subdir,
@@ -66,6 +67,7 @@ def test_current_repository_plugins_install_nothing(
     commands: list[list[str]] = []
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = claude_plugin_arguments(command)
         commands.append(command)
         return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -101,6 +103,7 @@ def test_update_changes_only_the_stale_applicable_scope(
     commands: list[list[str]] = []
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = claude_plugin_arguments(command)
         commands.append(command)
         if command[:3] == ["claude", "plugin", "update"]:
             update_claude_plugin(home, command)
@@ -153,6 +156,7 @@ def test_distinct_plugins_update_concurrently(
     together = threading.Barrier(2, timeout=10)
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = claude_plugin_arguments(command)
         if command[:3] == ["claude", "plugin", "update"]:
             together.wait()
             update_claude_plugin(home, command)
@@ -170,6 +174,7 @@ def test_an_update_that_misses_its_pin_fails(
     home = stale_plugins(tmp_path, monkeypatch)
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = claude_plugin_arguments(command)
         if command[:3] == ["claude", "plugin", "update"] and "rust" not in command[3]:
             update_claude_plugin(home, command)
         return subprocess.CompletedProcess(command, 0, "{}", "")
@@ -202,6 +207,7 @@ def test_a_torn_payload_at_its_pin_is_reinstalled_only_when_enabled(
     commands: list[list[str]] = []
 
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = claude_plugin_arguments(command)
         commands.append(command)
         if command[:3] == ["claude", "plugin", "install"]:
             claude_payload(torn, "python")
@@ -221,7 +227,22 @@ def test_a_torn_payload_at_its_pin_is_reinstalled_only_when_enabled(
             "user",
             "--json",
             "-y",
-        ]
+        ],
+        *(
+            [
+                [
+                    "claude",
+                    "plugin",
+                    "disable",
+                    "python@tj-agents",
+                    "--scope",
+                    "user",
+                    "--json",
+                ]
+            ]
+            if enabled
+            else []
+        ),
     ]
 
 
@@ -272,6 +293,7 @@ def native_commands(monkeypatch: pytest.MonkeyPatch, home: Path) -> list[list[st
     def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
         if command[0] == "git":
             return REAL_RUN(command, **options)  # type: ignore[arg-type]
+        command = claude_plugin_arguments(command)
         commands.append(command)
         if command[:3] == ["claude", "plugin", "install"]:
             registry = json.loads(
@@ -345,7 +367,8 @@ def test_a_registered_plugin_without_its_payload_is_installed_natively(
     assert update_plugins("claude") == 0
 
     assert commands == [
-        [*NATIVE_INSTALL, "rust@tj-agents", "--scope", "user", "--json", "-y"]
+        [*NATIVE_INSTALL, "rust@tj-agents", "--scope", "user", "--json", "-y"],
+        ["claude", "plugin", "disable", "rust@tj-agents", "--scope", "user", "--json"],
     ]
     assert (missing / ".claude-plugin/plugin.json").is_file()
 

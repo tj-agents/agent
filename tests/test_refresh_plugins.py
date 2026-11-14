@@ -20,6 +20,7 @@ from codex import launch as codex_launch
 from fake_machine import (
     CodexPlugins,
     claude_payload,
+    claude_plugin_arguments,
     environment,
     install_plugin,
     pin_plugin,
@@ -142,6 +143,7 @@ class RefreshPluginsTests(unittest.TestCase):
         self.install("base", "a" * 40, "c" * 40)
 
         def run(command, **_kwargs):
+            command = claude_plugin_arguments(command)
             if command[:3] == ["claude", "plugin", "update"]:
                 if "agent@tj-agents" in command:
                     return completed(1, "", "update failed")
@@ -151,7 +153,9 @@ class RefreshPluginsTests(unittest.TestCase):
         with mock.patch.object(process, "run", side_effect=run) as spawned:
             outcome = plugin_update.update(Host.CLAUDE, Digests(self.state))
         self.assertEqual(["claude: agent@tj-agents: update failed"], outcome.failures)
-        commands = [call.args[0] for call in spawned.call_args_list]
+        commands = [
+            claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list
+        ]
         self.assertIn(
             [
                 "claude",
@@ -198,12 +202,15 @@ class RefreshPluginsTests(unittest.TestCase):
         )
 
         def run(command, **_kwargs):
+            command = claude_plugin_arguments(command)
             return completed(0)
 
         with mock.patch.object(process, "run", side_effect=run) as spawned:
             outcome = plugin_update.update(Host.CLAUDE, Digests(self.state))
         self.assertEqual([], outcome.failures)
-        commands = [call.args[0] for call in spawned.call_args_list]
+        commands = [
+            claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list
+        ]
         updates = sorted(
             command
             for command in commands
@@ -248,6 +255,7 @@ class RefreshPluginsTests(unittest.TestCase):
         )
 
         def run(command, **_kwargs):
+            command = claude_plugin_arguments(command)
             if command[:3] == ["codex", "plugin", "list"]:
                 return completed(0, inventory.listing())
             if command[:3] == ["codex", "plugin", "add"]:
@@ -257,7 +265,9 @@ class RefreshPluginsTests(unittest.TestCase):
         with mock.patch.object(process, "run", side_effect=run) as spawned:
             outcome = plugin_update.update(Host.CODEX, Digests(self.state))
         self.assertEqual([], outcome.failures)
-        commands = [call.args[0] for call in spawned.call_args_list]
+        commands = [
+            claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list
+        ]
         command_fn = codex_installed.codex_command
         self.assertEqual(
             [
@@ -287,6 +297,7 @@ class RefreshPluginsTests(unittest.TestCase):
         self.install("base", "b" * 40, "c" * 40)
 
         def run(command, **_kwargs):
+            command = claude_plugin_arguments(command)
             if command[:3] == ["claude", "plugin", "update"]:
                 update_claude_plugin(self.claude_home, command)
             return completed(0, "[]")
@@ -295,9 +306,10 @@ class RefreshPluginsTests(unittest.TestCase):
             outcome = plugin_update.update(Host.CLAUDE, Digests(self.state))
         self.assertEqual([], outcome.failures)
         updates = [
-            call.args[0]
+            claude_plugin_arguments(call.args[0])
             for call in spawned.call_args_list
-            if call.args[0][:3] == ["claude", "plugin", "update"]
+            if claude_plugin_arguments(call.args[0])[:3]
+            == ["claude", "plugin", "update"]
         ]
         self.assertEqual(
             [
@@ -332,6 +344,7 @@ class RefreshPluginsTests(unittest.TestCase):
         )
 
         def run(command, **_kwargs):
+            command = claude_plugin_arguments(command)
             if command[:3] == ["codex", "plugin", "list"]:
                 return completed(0, inventory.listing())
             if command[:3] == ["codex", "plugin", "add"]:
@@ -488,6 +501,7 @@ def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None
     inventory = CodexPlugins(tmp_path / "codex", {"personal@tj-agents": "local"})
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = claude_plugin_arguments(command)
         if command[:3] == ["claude", "plugin", "update"]:
             update_claude_plugin(claude, command)
         if command[:3] == ["codex", "plugin", "list"]:
@@ -503,7 +517,9 @@ def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None
         state = Digests(tmp_path / "state")
         assert not plugin_update.update(Host.CLAUDE, state).failures
         assert not plugin_update.update(Host.CODEX, state).failures
-    commands = [call.args[0] for call in spawned.call_args_list]
+    commands = [
+        claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list
+    ]
     assert {command[0] for command in commands} == {"claude", "codex"}
     assert not [command for command in commands if "converge" in command]
 
@@ -567,7 +583,11 @@ def daemon_refresh(
         mock.patch.object(process, "run", side_effect=run) as spawned,
     ):
         outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"))
-    return outcome, [call.args[0] for call in spawned.call_args_list], trusted
+    return (
+        outcome,
+        [claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list],
+        trusted,
+    )
 
 
 def test_open_codex_sessions_install_through_the_daemon(
@@ -968,7 +988,9 @@ def test_only_a_marketplace_clone_behind_its_remote_needs_an_upgrade(
         for marketplace in ("tj-agents", "agents"):
             clone = plugin_update.INSTALLED[host].marketplace_root(marketplace)
             subprocess.run(
-                [*git, "clone", "-q", str(remote), str(clone)], env=variables, check=True
+                [*git, "clone", "-q", str(remote), str(clone)],
+                env=variables,
+                check=True,
             )
         subprocess.run(
             [*git, "-C", str(remote), "commit", "-q", "--allow-empty", "-m", "next"],
