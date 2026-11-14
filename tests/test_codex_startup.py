@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import subprocess
 import uuid
@@ -32,6 +33,7 @@ class Native:
     result_id: object = THREAD
     model: str = "fixture-model"
     effort: str = "high"
+    status: str = "idle"
 
     def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
         self.events.append((method, params))
@@ -48,6 +50,14 @@ class Native:
             }
         if method in {"thread/name/set", "thread/archive"}:
             return {}
+        if method == "thread/read":
+            return {
+                "thread": {
+                    "id": THREAD,
+                    "path": str(self.directory / "rollout.jsonl"),
+                    "status": {"type": self.status},
+                }
+            }
         pytest.fail(f"Unexpected native request: {method}")
 
     @contextmanager
@@ -79,6 +89,19 @@ def no_live_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Native:
     fake = Native(tmp_path, projects={str(tmp_path): {"trust_level": "trusted"}})
+    (tmp_path / "rollout.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "turn_context",
+                "payload": {
+                    "model": "fixture-model",
+                    "collaboration_mode": {"settings": {"reasoning_effort": "high"}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
         fake.events.append(command)
@@ -126,6 +149,12 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
             str(native.directory),
             "resume",
             THREAD,
+            "--model",
+            "fixture-model",
+            "-c",
+            "model_reasoning_effort=high",
+            "--remote",
+            "unix://",
             "--",
             'Read "file"; $value λ',
         ),
@@ -152,7 +181,6 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
         ("thread/name/set", {"threadId": THREAD, "name": "Actual title"}),
         "disconnect",
     ]
-    assert "-c" not in prepared.command and "--model" not in prepared.command
 
 
 @pytest.mark.parametrize("trust", [None, {}, {"trust_level": "untrusted"}])
@@ -227,6 +255,136 @@ def test_prepare_rejects_changed_model_before_resume(native: Native) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("model", "effort"),
+    [("other", "high"), ("fixture-model", "low"), ("fixture-model", None)],
+)
+def test_confirm_rejects_first_turn_settings_even_after_correct_thread_creation(
+    native: Native,
+    model: str,
+    effort: str | None,
+) -> None:
+    prepared = prepare(native)
+    (native.directory / "rollout.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "turn_context",
+                "payload": {
+                    "model": model,
+                    "collaboration_mode": {"settings": {"reasoning_effort": effort}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    arguments = launch.start_arguments(
+        native.directory, "Title", "Prompt", "fixture-model", "high"
+    )
+    with pytest.raises(LaunchError, match="first turn used"):
+        startup.confirm(prepared, arguments)
+
+
+def test_confirm_rejects_a_correct_turn_running_outside_the_shared_daemon(
+    native: Native,
+) -> None:
+    prepared = prepare(native)
+    native.status = "notLoaded"
+    arguments = launch.start_arguments(
+        native.directory, "Title", "Prompt", "fixture-model", "high"
+    )
+    with pytest.raises(LaunchError, match="not attached to the shared daemon"):
+        startup.confirm(prepared, arguments)
+
+
+def test_confirm_waits_for_first_turn_and_ignores_partial_record(
+    native: Native,
+) -> None:
+    prepared = prepare(native)
+    path = native.directory / "rollout.jsonl"
+    record = path.read_text(encoding="utf-8")
+    path.write_text('{"type":', encoding="utf-8")
+    waits: list[float] = []
+
+    def wait(seconds: float) -> None:
+        waits.append(seconds)
+        path.write_text(record, encoding="utf-8")
+
+    arguments = launch.start_arguments(
+        native.directory, "Title", "Prompt", "fixture-model", "high"
+    )
+    startup.confirm(prepared, arguments, clock=lambda: 0, wait=wait)
+    assert waits == [0.5]
+
+
+def test_confirm_times_out_without_claiming_an_unstarted_turn(native: Native) -> None:
+    prepared = prepare(native)
+    (native.directory / "rollout.jsonl").unlink()
+    arguments = launch.start_arguments(
+        native.directory, "Title", "Prompt", "fixture-model", "high"
+    )
+    with pytest.raises(LaunchTimeout, match="did not record its first turn"):
+        startup.confirm(prepared, arguments, timeout=0, clock=lambda: 0)
+
+
+def test_confirm_checks_first_turn_instead_of_a_later_corrected_turn(
+    native: Native,
+) -> None:
+    path = native.directory / "rollout.jsonl"
+    path.write_text(
+        '{"type":"turn_context","payload":{"model":"wrong"}}\n'
+        + path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    prepared = prepare(native)
+    arguments = launch.start_arguments(
+        native.directory, "Title", "Prompt", "fixture-model", "high"
+    )
+    with pytest.raises(LaunchError, match="first turn used model='wrong'"):
+        startup.confirm(prepared, arguments)
+
+
+def test_launch_reports_first_turn_mismatch_and_preserves_the_running_session(
+    native: Native,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (native.directory / "rollout.jsonl").write_text(
+        '{"type":"turn_context","payload":{"model":"wrong"}}\n', encoding="utf-8"
+    )
+    monkeypatch.setattr(agent_cli, "host_launch", lambda _: launch)
+    monkeypatch.setattr(shutil, "which", lambda name: name)
+    monkeypatch.setattr(
+        agent_cli, "open_tab", lambda *args, **kwargs: args[6](["terminal"])
+    )
+    monkeypatch.setattr(
+        agent_cli,
+        "await_launch",
+        lambda launch_id, **kwargs: {
+            "launch": {"state": "active"},
+            "session": {"session": f"codex:{THREAD}", "launch_id": launch_id},
+        },
+    )
+    monkeypatch.setattr(
+        agent_store, "run", lambda *args: {"launch": {"state": "active"}}
+    )
+    arguments = launch.start_arguments(
+        native.directory, "Title", "Prompt", "fixture-model", "high"
+    )
+    call_launch = cast(Callable[..., dict[str, object]], agent_cli.launch)
+    with pytest.raises(LaunchError, match="first turn used model='wrong'"):
+        call_launch(
+            Host.CODEX,
+            native.directory,
+            "Title",
+            arguments,
+            run=lambda *args, **kwargs: None,
+        )
+    assert not any(
+        isinstance(event, tuple) and event[0] == "thread/archive"
+        for event in native.events
+    )
+
+
 def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> None:
     prepared = startup.prepare(
         native.directory,
@@ -236,6 +394,7 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
         "fixture-codex",
     )
     startup.abandon(prepared, "new-launch", False)
+    startup.confirm(prepared, [])
     assert prepared.command == (
         "fixture-codex",
         "--cd",
@@ -279,12 +438,18 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
     call_launch(Host.CODEX, native.directory, "Actual title", arguments, run=run)
     command = commands[0]
     assert command[command.index("--session") + 1] == f"codex:{THREAD}"
-    assert command[-7:] == [
+    assert command[-13:] == [
         "fixture-codex",
         "--cd",
         str(native.directory),
         "resume",
         THREAD,
+        "--model",
+        "fixture-model",
+        "-c",
+        "model_reasoning_effort=high",
+        "--remote",
+        "unix://",
         "--",
         prompt,
     ]
