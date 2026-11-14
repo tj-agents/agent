@@ -211,3 +211,20 @@ def test_claude_permission_flag_reaches_native_cli(launcher: Launcher) -> None:
     code, _, err = launcher.run("--lane", "L4", "--dangerously-skip-permissions")
     assert code == 0, err
     assert launcher.launch.call_args.args[3][0] == "--dangerously-skip-permissions"
+
+
+def test_claude_prepared_tab_keeps_lane_model_and_effort(
+    launcher: Launcher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if launcher.host != Host.CLAUDE:
+        return
+    adapter = launcher.cli.host_launch(Host.CLAUDE)
+    monkeypatch.setattr(adapter, "executable", lambda: "native-claude")
+    code, _, err = launcher.run("--lane", "L2")
+    assert code == 0, err
+    host, directory, title, arguments = launcher.launch.call_args.args
+    prepared = adapter.prepare(directory, title, arguments, "tj")
+    entry = launcher.cli.resolve_lane(host, lane="L2")
+    assert prepared.command[prepared.command.index("--model") + 1] == entry["model"]
+    assert prepared.command[prepared.command.index("--effort") + 1] == entry["effort"]
