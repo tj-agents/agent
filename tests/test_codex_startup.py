@@ -663,7 +663,8 @@ def test_start_daemon_opens_a_terminal_tab_when_the_callers_job_refuses_it(
         "fixture-codex", tmp_path, clock=lambda: 0.0, wait=waits.append
     )
     tab = ["C:/bin/wt.exe", "-w", "0", "nt", "--title", "Codex daemon"]
-    assert calls[1] == [*tab, "fixture-codex", "app-server", "daemon", "start"]
+    detached = ["cmd.exe", "/d", "/c", "fixture-codex", "app-server", "daemon", "start"]
+    assert calls[1] == [*tab, *detached, ">", "NUL", "2>&1"]
     assert [call[-1] for call in calls[2:]] == ["version", "version", "version"]
     assert waits == [1, 1]
 
