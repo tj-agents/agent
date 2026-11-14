@@ -9,6 +9,7 @@ import jobs
 import plugin_update
 import pytest
 from codex import catalog, launch, plugins
+from codex import installed as codex_installed
 from fake_machine import commit_plugin, git_subdir
 from tj_agent.host import Host
 from tj_cli import process
@@ -137,8 +138,12 @@ def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) ->
             installed(home, "b" * 12)
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    with mock.patch.object(process, "run", side_effect=run) as native:
+    with (
+        mock.patch.object(process, "run", side_effect=run) as native,
+        mock.patch.object(codex_installed, "activate") as activate,
+    ):
         assert update_plugins("codex") == 0
+        activate.assert_called_once()
         assert (
             sum(
                 call.args[0][:3] == ["codex", "plugin", "add"]
@@ -467,3 +472,38 @@ def test_a_direct_replacement_that_cannot_verify_is_reported_and_left_native(
         "agent plugin with a usable version label; using native install"
     ) in capsys.readouterr().err
     assert [build.name for build in previous.parent.iterdir()] == ["a" * 12]
+
+
+def test_a_project_only_plugin_updated_outside_any_project_converges(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = publish(home, "b" * 40, "b" * 12)
+    installed(home, "a" * 12)
+    config = home / "config.toml"
+    config.write_text("", encoding="utf-8")
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        # Outside a project Codex lists only plugins the user config enables.
+        if command[:3] == ["codex", "plugin", "list"]:
+            listed = [entry] if "agent@tj-agents" in config.read_text("utf-8") else []
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps({"installed": listed}), ""
+            )
+        if command[:4] == ["codex", "plugin", "marketplace", "list"]:
+            root = home / ".tmp/marketplaces/tj-agents"
+            listing = {"marketplaces": [{"name": "tj-agents", "root": str(root)}]}
+            return subprocess.CompletedProcess(command, 0, json.dumps(listing), "")
+        if command[:3] == ["codex", "plugin", "add"]:
+            for build in (home / "plugins/cache/tj-agents/agent").iterdir():
+                build.rename(home / build.name)
+            installed(home, "b" * 12)
+            config.write_text(
+                '[plugins."agent@tj-agents"]\nenabled = true\n', encoding="utf-8"
+            )
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(process, "run", run)
+
+    assert update_plugins("codex") == 0
+    assert config.read_text(encoding="utf-8") == ""
+    assert converged(home)

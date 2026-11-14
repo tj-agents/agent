@@ -22,6 +22,11 @@ def marketplace_at_a_known_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def marketplaces_behind_their_remotes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(plugin_update, "behind_remote", lambda *_arguments: True)
+
+
 @pytest.fixture
 def plugin_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A local git repository of plugin sources; git ignores machine configuration."""
