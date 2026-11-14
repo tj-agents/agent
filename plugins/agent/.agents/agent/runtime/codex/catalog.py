@@ -35,9 +35,13 @@ def source_identity(source: Mapping[str, object], base: Path | None = None) -> s
     return json.dumps(normalized, sort_keys=True)
 
 
-def sources(marketplace: str) -> dict[str, str]:
-    clone = Host.CODEX.configuration_root / ".tmp/marketplaces" / marketplace
-    path = clone / ".agents/plugins/marketplace.json"
+def clone(marketplace: str) -> Path:
+    return Path(Host.CODEX.configuration_root) / ".tmp/marketplaces" / marketplace
+
+
+def declared(marketplace: str) -> dict[str, dict[str, object]]:
+    """Each plugin's source exactly as the marketplace clone's manifest declares it."""
+    path = clone(marketplace) / ".agents/plugins/marketplace.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -50,8 +54,16 @@ def sources(marketplace: str) -> dict[str, str]:
             continue
         name, source = entry.get("name"), entry.get("source")
         if isinstance(name, str) and isinstance(source, dict):
-            found[name] = source_identity(source, Path(clone))
+            found[name] = source
     return found
+
+
+def sources(marketplace: str) -> dict[str, str]:
+    base = clone(marketplace)
+    return {
+        name: source_identity(source, base)
+        for name, source in declared(marketplace).items()
+    }
 
 
 def recorded(state: Path) -> dict[str, Build]:
