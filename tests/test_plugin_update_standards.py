@@ -154,6 +154,26 @@ def test_an_interrupted_update_still_activates_on_the_next_call(
     assert report_commands == []
 
 
+def test_current_plugins_activate_once_per_marketplace_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(plugin_update, "already_current", lambda *args: True)
+    monkeypatch.setattr(required_plugins, "check", lambda *args: None)
+    events: list[str] = []
+    monkeypatch.setattr(
+        codex_installed, "activate", lambda *args: events.append("activated")
+    )
+    for revision in ("a" * 40, "a" * 40, "b" * 40):
+        monkeypatch.setattr(
+            plugin_update, "marketplace_revision", lambda *_, at=revision: at
+        )
+        assert not plugin_update.update(
+            Host.CODEX, Digests(tmp_path / "state")
+        ).failures
+    assert events == ["activated", "activated"]
+
+
 def test_a_liveness_check_failure_is_reported_until_it_answers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report_commands: list[list[str]]
 ) -> None:

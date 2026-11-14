@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -19,12 +20,23 @@ def repository(directory: Path) -> Path | None:
 
 
 def applies(directory: Path, scope: str, owner: str | None) -> bool:
-    if scope == "user":
-        return True
-    if scope not in {"project", "local"} or not isinstance(owner, str) or not owner:
-        return False
+    return matcher(directory)(scope, owner)
+
+
+def matcher(directory: Path) -> Callable[[str, str | None], bool]:
+    """`applies` for one directory, resolving each owner's repository once."""
     common = repository(directory)
-    owner_common = repository(Path(owner))
-    if common is not None and owner_common is not None:
-        return common == owner_common
-    return directory.resolve().is_relative_to(Path(owner).resolve())
+    owners: dict[str, Path | None] = {}
+
+    def applies_here(scope: str, owner: str | None) -> bool:
+        if scope == "user":
+            return True
+        if scope not in {"project", "local"} or not isinstance(owner, str) or not owner:
+            return False
+        if owner not in owners:
+            owners[owner] = repository(Path(owner))
+        if common is not None and owners[owner] is not None:
+            return common == owners[owner]
+        return directory.resolve().is_relative_to(Path(owner).resolve())
+
+    return applies_here
