@@ -243,6 +243,36 @@ def replace_build(identity: str, payload: Path, retired: Path) -> str:
     return version
 
 
+def inventory(
+    report: Any, label: str, marketplaces: Collection[str]
+) -> list[dict[str, object]] | None:
+    entries = []
+    for marketplace in marketplaces:
+        listing = report.step(
+            HOST,
+            f"{label} {marketplace}",
+            codex_command("plugin", "list", "--marketplace", marketplace, "--json"),
+        )
+        if listing is None:
+            return None
+        try:
+            rows = json.loads(listing.stdout)["installed"]
+            if not isinstance(rows, list) or any(
+                not isinstance(row, dict)
+                or not isinstance(row.get("pluginId"), str)
+                or not isinstance(row.get("marketplaceName"), str)
+                for row in rows
+            ):
+                raise ValueError("installed must be a list of plugin objects")
+            entries.extend(
+                row for row in rows if row.get("marketplaceName") == marketplace
+            )
+        except (ValueError, KeyError, TypeError) as error:
+            report.fail(HOST, f"{label} {marketplace}", f"unreadable listing: {error}")
+            return None
+    return entries
+
+
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
@@ -252,15 +282,29 @@ def refresh(
     ):
         trust_hooks(report)
         return
-    listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
-    if listing is None:
+    cached_plugins = cached(marketplaces)
+    try:
+        user_enabled = user_plugins.enabled(read_user_config())
+        selected = set(
+            required_plugins.selected(required_plugins.project_root(Path.cwd()))
+        )
+    except (OSError, ValueError, required_plugins.RequiredPluginsError) as error:
+        report.fail(HOST, "list", str(error))
+        return
+    selected.update(refresh_identities(marketplaces), cached_plugins, user_enabled)
+    selected_marketplaces = tuple(
+        marketplace
+        for marketplace in marketplaces
+        if marketplace == required_plugins.MARKETPLACE_NAME
+        or any(identity.rpartition("@")[2] == marketplace for identity in selected)
+    )
+    entries = inventory(report, "list", selected_marketplaces)
+    if entries is None:
         return
     listed = {
-        row["pluginId"]
-        for row in json.loads(listing.stdout)["installed"]
-        if row["marketplaceName"] in marketplaces
+        identity for row in entries if isinstance(identity := row.get("pluginId"), str)
     }
-    candidates = listed | cached(marketplaces)
+    candidates = listed | cached_plugins
     if required_plugins.MARKETPLACE_NAME in marketplaces and not any(
         identity.endswith("@" + required_plugins.MARKETPLACE_NAME)
         for identity in candidates
@@ -269,10 +313,6 @@ def refresh(
             HOST, "list", f"no {required_plugins.MARKETPLACE_NAME} plugins installed"
         )
         return
-    versions = report.step(HOST, "versions", codex_command("plugin", "list", "--json"))
-    if versions is None:
-        return
-    entries = json.loads(versions.stdout)["installed"]
     catalog.remember(entries)
     unlisted = candidates - listed
     try:
@@ -292,7 +332,6 @@ def refresh(
     ]
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
-    user_enabled = user_plugins.enabled(read_user_config())
     open_sessions = bool(stale) and bool(launch.liveness())
     if open_sessions:
         install_through_daemon(report, stale)
@@ -302,15 +341,13 @@ def refresh(
     # Codex lists a plugin only where it is enabled, so verify while `plugin add`'s
     # user-level enablement still holds, before project-only plugins lose it.
     if stale and not report.failures:
-        refreshed = report.step(
-            HOST, "installed versions", codex_command("plugin", "list", "--json")
+        refreshed = inventory(
+            report,
+            "installed versions",
+            tuple(dict.fromkeys(identity.rpartition("@")[2] for identity in stale)),
         )
         if refreshed is not None:
-            verified = [
-                entry
-                for entry in json.loads(refreshed.stdout)["installed"]
-                if entry.get("pluginId") in stale
-            ]
+            verified = [entry for entry in refreshed if entry.get("pluginId") in stale]
             catalog.remember(
                 verified,
                 verified_install=True,
