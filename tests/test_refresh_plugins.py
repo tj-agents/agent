@@ -31,6 +31,7 @@ from tj_cli import process
 from tree_digest import Digests
 
 READ_MARKETPLACE_REVISION = plugin_update.marketplace_revision
+BEHIND_REMOTE = plugin_update.behind_remote
 
 
 HOSTS = {host.value: host for host in Host}
@@ -875,3 +876,35 @@ def test_the_published_revision_is_the_marketplace_clone_commit(
             check=True,
         ).stdout.strip()
         assert READ_MARKETPLACE_REVISION(host) == head
+
+
+@pytest.mark.parametrize("host", list(Host))
+def test_only_a_marketplace_clone_behind_its_remote_needs_an_upgrade(
+    host: Host, tmp_path: Path
+) -> None:
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    git += ["-c", "commit.gpgsign=false"]
+    variables = without_git_config(dict(os.environ))
+    remote = tmp_path / "remote"
+    for command in (
+        ["init", "-q", str(remote)],
+        ["-C", str(remote), "commit", "-q", "--allow-empty", "-m", "pins"],
+    ):
+        subprocess.run([*git, *command], env=variables, check=True)
+    with _patched_homes(tmp_path):
+        assert BEHIND_REMOTE(host, "tj-agents")
+        for marketplace in ("tj-agents", "agents"):
+            clone = plugin_update.INSTALLED[host].marketplace_root(marketplace)
+            subprocess.run(
+                [*git, "clone", "-q", str(remote), str(clone)], env=variables, check=True
+            )
+        subprocess.run(
+            [*git, "-C", str(remote), "commit", "-q", "--allow-empty", "-m", "next"],
+            env=variables,
+            check=True,
+        )
+        subprocess.run(
+            [*git, "-C", str(clone), "pull", "-q"], env=variables, check=True
+        )
+        assert BEHIND_REMOTE(host, "tj-agents")
+        assert not BEHIND_REMOTE(host, "agents")

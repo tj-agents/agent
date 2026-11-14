@@ -9,6 +9,7 @@ import jobs
 import plugin_update
 import pytest
 from codex import catalog, launch, plugins
+from codex import installed as codex_installed
 from fake_machine import commit_plugin, git_subdir
 from tj_agent.host import Host
 from tj_cli import process
@@ -137,8 +138,12 @@ def test_a_codex_only_update_converges_to_the_new_catalog_version(home: Path) ->
             installed(home, "b" * 12)
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    with mock.patch.object(process, "run", side_effect=run) as native:
+    with (
+        mock.patch.object(process, "run", side_effect=run) as native,
+        mock.patch.object(codex_installed, "activate") as activate,
+    ):
         assert update_plugins("codex") == 0
+        activate.assert_called_once()
         assert (
             sum(
                 call.args[0][:3] == ["codex", "plugin", "add"]
