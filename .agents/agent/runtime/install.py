@@ -1329,18 +1329,16 @@ def apply_plugin_setup(context: Context) -> list[str]:
     return []
 
 
-SCOPED_MARKETPLACE = "@tj-agents"
+# Codex ships these marketplaces as part of the app; every other plugin, from any
+# marketplace, loads only where a repository enables it.
+CODEX_BUILT_IN_MARKETPLACES = ("@openai-bundled", "@openai-primary-runtime")
 
 
 def claude_user_enabled(context: Context) -> list[str]:
     enabled = read_json(context.claude_home / "settings.json").get("enabledPlugins")
     if not isinstance(enabled, dict):
         return []
-    return sorted(
-        identity
-        for identity, value in enabled.items()
-        if identity.endswith(SCOPED_MARKETPLACE) and value is True
-    )
+    return sorted(identity for identity, value in enabled.items() if value is True)
 
 
 def codex_user_enabled(context: Context) -> list[str]:
@@ -1349,12 +1347,12 @@ def codex_user_enabled(context: Context) -> list[str]:
     return sorted(
         identity
         for identity in codex_user_plugins.enabled(text)
-        if identity.endswith(SCOPED_MARKETPLACE)
+        if not identity.endswith(CODEX_BUILT_IN_MARKETPLACES)
     )
 
 
 def check_plugin_scope(context: Context) -> list[str]:
-    """tj-agents plugins load only where a repository selects them, never for every project."""
+    """Plugins load only where a repository selects them, never for every project."""
     return [
         f"stop enabling {identity} for every {host} project"
         for host, identities in (
