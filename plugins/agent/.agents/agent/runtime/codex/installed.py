@@ -299,15 +299,8 @@ def refresh(
     else:
         for identity in stale:
             report.step(HOST, identity, codex_command("plugin", "add", identity))
-    keep_project_scope(
-        report,
-        [
-            identity
-            for identity in stale
-            if identity.endswith("@tj-agents") or identity not in user_enabled
-        ],
-    )
-    trust_hooks(report)
+    # Codex lists a plugin only where it is enabled, so verify while `plugin add`'s
+    # user-level enablement still holds, before project-only plugins lose it.
     if stale and not report.failures:
         refreshed = report.step(
             HOST, "installed versions", codex_command("plugin", "list", "--json")
@@ -336,6 +329,15 @@ def refresh(
                     HOST, identity, f"native installation did not converge: {cause}"
                 )
             digests.save()
+    keep_project_scope(
+        report,
+        [
+            identity
+            for identity in stale
+            if identity.endswith("@tj-agents") or identity not in user_enabled
+        ],
+    )
+    trust_hooks(report)
 
 
 def cached(marketplaces: tuple[str, ...]) -> set[str]:
