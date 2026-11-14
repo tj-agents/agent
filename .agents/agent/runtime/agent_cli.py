@@ -378,6 +378,7 @@ def launch(
             host, directory, title, prepared, tj, launch_id, item, parent, want_session,
             cleared, forced, environ, dispatch, tmux_session,
         )
+        adapter.confirm(prepared, arguments)
         completed = True
         return shown
     finally:
