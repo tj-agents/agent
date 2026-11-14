@@ -133,8 +133,9 @@ Every agent tab is a Windows Terminal or tmux tab whose root process is `tj run`
 hook then binds the native session to that launch, so the session inherits its title, work item and parent,
 and a Codex thread is named after its title. Liveness always comes from the hosts:
 `claude agents --json`, and for Codex the threads loaded in the shared app-server daemon. Codex launches
-attach to that daemon and carry the lane's model and reasoning effort on the native resume command.
-Launch confirmation checks the first recorded turn against both requested settings; a mismatch or missing
+attach explicitly to that daemon with `--remote unix://` and carry the lane's model and reasoning effort
+on the native resume command. This keeps effort overrides from selecting an embedded server.
+Launch confirmation checks daemon attachment and the first recorded turn against both requested settings; a mismatch or missing
 first turn fails visibly and preserves the tab for inspection. The store holds links only. Its release is pinned in
 `.agents/agent/runtime/agent-store.json`, which Renovate bumps.
 

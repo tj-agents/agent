@@ -261,6 +261,8 @@ def prepare(
                     "resume",
                     thread_id,
                     *arguments[2:-1],
+                    "--remote",
+                    "unix://",
                     "--",
                     options.prompt,
                 ),
@@ -344,6 +346,27 @@ def confirm(
             f"Codex {thread_id} first turn used model={turn.get('model')!r}, "
             f"effort={effort!r}; requested model={options.model!r}, "
             f"effort={options.effort!r}. Check its tab before continuing"
+        )
+    try:
+        with connection(prepared.command[0], directory) as server:
+            response = server.request(
+                "thread/read", {"threadId": thread_id, "includeTurns": False}
+            )
+    except (OSError, ValueError, RuntimeError) as error:
+        raise LaunchError(
+            f"Cannot verify Codex daemon attachment for {thread_id}: {error}"
+        ) from error
+    thread = response.get("thread")
+    status = thread.get("status") if isinstance(thread, dict) else None
+    if (
+        not isinstance(thread, dict)
+        or thread.get("id") != thread_id
+        or not isinstance(status, dict)
+        or status.get("type") not in {"idle", "active"}
+    ):
+        raise LaunchError(
+            f"Codex {thread_id} first turn is not attached to the shared daemon; "
+            "check its tab"
         )
 
 
