@@ -443,23 +443,27 @@ def test_refresh_rechecks_pins_after_a_marketplace_moves(
     checks = []
 
     class Installed:
-        @staticmethod
-        def update_marketplaces(_report, marketplaces):
-            assert marketplaces == ("tj-agents",)
+        def __init__(self):
+            self.marketplaces = []
+            self.refreshes = []
+            self.activated = False
 
-        @staticmethod
-        def refresh(_report, marketplaces, _current):
-            assert marketplaces == plugin_update.MARKETPLACES
+        def update_marketplaces(self, _report, marketplaces):
+            self.marketplaces.append(marketplaces)
 
-        @staticmethod
-        def activate(_report):
-            return None
+        def refresh(self, _report, marketplaces, _current):
+            self.refreshes.append(marketplaces)
+
+        def activate(self, _report):
+            self.activated = True
+
+    installed = Installed()
 
     def current(_host: Host, _digests: Digests) -> bool:
-        checks.append("checked")
+        checks.append(tuple(installed.marketplaces))
         return len(checks) == 1
 
-    monkeypatch.setitem(plugin_update.INSTALLED, Host.CLAUDE, Installed())
+    monkeypatch.setitem(plugin_update.INSTALLED, Host.CLAUDE, installed)
     monkeypatch.setattr(plugin_update, "already_current", current)
     monkeypatch.setattr(
         plugin_update,
@@ -472,7 +476,9 @@ def test_refresh_rechecks_pins_after_a_marketplace_moves(
     outcome = plugin_update.update(Host.CLAUDE, Digests(tmp_path / "state"))
 
     assert not outcome.failures
-    assert checks == ["checked", "checked"]
+    assert checks == [(), (("tj-agents",),)]
+    assert installed.refreshes == [plugin_update.MARKETPLACES]
+    assert installed.activated
 
 
 def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None:
