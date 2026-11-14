@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -38,6 +37,15 @@ class StartOptions:
     model: str | None
     effort: str | None
     prompt: str
+
+
+def inside_wsl() -> bool:
+    # platform.release() queries WMI on Windows, which can hang.
+    if sys.platform == "win32":
+        inside = False
+    else:
+        inside = "microsoft" in os.uname().release.lower()
+    return inside
 
 
 def native_id(value: object) -> str:
@@ -241,10 +249,7 @@ def prepare(
                 "config/read", {"cwd": str(directory), "includeLayers": True}
             )
             permissions.require_project_trust(
-                document,
-                directory,
-                windows=os.name == "nt",
-                wsl="microsoft" in platform.release().lower(),
+                document, directory, windows=os.name == "nt", wsl=inside_wsl()
             )
             thread_id = create(server, directory, title, options.model, options.effort)
             prepared = PreparedLaunch(
