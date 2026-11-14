@@ -4,7 +4,6 @@ import argparse
 import importlib
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -13,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from enum import Enum
 from pathlib import Path
 
-from tj_cli import tool_receipts
+from tj_cli import host_os, tool_receipts
 from tj_cli.errors import TjCliError
 from tj_cli.native_install import default_bin_dir
 
@@ -91,7 +90,7 @@ class LinuxPackageManager(Enum):
 def pending(bin_dir: Path) -> str | None:
     path = bin_dir / RECEIPT
     receipt = tool_receipts.read(path)
-    expected_name = "handy.exe" if platform.system() == "Windows" else "handy"
+    expected_name = "handy.exe" if host_os.system() == "Windows" else "handy"
     if (
         receipt is None
         or len(receipt.hashes) != 1
@@ -292,7 +291,7 @@ def _linux_executable(manager: LinuxPackageManager, name: str) -> Path:
 
 def _install_linux(*, no_escalate: bool, env: Mapping[str, str]) -> Path:
     manager = _linux_package()
-    machine = platform.machine().lower()
+    machine = host_os.machine().lower()
     architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(machine, machine)
     if architecture not in manager.suffixes:
         raise HandyInstallError(f"unsupported Handy architecture: {machine}")
@@ -340,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--no-escalate", action="store_true")
     arguments = parser.parse_args(argv)
-    system = platform.system()
+    system = host_os.system()
     reason = None
     if os.environ.get("CI", "").lower() == "true":
         reason = "CI"

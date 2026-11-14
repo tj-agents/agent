@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import os
-import platform
 import re
 import shutil
 import stat
@@ -18,7 +17,7 @@ import zipfile
 from pathlib import Path
 from typing import BinaryIO, Final
 
-from tj_cli import tool_receipts
+from tj_cli import host_os, tool_receipts
 from tj_cli.errors import TjCliError
 
 VERSION = "0.2.0"
@@ -56,7 +55,7 @@ def default_bin_dir() -> Path:
     """Return the native CLI directory, honoring ``TJ_BIN_DIR`` when set."""
     if configured := os.environ.get("TJ_BIN_DIR"):
         return Path(configured).expanduser().resolve()
-    if platform.system() == "Windows":
+    if host_os.system() == "Windows":
         local_app_data = os.environ.get("LOCALAPPDATA")
         if not local_app_data:
             raise NativeInstallError(
@@ -169,15 +168,15 @@ def uninstall_native(directory: Path) -> tuple[str, ...]:
 
 
 def _binary_names() -> tuple[str, str]:
-    suffix = ".exe" if platform.system() == "Windows" else ""
+    suffix = ".exe" if host_os.system() == "Windows" else ""
     return (f"tj{suffix}", f"tj_hook{suffix}")
 
 
 def _asset_name() -> str:
-    system = platform.system()
-    if platform.machine().lower() not in {"amd64", "x86_64"}:
+    system = host_os.system()
+    if host_os.machine().lower() not in {"amd64", "x86_64"}:
         raise NativeInstallError(
-            f"unsupported native architecture: {platform.machine()}"
+            f"unsupported native architecture: {host_os.machine()}"
         )
     if system == "Windows":
         return "tj-x86_64-pc-windows-msvc.zip"
@@ -188,7 +187,7 @@ def _asset_name() -> str:
 
 def _is_executable(path: Path) -> bool:
     return path.is_file() and (
-        platform.system() == "Windows" or os.access(path, os.X_OK)
+        host_os.system() == "Windows" or os.access(path, os.X_OK)
     )
 
 
@@ -428,7 +427,7 @@ def _replace_pair(
         for name, binary in binaries.items():
             target = staged / name
             target.write_bytes(binary)
-            if platform.system() != "Windows":
+            if host_os.system() != "Windows":
                 target.chmod(0o755)
         tool_receipts.write(
             staged / RECEIPT,

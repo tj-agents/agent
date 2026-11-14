@@ -7,14 +7,13 @@ import io
 import json
 import os
 from pathlib import Path
-import platform
 import subprocess
 import tarfile
 import tempfile
 import urllib.request
 import zipfile
 
-from tj_cli import native_install, process
+from tj_cli import host_os, native_install, process
 
 REPOSITORY = "tj-agents/agent-store"
 PIN = Path(__file__).resolve().with_name("agent-store.json")
@@ -94,13 +93,13 @@ def current(pinned: str) -> str | None:
 
 
 def asset_name(version: str) -> str:
-    if platform.machine().lower() not in {"amd64", "x86_64"}:
-        raise AgentStoreError("unsupported", f"no agent-store release for {platform.machine()}")
+    if host_os.machine().lower() not in {"amd64", "x86_64"}:
+        raise AgentStoreError("unsupported", f"no agent-store release for {host_os.machine()}")
     if os.name == "nt":
         return f"agent-store-{version}-x86_64-pc-windows-msvc.zip"
-    if platform.system() == "Linux":
+    if host_os.system() == "Linux":
         return f"agent-store-{version}-x86_64-unknown-linux-musl.tar.gz"
-    raise AgentStoreError("unsupported", f"no agent-store release for {platform.system()}")
+    raise AgentStoreError("unsupported", f"no agent-store release for {host_os.system()}")
 
 
 def _download(url: str) -> bytes:
