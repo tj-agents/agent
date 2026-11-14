@@ -152,7 +152,7 @@ def marketplace_revision(host: Host) -> str | None:
 
 
 def behind_remote(host: Host, marketplace: str) -> bool:
-    """Whether this host's clone of `marketplace` may be behind its remote's default branch."""
+    """Whether this host's `marketplace` clone may be behind its remote HEAD."""
     root = str(INSTALLED[host].marketplace_root(marketplace))
     try:
         local = Report.run(["git", "-C", root, "rev-parse", "HEAD"])
