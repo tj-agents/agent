@@ -1782,13 +1782,26 @@ def test_plugin_scope_disables_every_user_plugin_but_codex_built_ins(
     assert calls == [
         [
             "claude",
+            "--setting-sources",
+            "user",
             "plugin",
             "disable",
             "clangd-lsp@claude-plugins-official",
             "--scope",
             "user",
+            "--json",
         ],
-        ["claude", "plugin", "disable", "python@tj-agents", "--scope", "user"],
+        [
+            "claude",
+            "--setting-sources",
+            "user",
+            "plugin",
+            "disable",
+            "python@tj-agents",
+            "--scope",
+            "user",
+            "--json",
+        ],
     ]
     codex = tomllib.loads((tmp_path / "codex/config.toml").read_text(encoding="utf-8"))
     assert codex == {
@@ -1811,7 +1824,7 @@ def test_plugin_scope_disables_a_dependency_after_the_plugin_requiring_it(
     calls: list[str] = []
 
     def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
-        identity = command[3]
+        identity = command[command.index("disable") + 1]
         calls.append(identity)
         if identity == "base@tj-agents" and "dotnet@tj-agents" in enabled:
             return subprocess.CompletedProcess(

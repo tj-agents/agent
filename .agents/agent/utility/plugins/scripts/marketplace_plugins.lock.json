@@ -1,6 +1,6 @@
 {
   "repository": "tj-agents/marketplace",
-  "revision": "efb6557f2c07616d54d874041bcf190ddbb163f7",
+  "revision": "ef09cff9e3bda47548242dd08255d88055b8e223",
   "marketplace": {
     "name": "tj-agents",
     "description": "Shared base, Agent Store, agent, CLI, workflow, engineering, documentation, C++, .NET, React, Neovim, Rust, Python, GitHub, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
@@ -9,227 +9,284 @@
       {
         "name": "base",
         "repository": "core",
-        "revision": "01eab1cf7cb6f3cc0a7a24be2d9770b8ac94eeb5"
+        "revision": "f856e6533fa7b8e2f063d9a6f9d44d38fd6ac32c",
+        "profile": "generic"
       },
       {
         "name": "agent-store",
         "repository": "agent",
-        "revision": "b354217d980a143516a3bd6029d60ffcc9ea3e7b",
+        "revision": "928d306bd661c3d79d47dbb7c17a757e99624592",
         "requires": [
           "base"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "agent",
         "repository": "agent",
-        "revision": "b354217d980a143516a3bd6029d60ffcc9ea3e7b",
+        "revision": "928d306bd661c3d79d47dbb7c17a757e99624592",
         "requires": [
           "base",
           "agent-store",
           "cli"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "codex",
         "repository": "agent",
-        "revision": "b354217d980a143516a3bd6029d60ffcc9ea3e7b",
+        "revision": "928d306bd661c3d79d47dbb7c17a757e99624592",
         "requires": [
           "agent"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "cli",
         "repository": "cli",
+        "revision": "591d50011d24902ec995037af607f3430b0cbd3b",
         "requires": [
           "base"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "workflow",
         "repository": "core",
-        "revision": "01eab1cf7cb6f3cc0a7a24be2d9770b8ac94eeb5",
+        "revision": "f856e6533fa7b8e2f063d9a6f9d44d38fd6ac32c",
         "requires": [
           "base",
           "agent-store",
           "agent"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "engineering",
         "repository": "core",
-        "revision": "01eab1cf7cb6f3cc0a7a24be2d9770b8ac94eeb5",
+        "revision": "f856e6533fa7b8e2f063d9a6f9d44d38fd6ac32c",
         "requires": [
           "base",
           "workflow",
           "agent-store",
           "agent"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "docs",
         "repository": "core",
-        "revision": "01eab1cf7cb6f3cc0a7a24be2d9770b8ac94eeb5"
+        "revision": "f856e6533fa7b8e2f063d9a6f9d44d38fd6ac32c",
+        "profile": "generic"
       },
       {
         "name": "cpp",
         "repository": "cpp",
+        "revision": "ae329c48249fdf24af3dcfc8370b47a4727c2cf6",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "gpp",
         "repository": "cpp",
+        "revision": "ae329c48249fdf24af3dcfc8370b47a4727c2cf6",
         "requires": [
           "cpp"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "msvc",
         "repository": "cpp",
+        "revision": "ae329c48249fdf24af3dcfc8370b47a4727c2cf6",
         "requires": [
           "cpp"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "win32",
         "repository": "cpp",
+        "revision": "ae329c48249fdf24af3dcfc8370b47a4727c2cf6",
         "requires": [
           "cpp"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "dotnet",
         "repository": "dotnet",
+        "revision": "6022dfb616cc280135c84ee21c2788bc883a41c2",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "efcore",
         "repository": "dotnet",
+        "revision": "6022dfb616cc280135c84ee21c2788bc883a41c2",
         "requires": [
           "dotnet"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "react",
         "repository": "react",
+        "revision": "94941308c9ccd2614bf43c8d2c8ca7caf82883ea",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "nvim",
         "repository": "nvim",
+        "revision": "0ebf338ea90880f256cde3f19c8a1d34981fadaa",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "rust",
         "repository": "rust",
+        "revision": "c51c1de9fb6779f7f6313241aecd26adc949e77a",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "tauri",
         "repository": "rust",
+        "revision": "c51c1de9fb6779f7f6313241aecd26adc949e77a",
         "requires": [
           "rust"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "rust-sqlx",
         "repository": "rust",
+        "revision": "c51c1de9fb6779f7f6313241aecd26adc949e77a",
         "requires": [
           "rust"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "seaorm",
         "repository": "rust",
+        "revision": "c51c1de9fb6779f7f6313241aecd26adc949e77a",
         "requires": [
           "rust"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "python",
         "repository": "python",
+        "revision": "e807f8bc16b30adafe11c3ed3688c66adb3c3765",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "github",
         "repository": "github",
+        "revision": "f75eb24d34df7ed7e567ea40e8ce2bb4f3f19300",
         "requires": [
           "base"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "github-actions",
         "repository": "github-actions",
+        "revision": "7af443d4a28479cbe529c3455f12047d91928ecf",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "azure",
         "repository": "azure",
+        "revision": "7c8a694979f0f740ff2b30d0ce0115dfe64c3f38",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "template",
         "repository": "template",
+        "revision": "d856d22ddb3deaf60aafcfb4b438eea3413fb6a9",
         "requires": [
           "engineering",
           "skill"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "skill",
         "repository": "template",
+        "revision": "d856d22ddb3deaf60aafcfb4b438eea3413fb6a9",
         "requires": [
           "engineering"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "learning",
         "repository": "learning",
+        "revision": "53dba4c4637a182f240154ba21c438839b8fb0bb",
         "requires": [
           "base"
-        ]
+        ],
+        "profile": "generic"
       },
       {
         "name": "personal",
         "repository": "personal",
+        "revision": "94ac98da540edafa250e1bacc22c19c6a31f9e40",
         "requires": [
           "engineering",
-          "agent"
-        ]
+          "agent",
+          "docs"
+        ],
+        "profile": "generic"
       },
       {
         "name": "teams",
-        "repository": "work"
+        "repository": "work",
+        "revision": "f02614e42a5b9f84819bc56f44cab2941677dedb",
+        "profile": "generic"
       },
       {
         "name": "work",
         "repository": "work",
+        "revision": "f02614e42a5b9f84819bc56f44cab2941677dedb",
         "requires": [
           "engineering",
           "teams"
-        ]
+        ],
+        "profile": "generic"
       },
       {
+        "revision": "1cf637118f8459c843b2beacd9ebca9edb85873b",
         "requires": [
           "work",
           "base",
           "engineering"
-        ]
+        ],
+        "profile": "specific",
+        "extends": "work"
       }
     ]
   }
