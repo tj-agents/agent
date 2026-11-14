@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import platform
 import sys
 import tarfile
 import zipfile
 from pathlib import Path
 
-from tj_cli import archive_install, tool_receipts
+from tj_cli import archive_install, host_os, tool_receipts
 from tj_cli.errors import TjCliError
 from tj_cli.native_install import default_bin_dir
 
@@ -38,7 +37,7 @@ class FzfInstallError(TjCliError):
 
 
 def executable(bin_dir: Path) -> Path:
-    return bin_dir / ("fzf.exe" if platform.system() == "Windows" else "fzf")
+    return bin_dir / ("fzf.exe" if host_os.system() == "Windows" else "fzf")
 
 
 def pending(bin_dir: Path) -> str | None:
@@ -71,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.check:
             print(f"missing    fzf {VERSION}")
             return 1
-        system, machine = platform.system(), platform.machine().lower()
+        system, machine = host_os.system(), host_os.machine().lower()
         architecture = {"x86_64": "amd64", "aarch64": "arm64"}.get(machine, machine)
         if (system, architecture) not in ARCHIVES:
             raise FzfInstallError(f"no pinned fzf build for {system} {machine}")

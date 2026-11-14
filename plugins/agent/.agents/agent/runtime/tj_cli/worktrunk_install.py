@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import platform
 import sys
 import tarfile
 import zipfile
 from pathlib import Path
 
-from tj_cli import archive_install, tool_receipts
+from tj_cli import archive_install, host_os, tool_receipts
 from tj_cli.errors import TjCliError
 from tj_cli.native_install import default_bin_dir
 
@@ -30,7 +29,7 @@ class WorktrunkInstallError(TjCliError):
 
 
 def executable(bin_dir: Path) -> Path:
-    return bin_dir / ("git-wt.exe" if platform.system() == "Windows" else "git-wt")
+    return bin_dir / ("git-wt.exe" if host_os.system() == "Windows" else "git-wt")
 
 
 def pending(bin_dir: Path) -> str | None:
@@ -64,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.check:
         print(f"missing    git-wt {VERSION}")
         return 1
-    system, machine = platform.system(), platform.machine()
+    system, machine = host_os.system(), host_os.machine()
     if system not in ARCHIVES or machine.lower() not in {"amd64", "x86_64"}:
         print(
             f"error      git-wt: no pinned worktrunk build for {system} {machine}",

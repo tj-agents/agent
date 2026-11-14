@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import platform
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+
+from tj_cli import host_os
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +109,7 @@ def pending(
             return f"cannot read installed file: {target}"
         if not is_file:
             return f"missing installed file: {target}"
-        if platform.system() != "Windows" and not os.access(target, os.X_OK):
+        if host_os.system() != "Windows" and not os.access(target, os.X_OK):
             return f"installed file is not executable: {target}"
         try:
             actual_digest = sha256(target)
