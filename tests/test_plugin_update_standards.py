@@ -165,8 +165,12 @@ def test_current_plugins_activate_once_per_marketplace_revision(
         codex_installed, "activate", lambda *args: events.append("activated")
     )
     for revision in ("a" * 40, "a" * 40, "b" * 40):
-        monkeypatch.setattr(plugin_update, "marketplace_revision", lambda *_: revision)
-        assert not plugin_update.update(Host.CODEX, Digests(tmp_path / "state")).failures
+        monkeypatch.setattr(
+            plugin_update, "marketplace_revision", lambda *_, at=revision: at
+        )
+        assert not plugin_update.update(
+            Host.CODEX, Digests(tmp_path / "state")
+        ).failures
     assert events == ["activated", "activated"]
 
 
