@@ -116,12 +116,28 @@ def declarations(lock_path: Path, lock: dict) -> tuple[dict[str, dict], dict[str
     return sources, identities, claude_allow, codex_rules
 
 
-def claude_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool], allow: list[str]) -> str:
-    settings = lock_io.load_json(path) if path.is_file() else {}
-    settings["extraKnownMarketplaces"] = {
-        name: {"source": {"source": "github", "repo": release["owner_repository"]}}
+def claude_auto_update(existing: dict, name: str) -> dict[str, bool]:
+    record = existing.get(name)
+    value = record.get("autoUpdate") if isinstance(record, dict) else None
+    if isinstance(value, bool):
+        return {"autoUpdate": value}
+    return {}
+
+
+def claude_marketplaces(sources: dict[str, dict], existing: object) -> dict[str, dict]:
+    existing = existing if isinstance(existing, dict) else {}
+    return {
+        name: {
+            "source": {"source": "github", "repo": release["owner_repository"]},
+            **claude_auto_update(existing, name),
+        }
         for name, release in sources.items()
     }
+
+
+def claude_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool], allow: list[str]) -> str:
+    settings = lock_io.load_json(path) if path.is_file() else {}
+    settings["extraKnownMarketplaces"] = claude_marketplaces(sources, settings.get("extraKnownMarketplaces"))
     settings["enabledPlugins"] = identities
     permissions = settings.get("permissions", {})
     if not isinstance(permissions, dict):
@@ -293,7 +309,7 @@ def local_state(path: Path) -> dict:
 def local_claude(path: Path, sources: dict, identities: dict, allow: list[str], previous: dict) -> tuple[str, dict]:
     settings = lock_io.load_json(path) if path.is_file() else {}
     wanted = {
-        "extraKnownMarketplaces": {name: {"source": {"source": "github", "repo": release["owner_repository"]}} for name, release in sources.items()},
+        "extraKnownMarketplaces": claude_marketplaces(sources, settings.get("extraKnownMarketplaces")),
         "enabledPlugins": identities,
     }
     owned = {}

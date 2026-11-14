@@ -193,14 +193,17 @@ def update(host: Host, digests: Digests) -> Outcome:
     installed = INSTALLED[host]
     before = marketplace_revision(host)
     with ThreadPoolExecutor(max_workers=CONCURRENT_STEPS) as pool:
+        pins = pool.submit(already_current, host, digests)
         behind = list(pool.map(partial(behind_remote, host), MARKETPLACES))
+        pins_current = pins.result()
     installed.update_marketplaces(
         report,
         tuple(name for name, stale in zip(MARKETPLACES, behind, strict=True) if stale),
     )
     if report.failures:
         return Outcome(report.failures, False, before)
-    pins_current = already_current(host, digests)
+    if any(behind):
+        pins_current = already_current(host, digests)
     if pins_current:
         print(f"{host}: plugins already match their pins")
         if host is Host.CODEX:

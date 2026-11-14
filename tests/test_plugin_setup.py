@@ -11,7 +11,9 @@ from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/runtime"
 sys.path.insert(0, str(SCRIPTS))
+import host_plugins
 import required_plugins
+from tj_agent.host import Host
 
 
 SCRIPT = """import os
@@ -58,6 +60,53 @@ class PluginSetupTests(unittest.TestCase):
             self.assertFalse(self.state.exists())
             self.assertEqual([], required_plugins.converge_setup(self.project, ("codex",), {"codex": None}))
             self.assertEqual("setup", self.state.read_text(encoding="utf-8"))
+
+    def test_check_reports_missing_plugins_without_installing(self):
+        missing = required_plugins.MissingRequiredPluginsError(
+            "missing selected", self.project, ["selected@publisher"]
+        )
+        with mock.patch.object(required_plugins, "check", side_effect=missing), \
+                mock.patch.object(host_plugins.PLUGINS[Host.CODEX], "install") as install:
+            errors = required_plugins.check_setup(
+                self.project, (Host.CODEX,), {Host.CODEX: None}
+            )
+        self.assertEqual([f"{Host.CODEX}: missing selected"], errors)
+        install.assert_not_called()
+        self.assertFalse(self.state.exists())
+
+    def test_converge_repairs_missing_plugins_after_collecting_every_host(self):
+        missing = {Host.CLAUDE, Host.CODEX}
+        checks = []
+
+        def check(project, host, executable=None, *, inventory_options=()):
+            self.assertEqual(self.project.resolve(), project)
+            self.assertEqual((), inventory_options)
+            checks.append(host)
+            if host in missing:
+                raise required_plugins.MissingRequiredPluginsError(
+                    f"missing {host}", project, ["selected@publisher"]
+                )
+            return {"selected@publisher": self.runtime}
+
+        def install(project, identities):
+            self.assertEqual(self.project.resolve(), project)
+            self.assertEqual(("selected@publisher",), tuple(identities))
+            self.assertEqual({Host.CLAUDE, Host.CODEX}, set(checks))
+            missing.remove(Host.CLAUDE)
+
+        def codex_install(project, identities):
+            self.assertEqual(self.project.resolve(), project)
+            self.assertEqual(("selected@publisher",), tuple(identities))
+            self.assertEqual({Host.CLAUDE, Host.CODEX}, set(checks))
+            missing.remove(Host.CODEX)
+
+        with mock.patch.object(required_plugins, "check", side_effect=check), \
+                mock.patch.object(host_plugins.PLUGINS[Host.CLAUDE], "install", side_effect=install), \
+                mock.patch.object(host_plugins.PLUGINS[Host.CODEX], "install", side_effect=codex_install):
+            self.assertEqual([], required_plugins.converge_setup(
+                self.project, (Host.CLAUDE, Host.CODEX), {Host.CLAUDE: None, Host.CODEX: None}
+            ))
+        self.assertEqual([Host.CLAUDE, Host.CODEX, Host.CLAUDE, Host.CODEX, Host.CLAUDE, Host.CODEX], checks)
 
     def test_onboarding_is_passed_only_when_explicitly_requested(self):
         with self.roots():
