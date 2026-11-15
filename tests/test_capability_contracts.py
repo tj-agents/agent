@@ -182,8 +182,17 @@ def test_session_start_binds_the_launch(
 
     monkeypatch.setattr(worktrees, "claim_started_worktree", capture)
 
-    def store(*arguments: str) -> dict[str, dict[str, None]]:
+    def store(*arguments: str) -> dict[str, object]:
         calls.append(arguments)
+        if arguments == ("show", "--launch-id", "launch"):
+            return {
+                "launch": {
+                    "launch_id": "launch",
+                    "host": str(host),
+                    "state": "active",
+                    "session": None,
+                }
+            }
         return {"session": {"title": None}}
 
     monkeypatch.setattr(agent_store, "run", store)
@@ -197,6 +206,7 @@ def test_session_start_binds_the_launch(
         [("show", "codex:native")] if host is Host.CODEX else []
     )
     expected += [
+        ("show", "--launch-id", "launch"),
         (
             "register",
             "--session",
@@ -207,7 +217,7 @@ def test_session_start_binds_the_launch(
             "/fixture",
             "--launch-id",
             "launch",
-        )
+        ),
     ]
     assert calls == expected
 
