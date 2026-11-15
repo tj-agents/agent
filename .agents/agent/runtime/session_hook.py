@@ -79,9 +79,14 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
     adapter = agent_cli.host_launch(host)
     session = codex_launch.registered_session(session_id) if host is Host.CODEX else None
     inherited = environ.get(LAUNCH_ENV)
+    cleared: tuple[str, ...] = ()
     launch = owned_launch.for_session(f"{host}:{session_id}") if session is None and inherited else None
     environ = {name: value for name, value in environ.items() if name != LAUNCH_ENV}
     if session is None and inherited and launch is None:
+        cleared = tuple(
+            name for name in (*environ, LAUNCH_ENV)
+            if name.startswith("TJ_RUN_") or name in {TITLE_ENV, "WT_SESSION", "TMUX_PANE"}
+        )
         environ = {
             name: value for name, value in environ.items()
             if not name.startswith("TJ_RUN_") and name not in {TITLE_ENV, "WT_SESSION", "TMUX_PANE"}
@@ -98,7 +103,7 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
         if host is Host.CODEX and session.get("title"):
             adapter.name_session(session_id, session["title"])
     finally:
-        adapter.record_session_environment(session_id, environ)
+        adapter.record_session_environment(session_id, environ, cleared=cleared)
         if root:
             worktrees.claim_started_worktree(host, session_id, Path(root), environ)
     return session
@@ -108,7 +113,7 @@ def end(host: Host, session_id: str, reason: str | None) -> None:
     if reason not in EXPLICIT_EXIT_REASONS:
         return
     try:
-        agent_store.run("end", "--session", f"{host}:{session_id}")
+        agent_store.run("end", "--session", f"{host}:{session_id}", "--reason", reason)
     except agent_store.AgentStoreError as error:
         if error.code not in ("not-found", "conflict"):
             raise

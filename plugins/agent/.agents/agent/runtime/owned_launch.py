@@ -58,9 +58,20 @@ def for_session(session: str) -> str | None:
         return launch_id
     if not isinstance(bound, str) or not bound:
         raise OwnedLaunchError("agent-store returned an invalid launch session")
-    if bound != session:
-        return None
     registered = data.get("session")
+    if bound != session:
+        if (
+            launch.get("state") == "active"
+            and isinstance(registered, dict)
+            and registered.get("session") == bound
+            and registered.get("host") == host
+            and registered.get("native_id") == bound.partition(":")[2]
+            and registered.get("launch_id") == launch_id
+            and registered.get("state") == "ended"
+            and registered.get("end_reason") in {"clear", "resume"}
+        ):
+            return launch_id
+        return None
     if (
         not isinstance(registered, dict)
         or registered.get("session") != session
