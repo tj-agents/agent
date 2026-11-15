@@ -27,6 +27,27 @@ IS_WINDOWS = os.name == "nt"
 # such as an agent's tool shell; a Windows Terminal tab is outside that job.
 JOB_REFUSAL = "prevents background processes from outliving it"
 DAEMON_WAIT_SECONDS = 30
+DAEMON_IDENTITY = frozenset(
+    {
+        "AGENT_CLI_TAB_TITLE",
+        "CLAUDECODE",
+        "CLAUDE_PID",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CODEX_TOOL_CALL_ID",
+        "WT_SESSION",
+        "TMUX_PANE",
+    }
+)
+
+
+def daemon_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in environ.items()
+        if name.upper() not in DAEMON_IDENTITY
+        and not name.upper().startswith(("TJ_RUN_", "CLAUDE_CODE_"))
+    }
 
 
 class Server(Protocol):
@@ -160,7 +181,7 @@ def create(
 
 
 def daemon_command(
-    native: str, action: str, directory: Path
+    native: str, action: str, directory: Path, environ: Mapping[str, str]
 ) -> subprocess.CompletedProcess[str]:
     return process.run(
         [native, "app-server", "daemon", action],
@@ -169,17 +190,19 @@ def daemon_command(
         text=True,
         timeout=30,
         check=False,
+        env=daemon_environment(environ),
     )
 
 
 def start_daemon(
     native: str,
     directory: Path,
+    environ: Mapping[str, str],
     clock: Callable[[], float] = time.monotonic,
     wait: Callable[[float], None] = time.sleep,
 ) -> None:
     """Start the shared Codex daemon, from a terminal tab if this job forbids it."""
-    started = daemon_command(native, "start", directory)
+    started = daemon_command(native, "start", directory, environ)
     if not started.returncode:
         return
     if not IS_WINDOWS or JOB_REFUSAL not in started.stderr:
@@ -217,9 +240,10 @@ def start_daemon(
         text=True,
         timeout=30,
         check=False,
+        env=daemon_environment(environ),
     )
     deadline = clock() + DAEMON_WAIT_SECONDS
-    while daemon_command(native, "version", directory).returncode:
+    while daemon_command(native, "version", directory, environ).returncode:
         if clock() >= deadline:
             raise LaunchError(
                 "The Codex daemon did not start from a Windows Terminal tab "
@@ -229,7 +253,12 @@ def start_daemon(
 
 
 def prepare(
-    directory: Path, title: str, arguments: list[str], cli: str, native: str
+    directory: Path,
+    title: str,
+    arguments: list[str],
+    cli: str,
+    native: str,
+    environ: Mapping[str, str],
 ) -> PreparedLaunch:
     prepared = None
     completed = False
@@ -244,7 +273,7 @@ def prepare(
             raise LaunchError(
                 "Codex shared daemon startup is disabled in the user configuration"
             )
-        start_daemon(native, directory)
+        start_daemon(native, directory, environ)
         with connection(native, directory) as server:
             document = server.request(
                 "config/read", {"cwd": str(directory), "includeLayers": True}
@@ -299,6 +328,7 @@ def first_turn(path: Path) -> dict[str, object] | None:
 def confirm(
     prepared: PreparedLaunch,
     arguments: list[str],
+    launch_id: str,
     *,
     timeout: float = 180,
     clock: Callable[[], float] = time.monotonic,
@@ -326,6 +356,31 @@ def confirm(
             )
         path = Path(thread["path"])
         while (turn := first_turn(path)) is None:
+            try:
+                shown = agent_store.run("show", "--launch-id", launch_id)
+            except agent_store.AgentStoreError as error:
+                raise LaunchError(f"Cannot read launch {launch_id}: {error}") from error
+            record = shown.get("launch")
+            if not isinstance(record, dict) or record.get("launch_id") != launch_id:
+                raise LaunchError(
+                    f"agent-store returned an invalid launch for {launch_id}"
+                )
+            if record.get("state") == "ended":
+                # The turn can be written between the first read and the store check.
+                if (turn := first_turn(path)) is not None:
+                    break
+                detail = ""
+                try:
+                    with connection(prepared.command[0], directory) as server:
+                        server.request(
+                            "thread/read", {"threadId": thread_id, "includeTurns": True}
+                        )
+                except (OSError, ValueError, RuntimeError) as error:
+                    detail = f"; Codex thread/read: {error}"
+                raise LaunchError(
+                    f"Codex launch {launch_id} exited before its first turn"
+                    f" (reason: {record.get('end_reason')}){detail}"
+                )
             if clock() >= deadline:
                 raise LaunchTimeout(
                     f"Codex {thread_id} did not record its first turn within "
