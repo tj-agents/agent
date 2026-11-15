@@ -364,7 +364,7 @@ def launch(
         if IS_WINDOWS or name != "TERM"
     }
     cleared, forced = launch_environment(clear=clear, force=force)
-    prepared = adapter.prepare(directory, title, arguments, tj)
+    prepared = adapter.prepare(directory, title, arguments, tj, environ)
     dispatched, completed = False, False
 
     def dispatch(command, **options):

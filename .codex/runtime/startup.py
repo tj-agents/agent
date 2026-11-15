@@ -41,10 +41,10 @@ DAEMON_IDENTITY = frozenset(
 )
 
 
-def daemon_environment() -> dict[str, str]:
+def daemon_environment(environ: Mapping[str, str]) -> dict[str, str]:
     return {
         name: value
-        for name, value in os.environ.items()
+        for name, value in environ.items()
         if name.upper() not in DAEMON_IDENTITY
         and not name.upper().startswith(("TJ_RUN_", "CLAUDE_CODE_"))
     }
@@ -181,7 +181,7 @@ def create(
 
 
 def daemon_command(
-    native: str, action: str, directory: Path
+    native: str, action: str, directory: Path, environ: Mapping[str, str]
 ) -> subprocess.CompletedProcess[str]:
     return process.run(
         [native, "app-server", "daemon", action],
@@ -190,18 +190,19 @@ def daemon_command(
         text=True,
         timeout=30,
         check=False,
-        env=daemon_environment(),
+        env=daemon_environment(environ),
     )
 
 
 def start_daemon(
     native: str,
     directory: Path,
+    environ: Mapping[str, str],
     clock: Callable[[], float] = time.monotonic,
     wait: Callable[[float], None] = time.sleep,
 ) -> None:
     """Start the shared Codex daemon, from a terminal tab if this job forbids it."""
-    started = daemon_command(native, "start", directory)
+    started = daemon_command(native, "start", directory, environ)
     if not started.returncode:
         return
     if not IS_WINDOWS or JOB_REFUSAL not in started.stderr:
@@ -239,10 +240,10 @@ def start_daemon(
         text=True,
         timeout=30,
         check=False,
-        env=daemon_environment(),
+        env=daemon_environment(environ),
     )
     deadline = clock() + DAEMON_WAIT_SECONDS
-    while daemon_command(native, "version", directory).returncode:
+    while daemon_command(native, "version", directory, environ).returncode:
         if clock() >= deadline:
             raise LaunchError(
                 "The Codex daemon did not start from a Windows Terminal tab "
@@ -252,7 +253,12 @@ def start_daemon(
 
 
 def prepare(
-    directory: Path, title: str, arguments: list[str], cli: str, native: str
+    directory: Path,
+    title: str,
+    arguments: list[str],
+    cli: str,
+    native: str,
+    environ: Mapping[str, str],
 ) -> PreparedLaunch:
     prepared = None
     completed = False
@@ -267,7 +273,7 @@ def prepare(
             raise LaunchError(
                 "Codex shared daemon startup is disabled in the user configuration"
             )
-        start_daemon(native, directory)
+        start_daemon(native, directory, environ)
         with connection(native, directory) as server:
             document = server.request(
                 "config/read", {"cwd": str(directory), "includeLayers": True}
