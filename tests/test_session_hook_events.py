@@ -92,7 +92,7 @@ def test_end_closes_the_session_for_an_explicit_exit_reason(monkeypatch, reason)
     monkeypatch.setattr(hook.agent_store, 'run', run)
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({'session_id': 'n1', 'reason': reason})))
     assert hook.main(['end', '--host', 'claude']) == 0
-    run.assert_called_once_with('end', '--session', 'claude:n1')
+    run.assert_called_once_with('end', '--session', 'claude:n1', '--reason', reason)
 
 
 @pytest.mark.parametrize('stdin', [

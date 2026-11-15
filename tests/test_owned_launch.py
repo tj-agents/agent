@@ -127,3 +127,33 @@ def test_launch_admission_rejects_nonreciprocal_session_metadata(
     monkeypatch.setattr(agent_store, "run", show)
     with pytest.raises(owned_launch.OwnedLaunchError, match="do not match"):
         owned_launch.for_session("codex:mine")
+
+
+@pytest.mark.parametrize("reason", ["clear", "resume", "logout", "transferred"])
+def test_claude_replacement_requires_an_explicit_native_reset(
+    monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    monkeypatch.setattr(owned_launch, "current", lambda: "L1")
+    monkeypatch.setattr(
+        agent_store,
+        "run",
+        lambda *_: {
+            "launch": {
+                "launch_id": "L1",
+                "host": "claude",
+                "session": "claude:old",
+                "state": "active",
+            },
+            "session": {
+                "session": "claude:old",
+                "host": "claude",
+                "native_id": "old",
+                "launch_id": "L1",
+                "state": "ended",
+                "end_reason": reason,
+            },
+        },
+    )
+    assert owned_launch.for_session("claude:new") == (
+        "L1" if reason in {"clear", "resume"} else None
+    )

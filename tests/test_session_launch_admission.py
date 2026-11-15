@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 from unittest.mock import Mock
 
 import agent_cli
@@ -6,10 +7,35 @@ import agent_store
 import owned_launch
 import pytest
 import session_hook
+from claude import launch as claude_launch
 from tj_agent.host import Host
 from tj_cli import process
 
 NATIVE_CURRENT = owned_launch.current
+
+
+def test_claude_background_tools_drop_inherited_launch_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "environment"
+    parent = {
+        "TJ_RUN_LAUNCH_ID": "parent-launch",
+        "TJ_RUN_PID": "123",
+        "TJ_RUN_STARTED_AT": "now",
+        "AGENT_CLI_TAB_TITLE": "parent",
+        "WT_SESSION": "parent-tab",
+        "TMUX_PANE": "%1",
+        "CLAUDE_ENV_FILE": str(target),
+    }
+    monkeypatch.setattr(owned_launch, "for_session", lambda _: None)
+    monkeypatch.setattr(session_hook, "worktree", lambda _: None)
+    monkeypatch.setattr(agent_store, "run", lambda *_: {"session": {"title": None}})
+    monkeypatch.setattr(agent_cli, "host_launch", lambda _: claude_launch)
+    session_hook.start(Host.CLAUDE, "child", "/child", parent)
+    script = target.read_text(encoding="utf-8")
+    for name in parent.keys() - {"CLAUDE_ENV_FILE"}:
+        assert f"unset {name}\n" in script
+    assert "export CLAUDE_CODE_SESSION_ID=child\n" in script
 
 
 @pytest.mark.parametrize("host", [Host.CLAUDE, Host.CODEX])
