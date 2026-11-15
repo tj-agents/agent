@@ -224,7 +224,7 @@ def test_claude_prepared_tab_keeps_lane_model_and_effort(
     code, _, err = launcher.run("--lane", "L2")
     assert code == 0, err
     host, directory, title, arguments = launcher.launch.call_args.args
-    prepared = adapter.prepare(directory, title, arguments, "tj")
+    prepared = adapter.prepare(directory, title, arguments, "tj", {})
     entry = launcher.cli.resolve_lane(host, lane="L2")
     assert prepared.command[prepared.command.index("--model") + 1] == entry["model"]
     assert prepared.command[prepared.command.index("--effort") + 1] == entry["effort"]

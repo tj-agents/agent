@@ -659,6 +659,7 @@ def test_a_recorded_launchs_bound_session_wins_over_the_session_variable() -> No
     shown = {"launch": {}, "session": {"session": "claude:abc"}}
     with (
         mock.patch.dict(os.environ, environ, clear=True),
+        mock.patch.object(CLI.owned_launch, "current", return_value="L1"),
         mock.patch.object(CLI.agent_store, "run", return_value=shown) as run,
     ):
         assert CLI.parent_session(None) == "claude:abc"
@@ -673,6 +674,7 @@ def test_an_unrecorded_launch_falls_back_to_the_session_variable() -> None:
     not_found = CLI.agent_store.AgentStoreError("not-found", "no launch")
     with (
         mock.patch.dict(os.environ, environ, clear=True),
+        mock.patch.object(CLI.owned_launch, "current", return_value="L1"),
         mock.patch.object(CLI.agent_store, "run", side_effect=not_found),
     ):
         assert CLI.parent_session(None) == "codex:thread-9"
@@ -685,6 +687,7 @@ def test_a_launch_not_yet_bound_to_a_session_falls_back_to_the_session_variable(
     shown = {"launch": {}, "session": None}
     with (
         mock.patch.dict(os.environ, environ, clear=True),
+        mock.patch.object(CLI.owned_launch, "current", return_value="L1"),
         mock.patch.object(CLI.agent_store, "run", return_value=shown),
     ):
         assert CLI.parent_session(None) == "claude:abc"
@@ -695,10 +698,29 @@ def test_an_agent_store_failure_other_than_not_found_propagates() -> None:
     boom = CLI.agent_store.AgentStoreError("unexpected", "boom")
     with (
         mock.patch.dict(os.environ, environ, clear=True),
+        mock.patch.object(CLI.owned_launch, "current", return_value="L1"),
         mock.patch.object(CLI.agent_store, "run", side_effect=boom),
         pytest.raises(CLI.LaunchError),
     ):
         CLI.parent_session(None)
+
+
+def test_inherited_launch_and_conflicting_host_identities_are_not_guessed() -> None:
+    environ = {"TJ_RUN_LAUNCH_ID": "stale", "CLAUDE_CODE_SESSION_ID": "claude",
+               "CODEX_THREAD_ID": "codex"}
+    with (mock.patch.dict(os.environ, environ, clear=True),
+          pytest.raises(CLI.LaunchError, match="multiple inherited identities")):
+        CLI.parent_session(None)
+
+
+@pytest.mark.parametrize("session", ["codex:remote", "claude:nested"])
+def test_verified_launch_identifies_remote_or_nested_parent(session: str) -> None:
+    environ = {"TJ_RUN_LAUNCH_ID": "stale", "CLAUDE_CODE_SESSION_ID": "nested",
+               "CODEX_THREAD_ID": "remote"}
+    with (mock.patch.dict(os.environ, environ, clear=True),
+          mock.patch.object(CLI.owned_launch, "current", return_value="actual"),
+          mock.patch.object(CLI.agent_store, "run", return_value={"session": {"session": session}})):
+        assert CLI.parent_session(None) == session
 
 
 def test_the_standing_rule_names_the_parent_by_title() -> None:
