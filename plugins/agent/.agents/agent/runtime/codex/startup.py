@@ -27,6 +27,27 @@ IS_WINDOWS = os.name == "nt"
 # such as an agent's tool shell; a Windows Terminal tab is outside that job.
 JOB_REFUSAL = "prevents background processes from outliving it"
 DAEMON_WAIT_SECONDS = 30
+DAEMON_IDENTITY = frozenset(
+    {
+        "AGENT_CLI_TAB_TITLE",
+        "CLAUDECODE",
+        "CLAUDE_PID",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "CODEX_TOOL_CALL_ID",
+        "WT_SESSION",
+        "TMUX_PANE",
+    }
+)
+
+
+def daemon_environment() -> dict[str, str]:
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name.upper() not in DAEMON_IDENTITY
+        and not name.upper().startswith(("TJ_RUN_", "CLAUDE_CODE_"))
+    }
 
 
 class Server(Protocol):
@@ -169,6 +190,7 @@ def daemon_command(
         text=True,
         timeout=30,
         check=False,
+        env=daemon_environment(),
     )
 
 
@@ -217,6 +239,7 @@ def start_daemon(
         text=True,
         timeout=30,
         check=False,
+        env=daemon_environment(),
     )
     deadline = clock() + DAEMON_WAIT_SECONDS
     while daemon_command(native, "version", directory).returncode:
@@ -299,6 +322,7 @@ def first_turn(path: Path) -> dict[str, object] | None:
 def confirm(
     prepared: PreparedLaunch,
     arguments: list[str],
+    launch_id: str,
     *,
     timeout: float = 180,
     clock: Callable[[], float] = time.monotonic,
@@ -326,6 +350,31 @@ def confirm(
             )
         path = Path(thread["path"])
         while (turn := first_turn(path)) is None:
+            try:
+                shown = agent_store.run("show", "--launch-id", launch_id)
+            except agent_store.AgentStoreError as error:
+                raise LaunchError(f"Cannot read launch {launch_id}: {error}") from error
+            record = shown.get("launch")
+            if not isinstance(record, dict) or record.get("launch_id") != launch_id:
+                raise LaunchError(
+                    f"agent-store returned an invalid launch for {launch_id}"
+                )
+            if record.get("state") == "ended":
+                # The turn can be written between the first read and the store check.
+                if (turn := first_turn(path)) is not None:
+                    break
+                detail = ""
+                try:
+                    with connection(prepared.command[0], directory) as server:
+                        server.request(
+                            "thread/read", {"threadId": thread_id, "includeTurns": True}
+                        )
+                except (OSError, ValueError, RuntimeError) as error:
+                    detail = f"; Codex thread/read: {error}"
+                raise LaunchError(
+                    f"Codex launch {launch_id} exited before its first turn"
+                    f" (reason: {record.get('end_reason')}){detail}"
+                )
             if clock() >= deadline:
                 raise LaunchTimeout(
                     f"Codex {thread_id} did not record its first turn within "
