@@ -23,7 +23,9 @@ def test_codex_launch_removes_inherited_monochrome_environment(
     monkeypatch.setattr(
         adapter,
         "prepare",
-        lambda directory, title, arguments, cli: PreparedLaunch(("codex", *arguments)),
+        lambda directory, title, arguments, cli, environ: PreparedLaunch(
+            ("codex", *arguments)
+        ),
     )
     monkeypatch.setattr(agent_cli, "IS_WINDOWS", windows)
     monkeypatch.setattr(shutil, "which", lambda name: name)
