@@ -3,6 +3,7 @@ import io
 import json
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -51,7 +52,12 @@ class FakeHost:
         return "fake-agent"
 
     def prepare(
-        self, directory: Path, title: str, arguments: list[str], cli: str
+        self,
+        directory: Path,
+        title: str,
+        arguments: list[str],
+        cli: str,
+        environ: Mapping[str, str],
     ) -> PreparedLaunch:
         return PreparedLaunch((self.executable(), *arguments))
 

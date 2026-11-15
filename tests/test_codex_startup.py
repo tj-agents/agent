@@ -133,7 +133,7 @@ def prepare(native: Native) -> PreparedLaunch:
     return cast(
         PreparedLaunch,
         startup.prepare(
-            native.directory, "Actual title", arguments, "tj", "fixture-codex"
+            native.directory, "Actual title", arguments, "tj", "fixture-codex", {}
         ),
     )
 
@@ -458,6 +458,7 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
         launch.resume_arguments(native.directory, "Existing", THREAD),
         "tj",
         "fixture-codex",
+        {},
     )
     startup.abandon(prepared, "new-launch", False)
     startup.confirm(prepared, [], "launch")
@@ -609,7 +610,7 @@ def test_prepare_requires_proven_native_version_before_any_creation(
     monkeypatch.setattr(launch, "resolve_executable", resolve)
     arguments = launch.start_arguments(native.directory, "Title", "Prompt", None, None)
     with pytest.raises(LaunchError, match=r"required 0\.167\.1"):
-        launch.prepare(native.directory, "Title", arguments, "tj")
+        launch.prepare(native.directory, "Title", arguments, "tj", {})
     assert native.events == []
 
 
@@ -880,9 +881,8 @@ def test_daemon_start_strips_inherited_session_and_tab_identity(
         "WT_SESSION",
         "TMUX_PANE",
     )
-    for name in identities:
-        monkeypatch.setenv(name, "stale")
-    monkeypatch.setenv("AGENT_FIXTURE_KEEP", "keep")
+    environ = dict.fromkeys(identities, "stale")
+    environ["AGENT_FIXTURE_KEEP"] = "keep"
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
@@ -895,7 +895,7 @@ def test_daemon_start_strips_inherited_session_and_tab_identity(
     monkeypatch.setattr(process, "run", run)
     monkeypatch.setattr(shutil, "which", lambda _: "wt.exe")
     monkeypatch.setattr(startup, "IS_WINDOWS", True)
-    startup.start_daemon("codex", tmp_path)
+    startup.start_daemon("codex", tmp_path, environ)
     for _, options in calls:
         env = cast(dict[str, str], options["env"])
         assert all(name not in env for name in identities)
@@ -932,7 +932,7 @@ def test_start_daemon_opens_a_terminal_tab_when_the_callers_job_refuses_it(
     calls = daemon_runs(monkeypatch, refused, up_after=2)
     waits: list[float] = []
     startup.start_daemon(
-        "fixture-codex", tmp_path, clock=lambda: 0.0, wait=waits.append
+        "fixture-codex", tmp_path, {}, clock=lambda: 0.0, wait=waits.append
     )
     tab = ["C:/bin/wt.exe", "-w", "0", "nt", "--title", "Codex daemon"]
     detached = ["cmd.exe", "/d", "/c", "fixture-codex", "app-server", "daemon", "start"]
@@ -951,6 +951,7 @@ def test_start_daemon_reports_a_tab_that_never_brings_it_up(
         startup.start_daemon(
             "fixture-codex",
             tmp_path,
+            {},
             clock=lambda: float(next(ticks)),
             wait=lambda _: None,
         )
@@ -966,5 +967,5 @@ def test_start_daemon_reports_other_failures_without_a_tab(
     )
     monkeypatch.setattr(startup, "IS_WINDOWS", windows)
     with pytest.raises(LaunchError, match="Cannot start the configured Codex daemon"):
-        startup.start_daemon("fixture-codex", tmp_path)
+        startup.start_daemon("fixture-codex", tmp_path, {})
     assert len(calls) == 1
