@@ -29,9 +29,13 @@ TAB_CLEARED: tuple[str, ...] = ()
 TAB_FORCED = {"FORCE_COLOR": "1", "TERM": "xterm-256color"}
 
 
-def record_session_environment(session_id: str, environ: Mapping[str, str]) -> None:
+def record_session_environment(
+    session_id: str, environ: Mapping[str, str], *, cleared: tuple[str, ...] = ()
+) -> None:
     if path := environ.get("CLAUDE_ENV_FILE"):
         with Path(path).open("a", encoding="utf-8") as stream:
+            for name in cleared:
+                stream.write(f"unset {shlex.quote(name)}\n")
             stream.write(f"export {HOST.session_variable}={shlex.quote(session_id)}\n")
 
 

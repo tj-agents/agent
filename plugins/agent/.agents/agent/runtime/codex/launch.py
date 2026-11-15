@@ -25,7 +25,9 @@ DAEMON_TIMEOUT_SECONDS = 10
 _CODEX_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?")
 
 
-def record_session_environment(session_id: str, environ: Mapping[str, str]) -> None:
+def record_session_environment(
+    session_id: str, environ: Mapping[str, str], *, cleared: tuple[str, ...] = ()
+) -> None:
     return None
 
 

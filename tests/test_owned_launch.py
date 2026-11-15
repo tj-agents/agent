@@ -1,6 +1,7 @@
 import subprocess
 from collections.abc import Callable
 
+import agent_store
 import owned_launch
 import pytest
 from tj_cli import process
@@ -59,3 +60,100 @@ def test_owned_launch_raises_when_tj_launch_cannot_answer(
     monkeypatch.setattr(process, "run", run)
     with pytest.raises(owned_launch.OwnedLaunchError, match=message):
         CURRENT()
+
+
+@pytest.mark.parametrize(
+    ("bound", "host", "expected"),
+    [
+        (None, "codex", "L1"),
+        ("codex:mine", "codex", "L1"),
+        ("codex:other", "codex", None),
+        (None, "claude", None),
+    ],
+)
+def test_launch_admission_checks_the_native_session(
+    monkeypatch: pytest.MonkeyPatch,
+    bound: str | None,
+    host: str,
+    expected: str | None,
+) -> None:
+    def show(*arguments: str) -> dict[str, object]:
+        assert arguments == ("show", "--launch-id", "L1")
+        return {
+            "launch": {
+                "launch_id": "L1",
+                "host": host,
+                "state": "active",
+                "session": bound,
+            },
+            "session": {
+                "session": "codex:mine",
+                "host": "codex",
+                "native_id": "mine",
+                "launch_id": "L1",
+                "state": "active",
+            },
+        }
+
+    monkeypatch.setattr(owned_launch, "current", lambda: "L1")
+    monkeypatch.setattr(agent_store, "run", show)
+    assert owned_launch.for_session("codex:mine") == expected
+
+
+@pytest.mark.parametrize("invalid_field", ["session", "host", "native_id", "launch_id"])
+def test_launch_admission_rejects_nonreciprocal_session_metadata(
+    monkeypatch: pytest.MonkeyPatch, invalid_field: str
+) -> None:
+    session = {
+        "session": "codex:mine",
+        "host": "codex",
+        "native_id": "mine",
+        "launch_id": "L1",
+    }
+    session[invalid_field] = "different"
+
+    def show(*_arguments: str) -> dict[str, object]:
+        return {
+            "launch": {
+                "launch_id": "L1",
+                "host": "codex",
+                "state": "active",
+                "session": "codex:mine",
+            },
+            "session": session,
+        }
+
+    monkeypatch.setattr(owned_launch, "current", lambda: "L1")
+    monkeypatch.setattr(agent_store, "run", show)
+    with pytest.raises(owned_launch.OwnedLaunchError, match="do not match"):
+        owned_launch.for_session("codex:mine")
+
+
+@pytest.mark.parametrize("reason", ["clear", "resume", "logout", "transferred"])
+def test_claude_replacement_requires_an_explicit_native_reset(
+    monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    monkeypatch.setattr(owned_launch, "current", lambda: "L1")
+    monkeypatch.setattr(
+        agent_store,
+        "run",
+        lambda *_: {
+            "launch": {
+                "launch_id": "L1",
+                "host": "claude",
+                "session": "claude:old",
+                "state": "active",
+            },
+            "session": {
+                "session": "claude:old",
+                "host": "claude",
+                "native_id": "old",
+                "launch_id": "L1",
+                "state": "ended",
+                "end_reason": reason,
+            },
+        },
+    )
+    assert owned_launch.for_session("claude:new") == (
+        "L1" if reason in {"clear", "resume"} else None
+    )
