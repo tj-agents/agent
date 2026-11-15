@@ -65,7 +65,7 @@ def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
     return None
 
 
-def confirm(prepared: PreparedLaunch, arguments: list[str]) -> None:
+def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> None:
     return None
 
 

@@ -27,6 +27,7 @@ from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 import agent_store
+import owned_launch
 import work_item
 
 LAUNCH_ID_ENVIRONMENT = 'TJ_RUN_LAUNCH_ID'
@@ -378,7 +379,7 @@ def launch(
             host, directory, title, prepared, tj, launch_id, item, parent, want_session,
             cleared, forced, environ, dispatch, tmux_session,
         )
-        adapter.confirm(prepared, arguments)
+        adapter.confirm(prepared, arguments, launch_id)
         completed = True
         return shown
     finally:
@@ -443,7 +444,10 @@ def parent_session(value):
     """The parent's `host:id`: as given, else the calling session as `tj approve` resolves it, else None."""
     if value is not None:
         return value
-    launch_id = os.environ.get(LAUNCH_ID_ENVIRONMENT)
+    try:
+        launch_id = owned_launch.current()
+    except owned_launch.OwnedLaunchError as error:
+        raise LaunchError(f'Cannot determine the calling launch: {error}') from error
     if launch_id:
         try:
             shown = agent_store.run('show', '--launch-id', launch_id)
@@ -454,10 +458,11 @@ def parent_session(value):
             session = shown.get('session')
             if session:
                 return session['session']
-    for host in Host:
-        if session_id := os.environ.get(host.session_variable):
-            return f'{host}:{session_id}'
-    return None
+    identities = [f'{host}:{session_id}' for host in Host
+                  if (session_id := os.environ.get(host.session_variable))]
+    if len(identities) > 1:
+        raise LaunchError('Cannot determine the calling session from multiple inherited identities')
+    return identities[0] if identities else None
 
 
 def resolve_item(item, title, cwd, parent, fields):

@@ -232,8 +232,8 @@ def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
     startup.abandon(prepared, launch_id, dispatched)
 
 
-def confirm(prepared: PreparedLaunch, arguments: list[str]) -> None:
-    startup.confirm(prepared, arguments)
+def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> None:
+    startup.confirm(prepared, arguments, launch_id)
 
 
 def start_arguments(directory, title, prompt, model, effort):

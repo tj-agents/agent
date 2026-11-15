@@ -60,7 +60,9 @@ class FakeHost:
     ) -> None:
         pass
 
-    def confirm(self, prepared: PreparedLaunch, arguments: list[str]) -> None:
+    def confirm(
+        self, prepared: PreparedLaunch, arguments: list[str], launch_id: str
+    ) -> None:
         pass
 
 
