@@ -67,11 +67,6 @@ def title_arguments(environ: Mapping[str, str]) -> list[str]:
     return []
 
 
-def wrapper_arguments(environ: Mapping[str, str]) -> list[str]:
-    pid, started_at = environ.get(WRAPPER_PID_ENV), environ.get(WRAPPER_STARTED_AT_ENV)
-    return ["--wrapper-pid", pid, "--wrapper-started-at", started_at] if pid and started_at else []
-
-
 def register(host: Host, session_id: str, cwd: str, root: str | None, arguments: list[str]) -> dict:
     base = ["register", "--session", f"{host}:{session_id}", "--cwd", cwd]
     if root:
@@ -83,20 +78,18 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
     root = worktree(cwd)
     adapter = agent_cli.host_launch(host)
     session = codex_launch.registered_session(session_id) if host is Host.CODEX else None
-    launch = owned_launch.current() if session is None and environ.get(LAUNCH_ENV) else None
+    inherited = environ.get(LAUNCH_ENV)
+    launch = owned_launch.for_session(f"{host}:{session_id}") if session is None and inherited else None
     environ = {name: value for name, value in environ.items() if name != LAUNCH_ENV}
+    if session is None and inherited and launch is None:
+        environ = {
+            name: value for name, value in environ.items()
+            if not name.startswith("TJ_RUN_") and name not in {TITLE_ENV, "WT_SESSION", "TMUX_PANE"}
+        }
     if session is None:
         if launch:
             environ[LAUNCH_ENV] = launch
-            try:
-                session = register(host, session_id, cwd, root, ["--launch-id", launch])
-            except agent_store.AgentStoreError as error:
-                if error.code != "not-found":
-                    raise
-                print(f"agent-store: launch {launch} was not recorded; registering {host}:{session_id} by title "
-                      "instead", file=sys.stderr)
-                session = register(host, session_id, cwd, root,
-                                    [*terminal(environ), *title_arguments(environ), *wrapper_arguments(environ)])
+            session = register(host, session_id, cwd, root, ["--launch-id", launch])
         else:
             session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
     else:

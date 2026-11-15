@@ -38,7 +38,13 @@ class AgentStoreCalls:
 
 class StartTests(unittest.TestCase):
     def start(self, host, environ, title=None, launch=None):
-        run = mock.Mock(return_value={'session': {'title': title}})
+        def response(*arguments: str) -> dict[str, object]:
+            if arguments[:2] == ('show', '--launch-id'):
+                return {'launch': {'launch_id': launch, 'host': str(host),
+                                   'state': 'active', 'session': None}, 'session': None}
+            return {'session': {'title': title}}
+
+        run = mock.Mock(side_effect=response)
         adapter = mock.Mock()
         with mock.patch.object(hook.agent_store, 'run', run), \
                 mock.patch.object(hook.owned_launch, 'current', return_value=launch), \
@@ -102,32 +108,33 @@ def test_end_leaves_the_session_active_for_other_missing_or_unknown_reasons(monk
     run.assert_not_called()
 
 
-def test_an_unrecorded_launch_registers_by_title_and_reports_it_on_stderr(monkeypatch, capsys):
-    calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no launch'), {'session': {'title': None}})
+def test_an_unrecorded_launch_does_not_register_by_inherited_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no launch'))
     monkeypatch.setattr(hook.agent_store, 'run', calls)
     monkeypatch.setattr(hook.owned_launch, 'current', lambda: 'L1')
     monkeypatch.setattr(hook, 'worktree', lambda cwd: '/repo')
     monkeypatch.setattr(hook, 'terminal', lambda environ: ['--terminal-kind', 'windows-terminal', '--terminal-id', 'w'])
     environ = {hook.LAUNCH_ENV: 'L1', hook.TITLE_ENV: 'agent#98'}
-    hook.start(Host.CLAUDE, 'n1', '/repo/sub', environ)
-    assert calls.calls == [
-        ('register', '--session', 'claude:n1', '--cwd', '/repo/sub', '--worktree', '/repo', '--launch-id', 'L1'),
-        ('register', '--session', 'claude:n1', '--cwd', '/repo/sub', '--worktree', '/repo',
-         '--terminal-kind', 'windows-terminal', '--terminal-id', 'w', '--title', 'agent#98'),
-    ]
-    assert 'L1' in capsys.readouterr().err
+    with pytest.raises(hook.agent_store.AgentStoreError, match='no launch'):
+        hook.start(Host.CLAUDE, 'n1', '/repo/sub', environ)
+    assert calls.calls == [('show', '--launch-id', 'L1')]
 
 
-def test_the_fallback_registration_carries_the_wrapper_pid_and_started_at(monkeypatch):
+def test_an_unrecorded_codex_launch_does_not_copy_its_inherited_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls = AgentStoreCalls(hook.agent_store.AgentStoreError('not-found', 'no session'),
-                            hook.agent_store.AgentStoreError('not-found', 'no launch'), {'session': {'title': None}})
+                            hook.agent_store.AgentStoreError('not-found', 'no launch'))
     monkeypatch.setattr(hook.agent_store, 'run', calls)
     monkeypatch.setattr(hook.owned_launch, 'current', lambda: 'L1')
     monkeypatch.setattr(hook, 'worktree', lambda cwd: None)
     monkeypatch.setattr(hook, 'terminal', lambda environ: [])
     environ = {hook.LAUNCH_ENV: 'L1', hook.WRAPPER_PID_ENV: '4242', hook.WRAPPER_STARTED_AT_ENV: '2026-11-09T00:00:00Z'}
-    hook.start(Host.CODEX, 'n1', '/repo/sub', environ)
-    assert calls.calls[2][-4:] == ('--wrapper-pid', '4242', '--wrapper-started-at', '2026-11-09T00:00:00Z')
+    with pytest.raises(hook.agent_store.AgentStoreError, match='no launch'):
+        hook.start(Host.CODEX, 'n1', '/repo/sub', environ)
+    assert calls.calls == [('show', 'codex:n1'), ('show', '--launch-id', 'L1')]
 
 
 def test_a_session_not_started_by_tj_run_never_carries_wrapper_arguments(monkeypatch):
