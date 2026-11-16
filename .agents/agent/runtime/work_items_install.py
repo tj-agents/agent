@@ -97,7 +97,7 @@ def discovered_profiles(
 ) -> tuple[Pin, ...]:
     """Work-item profile packages this machine's installed plugins declare.
 
-    A specific profile plugin ships its package and subdirectory in its own
+    An organization plugin ships its package and subdirectory in its own
     installed payload (`work-items.json`); the repository comes from the
     marketplace snapshot Agent already carries, and the revision is the exact
     commit Claude installed that plugin from, so no separate pin needs renewal
