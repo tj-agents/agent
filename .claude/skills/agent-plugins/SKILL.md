@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: Refresh this machine's plugins with tj plugins update, install a machine once with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, setting up a machine, adopting a stack, changing selected packages, or auditing machine plugin settings.
+description: Refresh this machine's plugins with tj plugins update, install the machine with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, setting up a machine, adopting a stack, changing selected packages, or auditing machine plugin settings.
 
 kind: utility
 domain: agent

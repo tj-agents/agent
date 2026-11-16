@@ -265,6 +265,7 @@ def inventory(binary: str, plugins: host_plugins.Plugins, launch_directory: Path
 CHECK_TIMEOUT_SECONDS = 90
 ONBOARD_TIMEOUT_SECONDS = 660
 MAX_OUTPUT = 1024
+SETUP_RECORD = "plugin-setup.json"
 
 
 class PluginSetupError(RuntimeError):
@@ -443,6 +444,26 @@ def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str
     return CollectionResult([reference[key] for key in sorted(reference)], errors, missing)
 
 
+def recorded_setups(state: Path) -> dict[str, str]:
+    """The setup runtime digest of each plugin's last successful setup, keyed by identity."""
+    try:
+        document = json.loads((state / SETUP_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(document, dict):
+        return {}
+    return {identity: runtime for identity, runtime in document.items()
+            if isinstance(identity, str) and isinstance(runtime, str)}
+
+
+def record_setups(state: Path, targets: Sequence[Target]) -> None:
+    document = recorded_setups(state) | {target.identity: target.runtime.hex() for target in targets}
+    state.mkdir(parents=True, exist_ok=True)
+    staged = state / f"{SETUP_RECORD}.{os.getpid()}"
+    staged.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    staged.replace(state / SETUP_RECORD)
+
+
 def install_and_recheck(project: Path, host: Host, error: MissingRequiredPluginsError,
                         executable: str | None = None, inventory_options: tuple[str, ...] = ()) -> dict[str, Path] | None:
     host_plugins.PLUGINS[host].install(error.project, error.missing)
@@ -489,7 +510,8 @@ def reconcile_selections(projects: Sequence[Path], *, check_only: bool = False) 
     return []
 
 
-def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None]) -> list[str]:
+def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None],
+                state: Path) -> list[str]:
     project = project_root(project)
     try:
         drift = reconcile_selection(project, check_only=True)
@@ -500,7 +522,11 @@ def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host,
     collected = collect(project, hosts, executables)
     errors = collected.errors
     errors.extend(f"{host}: {error}" for host, error in collected.missing.items())
+    recorded = recorded_setups(state)
     for target in collected.targets:
+        if recorded.get(target.identity) != target.runtime.hex():
+            errors.append(f"{target.identity}: setup has not succeeded with its current runtime")
+            continue
         try:
             result = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if result.returncode:
@@ -509,7 +535,8 @@ def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host,
             errors.append(f"{target.identity}: setup --check could not run: {error}")
     return errors
 
-def converge_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None], onboard: bool = False) -> list[str]:
+def converge_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None], state: Path,
+                   onboard: bool = False) -> list[str]:
     project = project_root(project)
     try:
         reconcile_selection(project)
@@ -531,18 +558,28 @@ def converge_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Ho
         collected = collect(project, hosts, executables)
         errors = collected.errors
     errors.extend(f"{host}: {error}" for host, error in collected.missing.items())
+    recorded = recorded_setups(state)
+    converged = []
     for target in collected.targets:
         try:
+            current = recorded.get(target.identity) == target.runtime.hex()
+            if current and not invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project).returncode:
+                continue
+            applied = invoke(target, ["--onboard"] if onboard else [],
+                             ONBOARD_TIMEOUT_SECONDS if onboard else CHECK_TIMEOUT_SECONDS, project, inherit=onboard)
+            if applied.returncode:
+                errors.append(f"{target.identity}: setup failed: {bounded(applied)}")
+                continue
             checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
             if checked.returncode:
-                applied = invoke(target, ["--onboard"] if onboard else [],
-                                 ONBOARD_TIMEOUT_SECONDS if onboard else CHECK_TIMEOUT_SECONDS, project, inherit=onboard)
-                if applied.returncode:
-                    errors.append(f"{target.identity}: setup failed: {bounded(applied)}")
-                    continue
-                checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
-            if checked.returncode:
                 errors.append(f"{target.identity}: setup did not converge: {bounded(checked)}")
+                continue
+            converged.append(target)
         except (OSError, subprocess.SubprocessError) as error:
             errors.append(f"{target.identity}: setup could not run: {error}")
+    if converged:
+        try:
+            record_setups(state, converged)
+        except OSError as error:
+            errors.append(f"plugin setup could not be recorded in {state}: {error}")
     return errors
