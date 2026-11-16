@@ -47,8 +47,8 @@ the wrapping; authored hook manifests keep the payload executable and arguments.
 Codex's shared daemon auto-start (a `daemon_auto_start = false` override is removed so refresh can reload open
 Codex sessions in place),
 the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
-profile agents, provisioning a verified PowerShell runtime when no usable PowerShell is available, harness
-permissions, plugin setup, plugin scope, Codex trust for tj-agents plugin hooks (verified against their
+profile agents, provisioning a verified PowerShell runtime when no usable PowerShell is available, plugin
+setup, plugin scope, Codex trust for tj-agents plugin hooks (verified against their
 published source, so no Codex launch asks to trust them) and plugin copies. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
@@ -85,6 +85,8 @@ repository selection and regenerate both hosts' settings through the same scope 
 as explicit adoption. The current Marketplace `main` dependency graph adds missing dependencies and
 removes retired TJ Agents packages, including retirements after the bundled offline snapshot.
 An unreachable marketplace leaves repository files untouched and reports the failure.
+The same reconciliation commits each selected plugin's published harness permissions into the repository's
+settings, never into user settings; see [repository permissions](#repository-permissions).
 Unconfigured projects are not enrolled. Installer `--check` reports
 selection drift without changing repository files, and a converged rerun writes nothing.
 
@@ -115,6 +117,29 @@ Runtime self-update accepts only enabled native Agent package bytes that match t
 Agent tree. Cache timestamps cannot select an older runtime. Launch updates include the current
 project's Codex selection when locating that native package; publisher lookup failure preserves the
 installed runtime and reports the update failure.
+
+## Repository permissions
+
+A repository's committed `.claude/settings.json` (`permissions.allow` and `permissions.deny`) and
+`.codex/rules/agent-harness.rules` (`allow` and `forbidden` prefix rules) carry the permissions its selected
+plugins declare in `requires.permissions`, merged with its own `.agents/repository-harness.json` overlay.
+Adoption and the `tj install` plugin setup reconciliation write them; `--check` reports drift, and a committed
+rule that no selected plugin or the overlay declares any more is removed. An uncommitted Claude entry nobody
+declares is refused rather than discarded. Nothing is written to user settings.
+
+```json
+{"claude_allow": ["Bash(tj item:*)"], "claude_deny": ["Bash(gh auth login *)"],
+ "codex_prefix_rules": [], "codex_forbidden_prefix_rules": []}
+```
+
+Each plugin's declaration is read from the `harness.json` its marketplace publishes on `main`, at the exact
+source revision the marketplace catalog pins, through a blobless Git fetch. A declaration naming a
+placeholder such as `${PLUGIN_ROOT}` or a machine-specific absolute path is rejected, since the repository
+commits every rule literally.
+
+Precedence: plugins combine as a union in which a plugin's deny or forbidden rule removes the identical
+allow entry or Codex pattern. The overlay then extends that result and wins: an overlay entry replaces the
+same Claude entry or Codex pattern from any plugin, whichever way the plugin decided it.
 
 ## Lifecycle
 
@@ -149,7 +174,8 @@ subsequent tool commands; Codex provides `CODEX_THREAD_ID`.
 
 Before starting or resuming a host, `tj run` calls `tj prepare`. It derives native project settings
 from `.agents/plugins.json`, installs missing selected plugins, and updates a small marked standards
-index in `AGENTS.md`. The index requires applicable skill bodies to be read before relevant edits;
+index in `AGENTS.md`. It keeps the committed permissions as they are, so a launch needs no published
+harness lookup; adoption and `tj install` own them. The index requires applicable skill bodies to be read before relevant edits;
 ordinary skills remain loaded on demand. Claude imports the shared instructions through `CLAUDE.md`.
 Preparation preserves authored guidance and reports a nonempty Codex override that would hide it.
 Run `tj prepare --host codex --cwd PATH` directly when starting the native host outside `tj run`.

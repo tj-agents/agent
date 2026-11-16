@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 from git_isolation import isolate_git_config
+import published_plugins
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,16 +31,24 @@ class SelectionConvergenceTests(unittest.TestCase):
         snapshot = json.loads((ROOT / "plugins/agent/.agents/agent/utility/plugins/scripts/marketplace_plugins.lock.json")
                               .read_text(encoding="utf-8"))
         (source / "plugins.json").write_text(json.dumps(snapshot["marketplace"]), encoding="utf-8")
-        for arguments in (["init", "--initial-branch=main"], ["add", "plugins.json"],
+        names = [plugin["name"] for plugin in snapshot["marketplace"]["plugins"]]
+        producer, commit = published_plugins.publish(
+            self.project / "producer", dict.fromkeys(names, published_plugins.EMPTY))
+        (source / ".claude-plugin").mkdir()
+        (source / ".claude-plugin/marketplace.json").write_text(
+            published_plugins.catalog(names, commit), encoding="utf-8")
+        for arguments in (["init", "--initial-branch=main"], ["add", "plugins.json", ".claude-plugin"],
                           ["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                            "-c", "core.hooksPath=", "commit", "-m", "Marketplace fixture"]):
             result = subprocess.run(["git", "-C", str(source), *arguments], capture_output=True,
                                     text=True, encoding="utf-8", errors="replace", check=False)
             self.assertEqual(0, result.returncode, result.stderr)
         environment = mock.patch.dict(os.environ, {
-            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_COUNT": "2",
             "GIT_CONFIG_KEY_0": "url." + source.as_uri() + ".insteadOf",
             "GIT_CONFIG_VALUE_0": "https://github.com/tj-agents/marketplace.git",
+            "GIT_CONFIG_KEY_1": "url." + producer + ".insteadOf",
+            "GIT_CONFIG_VALUE_1": published_plugins.PRODUCER,
         })
         environment.start()
         self.addCleanup(environment.stop)

@@ -126,9 +126,13 @@ python -B '<skill-directory>\scripts\repo_config.py' --root C:\path\to\repositor
 ```
 
 `--lock` defaults to `<root>/.agents/plugins.json`. The generator owns Claude's marketplace,
-enabled-plugin and `permissions.allow` keys and Codex's marketplace and plugin tables plus
-`.codex/rules/agent-harness.rules`; other project settings stay. Existing Claude allow entries outside the
-declared harness must move into `.agents/repository-harness.json` first. Project scope also rejects
+enabled-plugin, `permissions.allow` and `permissions.deny` keys and Codex's marketplace and plugin tables plus
+`.codex/rules/agent-harness.rules`; other project settings stay. Those permissions are every selected plugin's
+published `requires.permissions` merged with `.agents/repository-harness.json`, whose entries win; see
+[repository permissions](https://github.com/tj-agents/agent#repository-permissions). A committed entry nobody
+declares any more is removed; an uncommitted Claude allow or deny entry outside the declared harness is refused
+rather than discarded, so move it into that overlay first. `--preserve-permissions` keeps the current
+permissions, which is how `tj prepare` runs without a published harness lookup. Project scope also rejects
 machine-specific absolute paths (Windows drive and UNC paths, `/home/<user>`, `/Users/<user>`, `/mnt/<drive>`)
 anywhere in the committed `.claude/settings.json`, `.codex/config.toml` or `.codex/hooks.json`, in every mode,
 reporting `file:line`. Replace such a path with a repository-relative one, or move the setting to an

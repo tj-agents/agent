@@ -17,6 +17,7 @@ import config_conflicts
 import lock_io
 import machine_paths
 import plugin_selection
+import published_harness
 from plugin_runtime import Host, process
 
 if sys.version_info < (3, 11):
@@ -88,12 +89,19 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
     return "local"
 
 
-def declarations(lock_path: Path, lock: dict) -> tuple[dict[str, dict], dict[str, bool], list[str], list[dict]]:
+def declarations(
+    lock_path: Path, lock: dict, *, published: bool = True
+) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
+    """Return the selection's marketplaces, enabled plugins and committed permissions.
+
+    Permissions compose every selected plugin's published declaration with the repository overlay
+    (`harness_permissions.compose`). Without `published` they are None: the caller keeps its current ones.
+    """
     marketplaces, selected_identities = plugin_selection.validate(lock)
     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
     identities = {identity: True for identity in selected_identities}
     selected = {plugin_selection.overlay_id(identity) for identity in selected_identities}
-    requirements = []
+    overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
     overlay_path = lock_path.resolve().parent / "repository-harness.json"
     if overlay_path.is_file():
         overlay = lock_io.load_json(overlay_path)
@@ -109,11 +117,11 @@ def declarations(lock_path: Path, lock: dict) -> tuple[dict[str, dict], dict[str
         missing = sorted(set(overlay["requires"]["plugins"]) - selected)
         if missing:
             raise lock_io.LockError("Repository lock omits harness-required plugins: " + ", ".join(missing))
-        requirements.append(overlay["requires"])
-    claude_allow, codex_rules = harness_permissions.fold_permissions(requirements)
-    claude_allow = [entry for entry in claude_allow if not harness_permissions.contains_template(entry)]
-    codex_rules = [rule for rule in codex_rules if not harness_permissions.contains_template(rule)]
-    return sources, identities, claude_allow, codex_rules
+        overlay_permissions = overlay["requires"].get("permissions", overlay_permissions)
+    if not published:
+        return sources, identities, None
+    plugins = published_harness.declarations(marketplaces, selected_identities)
+    return sources, identities, harness_permissions.compose(plugins.values(), overlay_permissions)
 
 
 def claude_auto_update(existing: dict, name: str) -> dict[str, bool]:
@@ -135,21 +143,56 @@ def claude_marketplaces(sources: dict[str, dict], existing: object) -> dict[str,
     }
 
 
-def claude_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool], allow: list[str]) -> str:
+def claude_lists(permissions: harness_permissions.Permissions) -> dict[str, list[str]]:
+    return {"allow": list(permissions.claude_allow), "deny": list(permissions.claude_deny)}
+
+
+def committed_permissions(root: Path) -> dict[str, set[str]]:
+    """Return the Claude permission entries committed at HEAD, which regeneration may replace.
+
+    An entry outside HEAD and the current declarations is a local edit that only exists in the working tree,
+    so the writer refuses it rather than discarding it.
+    """
+    if not (root / ".git").exists():
+        return {}
+    text = machine_paths.tracked_snapshots(root, ".claude/settings.json").get("HEAD")
+    try:
+        settings = json.loads(text) if text is not None else {}
+    except ValueError as error:
+        raise lock_io.LockError(f"Committed .claude/settings.json is not valid JSON: {error}") from error
+    permissions = settings.get("permissions") if isinstance(settings, dict) else None
+    if not isinstance(permissions, dict):
+        return {}
+    return {
+        key: {entry for entry in entries if isinstance(entry, str)}
+        for key in ("allow", "deny")
+        if isinstance(entries := permissions.get(key), list)
+    }
+
+
+def claude_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool],
+                    permissions: harness_permissions.Permissions | None,
+                    committed: dict[str, set[str]] | None = None) -> str:
     settings = lock_io.load_json(path) if path.is_file() else {}
     settings["extraKnownMarketplaces"] = claude_marketplaces(sources, settings.get("extraKnownMarketplaces"))
     settings["enabledPlugins"] = identities
-    permissions = settings.get("permissions", {})
-    if not isinstance(permissions, dict):
+    if permissions is None:
+        return json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
+    current = settings.get("permissions", {})
+    if not isinstance(current, dict):
         raise lock_io.LockError(f"{path}: permissions must be an object")
-    existing_allow = permissions.get("allow", [])
-    if not isinstance(existing_allow, list) or any(not isinstance(entry, str) for entry in existing_allow):
-        raise lock_io.LockError(f"{path}: permissions.allow must be a string list")
-    unmanaged_allow = sorted(set(existing_allow) - set(allow))
-    if unmanaged_allow:
-        raise lock_io.LockError(f"{path}: unmanaged permissions.allow entries: " + ", ".join(unmanaged_allow))
-    permissions["allow"] = allow
-    settings["permissions"] = permissions
+    for key, entries in claude_lists(permissions).items():
+        existing = current.get(key, [])
+        if not isinstance(existing, list) or any(not isinstance(entry, str) for entry in existing):
+            raise lock_io.LockError(f"{path}: permissions.{key} must be a string list")
+        unmanaged = sorted(set(existing) - set(entries) - (committed or {}).get(key, set()))
+        if unmanaged:
+            raise lock_io.LockError(f"{path}: unmanaged permissions.{key} entries: " + ", ".join(unmanaged))
+        if entries or key == "allow":
+            current[key] = entries
+        else:
+            current.pop(key, None)
+    settings["permissions"] = current
     return json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -196,9 +239,12 @@ def codex_block(sources: dict, identities: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def codex_rules(rules: list[dict]) -> str:
-    lines = ["# Generated from repository-declared agent harness requirements.", ""]
-    lines += harness_permissions.codex_rule_lines(rules)
+def codex_rules(permissions: harness_permissions.Permissions) -> str | None:
+    if not permissions.codex_allow and not permissions.codex_forbidden:
+        return None
+    lines = ["# Generated from the selected plugins' and this repository's harness permissions.", ""]
+    lines += harness_permissions.codex_rule_lines(permissions.codex_allow, "allow")
+    lines += harness_permissions.codex_rule_lines(permissions.codex_forbidden, "forbidden")
     return "\n".join(lines)
 
 
@@ -297,16 +343,17 @@ def local_state(path: Path) -> dict:
     if not isinstance(state[Host.CLAUDE.value], dict) or any(state[key] is not None and not isinstance(state[key], str) for key in (Host.CODEX.value, "rules")):
         raise lock_io.LockError(f"{path}: invalid local ownership state")
     for key, value in state[Host.CLAUDE.value].items():
-        if key not in {"extraKnownMarketplaces", "enabledPlugins", "allow"}:
+        if key not in {"extraKnownMarketplaces", "enabledPlugins", "allow", "deny"}:
             raise lock_io.LockError(f"{path}: invalid Claude ownership key")
-        if key == "allow":
-            lock_io.require_string_list(value, "owned Claude approvals")
+        if key in {"allow", "deny"}:
+            lock_io.require_string_list(value, f"owned Claude permissions.{key}")
         elif not isinstance(value, dict) or any(not isinstance(record, dict) or set(record) != {"present", "before", "written"} or not isinstance(record["present"], bool) for record in value.values()):
             raise lock_io.LockError(f"{path}: invalid Claude ownership records")
     return state
 
 
-def local_claude(path: Path, sources: dict, identities: dict, allow: list[str], previous: dict) -> tuple[str, dict]:
+def local_claude(path: Path, sources: dict, identities: dict, permissions: harness_permissions.Permissions | None,
+                 previous: dict) -> tuple[str, dict]:
     settings = lock_io.load_json(path) if path.is_file() else {}
     wanted = {
         "extraKnownMarketplaces": claude_marketplaces(sources, settings.get("extraKnownMarketplaces")),
@@ -331,15 +378,22 @@ def local_claude(path: Path, sources: dict, identities: dict, allow: list[str], 
                 owned[key][name] = {"present": name in current, "before": current.get(name), "written": value}
                 current[name] = value
         settings[key] = current
-    permissions = settings.get("permissions", {})
-    if not isinstance(permissions, dict):
+    if permissions is None:
+        owned.update({key: previous[key] for key in ("allow", "deny") if key in previous})
+        return json.dumps(settings, indent=2, ensure_ascii=False) + "\n", owned
+    current = settings.get("permissions", {})
+    if not isinstance(current, dict):
         raise lock_io.LockError(f"{path}: permissions must be an object")
-    existing = permissions.get("allow", [])
-    lock_io.require_string_list(existing, "Claude approvals")
-    survivors = [entry for entry in existing if entry not in previous.get("allow", [])]
-    owned["allow"] = [entry for entry in allow if entry not in survivors]
-    permissions["allow"] = survivors + owned["allow"]
-    settings["permissions"] = permissions
+    for key, entries in claude_lists(permissions).items():
+        existing = current.get(key, [])
+        lock_io.require_string_list(existing, f"Claude permissions.{key}")
+        survivors = [entry for entry in existing if entry not in previous.get(key, [])]
+        owned[key] = [entry for entry in entries if entry not in survivors]
+        if survivors or owned[key] or key == "allow":
+            current[key] = survivors + owned[key]
+        else:
+            current.pop(key, None)
+    settings["permissions"] = current
     return json.dumps(settings, indent=2, ensure_ascii=False) + "\n", owned
 
 
@@ -423,6 +477,7 @@ def plan(
     read_paths: list[Path] = (),
     execute=process.run,
     exclusions: dict[Path, str] | None = None,
+    preserve_permissions: bool = False,
 ) -> dict[Path, str | None]:
     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
     scope = resolve_scope(root, scope, execute)
@@ -436,13 +491,13 @@ def plan(
         inputs.append(lock_path)
     exclude = preflight_paths(root, [*paths, *prospective_paths], scope=scope, read_paths=inputs, run=execute)
     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
-    sources, identities, allow, rules = declarations(lock_path, lock)
-    expected_rules = codex_rules(rules) if rules else None
+    sources, identities, permissions = declarations(lock_path, lock, published=not preserve_permissions)
+    actual_rules = text_at(rules_path)
+    expected_rules = actual_rules if permissions is None else codex_rules(permissions)
     if scope == "local":
         state = local_state(state_path)
-        claude_text, claude_owned = local_claude(claude, sources, identities, allow, state[Host.CLAUDE.value])
+        claude_text, claude_owned = local_claude(claude, sources, identities, permissions, state[Host.CLAUDE.value])
         codex_text, codex_owned = local_codex(codex, sources, identities, state[Host.CODEX.value])
-        actual_rules = text_at(rules_path)
         if actual_rules is not None and actual_rules != state["rules"]:
             raise lock_io.LockError(f"{rules_path}: harness rules are not owned or were changed")
         updated = {"schema_version": 1, Host.CLAUDE.value: claude_owned, Host.CODEX.value: codex_owned, "rules": expected_rules}
@@ -453,7 +508,9 @@ def plan(
             if exclusions is not None:
                 exclusions[exclude] = targets[exclude]
     else:
-        targets = {claude: claude_settings(claude, sources, identities, allow), codex: codex_settings(codex, sources, identities), rules_path: expected_rules}
+        committed = committed_permissions(root) if permissions is not None else {}
+        targets = {claude: claude_settings(claude, sources, identities, permissions, committed),
+                   codex: codex_settings(codex, sources, identities), rules_path: expected_rules}
     try:
         mode = host_permissions.permissions(root)
         targets[claude] = host_permissions.claude_settings(targets[claude], mode, project=True)
@@ -515,11 +572,12 @@ def write_batch(targets: dict[Path, str | None]) -> None:
         raise
 
 
-def run(lock_path: Path, mode: str, *, root: Path | None = None, scope: str | None = None) -> list[str]:
+def run(lock_path: Path, mode: str, *, root: Path | None = None, scope: str | None = None,
+        preserve_permissions: bool = False) -> list[str]:
     if mode not in {"write", "check", "preview"}:
         raise lock_io.LockError(f"Unknown repository mode: {mode}")
     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
-    targets = plan(lock_path, root=root, scope=scope)
+    targets = plan(lock_path, root=root, scope=scope, preserve_permissions=preserve_permissions)
     changed = {path: expected for path, expected in targets.items() if text_at(path) != expected}
     drift = [path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path) for path in changed]
     if mode == "write":
@@ -533,10 +591,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--mode", required=True, choices=("write", "check", "preview"))
     parser.add_argument("--root", type=Path)
     parser.add_argument("--scope", choices=("project", "local"))
+    parser.add_argument("--preserve-permissions", action="store_true",
+                        help="keep the current permissions instead of resolving the selected plugins' published ones")
     args = parser.parse_args(argv)
     try:
         lock = args.lock or plugin_selection.resolve((args.root or Path.cwd()).expanduser().resolve())
-        drift = run(lock, args.mode, root=args.root, scope=args.scope)
+        drift = run(lock, args.mode, root=args.root, scope=args.scope, preserve_permissions=args.preserve_permissions)
     except (lock_io.LockError, OSError, UnicodeError) as error:
         print(str(error), file=sys.stderr)
         return 1

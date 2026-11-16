@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from published_plugins import none_declared
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/agent/.agents/agent/utility/plugins/scripts"
@@ -89,6 +90,9 @@ def scenario(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GitScenario:
         ):
             monkeypatch.delenv(name)
     monkeypatch.setattr(ADOPT, "current_roster", ADOPT.load_roster)
+    monkeypatch.setattr(
+        ADOPT.repo_config.published_harness, "declarations", none_declared
+    )
     result = GitScenario(tmp_path)
     result.git("init", "--initial-branch=main")
     result.git("config", "user.name", "Fixture")
@@ -202,6 +206,9 @@ def test_batch_worktrees_share_exclusions_without_losing_owners(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(ADOPT, "current_roster", ADOPT.load_roster)
+    monkeypatch.setattr(
+        ADOPT.repo_config.published_harness, "declarations", none_declared
+    )
     root, linked = tmp_path / "first", tmp_path / "linked"
     root.mkdir()
     git = GitScenario(root)

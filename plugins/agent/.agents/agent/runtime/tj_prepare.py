@@ -24,6 +24,7 @@ def configure(project: Path, mode: str) -> str:
             str(project),
             "--mode",
             mode,
+            "--preserve-permissions",
         ],
         cwd=project,
         capture_output=True,

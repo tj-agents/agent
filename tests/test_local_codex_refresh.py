@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from published_plugins import none_declared
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins/agent/.agents/agent/utility/plugins/scripts"
@@ -49,6 +50,9 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setattr(ADOPT, "current_roster", ADOPT.load_roster)
+    monkeypatch.setattr(
+        ADOPT.repo_config.published_harness, "declarations", none_declared
+    )
     git(tmp_path, "init", "--initial-branch=main")
     git(tmp_path, "config", "user.name", "Fixture")
     git(tmp_path, "config", "user.email", "fixture@example.invalid")
