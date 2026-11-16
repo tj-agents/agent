@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -15,6 +15,7 @@ from typing import Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import marketplace_head
 import required_plugins
 import standards
 from claude import installed as claude_installed
@@ -123,13 +124,31 @@ def already_current(host: Host, digests: Digests) -> bool:
     )
 
 
-def update_standards(report: Report, host: Host) -> None:
+def prefetch_standards(host: Host) -> list[object] | None:
+    directory = Path.cwd()
+    project = required_plugins.project_root(directory)
+    if (project / ".agents/repo-capabilities.local.json").is_file():
+        return None
+    required = required_plugins.selected(project)
+    if not required:
+        return None
+    return list(required_plugins.inventory_rows(directory, host, identities=required))
+
+
+def update_standards(
+    report: Report, host: Host, prefetched: Future[list[object] | None] | None = None
+) -> None:
     directory = Path.cwd()
     project = required_plugins.project_root(directory)
     if (project / ".agents/repo-capabilities.local.json").is_file():
         return
     try:
-        roots = required_plugins.check(directory, host)
+        entries = prefetched.result() if prefetched is not None else None
+        roots = (
+            required_plugins.check(directory, host, entries=entries)
+            if entries is not None
+            else required_plugins.check(directory, host)
+        )
         if roots is not None and not required_plugins.committed_worktree(project):
             standards.update(project, roots)
     except (
@@ -151,20 +170,10 @@ def marketplace_revision(host: Host) -> str | None:
     return revision if not result.returncode and REVISION.fullmatch(revision) else None
 
 
-def behind_remote(host: Host, marketplace: str) -> bool:
+def behind_remote(host: Host, marketplace: str, environ: Mapping[str, str]) -> bool:
     """Whether this host's `marketplace` clone may be behind its remote HEAD."""
-    root = str(INSTALLED[host].marketplace_root(marketplace))
-    try:
-        local = Report.run(["git", "-C", root, "rev-parse", "HEAD"])
-        remote = Report.run(["git", "-C", root, "ls-remote", "origin", "HEAD"])
-    except (OSError, subprocess.TimeoutExpired):
-        return True
-    head = local.stdout.strip()
-    return bool(
-        local.returncode
-        or remote.returncode
-        or not REVISION.fullmatch(head)
-        or remote.stdout.split()[:1] != [head]
+    return marketplace_head.behind(
+        INSTALLED[host].marketplace_root(marketplace), environ
     )
 
 
@@ -187,15 +196,19 @@ class Outcome:
     revision: str | None
 
 
-def update(host: Host, digests: Digests) -> Outcome:
+def update(host: Host, digests: Digests, environ: Mapping[str, str]) -> Outcome:
     """Fetch the marketplaces, then bring this host's plugins to their pins."""
     report = Report()
     installed = INSTALLED[host]
     before = marketplace_revision(host)
     with ThreadPoolExecutor(max_workers=CONCURRENT_STEPS) as pool:
         pins = pool.submit(already_current, host, digests)
-        behind = list(pool.map(partial(behind_remote, host), MARKETPLACES))
+        inventory = pool.submit(prefetch_standards, host)
+        behind = list(
+            pool.map(lambda name: behind_remote(host, name, environ), MARKETPLACES)
+        )
         pins_current = pins.result()
+    reuse_inventory = pins_current and not any(behind)
     installed.update_marketplaces(
         report,
         tuple(name for name, stale in zip(MARKETPLACES, behind, strict=True) if stale),
@@ -212,7 +225,7 @@ def update(host: Host, digests: Digests) -> Outcome:
         installed.refresh(report, MARKETPLACES, partial(current, host, digests))
     digests.save()
     if not report.failures:
-        update_standards(report, host)
+        update_standards(report, host, inventory if reuse_inventory else None)
     revision = marketplace_revision(host)
     # Activation repeats until it succeeds once for the plugins at this revision.
     activated = digests.path.parent / f"activated-{host}.txt"
