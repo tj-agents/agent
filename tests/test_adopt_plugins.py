@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+from published_plugins import none_declared
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins" / "agent" / ".agents" / "agent" / "utility" / "plugins" / "scripts"
@@ -28,6 +30,9 @@ class RemovePluginTests(unittest.TestCase):
         live = mock.patch.object(ADOPT, "current_roster", side_effect=ADOPT.load_roster)
         live.start()
         self.addCleanup(live.stop)
+        published = mock.patch.object(ADOPT.repo_config.published_harness, "declarations", none_declared)
+        published.start()
+        self.addCleanup(published.stop)
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name) / "project"
