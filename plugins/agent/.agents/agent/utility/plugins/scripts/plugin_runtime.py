@@ -1,4 +1,4 @@
-"""Load shared process execution and the host model from this Agent package's shipped runtime."""
+"""Load shared process execution, the host model and installed declarations from this Agent package's shipped runtime."""
 
 import importlib
 import sys
@@ -37,5 +37,6 @@ if str(_RUNTIME) not in sys.path:
     sys.path.insert(0, str(_RUNTIME))
 process = importlib.import_module("tj_cli.process")
 Host = importlib.import_module("tj_agent.host").Host
+declarations = importlib.import_module("tj_agent.declarations")
 
-__all__ = ["Host", "process"]
+__all__ = ["Host", "declarations", "process"]
