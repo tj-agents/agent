@@ -586,11 +586,11 @@ class InstallerStepTests(Machine):
         )
         self.converge(step("Codex profile agents"), context)
 
-    def test_codex_agents_skip_without_pwsh(self):
+    def test_codex_agents_skip_without_codex_profile(self):
         out = io.StringIO()
         install.run_steps([step("Codex profile agents")], self.context(), False, out)
         self.assertIn(
-            "n/a    Codex profile agents: unpackaged PowerShell 7 is required",
+            "n/a    Codex profile agents: Codex is not set up",
             out.getvalue(),
         )
 
@@ -1197,12 +1197,13 @@ class RunStepsTests(Machine):
                 "tj lifecycle commands",
                 "shell profiles",
                 "hidden Git Bash for Claude",
-                "Codex profile agents",
                 "harness permissions",
                 "plugin setup",
+                "Codex profile agents",
                 "plugin scope",
                 "Codex hook trust",
                 "plugin copies",
+                "Codex update observer",
             ],
             [item.name for item in install.STEPS],
         )
@@ -1610,6 +1611,8 @@ def full_install(
     calls: list[list[str]] = []
 
     def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        if command and command[-1] == "--converged":
+            assert _options.get("preserve_descendants") is True
         calls.append(command)
         return subprocess.CompletedProcess(command, 0)
 
@@ -1648,6 +1651,29 @@ def test_an_install_already_at_the_converged_agent_runs_its_steps(
     assert updated == [Host.CLAUDE, Host.CODEX]
     assert calls == []
     assert steps.call_count == 2  # the native CLI step, then every step
+
+
+def test_failed_plugin_update_neither_hands_over_nor_publishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = machine_context(tmp_path)
+
+    def fail_update(current: install.Context) -> dict:
+        current.failures.append("plugins: convergence failed")
+        return {}
+
+    successor = mock.Mock()
+    publish = mock.Mock()
+    monkeypatch.setattr(install, "machine_context", lambda: context)
+    monkeypatch.setattr(install, "pinned_installer", lambda _state: None)
+    monkeypatch.setattr(install.native_runtime, "expose", lambda: None)
+    monkeypatch.setattr(install, "update_plugins", fail_update)
+    monkeypatch.setattr(install, "converged_installer", successor)
+    monkeypatch.setattr(install, "publish_update", publish)
+    monkeypatch.setattr(install, "run_steps", lambda *_args: 0)
+    assert install.main([]) == 2
+    successor.assert_not_called()
+    publish.assert_not_called()
 
 
 @pytest.mark.parametrize("arguments", [["--converged"], ["--step", "plugin copies"]])

@@ -1463,7 +1463,16 @@ def windows_bootstrap_argument(argument: str) -> ast.expr:
     )
 
 
-def claude_command_hook(hook: JSONObject, package: str) -> None:
+def preserve_descendants(hook: JSONObject, package: str) -> bool:
+    if "preserveDescendants" in hook and hook.get("type") != "command":
+        raise ValueError(f"{package}: preserveDescendants requires a command hook")
+    preserve = hook.pop("preserveDescendants", False)
+    if not isinstance(preserve, bool):
+        raise ValueError(f"{package}: preserveDescendants must be a boolean")
+    return preserve
+
+
+def claude_command_hook(hook: JSONObject, package: str, preserve: bool) -> None:
     command = hook.get("command")
     arguments = hook.get("args")
     if not isinstance(command, str) or not command or "\0" in command:
@@ -1478,7 +1487,12 @@ def claude_command_hook(hook: JSONObject, package: str) -> None:
             f"{package}: Claude command hook args must be a list of strings"
         )
     hook["command"] = "tj_hook"
-    hook["args"] = ["--", command, *arguments]
+    hook["args"] = [
+        *(["--preserve-descendants"] if preserve else []),
+        "--",
+        command,
+        *arguments,
+    ]
 
 
 def bind_claude_hook_commands(output: dict[str, bytes], packages: list[str]) -> None:
@@ -1509,8 +1523,9 @@ def bind_claude_hook_commands(output: dict[str, bytes], packages: list[str]) -> 
                 for hook in group["hooks"]:
                     if not isinstance(hook, dict):
                         raise ValueError(f"{package}: Claude hook must be an object")
+                    preserve = preserve_descendants(hook, package)
                     if hook.get("type") == "command":
-                        claude_command_hook(hook, package)
+                        claude_command_hook(hook, package, preserve)
         output[manifest] = dump(payload).encode("utf-8")
 
 
@@ -1536,12 +1551,18 @@ def bind_codex_hook_snapshots(
         for groups in payload["hooks"].values():
             for group in groups:
                 for hook in group["hooks"]:
+                    preserve = preserve_descendants(hook, package)
                     if hook.get("type") != "command":
                         continue
+                    runner = (
+                        "tj_hook --preserve-descendants --"
+                        if preserve
+                        else "tj_hook --"
+                    )
                     hook["command"] = snapshot_command(
                         hook["command"],
                         "python3 -B ",
-                        "tj_hook -- python3 -I -B " + linux_arguments,
+                        runner + " python3 -I -B " + linux_arguments,
                         "command",
                     )
                     arguments = windows_hook_arguments(
@@ -1569,7 +1590,9 @@ def bind_codex_hook_snapshots(
                         ],
                     )
                     windows = (
-                        'cmd.exe /d /s /v:off /c tj_hook -- python -I -B -c "'
+                        "cmd.exe /d /s /v:off /c "
+                        + runner
+                        + ' python -I -B -c "'
                         + windows_bootstrap
                         + '"'
                     )
