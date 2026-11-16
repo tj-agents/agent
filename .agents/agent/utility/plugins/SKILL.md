@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: Refresh this machine's plugins with tj plugins update, install a machine once with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, setting up a machine, adopting a stack, changing selected packages, or auditing machine plugin settings.
+description: Refresh this machine's plugins with tj plugins update, install the machine with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, setting up a machine, adopting a stack, changing selected packages, or auditing machine plugin settings.
 
 kind: utility
 domain: agent
@@ -21,12 +21,13 @@ tj install
 tj install --check
 ```
 
-After a plugin PR merges, or when plugins look outdated, run `tj plugins update --host <host>`. It refreshes
-the host's plugins and never re-runs plugin setup. `tj run` already starts it at launch and periodically when
-the marketplace moved. Run `tj install` only to set up a machine, or when machine tools, profiles, agent
-settings, command bindings or a plugin's one-time setup must change; it re-runs every plugin setup step. After a successful changed
+`tj plugins update --host <host>` refreshes that host's plugins to their marketplace pins without running
+plugin setup; `tj run` starts it at launch and periodically when the marketplace moved. `tj install` installs
+the machine: plugins, runtime, CLI, machine tools, Handy, profiles, agent settings and command bindings. It runs
+a selected plugin's setup only when that plugin's setup runtime changed since its last successful setup or its
+`setup --check` fails, and `tj install --check` reports drift without writing. After a successful changed
 installation, the internal `tj update --host <host> --revision <revision>` publishes the installed revision so
-`tj run` tabs apply it in place once idle. `tj run` checks for marketplace updates at launch and periodically.
+`tj run` tabs apply it in place once idle.
 See the [canonical plugin update flow](https://github.com/tj-agents/cli/blob/main/docs/plugin-updates.md)
 for details. A current machine changes nothing and exits 0. `tj init` remains shell initialization.
 tj-agents plugins load only where a repository selects them; machine installation disables any enabled for
