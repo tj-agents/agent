@@ -86,7 +86,7 @@ class Capability:
 
 
 REVISIONS = {
-    "cli": "cf10523a8910f3e57c202d718240780f10b49cfb",
+    "cli": "f245c8ec059adc163d1a364dae340c5d15a1bb98",
     "personal": "7e0b2a962df9ba1b90284990360cdbd9c49cbe3d",
     "core": "03f99b363e11943cf8918a99b6a7654f5b770edb",
     "work-items": "0d107309e04bedd77d2b1b3834ad92db0a777d0c",
