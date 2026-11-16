@@ -86,7 +86,7 @@ class Capability:
 
 
 REVISIONS = {
-    "cli": "3a511d2717284678b91e337fedb0d50c103e617a",
+    "cli": "cf10523a8910f3e57c202d718240780f10b49cfb",
     "personal": "7e0b2a962df9ba1b90284990360cdbd9c49cbe3d",
     "core": "03f99b363e11943cf8918a99b6a7654f5b770edb",
     "work-items": "0d107309e04bedd77d2b1b3834ad92db0a777d0c",
@@ -207,17 +207,18 @@ CAPABILITIES = (
         "message-post",
         Support(
             "cli:src/message.rs::run",
-            "cli:tests/message.rs::a_message_to_a_claude_session_reaches_its_native_inbox_from_either_host",
+            "cli:tests/message.rs::either_host_posts_to_either_hosts_feed_preserving_the_sender",
         ),
         Support(
             "cli:src/message.rs::run",
-            "cli:tests/message.rs::a_message_to_a_codex_session_lands_in_its_feed_with_the_sender",
+            "cli:tests/message.rs::either_host_posts_to_either_hosts_feed_preserving_the_sender",
         ),
     ),
     Capability(
-        "codex-feed-read",
+        "session-feed-read",
         Support(
-            reason="A Claude session gets tj message in its native inbox; no feed."
+            "cli:src/feed.rs::run",
+            "cli:tests/message.rs::feed_wait_returns_when_a_message_arrives",
         ),
         Support(
             "cli:src/feed.rs::run",

@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Use when launching an independent Claude or Codex goal in a named tab from a prepared prompt and exact checkout.
+description: Launch an independent Claude or Codex goal in a named tab from a prepared prompt and exact checkout. Use when starting a separate session; messaging an existing session uses agent:message.
 kind: utility
 domain: agent
 profile: core

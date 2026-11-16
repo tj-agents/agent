@@ -723,13 +723,15 @@ def test_verified_launch_identifies_remote_or_nested_parent(session: str) -> Non
         assert CLI.parent_session(None) == session
 
 
-def test_the_standing_rule_names_the_parent_by_title() -> None:
+@pytest.mark.parametrize("parent", ["claude:p", "codex:p"])
+def test_the_standing_rule_names_the_parent_without_forcing_a_transport(parent: str) -> None:
     with mock.patch.object(
         CLI.agent_store, "run", return_value={"session": {"title": "agent#98"}}
     ):
-        rule = CLI.parent_rule("claude:p")
-    assert '"agent#98" (claude:p)' in rule
-    assert 'agent:message (tj message claude:p "<text>")' in rule
+        rule = CLI.parent_rule(parent)
+    assert f'"agent#98" ({parent})' in rule
+    assert 'agent:message' in rule
+    assert 'tj message' not in rule
     assert "never send it status updates" in rule
     assert CLI.parent_rule(None) == ""
 
