@@ -6,6 +6,7 @@ from pathlib import Path
 import install
 import pytest
 from codex import powershell as codex_powershell
+from tj_cli import native_install, powershell_install
 
 
 def powershell(directory: Path) -> Path:
@@ -145,8 +146,8 @@ def test_profile_delivery_reports_packaged_only_powershell_without_running(
         )
         is None
     )
-    monkeypatch.setattr(install.native_install, "default_bin_dir", lambda: tmp_path)
-    monkeypatch.setattr(install.powershell_install, "pending", lambda _path: "missing")
+    monkeypatch.setattr(native_install, "default_bin_dir", lambda: tmp_path)
+    monkeypatch.setattr(powershell_install, "pending", lambda _path: "missing")
     assert install.check_codex_agents(context) == [
         "install PowerShell for Codex profile agents"
     ]
@@ -189,16 +190,14 @@ def test_profile_delivery_installs_missing_powershell_and_uses_it(
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "INSTALLED: profiles\n", "")
 
-    monkeypatch.setattr(install.native_install, "default_bin_dir", lambda: tmp_path)
+    monkeypatch.setattr(native_install, "default_bin_dir", lambda: tmp_path)
+    monkeypatch.setattr(powershell_install, "executable", lambda _path: executable)
     monkeypatch.setattr(
-        install.powershell_install, "executable", lambda _path: executable
-    )
-    monkeypatch.setattr(
-        install.powershell_install,
+        powershell_install,
         "pending",
         lambda _path: None if executable.is_file() else "missing",
     )
-    monkeypatch.setattr(install.powershell_install, "ensure", ensure)
+    monkeypatch.setattr(powershell_install, "ensure", ensure)
     context = install.Context(
         home=tmp_path, environ={}, windows=True, which=lambda _name: None, run=run
     )

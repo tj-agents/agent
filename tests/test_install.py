@@ -1659,7 +1659,7 @@ def test_failed_plugin_update_neither_hands_over_nor_publishes(
 ) -> None:
     context = machine_context(tmp_path)
 
-    def fail_update(current: install.Context) -> dict:
+    def fail_update(current: install.Context) -> dict[str, object]:
         current.failures.append("plugins: convergence failed")
         return {}
 

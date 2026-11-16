@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import install
 import pytest
@@ -9,7 +10,7 @@ from codex import observer
 
 
 def test_no_socket_needs_no_observer(tmp_path: Path) -> None:
-    def unexpected(*args: object, **kwargs: object) -> None:
+    def unexpected(*args: object, **kwargs: object) -> NoReturn:
         pytest.fail("a missing daemon must not start a process")
 
     assert observer.status(tmp_path, tmp_path, run=unexpected)
@@ -34,10 +35,10 @@ def test_start_waits_for_ready_without_restarting_the_daemon(tmp_path: Path) -> 
     socket = observer.socket_path(tmp_path)
     socket.parent.mkdir()
     socket.touch()
-    calls: list[tuple[list[str], dict]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
     results = iter((1, 0, 0))
 
-    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, next(results), "", "")
 
@@ -52,7 +53,7 @@ def test_idle_daemon_needs_no_observer(tmp_path: Path) -> None:
     socket.parent.mkdir()
     socket.touch()
 
-    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 3, "", "")
 
     assert observer.status(tmp_path, tmp_path, run=run)
@@ -64,7 +65,7 @@ def test_last_thread_exits_during_start_without_failing_setup(tmp_path: Path) ->
     socket.touch()
     results = iter((1, 3))
 
-    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, next(results), "", "")
 
     assert not observer.ensure(tmp_path, tmp_path, run=run)
@@ -75,7 +76,7 @@ def test_daemon_errors_are_not_reported_as_ready(tmp_path: Path) -> None:
     socket.parent.mkdir()
     socket.touch()
 
-    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 2, "", "connection failed")
 
     with pytest.raises(RuntimeError, match="connection failed"):
