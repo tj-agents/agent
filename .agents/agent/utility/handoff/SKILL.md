@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Use when launching an independent Claude or Codex goal in a named tab from a prepared prompt and exact checkout.
+description: Launch an independent Claude or Codex goal in a named tab from a prepared prompt and exact checkout. Use when starting a separate session; messaging an existing session uses agent:message.
 kind: utility
 domain: agent
 profile: core
@@ -23,7 +23,7 @@ Choose `--lane L1`–`L6` using `agent:lanes`; the launcher resolves both model 
 For L1, use `--host codex` because Claude L1 routes there.
 
 - `--title` is required, short and unique: it becomes the tab title and the session's native name, so other sessions address the child by it.
-- `--parent` defaults to the calling session; pass `--parent <host:id>` to override it. The child's prompt then gains a standing rule to report to the parent with `agent:message` only for its final result, a blocker it cannot resolve or an approval Tommy must give, never status updates. A Claude or Codex parent uses `agent:message` to wait with `tj feed --wait` through `agent:listen`, returning through the host's native background command completion.
+- `--parent` defaults to the calling session; pass `--parent <host:id>` to override it. The child's prompt gains a standing rule to report to that parent under [agent:message](../message/SKILL.md), which owns transport selection, receipts and any required parent wait. Preserve explicit task standing rules and user transport instructions in the prepared prompt.
 - `--item` links the child to a work item, so it appears in `tj status` and `tj recover`. Without it, `tj item create` makes one titled after `--title`, under the parent's item; pass profile-required fields with `--item-field NAME=VALUE`.
 
 Success prints the launch as JSON once `tj run` has recorded it. Exit 3 means the tab may have opened without being confirmed: check the tab before launching again.
