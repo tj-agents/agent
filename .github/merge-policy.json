@@ -1,5 +1,7 @@
 {
-  "requires_approval": false,
+  "approval": "none",
+  "merge": "agents",
+  "default_branch_push": "none",
   "required_checks": [
     "verify / hosts",
     "verify / verify (ubuntu-latest)",
