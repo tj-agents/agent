@@ -92,9 +92,12 @@ exits nonzero on drift, which is what CI runs. An unknown stack or plugin is rej
 Personal is only for personal projects explicitly adopting `personal@tj-agents`. Read the repository's
 README.md and AGENTS.md before selection; a GitHub owner, home directory or publisher account never
 establishes personal scope. When the user explicitly confirms personal scope, include `--plugin personal`;
-otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it. A specific
-profile's source repository and every worktree of it are work scope: never select or inject Personal there.
-See [Generic and specific profiles](https://github.com/tj-agents/docs/blob/main/PLUGINS.md#generic-and-specific-profiles).
+otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it.
+A repository selects one `kind: profile` plugin; an `organization` brings the profile it extends through
+`requires`. Selection, adoption and reconciliation refuse a second profile, and refuse any profile other than
+the one an organization extends when that organization's installed employer declaration matches the
+repository's origin or names it as its source repository. See
+[Plugin kinds](https://github.com/tj-agents/docs/blob/main/PLUGINS.md#plugin-kinds).
 Owner-based project/local file placement is independent of this policy boundary.
 Selecting a profile does not prove its instructions loaded.
 
