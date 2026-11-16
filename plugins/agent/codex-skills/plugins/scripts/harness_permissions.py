@@ -56,19 +56,38 @@ def _has_unbounded_script_arguments(command: str) -> bool:
 
 
 def validate_requires(requires: dict, label: str) -> None:
-    allowed = {"marketplaces", "plugins", "hooks", "permissions"}
-    if not isinstance(requires, dict) or set(requires) not in (allowed, allowed | {"setup"}):
+    allowed = {"marketplaces", "plugins", "hooks", "permissions", "setup"}
+    if (
+        not isinstance(requires, dict)
+        or not {"marketplaces", "plugins"} <= set(requires)
+        or set(requires) - allowed
+    ):
         raise lock_io.LockError(f"{label}: invalid harness requirements")
     if "setup" in requires:
         setup = requires["setup"]
-        script = setup.get("script") if isinstance(setup, dict) and set(setup) == {"script"} else None
+        valid_setup = (
+            isinstance(setup, dict)
+            and set(setup) in ({"script"}, {"script", "converge"})
+            and ("converge" not in setup or isinstance(setup["converge"], bool))
+        )
+        script = setup.get("script") if valid_setup else None
         path = Path(*PurePosixPath(script).parts) if isinstance(script, str) else None
-        if not isinstance(script, str) or not script or path.is_absolute() or ".." in path.parts or path.suffix != ".py":
+        if (
+            not isinstance(script, str)
+            or not script
+            or path.is_absolute()
+            or ".." in path.parts
+            or path.suffix != ".py"
+        ):
             raise lock_io.LockError(f"{label}: invalid harness setup")
-    if not isinstance(requires["marketplaces"], list) or not isinstance(requires["hooks"], list):
+    if not isinstance(requires["marketplaces"], list) or not isinstance(
+        requires.get("hooks", []), list
+    ):
         raise lock_io.LockError(f"{label}: invalid marketplace or hook requirements")
     lock_io.require_string_list(requires["plugins"], f"{label}.plugins")
-    permissions = requires["permissions"]
+    permissions = requires.get(
+        "permissions", {"claude_allow": [], "codex_prefix_rules": []}
+    )
     if not isinstance(permissions, dict) or set(permissions) not in (
         {"claude_allow", "codex_prefix_rules"},
         {"claude_allow", "codex_prefix_rules", "auto_merge"},
@@ -77,7 +96,10 @@ def validate_requires(requires: dict, label: str) -> None:
     _validate_permissions(permissions, label)
     if "auto_merge" in permissions:
         conditional = permissions["auto_merge"]
-        if not isinstance(conditional, dict) or set(conditional) != {"claude_allow", "codex_prefix_rules"}:
+        if not isinstance(conditional, dict) or set(conditional) != {
+            "claude_allow",
+            "codex_prefix_rules",
+        }:
             raise lock_io.LockError(f"{label}: invalid auto-merge permissions")
         _validate_permissions(conditional, f"{label}.auto_merge")
 
@@ -173,8 +195,11 @@ def fold_permissions(requirements: list[dict]) -> tuple[list[str], list[dict]]:
     claude_allow: set[str] = set()
     codex_rules: dict[str, dict] = {}
     for requires in requirements:
-        claude_allow.update(requires["permissions"]["claude_allow"])
-        for rule in requires["permissions"]["codex_prefix_rules"]:
+        permissions = requires.get(
+            "permissions", {"claude_allow": [], "codex_prefix_rules": []}
+        )
+        claude_allow.update(permissions["claude_allow"])
+        for rule in permissions["codex_prefix_rules"]:
             codex_rules[json.dumps(rule, sort_keys=True)] = rule
     return sorted(claude_allow), [codex_rules[key] for key in sorted(codex_rules)]
 

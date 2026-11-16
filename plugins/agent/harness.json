@@ -24,6 +24,12 @@
           "claude",
           "codex"
         ]
+      },
+      {
+        "path": ".agents/agent/runtime/observer_start.py",
+        "hosts": [
+          "codex"
+        ]
       }
     ],
     "permissions": {
