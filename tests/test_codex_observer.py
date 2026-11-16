@@ -1,4 +1,3 @@
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,11 +16,13 @@ def test_no_socket_needs_no_observer(tmp_path: Path) -> None:
     assert not observer.ensure(tmp_path, tmp_path, run=unexpected)
 
 
-def test_hook_entrypoint_works_without_a_running_daemon(tmp_path: Path) -> None:
+def test_hook_entrypoint_works_without_a_running_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     script = Path(observer.__file__).parent.parent / "observer_start.py"
     result = subprocess.run(
         [sys.executable, "-B", str(script)],
-        env={**os.environ, "CODEX_HOME": str(tmp_path)},
         capture_output=True,
         text=True,
         timeout=10,
