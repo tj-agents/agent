@@ -10,6 +10,17 @@
             "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" start --host codex"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 60,
+            "preserveDescendants": true,
+            "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/observer_start.py\"",
+            "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/observer_start.py\""
+          }
+        ]
       }
     ],
     "SessionEnd": [

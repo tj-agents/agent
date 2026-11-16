@@ -34,11 +34,18 @@ class _RunOptions(_StartOptions, total=False):
     input: str | bytes | None
 
 
-def start(command: _Command, **options: Unpack[_StartOptions]) -> subprocess.Popen[Any]:
-    return _start(command, options)
+def start(
+    command: _Command,
+    *,
+    preserve_descendants: bool = False,
+    **options: Unpack[_StartOptions],
+) -> subprocess.Popen[Any]:
+    return _start(command, options, preserve_descendants)
 
 
-def _start(command: _Command, options: _StartOptions) -> subprocess.Popen[Any]:
+def _start(
+    command: _Command, options: _StartOptions, preserve: bool
+) -> subprocess.Popen[Any]:
     if unknown := options.keys() - _StartOptions.__optional_keys__:
         raise TypeError(f"unsupported process options: {', '.join(sorted(unknown))}")
     if not command:
@@ -65,7 +72,8 @@ def _start(command: _Command, options: _StartOptions) -> subprocess.Popen[Any]:
                 "hidden processes cannot request a visible or detached console"
             )
         options["creationflags"] = flags | subprocess.CREATE_NO_WINDOW
-    return subprocess.Popen([launcher, "--", *command], **options)
+    launcher_options = ["--preserve-descendants"] if preserve else []
+    return subprocess.Popen([launcher, *launcher_options, "--", *command], **options)
 
 
 def _launcher() -> str | None:
@@ -87,6 +95,7 @@ def run(
     capture_output: bool = False,
     timeout: float | None = None,
     check: bool = False,
+    preserve_descendants: bool = False,
     **options: Unpack[_RunOptions],
 ) -> subprocess.CompletedProcess[Any]:
     input_data = options.pop("input", None)
@@ -100,7 +109,7 @@ def run(
         options["stdout"] = options["stderr"] = subprocess.PIPE
     if sys.platform != "win32":
         options["start_new_session"] = True
-    with _start(command, options) as process:
+    with _start(command, options, preserve_descendants) as process:
         try:
             stdout, stderr = process.communicate(input_data, timeout=timeout)
         except subprocess.TimeoutExpired as error:

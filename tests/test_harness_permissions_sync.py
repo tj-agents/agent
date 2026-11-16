@@ -32,15 +32,85 @@ OLD_RULE = {
 DEAD_RULE = "Bash(python -B C:/Users/someone/.claude/plugins/cache/base-agents/engineering/0123/hooks/gate.py --clear:*)"
 
 
+def test_current_optional_harness_fields_render_declared_permissions(
+    tmp_path: Path,
+) -> None:
+    template, skill, personal = (
+        tmp_path / name for name in ("template", "skill", "personal")
+    )
+    for root in (template, skill, personal):
+        root.mkdir()
+    documents: tuple[tuple[Path, dict[str, object]], ...] = (
+        (
+            template,
+            {
+                "marketplaces": [],
+                "plugins": [],
+                "permissions": {
+                    "claude_allow": ["Bash(shipped)"],
+                    "codex_prefix_rules": [RULE],
+                },
+            },
+        ),
+        (skill, {"marketplaces": [], "plugins": [], "hooks": []}),
+        (
+            personal,
+            {
+                "marketplaces": [],
+                "plugins": [],
+                "setup": {"script": ".agents/personal/setup.py", "converge": True},
+                "permissions": {"claude_allow": [], "codex_prefix_rules": []},
+            },
+        ),
+    )
+    for root, requires in documents:
+        (root / "harness.json").write_text(
+            json.dumps({"requires": requires}), encoding="utf-8"
+        )
+    warnings: list[str] = []
+    requirements = SYNC.rendered_requirements({template, skill, personal}, warnings)
+    assert warnings == []
+    claude_allow, codex_rules = SYNC.harness_permissions.fold_permissions(requirements)
+    assert "Bash(shipped)" in claude_allow
+    assert len(codex_rules) == 1
+
+
+def test_invalid_setup_converge_flag_is_rejected(tmp_path: Path) -> None:
+    requires = {
+        "marketplaces": [],
+        "plugins": [],
+        "setup": {"script": "setup.py", "converge": "yes"},
+    }
+    (tmp_path / "harness.json").write_text(
+        json.dumps({"requires": requires}), encoding="utf-8"
+    )
+    warnings: list[str] = []
+    assert SYNC.load_requires(tmp_path, warnings) is None
+    assert warnings
+
+
 def harness(root: Path, permissions: dict) -> None:
     root.mkdir(parents=True, exist_ok=True)
-    value = {"schema_version": 1, "plugin": "tj-agents/test", "source_roots": [],
-             "requires": {"marketplaces": [], "plugins": [], "hooks": [], "permissions": permissions}}
+    value = {
+        "schema_version": 1,
+        "plugin": "tj-agents/test",
+        "source_roots": [],
+        "requires": {
+            "marketplaces": [],
+            "plugins": [],
+            "hooks": [],
+            "permissions": permissions,
+        },
+    }
     (root / "harness.json").write_text(json.dumps(value), encoding="utf-8")
 
 
 def snapshot(root: Path) -> dict[str, bytes]:
-    return {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
 
 
 class HarnessPermissionsSyncTests(unittest.TestCase):

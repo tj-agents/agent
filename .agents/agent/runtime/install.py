@@ -41,6 +41,7 @@ from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
 from codex import launch as codex_launch
+from codex import observer as codex_observer
 from codex import powershell as codex_powershell
 from codex import projects as codex_projects
 from codex import user_plugins as codex_user_plugins
@@ -56,7 +57,13 @@ import native_runtime
 import agent_store
 import work_items_install
 from tj_agent import content
-from tj_cli import handy_install, process, worktrunk_install
+from tj_cli import (
+    handy_install,
+    native_install,
+    powershell_install,
+    process,
+    worktrunk_install,
+)
 from tree_digest import Digests
 
 INSTALLER_TIMEOUT_SECONDS = 600
@@ -788,17 +795,6 @@ def codex_agents_installer(context: Context) -> Path | None:
 
 
 def skip_codex_agents(context: Context) -> str | None:
-    user_path = (
-        context.user_environment.get("Path")
-        if context.user_environment is not None
-        else None
-    )
-    if not codex_powershell.executable(
-        context.which("pwsh"), context.environ, user_path, context.windows
-    ):
-        if context.windows:
-            return "unpackaged PowerShell 7 is required; add its directory to process or User PATH to deliver Codex profile agents"
-        return "pwsh is not installed; install PowerShell 7 to deliver Codex profile agents"
     if not context.codex_home.is_dir():
         return f"Codex is not set up ({context.codex_home} is missing)"
     if codex_agents_installer(context) is None:
@@ -806,15 +802,25 @@ def skip_codex_agents(context: Context) -> str | None:
     return None
 
 
-def codex_agents_command(context: Context, flag: str) -> list[str]:
+def codex_agents_powershell(context: Context) -> str | None:
     user_path = (
         context.user_environment.get("Path")
         if context.user_environment is not None
         else None
     )
-    executable = codex_powershell.executable(
+    existing = codex_powershell.executable(
         context.which("pwsh"), context.environ, user_path, context.windows
     )
+    if existing is not None:
+        return existing
+    bin_dir = native_install.default_bin_dir()
+    if powershell_install.pending(bin_dir) is None:
+        return str(powershell_install.executable(bin_dir))
+    return None
+
+
+def codex_agents_command(context: Context, flag: str) -> list[str]:
+    executable = codex_agents_powershell(context)
     if executable is None:
         raise InstallError(
             "PowerShell 7 is unavailable for Codex profile agent delivery"
@@ -832,6 +838,8 @@ def codex_agents_command(context: Context, flag: str) -> list[str]:
 
 
 def check_codex_agents(context: Context) -> list[str]:
+    if codex_agents_powershell(context) is None:
+        return ["install PowerShell for Codex profile agents"]
     result = run_installer(context, codex_agents_command(context, "-Verify"))
     if result.returncode == 0:
         return []
@@ -840,6 +848,8 @@ def check_codex_agents(context: Context) -> list[str]:
 
 
 def apply_codex_agents(context: Context) -> list[str]:
+    if codex_agents_powershell(context) is None:
+        powershell_install.ensure(native_install.default_bin_dir())
     result = run_installer(context, codex_agents_command(context, "-Apply"))
     if result.returncode:
         raise InstallError(
@@ -847,6 +857,28 @@ def apply_codex_agents(context: Context) -> list[str]:
         )
     lines = output_lines(result)
     return [lines[-1] if lines else "delivered Codex profile agents"]
+
+
+def check_codex_observer(context: Context) -> list[str]:
+    return (
+        []
+        if codex_observer.status(context.codex_home, context.home)
+        else ["start the Codex update observer"]
+    )
+
+
+def apply_codex_observer(context: Context) -> list[str]:
+    return (
+        ["started the Codex update observer"]
+        if codex_observer.ensure(context.codex_home, context.home)
+        else []
+    )
+
+
+def skip_codex_observer(context: Context) -> str | None:
+    if not context.codex_home.is_dir():
+        return f"Codex is not set up ({context.codex_home} is missing)"
+    return None
 
 
 def permission_sync(context: Context) -> ModuleType:
@@ -1368,7 +1400,9 @@ def check_plugin_scope(context: Context) -> list[str]:
 
 def apply_plugin_scope(context: Context) -> list[str]:
     try:
-        disabled = claude_plugins.disable_user(claude_user_enabled(context), context.run)
+        disabled = claude_plugins.disable_user(
+            claude_user_enabled(context), context.run
+        )
     except required_plugins.RequiredPluginsError as error:
         raise InstallError(str(error)) from error
     changes = [
@@ -1492,17 +1526,17 @@ STEPS = (
         "hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only
     ),
     Step(
-        "Codex profile agents",
-        check_codex_agents,
-        apply_codex_agents,
-        skip_codex_agents,
-    ),
-    Step(
         "harness permissions",
         lambda context: synchronize_permissions(context, "check"),
         lambda context: synchronize_permissions(context, "apply"),
     ),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
+    Step(
+        "Codex profile agents",
+        check_codex_agents,
+        apply_codex_agents,
+        skip_codex_agents,
+    ),
     Step("plugin scope", check_plugin_scope, apply_plugin_scope),
     Step(
         "Codex hook trust",
@@ -1511,6 +1545,12 @@ STEPS = (
         skip_codex_hook_trust,
     ),
     Step("plugin copies", check_plugin_copies, apply_plugin_copies),
+    Step(
+        "Codex update observer",
+        check_codex_observer,
+        apply_codex_observer,
+        skip_codex_observer,
+    ),
 )
 
 
@@ -1527,6 +1567,16 @@ def run_steps(
             continue
         if step.name == "plugin setup" and failed_steps & {"harness permissions"}:
             print("n/a    plugin setup: prerequisite install step failed", file=out)
+            continue
+        if (
+            step.name == "Codex update observer"
+            and (failed_steps or context.failures)
+            and not check_only
+        ):
+            print(
+                "n/a    Codex update observer: prerequisite install step failed",
+                file=out,
+            )
             continue
         try:
             reason = step.skip(context)
@@ -1729,7 +1779,8 @@ def main(argv: list[str] | None = None) -> int:
     installer = pinned_installer(context.state_directory)
     if installer is not None:
         return process.run(
-            [sys.executable, "-B", str(installer), *arguments]
+            [sys.executable, "-B", str(installer), *arguments],
+            preserve_descendants=True,
         ).returncode
     context.onboard = parsed.onboard
     native_runtime.expose()
@@ -1753,7 +1804,8 @@ def main(argv: list[str] | None = None) -> int:
                 jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
                 return 2
             outcomes = update_plugins(context)
-            successor = converged_installer(context)
+            if not context.failures:
+                successor = converged_installer(context)
         if successor is None:
             code = run_steps(steps, context, False)
         jobs.record(context.state_directory, jobs.Job.INSTALL, context.failures)
@@ -1762,9 +1814,10 @@ def main(argv: list[str] | None = None) -> int:
             f"install: continuing with the converged Agent package at {successor.parents[3]}"
         )
         code = process.run(
-            [sys.executable, "-B", str(successor), *arguments, "--converged"]
+            [sys.executable, "-B", str(successor), *arguments, "--converged"],
+            preserve_descendants=True,
         ).returncode
-    if not code:
+    if not code and not context.failures:
         code = publish_update(context, outcomes)
     return 2 if context.failures and not code else code
 
