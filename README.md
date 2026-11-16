@@ -53,7 +53,7 @@ published source, so no Codex launch asks to trust them) and plugin copies. It i
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
 `tj item` is `tj-work-items`, installed with `uv tool install` (uv is required) together with the work-item
-profile package each specific profile plugin installed on this machine declares in its own payload
+profile package each organization plugin installed on this machine declares in its own payload
 (a `work-items.json` naming its package and subdirectory). Its repository comes from the marketplace
 snapshot Agent already carries and its revision is the exact commit that plugin was installed from, so no
 separate pin needs renewal. The tool's own pin is in `.agents/agent/runtime/work-items.json`, which Renovate
