@@ -21,7 +21,7 @@ NATIVE_ADD = ["codex", "plugin", "add"]
 
 
 def update_plugins(host: str) -> int:
-    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()))
+    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()), {})
     return 1 if outcome.failures else 0
 
 
@@ -89,7 +89,7 @@ def test_native_inventory_seeds_a_codex_only_fast_path(home: Path) -> None:
     with mock.patch.object(
         process, "run", return_value=subprocess.CompletedProcess([], 0, "", "")
     ) as run:
-        outcome = plugin_update.update(Host.CODEX, Digests(jobs.state_directory()))
+        outcome = plugin_update.update(Host.CODEX, Digests(jobs.state_directory()), {})
     assert not outcome.failures
     assert not outcome.changed
     assert native_installs(run.call_args_list) == []
@@ -264,7 +264,7 @@ def test_a_native_add_cannot_report_success_without_converging(
         return subprocess.CompletedProcess(command, 0, "", "")
 
     with mock.patch.object(process, "run", side_effect=run):
-        result = plugin_update.update(Host.CODEX, Digests(home.parent / "state"))
+        result = plugin_update.update(Host.CODEX, Digests(home.parent / "state"), {})
     assert any("did not converge" in failure for failure in result.failures)
 
 
@@ -458,7 +458,7 @@ def test_a_direct_replacement_that_cannot_verify_is_reported_and_left_native(
     ]
     commands = codex_natively(monkeypatch, home, listed, installs=False)
 
-    outcome = plugin_update.update(Host.CODEX, Digests(jobs.state_directory()))
+    outcome = plugin_update.update(Host.CODEX, Digests(jobs.state_directory()), {})
 
     assert [command[3] for command in commands if command[:3] == NATIVE_ADD] == [
         "agent@tj-agents"

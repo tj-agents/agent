@@ -30,7 +30,7 @@ NATIVE_UPDATE = ["claude", "plugin", "update"]
 
 
 def update_plugins(host: str) -> int:
-    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()))
+    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()), {})
     return 1 if outcome.failures else 0
 
 
@@ -384,7 +384,7 @@ def test_a_direct_update_that_cannot_verify_is_reported_and_left_native(
     )
     commands = native_commands(monkeypatch, home)
 
-    outcome = plugin_update.update(Host.CLAUDE, Digests(jobs.state_directory()))
+    outcome = plugin_update.update(Host.CLAUDE, Digests(jobs.state_directory()), {})
 
     assert outcome.failures == [
         "claude: python@tj-agents: user did not reach its marketplace pin"

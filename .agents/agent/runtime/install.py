@@ -1650,7 +1650,7 @@ def update_plugins(
                 file=out,
             )
             continue
-        outcome = plugin_update.update(host, digests)
+        outcome = plugin_update.update(host, digests, context.environ)
         for failure in outcome.failures:
             print(f"failed plugins: {failure}", file=err)
             context.failures.append(f"plugins: {failure}")
