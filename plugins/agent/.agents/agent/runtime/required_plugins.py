@@ -178,7 +178,7 @@ def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -
 
 
 def check(project: Path, host: Host, executable: str | None = None,
-          inventory_options: tuple[str, ...] = ()) -> dict[str, Path] | None:
+          inventory_options: tuple[str, ...] = (), *, entries: list | None = None) -> dict[str, Path] | None:
     plugins = host_plugins.PLUGINS[host]
     launch_directory = project.resolve()
     project = project_root(launch_directory)
@@ -189,7 +189,8 @@ def check(project: Path, host: Host, executable: str | None = None,
     binary = executable or shutil.which(host.value)
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
-    roots = inventory_roots(launch_directory, host, binary, inventory_options, identities=required)
+    roots = (enabled_roots(plugins, launch_directory, entries) if entries is not None
+             else inventory_roots(launch_directory, host, binary, inventory_options, identities=required))
     missing = sorted(set(required) - roots.keys())
     if missing:
         raise MissingRequiredPluginsError(
@@ -203,13 +204,21 @@ def check(project: Path, host: Host, executable: str | None = None,
 def inventory_roots(project: Path, host: Host, executable: str | None = None,
                     inventory_options: tuple[str, ...] = (), *, identities: Sequence[str] | None = None) -> dict[str, Path]:
     """Return verified enabled roots, optionally limited to selected marketplaces and identities."""
+    entries = inventory_rows(project, host, executable, inventory_options, identities=identities)
+    roots = enabled_roots(host_plugins.PLUGINS[host], project.resolve(), entries)
+    return roots if identities is None else {identity: root for identity, root in roots.items() if identity in identities}
+
+
+def inventory_rows(project: Path, host: Host, executable: str | None = None,
+                   inventory_options: tuple[str, ...] = (), *, identities: Sequence[str] | None = None) -> list:
+    """Read native inventory without processing installations or writing receipts."""
     plugins = host_plugins.PLUGINS[host]
     launch_directory = project.resolve()
     binary = executable or shutil.which(host.value)
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
     if identities is None:
-        return enabled_roots(plugins, launch_directory, inventory(binary, plugins, launch_directory, inventory_options))
+        return inventory(binary, plugins, launch_directory, inventory_options)
     plugins.require_inventory_options(inventory_options)
     entries = []
     deadline = time.monotonic() + INVENTORY_TIMEOUT_SECONDS
@@ -218,8 +227,7 @@ def inventory_roots(project: Path, host: Host, executable: str | None = None,
         if remaining <= 0:
             raise RequiredPluginsError(f"Required {host} plugin inventory exceeded its {INVENTORY_TIMEOUT_SECONDS}-second budget")
         entries.extend(inventory(binary, plugins, launch_directory, inventory_options, marketplace, timeout=remaining))
-    return {identity: root for identity, root in enabled_roots(plugins, launch_directory, entries).items()
-            if identity in identities}
+    return entries
 
 
 def inventory(binary: str, plugins: host_plugins.Plugins, launch_directory: Path, inventory_options: tuple[str, ...],
