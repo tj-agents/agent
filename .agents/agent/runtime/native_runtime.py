@@ -7,7 +7,7 @@ import os
 from tj_cli import native_install
 from tj_cli.paths import prepend
 
-NATIVE_REVISION = "bb3e141306cc449bfadf0111b7cca4d7651f9c3a"
+NATIVE_REVISION = "c3d80212e4e785ee591bd76f203ac70028e8e97b"
 
 
 def pending(*, revision: str | None = None) -> tuple[str, ...]:
