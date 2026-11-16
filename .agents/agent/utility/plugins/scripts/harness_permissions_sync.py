@@ -276,8 +276,20 @@ def rendered_requirements(roots: set[Path], warnings: list[str]) -> list[dict]:
         if loaded is None:
             continue
         _, requires = loaded
-        claude_allow, codex_rules = harness_permissions.render_permissions(requires["permissions"], root)
-        requirements.append({"permissions": {"claude_allow": claude_allow, "codex_prefix_rules": codex_rules}})
+        permissions = requires.get(
+            "permissions", {"claude_allow": [], "codex_prefix_rules": []}
+        )
+        claude_allow, codex_rules = harness_permissions.render_permissions(
+            permissions, root
+        )
+        requirements.append(
+            {
+                "permissions": {
+                    "claude_allow": claude_allow,
+                    "codex_prefix_rules": codex_rules,
+                }
+            }
+        )
     return requirements
 
 
@@ -467,7 +479,7 @@ def print_invocations(environ: dict, script_name: str) -> tuple[list[str], list[
         if loaded is None:
             continue
         _, requires = loaded
-        for template in requires["permissions"]["claude_allow"]:
+        for template in requires.get("permissions", {}).get("claude_allow", []):
             if not (template.startswith("Bash(") and template.endswith(")")):
                 continue
             inner = template[len("Bash("):-1]
