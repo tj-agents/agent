@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from tj_cli import native_install, process
 
@@ -27,7 +30,12 @@ def command(codex_home: Path, cwd: Path, action: str) -> list[str]:
     ]
 
 
-def status(codex_home: Path, cwd: Path, *, run=process.run) -> bool:
+def status(
+    codex_home: Path,
+    cwd: Path,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = process.run,
+) -> bool:
     if not socket_path(codex_home).exists():
         return True
     result = run(
@@ -46,7 +54,12 @@ def status(codex_home: Path, cwd: Path, *, run=process.run) -> bool:
     raise RuntimeError(f"Codex update observer status failed: {detail}")
 
 
-def ensure(codex_home: Path, cwd: Path, *, run=process.run) -> bool:
+def ensure(
+    codex_home: Path,
+    cwd: Path,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = process.run,
+) -> bool:
     if status(codex_home, cwd, run=run):
         return False
     result = run(

@@ -40,7 +40,7 @@ def test_current_optional_harness_fields_render_declared_permissions(
     )
     for root in (template, skill, personal):
         root.mkdir()
-    documents = (
+    documents: tuple[tuple[Path, dict[str, object]], ...] = (
         (
             template,
             {
