@@ -1192,7 +1192,8 @@ def lifecycle_binding(context: Context, path: Path, script: Path) -> str | None:
     if not path.is_file():
         return None
     try:
-        text = path.read_text(encoding="utf-8", newline="")
+        with path.open(encoding="utf-8", newline="") as stream:
+            text = stream.read()
     except (OSError, UnicodeDecodeError):
         return None
     binding = parsed_shim_binding(context.windows, text)
