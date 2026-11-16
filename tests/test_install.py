@@ -1355,6 +1355,30 @@ def machine_context(home: Path) -> install.Context:
     return install.Context(home=home, environ={}, windows=False)
 
 
+@pytest.mark.parametrize("windows", [False, True])
+def test_lifecycle_bindings_preserve_line_endings_and_existing_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
+) -> None:
+    context = install.Context(home=tmp_path, environ={}, windows=windows)
+    interpreter = install.console_python()
+    script = tmp_path / "tj_start.py"
+    script.write_text("print('fixture')\n", encoding="utf-8")
+    shim = tmp_path / ("tj-start.cmd" if windows else "tj-start")
+    contents = install.command_shim_text(interpreter, script, windows).encode("utf-8")
+    shim.write_bytes(contents)
+    modified = shim.stat().st_mtime_ns
+    monkeypatch.setattr(install, "lifecycle_paths", lambda _context: {shim: script})
+    fallback = mock.Mock(side_effect=AssertionError("existing binding was discarded"))
+    monkeypatch.setattr(install, "console_python", fallback)
+
+    assert install.lifecycle_binding(context, shim, script) == interpreter
+    assert install.check_lifecycle_commands(context) == []
+    assert install.apply_lifecycle_commands(context) == []
+    assert shim.read_bytes() == contents
+    assert shim.stat().st_mtime_ns == modified
+    fallback.assert_not_called()
+
+
 def test_install_records_its_failures(tmp_path: Path) -> None:
     context = machine_context(tmp_path)
     failing = install.Step(
