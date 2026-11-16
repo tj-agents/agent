@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "plugins" / "agent" / ".agents" / "agent" / "utility" / "plugins" / "scripts"
@@ -183,6 +185,72 @@ class RemovePluginTests(unittest.TestCase):
         with self.assertRaisesRegex(LockError, "prerequisite"):
             ADOPT.run(self.root, [], [], "write", removals=["base"])
         self.assertEqual(before, (self.root / ".agents" / "plugins.json").read_bytes())
+
+
+@pytest.fixture
+def profile_roster() -> dict[str, object]:
+    """The bundled roster with personal and work marked as generic profiles and a specific profile of work."""
+    snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK)
+    entries = snapshot["marketplace"]["plugins"]
+    for entry in entries:
+        if entry["name"] in {"personal", "work"}:
+            entry["generic_profile"] = True
+    entries.append({"name": "example-employer", "repository": "example-employer", "revision": "a" * 40,
+                    "requires": ["work"], "profile": "specific", "extends": "work"})
+    roster: dict[str, object] = ADOPT.load_roster(snapshot)
+    return roster
+
+
+@pytest.fixture
+def project(tmp_path: Path) -> Path:
+    (tmp_path / ".agents").mkdir()
+    return tmp_path
+
+
+def selection(root: Path) -> list[str]:
+    plugins: list[str] = json.loads((root / ".agents" / "plugins.json").read_text(encoding="utf-8"))["plugins"]
+    return plugins
+
+
+def test_load_roster_reads_generic_profiles(profile_roster: dict[str, object]) -> None:
+    assert profile_roster["generic_profiles"] == {"personal", "work"}
+
+
+def test_run_selects_a_single_generic_profile(project: Path, profile_roster: dict[str, object]) -> None:
+    ADOPT.run(project, [], ["personal"], "write", roster=profile_roster)
+    assert "personal@tj-agents" in selection(project)
+
+
+def test_run_adds_the_generic_profile_a_specific_profile_extends(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
+    ADOPT.run(project, [], ["example-employer"], "write", roster=profile_roster)
+    assert {"example-employer@tj-agents", "work@tj-agents"} <= set(selection(project))
+
+
+@pytest.mark.parametrize("plugins", [["personal", "work"], ["personal", "example-employer"]])
+def test_run_refuses_two_generic_profiles_without_writing(
+    project: Path, profile_roster: dict[str, object], plugins: list[str]
+) -> None:
+    with pytest.raises(LockError, match="one generic profile, not personal and work"):
+        ADOPT.run(project, [], plugins, "write", roster=profile_roster)
+    assert not (project / ".agents" / "plugins.json").exists()
+
+
+def test_reconcile_refuses_an_existing_selection_of_two_generic_profiles(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
+    path = project / ".agents" / "plugins.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "marketplaces": {"tj-agents": {"repository": "tj-agents/marketplace"}},
+        "plugins": ["personal@tj-agents", "work@tj-agents"],
+    }), encoding="utf-8")
+    before = path.read_bytes()
+    with mock.patch.object(ADOPT, "current_roster", return_value=profile_roster), \
+            pytest.raises(LockError, match="one generic profile"):
+        ADOPT.reconcile(project, "write")
+    assert path.read_bytes() == before
 
 
 if __name__ == "__main__":
