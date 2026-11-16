@@ -1,7 +1,9 @@
+import shutil
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 
 import jobs
 import plugin_update
@@ -17,10 +19,11 @@ from tj_agent.host import Host
 from tree_digest import Digests
 
 HOSTS = {host.value: host for host in Host}
+PREFETCH_STANDARDS = plugin_update.prefetch_standards
 
 
 def update_plugins(host: str) -> int:
-    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()))
+    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()), {})
     return 1 if outcome.failures else 0
 
 
@@ -37,6 +40,7 @@ def report_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     for adapter in (claude_installed, codex_installed):
         monkeypatch.setattr(adapter, "update_marketplaces", lambda *_arguments: None)
     monkeypatch.setattr(codex_installed, "trust_hooks", lambda _report: True)
+    monkeypatch.setattr(plugin_update, "prefetch_standards", lambda _host: None)
     return commands
 
 
@@ -140,7 +144,7 @@ def test_an_interrupted_update_still_activates_on_the_next_call(
 
     monkeypatch.setattr(claude_installed, "refresh", interrupted)
     with pytest.raises(RuntimeError, match="process interrupted"):
-        plugin_update.update(Host.CLAUDE, Digests(state))
+        plugin_update.update(Host.CLAUDE, Digests(state), {})
     assert report_commands == []
     events: list[str] = []
     monkeypatch.setattr(plugin_update, "already_current", lambda *args: True)
@@ -148,7 +152,7 @@ def test_an_interrupted_update_still_activates_on_the_next_call(
     monkeypatch.setattr(
         claude_installed, "activate", lambda *args: events.append("activated")
     )
-    outcome = plugin_update.update(Host.CLAUDE, Digests(state))
+    outcome = plugin_update.update(Host.CLAUDE, Digests(state), {})
     assert not outcome.failures
     assert events == ["activated"]
     assert report_commands == []
@@ -169,7 +173,7 @@ def test_current_plugins_activate_once_per_marketplace_revision(
             plugin_update, "marketplace_revision", lambda *_, at=revision: at
         )
         assert not plugin_update.update(
-            Host.CODEX, Digests(tmp_path / "state")
+            Host.CODEX, Digests(tmp_path / "state"), {}
         ).failures
     assert events == ["activated", "activated"]
 
@@ -190,11 +194,11 @@ def test_a_liveness_check_failure_is_reported_until_it_answers(
         return {}
 
     monkeypatch.setattr(codex_launch, "liveness", liveness)
-    outcome = plugin_update.update(Host.CODEX, Digests(state))
+    outcome = plugin_update.update(Host.CODEX, Digests(state), {})
     assert any("connection failed" in failure for failure in outcome.failures)
     assert report_commands == []
     failed = False
-    outcome = plugin_update.update(Host.CODEX, Digests(state))
+    outcome = plugin_update.update(Host.CODEX, Digests(state), {})
     assert not outcome.failures
     assert report_commands == []
 
@@ -228,3 +232,125 @@ def test_loaded_thread_pages_preserve_projects_and_reject_cursor_cycles(
             tmp_path / "first",
             tmp_path / "second",
         }
+
+
+@pytest.mark.parametrize("host", list(Host))
+@pytest.mark.parametrize("change", ["unchanged", "marketplace", "repair"])
+@pytest.mark.parametrize("prefetch_fails", [False, True])
+def test_inventory_prefetch_is_reused_only_without_marketplace_or_plugin_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: Host,
+    change: str,
+    prefetch_fails: bool,
+) -> None:
+    selection = tmp_path / ".agents/plugins.json"
+    selection.parent.mkdir()
+    selection.write_text(
+        '{"schema_version": 1, "plugins": ["python@tj-agents"]}', encoding="utf-8"
+    )
+    instructions = tmp_path / "AGENTS.md"
+    instructions.write_text("Keep these instructions\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    builds = {}
+    for version in ("before", "after"):
+        build = tmp_path / "codex/plugins/cache/tj-agents/python" / version
+        for manifest_directory in (".claude-plugin", ".codex-plugin"):
+            manifest = build / manifest_directory / "plugin.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text('{"name": "python"}', encoding="utf-8")
+        skill = build / ".agents/python/convention" / version / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            f"---\nname: {version}\nkind: convention\nprofile: core\n"
+            "applicability: Python projects\n---\n",
+            encoding="utf-8",
+        )
+        builds[version] = build
+    inventory_started = Event()
+    pins_started = Event()
+    heads_started = Event()
+    decisions_started = Event()
+    inventory_versions: list[str] = []
+    remembered: list[str] = []
+    mutations: list[str] = []
+
+    def inventory(*_arguments: object, **_options: object) -> list[dict[str, object]]:
+        version = "after" if mutations else "before"
+        inventory_versions.append(version)
+        if len(inventory_versions) == 1:
+            inventory_started.set()
+            assert heads_started.wait(timeout=3)
+            if prefetch_fails:
+                raise required_plugins.RequiredPluginsError(
+                    "speculative inventory failed"
+                )
+        else:
+            assert decisions_started.is_set()
+        return [
+            {
+                "id": "python@tj-agents",
+                "pluginId": "python@tj-agents",
+                "name": "python",
+                "marketplaceName": "tj-agents",
+                "version": version,
+                "installPath": str(builds[version]),
+                "enabled": True,
+                "installed": True,
+                "scope": "user",
+            }
+        ]
+
+    def pins(*_arguments: object) -> bool:
+        pins_started.set()
+        return change != "repair"
+
+    def behind(_host: Host, name: str, environ: object) -> bool:
+        assert environ == {"fixture": "explicit environment"}
+        assert inventory_started.wait(timeout=3)
+        assert pins_started.wait(timeout=3)
+        assert not remembered
+        heads_started.set()
+        return change == "marketplace" and name == "tj-agents"
+
+    def marketplaces(_report: plugin_update.Report, names: tuple[str, ...]) -> None:
+        decisions_started.set()
+        assert instructions.read_text(encoding="utf-8") == "Keep these instructions\n"
+        if names:
+            mutations.append("marketplace")
+
+    def repair(*_arguments: object) -> None:
+        mutations.append("repair")
+
+    def remember(entries: list[dict[str, object]]) -> None:
+        assert decisions_started.is_set()
+        remembered.extend(str(entry["version"]) for entry in entries)
+
+    adapter = plugin_update.INSTALLED[host]
+    monkeypatch.setattr(adapter, "update_marketplaces", marketplaces)
+    monkeypatch.setattr(adapter, "refresh", repair)
+    monkeypatch.setattr(adapter, "activate", lambda _report: None)
+    monkeypatch.setattr(plugin_update, "already_current", pins)
+    monkeypatch.setattr(plugin_update, "behind_remote", behind)
+    monkeypatch.setattr(plugin_update, "prefetch_standards", PREFETCH_STANDARDS)
+    monkeypatch.setattr(required_plugins, "inventory", inventory)
+    monkeypatch.setattr(shutil, "which", lambda _name: "native-host")
+    monkeypatch.setattr(codex_installed.catalog, "remember", remember)
+
+    outcome = plugin_update.update(
+        host, Digests(tmp_path / "state"), {"fixture": "explicit environment"}
+    )
+
+    failed = prefetch_fails and change == "unchanged"
+    assert bool(outcome.failures) == failed
+    assert inventory_versions == (
+        ["before"] if change == "unchanged" else ["before", "after"]
+    )
+    if failed:
+        assert instructions.read_text(encoding="utf-8") == "Keep these instructions\n"
+        assert not remembered
+    else:
+        expected = "before" if change == "unchanged" else "after"
+        assert f"python:{expected}" in instructions.read_text(encoding="utf-8")
+        assert remembered == ([expected] if host is Host.CODEX else [])

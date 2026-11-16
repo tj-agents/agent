@@ -1603,7 +1603,8 @@ def full_install(
     )
     updated: list[Host] = []
 
-    def update(host: Host, _digests: object) -> Outcome:
+    def update(host: Host, _digests: object, environ: object) -> Outcome:
+        assert environ is context.environ
         updated.append(host)
         return outcome(changed=False)
 
@@ -1672,7 +1673,8 @@ def test_a_full_install_delivers_the_native_cli_before_updating_plugins(
         order.append("native CLI")
         return []
 
-    def update(host: Host, _digests: object) -> Outcome:
+    def update(host: Host, _digests: object, environ: object) -> Outcome:
+        assert environ is context.environ
         order.append(host.value)
         return outcome(changed=False)
 
