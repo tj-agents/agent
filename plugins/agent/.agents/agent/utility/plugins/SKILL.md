@@ -94,6 +94,8 @@ establishes personal scope. When the user explicitly confirms personal scope, in
 otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it. A specific
 profile's source repository and every worktree of it are work scope: never select or inject Personal there.
 See [Generic and specific profiles](https://github.com/tj-agents/docs/blob/main/PLUGINS.md#generic-and-specific-profiles).
+A repository selects at most one generic profile, the roster entries marked `generic_profile`. Selection and
+reconciliation refuse a second one, and selecting a specific profile adds the generic profile it extends.
 Owner-based project/local file placement is independent of this policy boundary.
 Selecting a profile does not prove its instructions loaded.
 

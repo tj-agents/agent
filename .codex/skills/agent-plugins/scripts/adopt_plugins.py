@@ -36,6 +36,7 @@ def load_roster(snapshot: dict | None = None) -> dict:
     if not isinstance(entries, list):
         raise lock_io.LockError(f"{LOCK}: plugins must be a list")
     plugins = {}
+    generic_profiles = set()
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
             raise lock_io.LockError(f"{LOCK}: invalid plugin entry")
@@ -43,11 +44,13 @@ def load_roster(snapshot: dict | None = None) -> dict:
         if name in plugins:
             raise lock_io.LockError(f"{LOCK}: duplicate plugin: {name}")
         plugins[name] = lock_io.require_string_list(entry.get("requires", []), f"{name}.requires")
+        if entry.get("generic_profile") is True:
+            generic_profiles.add(name)
     for name, required in plugins.items():
         if any(dependency not in plugins for dependency in required):
             raise lock_io.LockError(f"{LOCK}: unknown dependency in {name}")
     if live:
-        return {"plugins": plugins, "stacks": {}}
+        return {"plugins": plugins, "generic_profiles": generic_profiles, "stacks": {}}
     stacks = lock_io.load_json(STACKS)
     if stacks.get("schema_version") != 1 or set(stacks) != {"schema_version", "stacks"} or not isinstance(stacks["stacks"], dict):
         raise lock_io.LockError(f"{STACKS}: invalid stack choices")
@@ -55,7 +58,7 @@ def load_roster(snapshot: dict | None = None) -> dict:
         lock_io.require_string_list(selected, f"{stack}.plugins")
         if any(name not in plugins for name in selected):
             raise lock_io.LockError(f"{STACKS}: unknown plugin in stack {stack}")
-    return {"plugins": plugins, "stacks": stacks["stacks"]}
+    return {"plugins": plugins, "generic_profiles": generic_profiles, "stacks": stacks["stacks"]}
 
 
 def expand(requested: set[str], roster: dict) -> list[str]:
@@ -129,6 +132,10 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
     local = {plugin_selection.split(identity)[0] for identity in selected
              if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
              and plugin_selection.split(identity)[0] in roster["plugins"]}
+    profiles = sorted(local & roster["generic_profiles"])
+    if len(profiles) > 1:
+        raise lock_io.LockError("A repository selects one generic profile, not " + " and ".join(profiles)
+                                + "; keep one and drop the others with --remove-plugin <name>")
     required = set().union(*(expand({name}, roster) for name in local)) if local else set()
     blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
     if blocked:
