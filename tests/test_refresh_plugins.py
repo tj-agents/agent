@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from threading import Event
 import unittest
 from pathlib import Path
@@ -11,9 +12,11 @@ from unittest import mock
 
 import install
 import jobs
+import marketplace_head
 import plugin_update
 import pytest
 import required_plugins
+import tj_plugins
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
 from codex import launch as codex_launch
@@ -40,7 +43,7 @@ HOSTS = {host.value: host for host in Host}
 
 
 def update_plugins(host: str) -> int:
-    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()))
+    outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()), {})
     return 1 if outcome.failures else 0
 
 
@@ -314,7 +317,7 @@ class RefreshPluginsTests(unittest.TestCase):
             return completed(0)
 
         with mock.patch.object(process, "run", side_effect=run) as spawned:
-            outcome = plugin_update.update(Host.CLAUDE, Digests(self.state))
+            outcome = plugin_update.update(Host.CLAUDE, Digests(self.state), {})
         self.assertEqual(["claude: agent@tj-agents: update failed"], outcome.failures)
         commands = [
             claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list
@@ -369,7 +372,7 @@ class RefreshPluginsTests(unittest.TestCase):
             return completed(0)
 
         with mock.patch.object(process, "run", side_effect=run) as spawned:
-            outcome = plugin_update.update(Host.CLAUDE, Digests(self.state))
+            outcome = plugin_update.update(Host.CLAUDE, Digests(self.state), {})
         self.assertEqual([], outcome.failures)
         commands = [
             claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list
@@ -427,7 +430,7 @@ class RefreshPluginsTests(unittest.TestCase):
             return completed(0)
 
         with mock.patch.object(process, "run", side_effect=run) as spawned:
-            outcome = plugin_update.update(Host.CODEX, Digests(self.state))
+            outcome = plugin_update.update(Host.CODEX, Digests(self.state), {})
         self.assertEqual([], outcome.failures)
         commands = [
             claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list
@@ -467,7 +470,7 @@ class RefreshPluginsTests(unittest.TestCase):
             return completed(0, "[]")
 
         with mock.patch.object(process, "run", side_effect=run) as spawned:
-            outcome = plugin_update.update(Host.CLAUDE, Digests(self.state))
+            outcome = plugin_update.update(Host.CLAUDE, Digests(self.state), {})
         self.assertEqual([], outcome.failures)
         updates = [
             claude_plugin_arguments(call.args[0])
@@ -516,7 +519,7 @@ class RefreshPluginsTests(unittest.TestCase):
             return completed(0)
 
         with mock.patch.object(process, "run", side_effect=run) as spawned:
-            outcome = plugin_update.update(Host.CODEX, Digests(self.state))
+            outcome = plugin_update.update(Host.CODEX, Digests(self.state), {})
         self.assertEqual([], outcome.failures)
         adds = [
             call.args[0]
@@ -578,7 +581,7 @@ def test_codex_refresh_fails_with_no_tj_agents_rows_after_listing(
         _patched_homes(tmp_path),
         mock.patch.object(process, "run", side_effect=run),
     ):
-        outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"))
+        outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"), {})
     assert outcome.failures == ["codex: list: no tj-agents plugins installed"]
 
 
@@ -598,7 +601,7 @@ def test_refresh_overlaps_pin_checks_with_remote_freshness_probes(
         assert probe_saw_pin_check.wait(timeout=1)
         return True
 
-    def behind(_host: Host, _marketplace: str) -> bool:
+    def behind(_host: Host, _marketplace: str, _environ: object) -> bool:
         assert pin_check_started.wait(timeout=1)
         probe_saw_pin_check.set()
         return False
@@ -608,10 +611,26 @@ def test_refresh_overlaps_pin_checks_with_remote_freshness_probes(
     monkeypatch.setattr(plugin_update, "marketplace_revision", lambda _host: OLD_PIN)
     monkeypatch.setattr(plugin_update, "update_standards", lambda *_args: None)
 
-    outcome = plugin_update.update(Host.CLAUDE, Digests(tmp_path / "state"))
+    outcome = plugin_update.update(Host.CLAUDE, Digests(tmp_path / "state"), {})
 
     assert not outcome.failures
     assert probe_saw_pin_check.is_set()
+
+
+def test_plugin_entrypoint_passes_its_configured_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def update(host: Host, _digests: Digests, environ: object) -> plugin_update.Outcome:
+        assert host is Host.CLAUDE
+        assert environ is os.environ
+        assert os.environ["GIT_CONFIG_GLOBAL"] == "entrypoint-only-config"
+        return plugin_update.Outcome([], False, OLD_PIN)
+
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "entrypoint-only-config")
+    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
+    monkeypatch.setattr(plugin_update, "update", update)
+    monkeypatch.setattr(tj_plugins, "refresh_runtime", lambda _host: None)
+    assert tj_plugins.main(["update", "--host", "claude"]) == 0
 
 
 def test_refresh_rechecks_pins_after_a_marketplace_moves(
@@ -645,12 +664,12 @@ def test_refresh_rechecks_pins_after_a_marketplace_moves(
     monkeypatch.setattr(
         plugin_update,
         "behind_remote",
-        lambda _host, marketplace: marketplace == "tj-agents",
+        lambda _host, marketplace, _environ: marketplace == "tj-agents",
     )
     monkeypatch.setattr(plugin_update, "marketplace_revision", lambda _host: OLD_PIN)
     monkeypatch.setattr(plugin_update, "update_standards", lambda *_args: None)
 
-    outcome = plugin_update.update(Host.CLAUDE, Digests(tmp_path / "state"))
+    outcome = plugin_update.update(Host.CLAUDE, Digests(tmp_path / "state"), {})
 
     assert not outcome.failures
     assert checks == [(), (("tj-agents",),)]
@@ -679,8 +698,8 @@ def test_refresh_runs_only_plugin_commands_on_both_hosts(tmp_path: Path) -> None
         mock.patch.object(process, "run", side_effect=run) as spawned,
     ):
         state = Digests(tmp_path / "state")
-        assert not plugin_update.update(Host.CLAUDE, state).failures
-        assert not plugin_update.update(Host.CODEX, state).failures
+        assert not plugin_update.update(Host.CLAUDE, state, {}).failures
+        assert not plugin_update.update(Host.CODEX, state, {}).failures
     commands = [
         claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list
     ]
@@ -746,7 +765,7 @@ def daemon_refresh(
         _patched_homes(tmp_path),
         mock.patch.object(process, "run", side_effect=run) as spawned,
     ):
-        outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"))
+        outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"), {})
     return (
         outcome,
         [claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list],
@@ -1051,7 +1070,7 @@ def test_current_codex_plugins_repair_pending_hook_trust(
         ) as activate,
         mock.patch.object(process, "run", return_value=completed()) as spawned,
     ):
-        outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"))
+        outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"), {})
     assert bool(outcome.failures) == failed
     trust.assert_called_once()
     assert activate.call_count == int(not failed)
@@ -1136,11 +1155,25 @@ def test_the_published_revision_is_the_marketplace_clone_commit(
 
 @pytest.mark.parametrize("host", list(Host))
 def test_only_a_marketplace_clone_behind_its_remote_needs_an_upgrade(
-    host: Host, tmp_path: Path
+    host: Host, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
     git += ["-c", "commit.gpgsign=false"]
     variables = without_git_config(dict(os.environ))
+    remote_head = "a" * 40
+
+    def freshness(root: Path, environ: Mapping[str, str]) -> bool:
+        assert environ is variables
+        local = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            env=environ,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return local.returncode != 0 or local.stdout.strip() != remote_head
+
+    monkeypatch.setattr(marketplace_head, "behind", freshness)
     remote = tmp_path / "remote"
     for command in (
         ["init", "-q", str(remote)],
@@ -1148,7 +1181,7 @@ def test_only_a_marketplace_clone_behind_its_remote_needs_an_upgrade(
     ):
         subprocess.run([*git, *command], env=variables, check=True)
     with _patched_homes(tmp_path):
-        assert BEHIND_REMOTE(host, "tj-agents")
+        assert BEHIND_REMOTE(host, "tj-agents", variables)
         for marketplace in ("tj-agents", "agents"):
             clone = plugin_update.INSTALLED[host].marketplace_root(marketplace)
             subprocess.run(
@@ -1164,5 +1197,12 @@ def test_only_a_marketplace_clone_behind_its_remote_needs_an_upgrade(
         subprocess.run(
             [*git, "-C", str(clone), "pull", "-q"], env=variables, check=True
         )
-        assert BEHIND_REMOTE(host, "tj-agents")
-        assert not BEHIND_REMOTE(host, "agents")
+        remote_head = subprocess.run(
+            ["git", "-C", str(remote), "rev-parse", "HEAD"],
+            env=variables,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert BEHIND_REMOTE(host, "tj-agents", variables)
+        assert not BEHIND_REMOTE(host, "agents", variables)

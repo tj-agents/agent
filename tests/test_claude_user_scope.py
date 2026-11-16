@@ -168,7 +168,7 @@ def test_refresh_cleans_torn_reinstall_enables_even_after_failure(
             }
         },
     )
-    outcome = plugin_update.update(Host.CLAUDE, Digests(native.home / "state"))
+    outcome = plugin_update.update(Host.CLAUDE, Digests(native.home / "state"), {})
     assert bool(outcome.failures) is fail_install
     assert {identity for identity, enabled in native.enabled().items() if enabled} == {
         "kept@other"

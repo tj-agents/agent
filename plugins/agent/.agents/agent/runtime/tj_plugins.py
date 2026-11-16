@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         host = selected_host(arguments.host, os.environ)
     except ValueError as error:
         parser.error(str(error))
-    outcome = plugin_update.update(host, Digests(jobs.state_directory()))
+    outcome = plugin_update.update(host, Digests(jobs.state_directory()), os.environ)
     if outcome.failures:
         for failure in outcome.failures:
             print(f"  {failure}", file=sys.stderr)
