@@ -1349,7 +1349,10 @@ def check_plugin_setup(context: Context) -> list[str]:
     if native_runtime.pending():
         return check_native_cli(context)
     return required_plugins.check_setup(
-        plugin_setup_project(context), tuple(Host), plugin_setup_executables(context)
+        plugin_setup_project(context),
+        tuple(Host),
+        plugin_setup_executables(context),
+        context.state_directory,
     )
 
 
@@ -1358,6 +1361,7 @@ def apply_plugin_setup(context: Context) -> list[str]:
         plugin_setup_project(context),
         tuple(Host),
         plugin_setup_executables(context),
+        context.state_directory,
         context.onboard,
     )
     if errors:
