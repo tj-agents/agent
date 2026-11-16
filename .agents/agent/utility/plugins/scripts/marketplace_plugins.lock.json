@@ -1,6 +1,6 @@
 {
   "repository": "tj-agents/marketplace",
-  "revision": "ef09cff9e3bda47548242dd08255d88055b8e223",
+  "revision": "7a69b6972a96c84dc1b97fa3f3c90d0d38eb8e08",
   "marketplace": {
     "name": "tj-agents",
     "description": "Shared base, Agent Store, agent, CLI, workflow, engineering, documentation, C++, .NET, React, Neovim, Rust, Python, GitHub, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
@@ -9,274 +9,275 @@
       {
         "name": "base",
         "repository": "core",
-        "revision": "f856e6533fa7b8e2f063d9a6f9d44d38fd6ac32c",
-        "profile": "generic"
+        "revision": "a1ebc9faa054d6d6b1e256454743aa8512131afb",
+        "kind": "shared"
       },
       {
         "name": "agent-store",
         "repository": "agent",
-        "revision": "928d306bd661c3d79d47dbb7c17a757e99624592",
+        "revision": "7af24fbde3c4561a2712af016ac1426a387e1234",
         "requires": [
           "base"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "agent",
         "repository": "agent",
-        "revision": "928d306bd661c3d79d47dbb7c17a757e99624592",
+        "revision": "7af24fbde3c4561a2712af016ac1426a387e1234",
         "requires": [
           "base",
           "agent-store",
           "cli"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "codex",
         "repository": "agent",
-        "revision": "928d306bd661c3d79d47dbb7c17a757e99624592",
+        "revision": "7af24fbde3c4561a2712af016ac1426a387e1234",
         "requires": [
           "agent"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "cli",
         "repository": "cli",
-        "revision": "591d50011d24902ec995037af607f3430b0cbd3b",
+        "revision": "9608c76960c1b0aba7d0f1a05ae335679ffbbf47",
         "requires": [
           "base"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "workflow",
         "repository": "core",
-        "revision": "f856e6533fa7b8e2f063d9a6f9d44d38fd6ac32c",
+        "revision": "a1ebc9faa054d6d6b1e256454743aa8512131afb",
         "requires": [
           "base",
           "agent-store",
           "agent"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "engineering",
         "repository": "core",
-        "revision": "f856e6533fa7b8e2f063d9a6f9d44d38fd6ac32c",
+        "revision": "a1ebc9faa054d6d6b1e256454743aa8512131afb",
         "requires": [
           "base",
           "workflow",
           "agent-store",
           "agent"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "docs",
         "repository": "core",
-        "revision": "f856e6533fa7b8e2f063d9a6f9d44d38fd6ac32c",
-        "profile": "generic"
+        "revision": "a1ebc9faa054d6d6b1e256454743aa8512131afb",
+        "kind": "shared"
       },
       {
         "name": "cpp",
         "repository": "cpp",
-        "revision": "ae329c48249fdf24af3dcfc8370b47a4727c2cf6",
+        "revision": "a3f6887174137172fb775add028b86893ef67f75",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "gpp",
         "repository": "cpp",
-        "revision": "ae329c48249fdf24af3dcfc8370b47a4727c2cf6",
+        "revision": "a3f6887174137172fb775add028b86893ef67f75",
         "requires": [
           "cpp"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "msvc",
         "repository": "cpp",
-        "revision": "ae329c48249fdf24af3dcfc8370b47a4727c2cf6",
+        "revision": "a3f6887174137172fb775add028b86893ef67f75",
         "requires": [
           "cpp"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "win32",
         "repository": "cpp",
-        "revision": "ae329c48249fdf24af3dcfc8370b47a4727c2cf6",
+        "revision": "a3f6887174137172fb775add028b86893ef67f75",
         "requires": [
           "cpp"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "dotnet",
         "repository": "dotnet",
-        "revision": "6022dfb616cc280135c84ee21c2788bc883a41c2",
+        "revision": "06003e6791cbb4e48ba39e9502b3ccdc4086be8b",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "efcore",
         "repository": "dotnet",
-        "revision": "6022dfb616cc280135c84ee21c2788bc883a41c2",
+        "revision": "06003e6791cbb4e48ba39e9502b3ccdc4086be8b",
         "requires": [
           "dotnet"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "react",
         "repository": "react",
-        "revision": "94941308c9ccd2614bf43c8d2c8ca7caf82883ea",
+        "revision": "31566319cda2e8e23ad273404782685de2ee658b",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "nvim",
         "repository": "nvim",
-        "revision": "0ebf338ea90880f256cde3f19c8a1d34981fadaa",
+        "revision": "569a38353b65f15bb4fffaf8c857f8e30dcde25a",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "rust",
         "repository": "rust",
-        "revision": "c51c1de9fb6779f7f6313241aecd26adc949e77a",
+        "revision": "a45830945bedb0fba1ea5558682aad3873f5477b",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "tauri",
         "repository": "rust",
-        "revision": "c51c1de9fb6779f7f6313241aecd26adc949e77a",
+        "revision": "a45830945bedb0fba1ea5558682aad3873f5477b",
         "requires": [
           "rust"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "rust-sqlx",
         "repository": "rust",
-        "revision": "c51c1de9fb6779f7f6313241aecd26adc949e77a",
+        "revision": "a45830945bedb0fba1ea5558682aad3873f5477b",
         "requires": [
           "rust"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "seaorm",
         "repository": "rust",
-        "revision": "c51c1de9fb6779f7f6313241aecd26adc949e77a",
+        "revision": "a45830945bedb0fba1ea5558682aad3873f5477b",
         "requires": [
           "rust"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "python",
         "repository": "python",
-        "revision": "e807f8bc16b30adafe11c3ed3688c66adb3c3765",
+        "revision": "8b9af49d583d0d4fbe9b89521de36f21a752924b",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "github",
         "repository": "github",
-        "revision": "f75eb24d34df7ed7e567ea40e8ce2bb4f3f19300",
+        "revision": "1cea58564c75481354beb266597cfa60c3871c4b",
         "requires": [
           "base"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "github-actions",
         "repository": "github-actions",
-        "revision": "7af443d4a28479cbe529c3455f12047d91928ecf",
+        "revision": "a95a57daa8ddf154456e1c822cd34a11e08af118",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "azure",
         "repository": "azure",
-        "revision": "7c8a694979f0f740ff2b30d0ce0115dfe64c3f38",
+        "revision": "f36d5d911fb009ddf4856c75fffcc91b52c99bce",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "template",
         "repository": "template",
-        "revision": "d856d22ddb3deaf60aafcfb4b438eea3413fb6a9",
+        "revision": "b3c238edcef24362b9f4a3b74e150bda32bce7c2",
         "requires": [
           "engineering",
           "skill"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "skill",
         "repository": "template",
-        "revision": "d856d22ddb3deaf60aafcfb4b438eea3413fb6a9",
+        "revision": "b3c238edcef24362b9f4a3b74e150bda32bce7c2",
         "requires": [
           "engineering"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "learning",
         "repository": "learning",
-        "revision": "53dba4c4637a182f240154ba21c438839b8fb0bb",
+        "revision": "e794c1a187069cc6facf28c87fd29e7683695092",
         "requires": [
           "base"
         ],
-        "profile": "generic"
+        "kind": "shared"
       },
       {
         "name": "personal",
         "repository": "personal",
-        "revision": "94ac98da540edafa250e1bacc22c19c6a31f9e40",
+        "revision": "31b19b5791b77358791604992d0580f2bd1c324a",
         "requires": [
           "engineering",
           "agent",
-          "docs"
+          "docs",
+          "github"
         ],
-        "profile": "generic"
+        "kind": "profile"
       },
       {
         "name": "teams",
         "repository": "work",
-        "revision": "f02614e42a5b9f84819bc56f44cab2941677dedb",
-        "profile": "generic"
+        "revision": "a1c667ff8c8e16ed2decb05c52c4a45169c68b73",
+        "kind": "shared"
       },
       {
         "name": "work",
         "repository": "work",
-        "revision": "f02614e42a5b9f84819bc56f44cab2941677dedb",
+        "revision": "a1c667ff8c8e16ed2decb05c52c4a45169c68b73",
         "requires": [
           "engineering",
           "teams"
         ],
-        "profile": "generic"
+        "kind": "profile"
       },
       {
         "revision": "1cf637118f8459c843b2beacd9ebca9edb85873b",
@@ -285,7 +286,7 @@
           "base",
           "engineering"
         ],
-        "profile": "specific",
+        "kind": "organization",
         "extends": "work"
       }
     ]

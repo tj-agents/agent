@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: Update this machine's plugins, runtime and tools with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, adopting a stack, changing selected packages, or auditing machine plugin settings.
+description: Refresh this machine's plugins with tj plugins update, install a machine once with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, setting up a machine, adopting a stack, changing selected packages, or auditing machine plugin settings.
 
 kind: utility
 domain: agent
@@ -13,17 +13,18 @@ route: infer
 
 # Plugins
 
-Owns the one machine install and repository plugin selection.
+Owns plugin refresh, the one machine install and repository plugin selection.
 
 ```text
+tj plugins update --host claude
 tj install
 tj install --check
-tj install --step "Handy"
 ```
 
-`tj install` performs the full machine installation, including plugins, runtime, CLI, machine tools, Handy,
-profiles, agent settings and command bindings. After a plugin PR merges, run `tj plugins update --host <host>`
-for a host-only plugin refresh, or `tj install` for the full machine installation. After a successful changed
+After a plugin PR merges, or when plugins look outdated, run `tj plugins update --host <host>`. It refreshes
+the host's plugins and never re-runs plugin setup. `tj run` already starts it at launch and periodically when
+the marketplace moved. Run `tj install` only to set up a machine, or when machine tools, profiles, agent
+settings, command bindings or a plugin's one-time setup must change; it re-runs every plugin setup step. After a successful changed
 installation, the internal `tj update --host <host> --revision <revision>` publishes the installed revision so
 `tj run` tabs apply it in place once idle. `tj run` checks for marketplace updates at launch and periodically.
 See the [canonical plugin update flow](https://github.com/tj-agents/cli/blob/main/docs/plugin-updates.md)
@@ -91,9 +92,12 @@ exits nonzero on drift, which is what CI runs. An unknown stack or plugin is rej
 Personal is only for personal projects explicitly adopting `personal@tj-agents`. Read the repository's
 README.md and AGENTS.md before selection; a GitHub owner, home directory or publisher account never
 establishes personal scope. When the user explicitly confirms personal scope, include `--plugin personal`;
-otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it. A specific
-profile's source repository and every worktree of it are work scope: never select or inject Personal there.
-See [Generic and specific profiles](https://github.com/tj-agents/docs/blob/main/PLUGINS.md#generic-and-specific-profiles).
+otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it.
+A repository selects one `kind: profile` plugin; an `organization` brings the profile it extends through
+`requires`. Selection, adoption and reconciliation refuse a second profile, and refuse any profile other than
+the one an organization extends when that organization's installed employer declaration matches the
+repository's origin or names it as its source repository. See
+[Plugin kinds](https://github.com/tj-agents/docs/blob/main/PLUGINS.md#plugin-kinds).
 Owner-based project/local file placement is independent of this policy boundary.
 Selecting a profile does not prove its instructions loaded.
 
