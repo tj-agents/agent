@@ -6,6 +6,7 @@ from pathlib import Path
 import install
 import pytest
 from codex import powershell as codex_powershell
+from tj_cli import native_install, powershell_install
 
 
 def powershell(directory: Path) -> Path:
@@ -118,7 +119,7 @@ def test_profile_delivery_searches_beyond_packaged_process_path(tmp_path: Path) 
 @pytest.mark.parametrize("persisted", [None, "", 12, ";relative;\0bad;%UNKNOWN%"])
 @pytest.mark.parametrize("package", ["WindowsApps", "wINDOWSaPPS/PowerShell_7"])
 def test_profile_delivery_reports_packaged_only_powershell_without_running(
-    tmp_path: Path, persisted: object, package: str
+    tmp_path: Path, persisted: object, package: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     packaged = powershell(tmp_path / package)
     calls: list[list[str]] = []
@@ -145,16 +146,85 @@ def test_profile_delivery_reports_packaged_only_powershell_without_running(
         )
         is None
     )
-    selected = next(
-        step for step in install.STEPS if step.name == "Codex profile agents"
-    )
-    output = io.StringIO()
-    assert install.run_steps([selected], context, False, output) == 0
-    assert "unpackaged PowerShell 7 is required" in output.getvalue()
+    monkeypatch.setattr(native_install, "default_bin_dir", lambda: tmp_path)
+    monkeypatch.setattr(powershell_install, "pending", lambda _path: "missing")
+    assert install.check_codex_agents(context) == [
+        "install PowerShell for Codex profile agents"
+    ]
     assert calls == []
     assert before == {
         path: path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()
     }
+
+
+def test_profile_delivery_installs_missing_powershell_and_uses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    codex = tmp_path / ".codex"
+    codex.mkdir()
+    package = tmp_path / "engineering"
+    installer = package / "scripts" / "install-codex-agents.ps1"
+    installer.parent.mkdir(parents=True)
+    installer.touch()
+    claude = tmp_path / ".claude"
+    (claude / "plugins").mkdir(parents=True)
+    (claude / "settings.json").write_text(
+        json.dumps({"enabledPlugins": {"engineering@tj-agents": True}}),
+        encoding="utf-8",
+    )
+    (claude / "plugins" / "installed_plugins.json").write_text(
+        json.dumps(
+            {"plugins": {"engineering@tj-agents": [{"installPath": str(package)}]}}
+        ),
+        encoding="utf-8",
+    )
+    executable = tmp_path / "managed" / "pwsh.exe"
+    calls: list[list[str]] = []
+
+    def ensure(_path: Path) -> Path:
+        executable.parent.mkdir()
+        executable.touch()
+        return executable
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "INSTALLED: profiles\n", "")
+
+    monkeypatch.setattr(native_install, "default_bin_dir", lambda: tmp_path)
+    monkeypatch.setattr(powershell_install, "executable", lambda _path: executable)
+    monkeypatch.setattr(
+        powershell_install,
+        "pending",
+        lambda _path: None if executable.is_file() else "missing",
+    )
+    monkeypatch.setattr(powershell_install, "ensure", ensure)
+    context = install.Context(
+        home=tmp_path, environ={}, windows=True, which=lambda _name: None, run=run
+    )
+    assert install.check_codex_agents(context) == [
+        "install PowerShell for Codex profile agents"
+    ]
+    selected = next(
+        step for step in install.STEPS if step.name == "Codex profile agents"
+    )
+    output = io.StringIO()
+    assert install.run_steps([selected], context, True, output) == 1
+    assert "drift  Codex profile agents: install PowerShell" in output.getvalue()
+    assert not executable.exists()
+    assert install.apply_codex_agents(context) == ["INSTALLED: profiles"]
+    assert calls == [
+        [
+            str(executable),
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(installer),
+            "-CodexHome",
+            str(codex),
+            "-Apply",
+        ]
+    ]
+    assert install.check_codex_agents(context) == []
 
 
 @pytest.mark.parametrize("executable", [None, "/usr/local/bin/pwsh"])

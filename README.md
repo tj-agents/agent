@@ -47,8 +47,9 @@ the wrapping; authored hook manifests keep the payload executable and arguments.
 Codex's shared daemon auto-start (a `daemon_auto_start = false` override is removed so refresh can reload open
 Codex sessions in place),
 the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
-profile agents, harness permissions, plugin setup, plugin scope, Codex trust for tj-agents plugin hooks (verified against their published
-source, so no Codex launch asks to trust them) and plugin copies. It is idempotent; `--check` reports
+profile agents, provisioning a verified PowerShell runtime when no usable PowerShell is available, harness
+permissions, plugin setup, plugin scope, Codex trust for tj-agents plugin hooks (verified against their
+published source, so no Codex launch asks to trust them) and plugin copies. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
 `tj item` is `tj-work-items`, installed with `uv tool install` (uv is required) together with the work-item
@@ -61,6 +62,9 @@ bumps; the step is a no-op while uv's receipt matches the pins. worktrunk and Ha
 
 See [plugin updates](https://github.com/tj-agents/cli/blob/main/docs/plugin-updates.md) for update commands,
 automatic checks and session reloads.
+Install and a Codex session selecting Agent ensure one observer follows the existing Codex daemon while it has
+loaded threads. It checks for published updates and reloads the daemon without restarting those conversations;
+it exits when the daemon disconnects or has no loaded threads.
 Updates regenerate the calling repository's standards index before activation. Codex also reconciles
 the adopted repositories of loaded threads from verified installed builds before publishing.
 Local-only adoption preserves owner-supplied instruction files. Failed verification retains existing
