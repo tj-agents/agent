@@ -158,7 +158,10 @@ def origin_evidence(
         matched = [child for child in children if child is not None]
         if not matched or (operator == "all" and len(matched) != len(children)):
             return None
-        return tuple(dict.fromkeys(item for child in matched for item in child))
+        evidence: dict[str, None] = {}
+        for child in matched:
+            evidence.update(dict.fromkeys(child))
+        return tuple(evidence)
     if origin is None:
         return None
     assert isinstance(value, str)
@@ -200,7 +203,7 @@ def _cache_of(payload: Path) -> Path | None:
     )
 
 
-def cache_roots() -> list[Path]:
+def cache_roots(environ: Mapping[str, str]) -> list[Path]:
     """Host plugin caches in priority order: the running payload's cache first."""
     roots: list[Path] = []
 
@@ -215,7 +218,7 @@ def cache_roots() -> list[Path]:
             roots.append(resolved)
 
     for variable in dict.fromkeys(host.plugin_root_variable for host in Host):
-        value = os.environ.get(variable)
+        value = environ.get(variable)
         if value:
             with contextlib.suppress(OSError, ValueError):
                 add(_cache_of(Path(value).resolve()))
@@ -226,7 +229,7 @@ def cache_roots() -> list[Path]:
         if len(runtime.parents) > depth:
             add(_cache_of(runtime.parents[depth]))
     for host in Host:
-        value = os.environ.get(host.home_variable)
+        value = environ.get(host.home_variable)
         if value:
             add(Path(value) / "plugins" / "cache")
     for host in Host:
@@ -318,10 +321,10 @@ def installed(roots: Iterable[Path], project: Path | None = None) -> list[Instal
     return list(found.values())
 
 
-def installed_employers(project: Path) -> list[Employer]:
+def installed_employers(project: Path, environ: Mapping[str, str]) -> list[Employer]:
     """Live employer declarations installed for `project` that detect by origin."""
     employers = []
-    for item in installed(cache_roots(), project):
+    for item in installed(cache_roots(environ), project):
         if item.orphaned:
             continue
         try:

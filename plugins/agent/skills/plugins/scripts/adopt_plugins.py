@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+from types import MappingProxyType
 
 import lock_io
 import plugin_selection
@@ -19,6 +22,7 @@ from plugin_runtime import declarations, process
 
 LOCK = Path(__file__).resolve().parent / "marketplace_plugins.lock.json"
 STACKS = Path(__file__).resolve().parent / "plugin_stacks.json"
+NO_ENVIRONMENT: Mapping[str, str] = MappingProxyType({})
 
 
 def load_roster(snapshot: dict | None = None) -> dict:
@@ -117,9 +121,9 @@ def removal_identities(plugins: list[str]) -> set[str]:
     return identities
 
 
-def refuse_employer_conflict(root: Path, profile: str, roster: dict) -> None:
+def refuse_employer_conflict(root: Path, profile: str, roster: dict, environ: Mapping[str, str]) -> None:
     """Refuse a profile other than the one a matching installed employer's organization extends."""
-    for employer, evidence in declarations.matching_employers(root, declarations.installed_employers(root)):
+    for employer, evidence in declarations.matching_employers(root, declarations.installed_employers(root, environ)):
         permitted = (roster["organizations"].get(employer.plugin)
                      if employer.marketplace == plugin_selection.MARKETPLACE_NAME else None)
         if profile != permitted:
@@ -129,7 +133,7 @@ def refuse_employer_conflict(root: Path, profile: str, roster: dict) -> None:
                                     f"matches this repository ({', '.join(evidence)}); {reason}")
 
 
-def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict) -> dict:
+def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> dict:
     selection = plugin_selection.resolve(root)
     kept: list[str] = []
     marketplaces = {}
@@ -154,7 +158,7 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
         raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
                                 + "; keep one and drop the others with --remove-plugin <name>")
     if profiles:
-        refuse_employer_conflict(root, profiles[0], roster)
+        refuse_employer_conflict(root, profiles[0], roster, environ)
     required = set().union(*(expand({name}, roster) for name in local)) if local else set()
     blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
     if blocked:
@@ -173,7 +177,7 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
     return document
 
 
-def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None) -> tuple[dict[Path, str | None], Path]:
+def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> tuple[dict[Path, str | None], Path]:
     root = root.expanduser().resolve()
     if root.exists() and not root.is_dir():
         raise lock_io.LockError(f"Repository root is not a directory: {root}")
@@ -185,15 +189,15 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
         if name in declared:
             raise lock_io.LockError(f"--marketplace {name} is given more than once")
         declared[name] = source
-    document = selection_document(root, names, foreign, removal_identities(removals), declared, roster)
+    document = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
     selection = root / ".agents" / plugin_selection.SELECTION_NAME
     host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document, exclusions=exclusions)
     targets = {selection: json.dumps(document, indent=2, ensure_ascii=False) + "\n", **host_targets}
     return targets, root
 
 
-def run(root: Path, stacks: list[str], plugins: list[str], mode: str, scope: str | None = None, marketplaces: list[str] = (), removals: list[str] = (), *, roster: dict | None = None) -> list[str]:
-    targets, root = plan(root, stacks, plugins, removals, scope, marketplaces, roster=roster)
+def run(root: Path, stacks: list[str], plugins: list[str], mode: str, scope: str | None = None, marketplaces: list[str] = (), removals: list[str] = (), *, roster: dict | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> list[str]:
+    targets, root = plan(root, stacks, plugins, removals, scope, marketplaces, roster=roster, environ=environ)
     changed = {path: value for path, value in targets.items() if repo_config.text_at(path) != value}
     drift = [path.relative_to(root).as_posix() for path in changed]
     if mode == "write":
@@ -217,16 +221,16 @@ def current_roster() -> dict:
         return load_roster(json.loads(update_marketplace_plugins.snapshot(source)))
 
 
-def reconcile(root: Path, mode: str) -> list[str]:
+def reconcile(root: Path, mode: str, environ: Mapping[str, str] = NO_ENVIRONMENT) -> list[str]:
     root = root.expanduser().resolve()
     selection = plugin_selection.resolve(root)
     if not selection.is_file():
         return []
     plugin_selection.validate(lock_io.load_json(selection))
-    return run(root, [], [], mode, roster=current_roster())
+    return run(root, [], [], mode, roster=current_roster(), environ=environ)
 
 
-def reconcile_many(roots: list[Path], mode: str) -> list[str]:
+def reconcile_many(roots: list[Path], mode: str, environ: Mapping[str, str] = NO_ENVIRONMENT) -> list[str]:
     roots = sorted({root.expanduser().resolve() for root in roots
                     if plugin_selection.resolve(root).is_file()})
     if not roots:
@@ -236,7 +240,7 @@ def reconcile_many(roots: list[Path], mode: str) -> list[str]:
     exclusions = {}
     drift = []
     for root in roots:
-        targets, _ = plan(root, [], [], [], None, roster=roster, exclusions=exclusions)
+        targets, _ = plan(root, [], [], [], None, roster=roster, exclusions=exclusions, environ=environ)
         for path, value in targets.items():
             if path in exclusions:
                 continue
@@ -270,12 +274,13 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.converge_existing:
             if arguments.stack or arguments.plugin or arguments.remove_plugin or arguments.marketplace or arguments.scope:
                 raise lock_io.LockError("--converge-existing cannot change the requested selection or scope")
-            drift = (reconcile_many([arguments.root, *arguments.also_root], arguments.mode)
-                     if arguments.also_root else reconcile(arguments.root, arguments.mode))
+            drift = (reconcile_many([arguments.root, *arguments.also_root], arguments.mode, os.environ)
+                     if arguments.also_root else reconcile(arguments.root, arguments.mode, os.environ))
         else:
             if arguments.also_root:
                 raise lock_io.LockError("--also-root requires --converge-existing")
-            drift = run(arguments.root, arguments.stack, arguments.plugin, arguments.mode, arguments.scope, arguments.marketplace, arguments.remove_plugin)
+            drift = run(arguments.root, arguments.stack, arguments.plugin, arguments.mode, arguments.scope, arguments.marketplace,
+                        arguments.remove_plugin, environ=os.environ)
     except (lock_io.LockError, OSError, UnicodeError, ValueError, subprocess.SubprocessError) as error:
         print(f"Plugin adoption failed: {error}", file=sys.stderr)
         return 1

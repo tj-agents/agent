@@ -197,7 +197,7 @@ EMPLOYER = {"all": [{"remote_host": "example.test"}, {"remote": "^example-employ
 def installed_employers(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     """The employer declarations adoption sees as installed; none unless a test adds one."""
     employers: list[object] = []
-    monkeypatch.setattr(ADOPT.declarations, "installed_employers", lambda _root: employers)
+    monkeypatch.setattr(ADOPT.declarations, "installed_employers", lambda _root, _environ: employers)
     return employers
 
 

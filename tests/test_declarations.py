@@ -168,18 +168,11 @@ def test_cache_roots_promote_only_a_plugin_root_inside_a_cache(
     native.mkdir(parents=True)
     scratch = home / "scratch" / "engineering"
     scratch.mkdir(parents=True)
-    for variable in (
-        "CLAUDE_PLUGIN_ROOT",
-        "PLUGIN_ROOT",
-        "CLAUDE_CONFIG_DIR",
-        "CODEX_HOME",
-    ):
-        monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setenv("PLUGIN_ROOT", str(scratch))
-    assert scratch.parents[2] not in declarations.cache_roots()
-    monkeypatch.setenv("PLUGIN_ROOT", str(native))
-    assert declarations.cache_roots()[0] == cache.resolve()
+    assert scratch.parents[2] not in declarations.cache_roots(
+        {"PLUGIN_ROOT": str(scratch)}
+    )
+    assert declarations.cache_roots({"PLUGIN_ROOT": str(native)})[0] == cache.resolve()
 
 
 @pytest.mark.parametrize(
@@ -199,18 +192,22 @@ def test_cache_roots_put_the_running_payload_cache_first(
     )
     module.parent.mkdir(parents=True)
     (home / ".claude" / "plugins" / "cache").mkdir(parents=True)
-    for variable in (
-        "CLAUDE_PLUGIN_ROOT",
-        "PLUGIN_ROOT",
-        "CLAUDE_CONFIG_DIR",
-        "CODEX_HOME",
-    ):
-        monkeypatch.delenv(variable, raising=False)
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setattr(declarations, "__file__", str(module))
-    assert declarations.cache_roots() == [
+    assert declarations.cache_roots({}) == [
         own.resolve(),
         (home / ".claude" / "plugins" / "cache").resolve(),
+    ]
+
+
+def test_cache_roots_read_each_hosts_configured_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = tmp_path / "configured"
+    (configured / "plugins" / "cache").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    assert declarations.cache_roots({"CODEX_HOME": str(configured)}) == [
+        (configured / "plugins" / "cache").resolve()
     ]
 
 
@@ -261,7 +258,7 @@ def test_installed_never_lets_an_orphaned_version_shadow_a_live_one(
 def test_installed_employers_reads_live_origin_employer_declarations(
     tmp_path: Path, cache: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(declarations, "cache_roots", lambda: [cache])
+    monkeypatch.setattr(declarations, "cache_roots", lambda _environ: [cache])
     employer = {
         "schema_version": 3,
         "tier": "employer-a",
@@ -284,7 +281,7 @@ def test_installed_employers_reads_live_origin_employer_declarations(
     install(cache, "marker", dict(employer, detect={"file": "marker"}))
     orphaned = install(cache, "orphaned", employer)
     (orphaned / declarations.ORPHAN_MARKER).touch()
-    assert declarations.installed_employers(tmp_path) == [
+    assert declarations.installed_employers(tmp_path, {}) == [
         Employer("employer-a", "test-market", EMPLOYER, ("publisher/employer-a",))
     ]
 
