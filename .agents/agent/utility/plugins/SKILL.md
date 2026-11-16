@@ -1,6 +1,6 @@
 ---
 name: plugins
-description: Update this machine's plugins, runtime and tools with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, adopting a stack, changing selected packages, or auditing machine plugin settings.
+description: Refresh this machine's plugins with tj plugins update, install a machine once with tj install, or select a repository's plugins and generate its Claude and Codex settings. Use when plugins look outdated, a plugin PR merged, setting up a machine, adopting a stack, changing selected packages, or auditing machine plugin settings.
 
 kind: utility
 domain: agent
@@ -13,17 +13,18 @@ route: infer
 
 # Plugins
 
-Owns the one machine install and repository plugin selection.
+Owns plugin refresh, the one machine install and repository plugin selection.
 
 ```text
+tj plugins update --host claude
 tj install
 tj install --check
-tj install --step "Handy"
 ```
 
-`tj install` performs the full machine installation, including plugins, runtime, CLI, machine tools, Handy,
-profiles, agent settings and command bindings. After a plugin PR merges, run `tj plugins update --host <host>`
-for a host-only plugin refresh, or `tj install` for the full machine installation. After a successful changed
+After a plugin PR merges, or when plugins look outdated, run `tj plugins update --host <host>`. It refreshes
+the host's plugins and never re-runs plugin setup. `tj run` already starts it at launch and periodically when
+the marketplace moved. Run `tj install` only to set up a machine, or when machine tools, profiles, agent
+settings, command bindings or a plugin's one-time setup must change; it re-runs every plugin setup step. After a successful changed
 installation, the internal `tj update --host <host> --revision <revision>` publishes the installed revision so
 `tj run` tabs apply it in place once idle. `tj run` checks for marketplace updates at launch and periodically.
 See the [canonical plugin update flow](https://github.com/tj-agents/cli/blob/main/docs/plugin-updates.md)
