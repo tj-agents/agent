@@ -633,6 +633,52 @@ def test_plugin_entrypoint_passes_its_configured_environment(
     assert tj_plugins.main(["update", "--host", "claude"]) == 0
 
 
+@pytest.mark.parametrize("command_config", ["entries", "parameters"])
+def test_plugin_entrypoint_uses_current_machine_git_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command_config: str
+) -> None:
+    configuration = tmp_path / "machine.gitconfig"
+    configuration.write_text(
+        "[credential]\n\thelper = current-machine-helper\n", encoding="utf-8"
+    )
+    environment = without_git_config(os.environ)
+    environment.update(
+        GIT_CONFIG_GLOBAL=str(configuration),
+        GIT_CONFIG_NOSYSTEM="1",
+    )
+    if command_config == "entries":
+        environment.update(
+            GIT_CONFIG_COUNT="1",
+            GIT_CONFIG_KEY_0="credential.helper",
+            GIT_CONFIG_VALUE_0="retired-session-helper",
+        )
+    else:
+        environment["GIT_CONFIG_PARAMETERS"] = (
+            "'credential.helper=retired-session-helper'"
+        )
+    monkeypatch.setattr(os, "environ", environment)
+    monkeypatch.chdir(tmp_path)
+
+    def update(
+        host: Host, _digests: Digests, environ: Mapping[str, str]
+    ) -> plugin_update.Outcome:
+        result = subprocess.run(
+            ["git", "config", "--get", "credential.helper"],
+            env=environ,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.stdout.strip() == "current-machine-helper"
+        return plugin_update.Outcome([], False, OLD_PIN)
+
+    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
+    monkeypatch.setattr(plugin_update, "update", update)
+    monkeypatch.setattr(tj_plugins, "refresh_runtime", lambda _host: None)
+    assert tj_plugins.main(["update", "--host", "codex"]) == 0
+
+
 def test_refresh_rechecks_pins_after_a_marketplace_moves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -22,6 +22,54 @@ HOSTS = {host.value: host for host in Host}
 PREFETCH_STANDARDS = plugin_update.prefetch_standards
 
 
+def test_failed_marketplace_still_settles_installed_hook_trust(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+
+    def fail_marketplace(
+        report: plugin_update.Report, marketplaces: tuple[str, ...]
+    ) -> None:
+        report.fail(Host.CODEX, "marketplace agents", "authentication failed")
+
+    def trust_hooks(_report: plugin_update.Report) -> bool:
+        events.append("trust")
+        return True
+
+    monkeypatch.setattr(plugin_update, "already_current", lambda *_args: True)
+    monkeypatch.setattr(codex_installed, "update_marketplaces", fail_marketplace)
+    monkeypatch.setattr(codex_installed, "trust_hooks", trust_hooks)
+    monkeypatch.setattr(
+        codex_installed, "activate", lambda _report: events.append("activate")
+    )
+    outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"), {})
+
+    assert outcome.failures == ["codex: marketplace agents: authentication failed"]
+    assert events == ["trust"]
+    assert not outcome.changed
+    assert not (tmp_path / "state" / "activated-codex.txt").exists()
+
+
+def test_failed_native_update_preserves_the_cause_before_its_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = (
+        "Failed to upgrade marketplace agents: credential helper is missing\n"
+        "Error: 1 upgrade failure(s) occurred."
+    )
+    monkeypatch.setattr(
+        plugin_update.Report,
+        "run",
+        staticmethod(
+            lambda command: subprocess.CompletedProcess(command, 1, "", diagnostic)
+        ),
+    )
+    report = plugin_update.Report()
+
+    assert report.step(Host.CODEX, "marketplace agents", ["codex"]) is None
+    assert report.failures == [f"codex: marketplace agents: {diagnostic}"]
+
+
 def update_plugins(host: str) -> int:
     outcome = plugin_update.update(HOSTS[host], Digests(jobs.state_directory()), {})
     return 1 if outcome.failures else 0

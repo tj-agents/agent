@@ -92,6 +92,11 @@ Plugin setup runs a selected plugin's `setup` only when its `setup --check` fail
 from the one recorded at its last successful setup in `~/.agents-state/plugin-setup.json`. That record is a
 rebuildable cache: deleting it runs each selected plugin's setup once more.
 
+`tj plugins update` uses the current machine Git configuration. It removes inherited per-command Git
+configuration overrides from its own process, while preserving configuration file locations such as
+`GIT_CONFIG_GLOBAL`. A failed marketplace upgrade still attempts to settle verified installed Codex hook
+trust; the update remains failed and publishes no successful revision until convergence succeeds.
+
 `tj item` is `tj-work-items`, installed with `uv tool install` (uv is required) together with the work-item
 profile package each organization plugin installed on this machine declares in its own payload
 (a `work-items.json` naming its package and subdirectory). Its repository comes from the marketplace
