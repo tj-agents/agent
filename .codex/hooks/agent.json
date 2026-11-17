@@ -23,6 +23,21 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{"type": "command", "timeout": 5, "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex", "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex"}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{"type": "command", "timeout": 5, "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex", "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex"}]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [{"type": "command", "timeout": 3, "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex", "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex"}]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [

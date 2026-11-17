@@ -18,6 +18,21 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{"type": "command", "timeout": 5, "command": "python", "args": ["-B", "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py", "--host", "claude"]}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{"type": "command", "timeout": 5, "command": "python", "args": ["-B", "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py", "--host", "claude"]}]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [{"type": "command", "timeout": 5, "command": "python", "args": ["-B", "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py", "--host", "claude"]}]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [
