@@ -456,12 +456,34 @@ def add_parent_arguments(parser: argparse.ArgumentParser) -> None:
                               help="open without a parent or inherited reporting obligation")
 
 
-def resolve_item(item, title, cwd, parent, fields):
-    """The handoff's work item ref: `item` as given, or a new item titled `title` under `cwd`."""
-    if item:
-        if fields:
-            raise LaunchError('--item-field applies only to the work item created when --item is omitted.')
+def add_item_arguments(parser: argparse.ArgumentParser) -> None:
+    tracker = parser.add_mutually_exclusive_group()
+    tracker.add_argument('--item', help='link an existing work item; omitted by default')
+    tracker.add_argument('--create-item', action='store_true',
+                         help='create a work item titled after --title, under the explicit parent item if linked')
+    parser.add_argument('--item-field', action='append', default=[], type=item_field,
+                        metavar='NAME=VALUE', help='a creation field; requires --create-item')
+
+
+def resolve_item(
+    item: str | None,
+    title: str,
+    cwd: Path,
+    parent: str | None,
+    fields: list[tuple[str, str]],
+    *,
+    create_item: bool = False,
+) -> str | None:
+    if item is not None and create_item:
+        raise LaunchError('--item and --create-item are mutually exclusive.')
+    if fields and not create_item:
+        raise LaunchError('--item-field requires --create-item.')
+    if item is not None:
+        if not item.strip():
+            raise LaunchError('--item must name an existing work item.')
         return item
+    if not create_item:
+        return None
     parent_ref = work_item.parent_item_ref(parent) if parent else None
     return work_item.create(cwd, title, parent_ref, dict(fields))
 

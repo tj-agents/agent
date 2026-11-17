@@ -11,7 +11,7 @@ import pytest
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = ROOT / "plugins/agent/.agents/agent"
+PACKAGE = ROOT / ".agents/agent"
 
 
 def load(path: Path, name: str) -> ModuleType:
@@ -39,6 +39,9 @@ class Launcher:
             try:
                 code = self.module.main(
                     [
+                        "--host",
+                        self.host.value,
+                        "--",
                         "--working-directory",
                         str(self.directory),
                         "--prompt-path",
@@ -63,17 +66,30 @@ def launcher(
     prompt.write_text("Do the work.", encoding="utf-8")
     cli = load(PACKAGE / "runtime/agent_cli.py", f"handoff_cli_{host}")
     launch = Mock(return_value={"launch": {"launch_id": "launch-1"}})
-    item = Mock(return_value="auto-item")
+    item = Mock(side_effect=cli.resolve_item)
     executable = Mock(return_value=("/bin/codex", {}))
     monkeypatch.setattr(cli, "launch", launch)
     monkeypatch.setattr(cli, "resolve_item", item)
+    monkeypatch.setattr(
+        cli.work_item, "create", Mock(side_effect=AssertionError("unexpected tracker mutation"))
+    )
+    monkeypatch.setattr(
+        cli.work_item, "parent_item_ref", Mock(wraps=cli.work_item.parent_item_ref)
+    )
     monkeypatch.setattr(
         cli.agent_store, "run", Mock(return_value={"session": {"title": "parent tab"}})
     )
     for name in ("TJ_RUN_LAUNCH_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"):
         monkeypatch.delenv(name, raising=False)
-    module = load(PACKAGE / f"resources/handoff/launch_{host}.py", f"handoff_{host}")
-    monkeypatch.setattr(module, "_load_agent_cli", lambda: cli)
+    handler = load(PACKAGE / f"resources/handoff/launch_{host}.py", f"handoff_{host}")
+    monkeypatch.setattr(handler, "_load_agent_cli", lambda: cli)
+    module = load(PACKAGE / "utility/handoff/scripts/handoff.py", f"handoff_entry_{host}")
+
+    def load_handler(selected_host: Host) -> ModuleType:
+        assert selected_host == host
+        return handler
+
+    monkeypatch.setattr(module, "_load_handler", load_handler)
     if host == Host.CODEX:
         monkeypatch.setattr(cli.host_launch(host), "resolve_executable", executable)
     return Launcher(host, module, cli, tmp_path, prompt, launch, item, executable)
@@ -149,7 +165,7 @@ def test_handoff_refuses_in_session_and_unknown_lanes(
 
 
 @pytest.mark.parametrize("parent", ("claude:p", "codex:p"))
-def test_parent_item_and_fields_reach_launch(launcher: Launcher, parent: str) -> None:
+def test_explicit_existing_item_reaches_launch(launcher: Launcher, parent: str) -> None:
     code, _, err = launcher.run(
         "--lane",
         "L4",
@@ -157,31 +173,139 @@ def test_parent_item_and_fields_reach_launch(launcher: Launcher, parent: str) ->
         "98",
         "--parent",
         parent,
-        "--item-field",
-        "attribution=TechPlatform",
     )
     assert code == 0, err
-    launcher.item.assert_called_once_with(
-        "98",
-        "agent#98 review",
-        launcher.directory,
-        parent,
-        [("attribution", "TechPlatform")],
-    )
     assert launcher.launch.call_args.kwargs == {
-        "item": "auto-item",
+        "item": "98",
         "parent": parent,
     }
+    launcher.cli.work_item.parent_item_ref.assert_not_called()
+    launcher.cli.work_item.create.assert_not_called()
     assert f'"parent tab" ({parent})' in launcher.launch.call_args.args[3][-1]
+
+
+@pytest.mark.parametrize("parent", (None, "claude:p", "codex:p"))
+def test_generic_handoff_launches_unlinked_without_tracker(
+    launcher: Launcher, parent: str | None
+) -> None:
+    relationship = ("--parent", parent) if parent else ("--independent",)
+    code, out, err = launcher.run("--lane", "L4", *relationship)
+    assert code == 0, err
+    assert launcher.launch.call_args.kwargs == {"item": None, "parent": parent}
+    assert json.loads(out.splitlines()[-1])["parent"] == parent
+    launcher.cli.work_item.parent_item_ref.assert_not_called()
+    launcher.cli.work_item.create.assert_not_called()
+
+
+@pytest.mark.parametrize("item_arguments", ((), ("--item", "98")))
+def test_handoff_rejects_creation_fields_without_explicit_creation(
+    launcher: Launcher, item_arguments: tuple[str, ...]
+) -> None:
+    code, _, err = launcher.run(
+        "--lane", "L4", "--independent", *item_arguments,
+        "--item-field", "attribution=TechPlatform",
+    )
+    assert code != 0
+    assert "--item-field requires --create-item" in err
+    launcher.launch.assert_not_called()
+    launcher.cli.work_item.parent_item_ref.assert_not_called()
+    launcher.cli.work_item.create.assert_not_called()
+
+
+@pytest.mark.parametrize("parent", (None, "claude:p", "codex:p"))
+def test_explicit_creation_links_the_canonical_parent_item(
+    launcher: Launcher, parent: str | None
+) -> None:
+    launcher.cli.agent_store.run.return_value = {
+        "session": {
+            "title": "parent tab",
+            "links": [
+                {"item": {"ref": "reviewed#1"}, "role": "reviewer"},
+                {"item": {"ref": "canonical#42"}, "role": "owner"},
+            ],
+        }
+    }
+    create = launcher.cli.work_item.create
+    create.side_effect = None
+    create.return_value = "canonical#99"
+    relationship = ("--parent", parent) if parent else ("--independent",)
+    code, out, err = launcher.run(
+        "--lane", "L4", *relationship, "--create-item",
+        "--item-field", "attribution=TechPlatform",
+    )
+    assert code == 0, err
+    create.assert_called_once_with(
+        launcher.directory, "agent#98 review", "canonical#42" if parent else None,
+        {"attribution": "TechPlatform"},
+    )
+    assert launcher.launch.call_args.kwargs == {"item": "canonical#99", "parent": parent}
+    assert json.loads(out.splitlines()[-1])["parent"] == parent
+    if parent:
+        launcher.cli.work_item.parent_item_ref.assert_called_once_with(parent)
+    else:
+        launcher.cli.work_item.parent_item_ref.assert_not_called()
+        launcher.cli.agent_store.run.assert_not_called()
+
+
+def test_explicit_creation_with_unlinked_parent_creates_a_root_item(launcher: Launcher) -> None:
+    launcher.cli.agent_store.run.return_value = {"session": {"title": "parent tab", "links": []}}
+    create = launcher.cli.work_item.create
+    create.side_effect = None
+    create.return_value = "canonical#99"
+    code, _, err = launcher.run("--lane", "L4", "--parent", "claude:p", "--create-item")
+    assert code == 0, err
+    create.assert_called_once_with(launcher.directory, "agent#98 review", None, {})
+    assert launcher.launch.call_args.kwargs == {"item": "canonical#99", "parent": "claude:p"}
+
+
+def test_handoff_refuses_existing_item_with_creation(launcher: Launcher) -> None:
+    code, _, err = launcher.run(
+        "--lane", "L4", "--independent", "--item", "98", "--create-item"
+    )
+    assert code == 2
+    assert "not allowed with argument" in err
+    launcher.launch.assert_not_called()
+    launcher.item.assert_not_called()
+    launcher.executable.assert_not_called()
+    launcher.cli.work_item.parent_item_ref.assert_not_called()
+    launcher.cli.work_item.create.assert_not_called()
+
+
+def test_creation_lookup_failure_cannot_create_an_unparented_item(launcher: Launcher) -> None:
+    launcher.cli.agent_store.run.side_effect = launcher.cli.agent_store.AgentStoreError(
+        "unavailable", "store unavailable"
+    )
+    code, _, err = launcher.run("--lane", "L4", "--parent", "codex:p", "--create-item")
+    assert code == 1
+    assert "Could not read the parent work item" in err
+    launcher.launch.assert_not_called()
+    launcher.cli.work_item.create.assert_not_called()
+
+
+def test_creation_failure_cannot_launch_unlinked(launcher: Launcher) -> None:
+    launcher.cli.work_item.create.side_effect = launcher.cli.LaunchError("tracker unavailable")
+    code, _, err = launcher.run("--lane", "L4", "--independent", "--create-item")
+    assert code == 1
+    assert "tracker unavailable" in err
+    launcher.launch.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", (("--title", " "), ("--lane", "L7"), ("--prompt-path", "missing.md")))
+def test_invalid_creation_request_never_reaches_tracker(
+    launcher: Launcher, invalid: tuple[str, ...]
+) -> None:
+    code, _, _ = launcher.run("--lane", "L4", "--independent", "--create-item", *invalid)
+    assert code != 0
+    launcher.launch.assert_not_called()
+    launcher.cli.work_item.parent_item_ref.assert_not_called()
+    launcher.cli.work_item.create.assert_not_called()
 
 
 def test_without_parent_prompt_has_no_standing_rule(launcher: Launcher) -> None:
     code, _, err = launcher.run("--lane", "L4", "--independent")
     assert code == 0, err
     assert "Standing rule" not in launcher.launch.call_args.args[3][-1]
-    launcher.item.assert_called_once_with(
-        None, "agent#98 review", launcher.directory, None, []
-    )
+    assert launcher.launch.call_args.kwargs["item"] is None
 
 
 def test_independent_launch_ignores_all_ambient_parent_identities(
@@ -195,9 +319,7 @@ def test_independent_launch_ignores_all_ambient_parent_identities(
     assert launcher.launch.call_args.kwargs["parent"] is None
     assert json.loads(out.splitlines()[-1])["parent"] is None
     assert "Standing rule" not in launcher.launch.call_args.args[3][-1]
-    launcher.item.assert_called_once_with(
-        None, "agent#98 review", launcher.directory, None, []
-    )
+    assert launcher.launch.call_args.kwargs["item"] is None
 
 
 @pytest.mark.parametrize(

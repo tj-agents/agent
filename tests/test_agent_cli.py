@@ -19,8 +19,11 @@ from launch_contract import PreparedLaunch
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
-CLI = importlib.import_module('agent_cli')
+sys.path.insert(0, str(ROOT / '.agents/agent/runtime'))
+CLI_SPEC = importlib.util.spec_from_file_location('agent_cli_under_test', ROOT / '.agents/agent/runtime/agent_cli.py')
+assert CLI_SPEC is not None and CLI_SPEC.loader is not None
+CLI = importlib.util.module_from_spec(CLI_SPEC)
+CLI_SPEC.loader.exec_module(CLI)
 Host = importlib.import_module('tj_agent.host').Host
 
 
@@ -666,40 +669,107 @@ def test_a_given_item_passes_through_unchanged() -> None:
     assert CLI.resolve_item("98", "title", Path("/work"), "claude:p", []) == "98"
 
 
-def test_item_fields_with_a_given_item_are_refused() -> None:
-    with pytest.raises(CLI.LaunchError, match="--item-field applies only"):
+@pytest.mark.parametrize("item", (None, "98"))
+def test_item_fields_require_explicit_creation(item: str | None) -> None:
+    with (
+        mock.patch.object(CLI.work_item, "parent_item_ref") as parent_ref,
+        mock.patch.object(CLI.work_item, "create") as create,
+        pytest.raises(CLI.LaunchError, match="--item-field requires --create-item"),
+    ):
         CLI.resolve_item(
-            "98", "title", Path("/work"), None, [("attribution", "Techops")]
+            item, "title", Path("/work"), "claude:p", [("attribution", "Techops")]
         )
+    parent_ref.assert_not_called()
+    create.assert_not_called()
 
 
-def test_an_absent_item_is_created_under_the_parents_item_with_its_fields() -> None:
+@pytest.mark.parametrize("parent", (None, "claude:p", "codex:p"))
+def test_an_unlinked_handoff_does_not_consult_the_tracker(parent: str | None) -> None:
+    with (
+        mock.patch.object(CLI.work_item, "parent_item_ref", side_effect=AssertionError("tracker lookup")) as parent_ref,
+        mock.patch.object(CLI.work_item, "create", side_effect=AssertionError("tracker mutation")) as create,
+    ):
+        assert CLI.resolve_item(None, "title", Path("/work"), parent, []) is None
+    parent_ref.assert_not_called()
+    create.assert_not_called()
+
+
+def test_existing_item_and_creation_cannot_be_combined() -> None:
+    with (
+        mock.patch.object(CLI.work_item, "parent_item_ref") as parent_ref,
+        mock.patch.object(CLI.work_item, "create") as create,
+        pytest.raises(CLI.LaunchError, match="--item and --create-item are mutually exclusive"),
+    ):
+        CLI.resolve_item("98", "title", Path("/work"), "claude:p", [], create_item=True)
+    parent_ref.assert_not_called()
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("item", ("", " "))
+def test_an_explicit_empty_item_is_refused(item: str) -> None:
+    with pytest.raises(CLI.LaunchError, match="--item must name an existing work item"):
+        CLI.resolve_item(item, "title", Path("/work"), None, [])
+
+
+def test_item_parser_rejects_existing_item_with_creation(capsys: pytest.CaptureFixture[str]) -> None:
+    parser = CLI.argparse.ArgumentParser()
+    CLI.add_item_arguments(parser)
+    with pytest.raises(SystemExit, match="2"):
+        parser.parse_args(["--item", "98", "--create-item"])
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
+def test_item_parser_preserves_explicit_creation_fields() -> None:
+    parser = CLI.argparse.ArgumentParser()
+    CLI.add_item_arguments(parser)
+    args = parser.parse_args(["--create-item", "--item-field", "attribution=Techops"])
+    assert args.item is None
+    assert args.create_item is True
+    assert args.item_field == [("attribution", "Techops")]
+
+
+@pytest.mark.parametrize("parent", ("claude:p", "codex:p"))
+def test_explicit_creation_uses_the_parents_item_and_fields(parent: str) -> None:
     with (
         mock.patch.object(
-            CLI.work_item, "parent_item_ref", return_value="42"
-        ) as parent_ref,
+            CLI.work_item.agent_store, "run", return_value={
+                "session": {"links": [
+                    {"item": {"ref": "unrelated#1"}, "role": "reviewer"},
+                    {"item": {"ref": "canonical#42"}, "role": "owner"},
+                ]}
+            }
+        ) as store,
         mock.patch.object(CLI.work_item, "create", return_value="99") as create,
     ):
         assert (
             CLI.resolve_item(
-                None, "title", Path("/work"), "claude:p", [("attribution", "Techops")]
+                None, "title", Path("/work"), parent, [("attribution", "Techops")],
+                create_item=True,
             )
             == "99"
         )
-    parent_ref.assert_called_once_with("claude:p")
+    store.assert_called_once_with("show", parent)
     create.assert_called_once_with(
-        Path("/work"), "title", "42", {"attribution": "Techops"}
+        Path("/work"), "title", "canonical#42", {"attribution": "Techops"}
     )
 
 
-def test_an_absent_item_with_no_parent_is_created_with_no_parent_ref() -> None:
+def test_explicit_creation_without_parent_creates_a_root_item() -> None:
     with (
         mock.patch.object(CLI.work_item, "parent_item_ref") as parent_ref,
         mock.patch.object(CLI.work_item, "create", return_value="7") as create,
     ):
-        assert CLI.resolve_item(None, "title", Path("/work"), None, []) == "7"
+        assert CLI.resolve_item(None, "title", Path("/work"), None, [], create_item=True) == "7"
     parent_ref.assert_not_called()
     create.assert_called_once_with(Path("/work"), "title", None, {})
+
+
+def test_explicit_item_creation_failure_does_not_fall_back_to_unlinked() -> None:
+    with (
+        mock.patch.object(CLI.work_item, "create", side_effect=CLI.LaunchError("tracker unavailable")),
+        pytest.raises(CLI.LaunchError, match="tracker unavailable"),
+    ):
+        CLI.resolve_item(None, "title", Path("/work"), None, [], create_item=True)
 
 
 if __name__ == "__main__":

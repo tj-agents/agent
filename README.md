@@ -272,6 +272,12 @@ goal and choose exactly one of `--parent <host:id>` or `--independent`. Parent i
 from the environment. A parented launch can report blockers through `tj message` and its managed final
 result routes to that exact parent. An independent launch has no inherited reporting obligation.
 
+Handoff does not require a tracker profile. With neither `--item` nor `--create-item`, it launches unlinked
+without any work-item lookup or creation, for either relationship and either host. Use `--item <ref>` to
+link an existing work item, or `--create-item` to request one through the selected tracker profile using
+the session title and the explicit parent's linked item as its parent when present. The two options are
+mutually exclusive. Creation fields use `--item-field NAME=VALUE`, which requires `--create-item`.
+
 Both hosts use `tj message <title|host:id> <text>`; TJ chooses the provider transport. Native submission
 means queued for the provider, and a feed receipt means stored; neither proves recipient approval or
 reading. The [CLI messaging contract](https://github.com/tj-agents/cli#tj-message-and-tj-feed-messaging-between-sessions)
@@ -310,6 +316,9 @@ from durable completion state, including pending work, holds and failures, toget
 parent relationship. Item details retain worktree, PR, CI and card information. `tj status --json` returns
 an object with `sessions`, `items` and `errors`; lookup failures remain visible rather than implying there
 are no sessions. Pass work-item references to filter both sessions and linked work.
+
+`tj session liveness --session HOST:ID --launch-id ID` is read-only: it verifies the exact session/launch
+binding and queries native liveness strictly, refusing unknown results instead of reporting them as dead.
 
 Session startup records its initial linked worktree in the store's ownership collection. Engineering's
 worktree creator calls `tj session claim-worktree --path PATH` after each creation, associating the
