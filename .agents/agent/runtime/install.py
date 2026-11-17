@@ -75,6 +75,8 @@ RUNTIME_EXPORTS = (
     ".agents/agent/utility/plugins/scripts",
 )
 LIFECYCLE_COMMANDS = {
+    "claude": "claude/command.py",
+    "codex": "codex/command.py",
     "start": "tj_start.py",
     "status": "tj_status.py",
     "recover": "tj_recover.py",

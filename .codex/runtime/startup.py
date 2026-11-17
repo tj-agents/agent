@@ -85,13 +85,18 @@ def native_id(value: object) -> str:
 
 def require_binding(cli: str) -> None:
     result = process.run(
-        [cli, "run", "--help"], capture_output=True, text=True, timeout=10, check=False
+        [cli, "_session", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
     )
     if result.returncode or not any(
         line.strip().startswith("--session ") for line in result.stdout.splitlines()
     ):
         raise LaunchError(
-            "This Codex launch requires tj run --session; update the pinned CLI first"
+            "This Codex launch requires tj _session --session; "
+            "update the pinned CLI first"
         )
 
 

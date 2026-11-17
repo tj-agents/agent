@@ -105,7 +105,7 @@ def native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Native:
 
     def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
         fake.events.append(command)
-        if command == ["tj", "run", "--help"]:
+        if command == ["tj", "_session", "--help"]:
             return subprocess.CompletedProcess(
                 command, 0, "  --session <SESSION>\n", ""
             )
@@ -162,7 +162,7 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
         created=True,
     )
     assert native.events == [
-        ["tj", "run", "--help"],
+        ["tj", "_session", "--help"],
         "admit",
         ["fixture-codex", "app-server", "daemon", "start"],
         "connect",
@@ -205,9 +205,11 @@ def test_prepare_requires_cli_support_before_admission_or_creation(
     monkeypatch.setattr(
         process,
         "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "Usage: tj run", ""),
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            [], 0, "Usage: tj _session", ""
+        ),
     )
-    with pytest.raises(LaunchError, match="tj run --session"):
+    with pytest.raises(LaunchError, match="tj _session --session"):
         prepare(native)
     assert native.events == []
 
@@ -470,7 +472,7 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
         THREAD,
     )
     assert prepared.session == f"codex:{THREAD}" and not prepared.created
-    assert native.events == [["tj", "run", "--help"]]
+    assert native.events == [["tj", "_session", "--help"]]
 
 
 @pytest.mark.parametrize(
@@ -654,7 +656,7 @@ def test_prepare_stops_when_repository_admission_fails(
     monkeypatch.setattr(startup, "admit", refuse)
     with pytest.raises(LaunchError, match="admission refused"):
         prepare(native)
-    assert native.events == [["tj", "run", "--help"]]
+    assert native.events == [["tj", "_session", "--help"]]
 
 
 def test_prepare_archives_exact_created_thread_when_creator_disconnect_fails(

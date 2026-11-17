@@ -394,7 +394,7 @@ def _launch_prepared(
 ):
     command = [
         tj,
-        "run",
+        "_session",
         "--host",
         str(host),
         "--title",
@@ -441,10 +441,8 @@ def attach_tmux(
 
 def parent_session(value: str) -> str:
     host, separator, session_id = value.partition(":")
-    try:
-        Host(host)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("parent must be claude:<id> or codex:<id>") from error
+    if host not in {member.value for member in Host}:
+        raise argparse.ArgumentTypeError("parent must be claude:<id> or codex:<id>")
     if not separator or not session_id or ":" in session_id or any(character.isspace() for character in session_id):
         raise argparse.ArgumentTypeError("parent must be claude:<id> or codex:<id>")
     return value
