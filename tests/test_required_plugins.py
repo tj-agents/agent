@@ -153,6 +153,50 @@ def test_selected_leaves_an_ordinary_unconfigured_directory_unselected(tmp_path:
     assert REQUIRED.selected(tmp_path) == ()
 
 
+def test_project_root_preserves_a_malformed_nested_selection_boundary(
+    tmp_path: Path,
+) -> None:
+    selection = tmp_path / ".agents/plugins.json"
+    selection.parent.mkdir()
+    selection.write_text(
+        json.dumps({"schema_version": 1, "plugins": ["base@tj-agents"]}),
+        encoding="utf-8",
+    )
+    nested = tmp_path / "nested"
+    (nested / ".agents/plugins.json").mkdir(parents=True)
+    directory = nested / "source"
+    directory.mkdir()
+
+    project = REQUIRED.project_root(directory)
+
+    assert project == nested
+    with pytest.raises(
+        REQUIRED.RequiredPluginsError, match="Cannot read required plugin selection"
+    ):
+        REQUIRED.selected(project)
+
+
+def test_project_root_preserves_a_dangling_nested_selection_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    selection = tmp_path / ".agents/plugins.json"
+    selection.parent.mkdir()
+    selection.write_text(
+        json.dumps({"schema_version": 1, "plugins": ["base@tj-agents"]}),
+        encoding="utf-8",
+    )
+    nested = tmp_path / "nested"
+    local = nested / ".agents/plugins.json"
+    directory = nested / "source"
+    directory.mkdir(parents=True)
+    is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path, "is_symlink", lambda path: path == local or is_symlink(path)
+    )
+
+    assert REQUIRED.project_root(directory) == nested
+
+
 @pytest.mark.parametrize(
     "setup",
     [
