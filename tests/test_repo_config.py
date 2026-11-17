@@ -189,7 +189,16 @@ def test_main_reads_a_primary_selection_and_overlay_but_writes_to_the_linked_wor
     (primary / "README.md").write_text("primary\n", encoding="utf-8")
     git(primary, "init", "--quiet")
     git(primary, "add", "README.md")
-    git(primary, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "initial")
+    git(
+        primary,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.test",
+        "commit",
+        "-qm",
+        "initial",
+    )
     linked = tmp_path / "linked"
     git(primary, "worktree", "add", "--quiet", str(linked))
     selection = select(primary, "alpha@tj-agents")
@@ -197,7 +206,12 @@ def test_main_reads_a_primary_selection_and_overlay_but_writes_to_the_linked_wor
 
     inherited = REPO_CONFIG.plugin_selection.resolve(linked)
     assert inherited == selection
-    assert REPO_CONFIG.main(["--root", str(linked), "--lock", str(inherited), "--mode", "write"]) == 0
+    assert (
+        REPO_CONFIG.main(
+            ["--root", str(linked), "--lock", str(inherited), "--mode", "write"]
+        )
+        == 0
+    )
 
     linked_settings = linked / ".claude/settings.json"
     assert linked_settings.is_file()
