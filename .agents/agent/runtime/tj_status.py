@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_cli
 import agent_store
 import lifecycle
+import work_item
 from launch_errors import LaunchError
 from tj_agent.host import Host
 
@@ -348,7 +349,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("items", nargs="*", help="filter sessions and work by item references; default: registered sessions and their linked open work; use tj item mine for assigned work")
     parser.add_argument("--json", action="store_true", help="print JSON")
     args = parser.parse_args(argv)
-    status = snapshot(args.items or None, Path.cwd())
+    cwd = Path.cwd()
+    try:
+        refs = [work_item.reference(cwd, ref) for ref in args.items]
+    except LaunchError as error:
+        print(f"tj status: {error}", file=sys.stderr)
+        return 1
+    status = snapshot(refs or None, cwd)
     print(json.dumps(asdict(status), indent=2) if args.json else render(status))
     return int(bool(status.errors))
 

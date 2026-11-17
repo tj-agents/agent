@@ -136,6 +136,13 @@ def test_handoff_preserves_item_parent_and_standing_rule(
         pytest.fail("An existing or omitted handoff item must not create tracker work")
 
     monkeypatch.setattr(cli.work_item, "create", unexpected_creation)
+    canonical = "azure-devops:dev.azure.com/contoso:130"
+
+    def existing(directory: Path, value: str) -> str:
+        assert item is not None and directory == tmp_path and value == item
+        return canonical
+
+    monkeypatch.setattr(cli.work_item, "existing", existing)
     calls: list[tuple[Host, list[str], dict[str, str | None]]] = []
 
     def launch(
@@ -172,7 +179,10 @@ def test_handoff_preserves_item_parent_and_standing_rule(
     )
     selected, arguments, options = calls.pop()
     assert selected is host
-    assert options == {"item": item, "parent": "claude:parent"}
+    assert options == {
+        "item": canonical if item is not None else None,
+        "parent": "claude:parent",
+    }
     assert str(prompt) in arguments[-1] and "Standing rule:" in arguments[-1]
     assert "tj finish" in arguments[-1]
 

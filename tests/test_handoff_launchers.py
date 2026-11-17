@@ -71,6 +71,9 @@ def launcher(
     monkeypatch.setattr(cli, "launch", launch)
     monkeypatch.setattr(cli, "resolve_item", item)
     monkeypatch.setattr(
+        cli.work_item, "existing", Mock(return_value="jira:tracker:ABC-98")
+    )
+    monkeypatch.setattr(
         cli.work_item, "create", Mock(side_effect=AssertionError("unexpected tracker mutation"))
     )
     monkeypatch.setattr(
@@ -176,9 +179,10 @@ def test_explicit_existing_item_reaches_launch(launcher: Launcher, parent: str) 
     )
     assert code == 0, err
     assert launcher.launch.call_args.kwargs == {
-        "item": "98",
+        "item": "jira:tracker:ABC-98",
         "parent": parent,
     }
+    launcher.cli.work_item.existing.assert_called_once_with(launcher.directory, "98")
     launcher.cli.work_item.parent_item_ref.assert_not_called()
     launcher.cli.work_item.create.assert_not_called()
     assert f'"parent tab" ({parent})' in launcher.launch.call_args.args[3][-1]
@@ -193,6 +197,7 @@ def test_generic_handoff_launches_unlinked_without_tracker(
     assert code == 0, err
     assert launcher.launch.call_args.kwargs == {"item": None, "parent": parent}
     assert json.loads(out.splitlines()[-1])["parent"] == parent
+    launcher.cli.work_item.existing.assert_not_called()
     launcher.cli.work_item.parent_item_ref.assert_not_called()
     launcher.cli.work_item.create.assert_not_called()
 
@@ -287,6 +292,56 @@ def test_creation_failure_cannot_launch_unlinked(launcher: Launcher) -> None:
     code, _, err = launcher.run("--lane", "L4", "--independent", "--create-item")
     assert code == 1
     assert "tracker unavailable" in err
+    launcher.launch.assert_not_called()
+
+
+@pytest.mark.parametrize("parent", (None, "claude:p", "codex:p"))
+@pytest.mark.parametrize("ref", (
+    "98", "jira:tracker:ABC-98",
+    "https://dev.azure.com/contoso/Project/_workitems/edit/98",
+))
+def test_missing_referenced_item_refuses_before_native_dispatch(
+    launcher: Launcher, parent: str | None, ref: str
+) -> None:
+    launcher.cli.work_item.existing.side_effect = launcher.cli.LaunchError("item not found")
+    relationship = ("--parent", parent) if parent else ("--independent",)
+    code, _, err = launcher.run("--lane", "L4", *relationship, "--item", ref)
+    assert code == 1
+    assert "item not found" in err
+    launcher.cli.work_item.existing.assert_called_once_with(launcher.directory, ref)
+    launcher.launch.assert_not_called()
+    launcher.cli.work_item.create.assert_not_called()
+
+
+@pytest.mark.parametrize("ref", (
+    "https://dev.azure.com/contoso/Project/_workitems/edit/42",
+    "https://tracker.example/browse/ABC-12",
+))
+def test_handoff_links_verified_tracker_urls_without_creating(
+    launcher: Launcher, ref: str
+) -> None:
+    launcher.cli.work_item.existing.return_value = ref
+    code, _, err = launcher.run("--lane", "L4", "--independent", "--item", ref)
+    assert code == 0, err
+    assert launcher.launch.call_args.kwargs == {"item": ref, "parent": None}
+    launcher.cli.work_item.existing.assert_called_once_with(launcher.directory, ref)
+    launcher.cli.work_item.create.assert_not_called()
+
+
+@pytest.mark.parametrize("role", ("owner", "reviewer"))
+def test_ambiguous_parent_items_refuse_explicit_creation(
+    launcher: Launcher, role: str
+) -> None:
+    launcher.cli.agent_store.run.return_value = {
+        "session": {"links": [
+            {"item": {"ref": "jira:tracker:ABC-1"}, "role": role},
+            {"item": {"ref": "jira:tracker:ABC-2"}, "role": role},
+        ]}
+    }
+    code, _, err = launcher.run("--lane", "L4", "--parent", "codex:p", "--create-item")
+    assert code == 1
+    assert "several work items" in err
+    launcher.cli.work_item.create.assert_not_called()
     launcher.launch.assert_not_called()
 
 

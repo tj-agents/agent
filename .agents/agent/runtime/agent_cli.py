@@ -481,7 +481,7 @@ def resolve_item(
     if item is not None:
         if not item.strip():
             raise LaunchError('--item must name an existing work item.')
-        return item
+        return work_item.existing(cwd, item)
     if not create_item:
         return None
     parent_ref = work_item.parent_item_ref(parent) if parent else None

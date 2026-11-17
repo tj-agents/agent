@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import Mock
 
 import agent_cli
 import agent_store
@@ -301,10 +302,15 @@ def test_failed_liveness_never_ends_or_restores_affected_host(
     assert len(recovery.launched) == (0 if dry_run else 1)
 
 
-def test_recover_session_and_item_filters(recovery: Recovery) -> None:
+def test_recover_session_and_item_filters(
+    recovery: Recovery, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reference = Mock(return_value=ITEM)
+    monkeypatch.setattr(tj_recover.work_item, "reference", reference)
     recovery.session(Host.CODEX, "unlinked")
     recovery.session(Host.CLAUDE, "linked", links=[{"item": {"ref": ITEM}}])
     assert recovery.run("124", "--dry-run")[1][0]["session"] == "claude:linked"
+    reference.assert_called_once_with(Path.cwd(), "124")
     assert (
         recovery.run("--session", "codex:unlinked", "--dry-run")[1][0]["session"]
         == "codex:unlinked"

@@ -18,6 +18,7 @@ import agent_cli
 import agent_store
 import boot_history
 import lifecycle
+import work_item
 from host_sessions import SESSIONS
 from launch_contract import Liveness
 from tj_agent.host import Host
@@ -294,10 +295,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.open and (args.session or args.older or args.ended):
         parser.error("--open cannot be combined with --session, --older or --ended")
     try:
+        item = work_item.reference(Path.cwd(), args.item) if args.item else None
         rows = (
-            open_plan(args.item)
+            open_plan(item)
             if args.open
-            else plan(sessions(args.item, args.session), args.older, args.ended)
+            else plan(sessions(item, args.session), args.older, args.ended)
         )
     except (
         lifecycle.LifecycleError,

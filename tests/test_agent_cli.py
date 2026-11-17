@@ -665,8 +665,11 @@ def test_the_standing_rule_uses_common_messaging_and_one_final_delivery(parent: 
     assert CLI.parent_rule(None) == ""
 
 
-def test_a_given_item_passes_through_unchanged() -> None:
-    assert CLI.resolve_item("98", "title", Path("/work"), "claude:p", []) == "98"
+def test_a_given_item_is_verified_in_the_target_project() -> None:
+    canonical = "jira:tracker:ABC-12"
+    with mock.patch.object(CLI.work_item, "existing", return_value=canonical) as existing:
+        assert CLI.resolve_item("ABC-12", "title", Path("/work"), "claude:p", []) == canonical
+    existing.assert_called_once_with(Path("/work"), "ABC-12")
 
 
 @pytest.mark.parametrize("item", (None, "98"))
@@ -686,12 +689,14 @@ def test_item_fields_require_explicit_creation(item: str | None) -> None:
 @pytest.mark.parametrize("parent", (None, "claude:p", "codex:p"))
 def test_an_unlinked_handoff_does_not_consult_the_tracker(parent: str | None) -> None:
     with (
+        mock.patch.object(CLI.work_item, "existing", side_effect=AssertionError("tracker lookup")) as existing,
         mock.patch.object(CLI.work_item, "parent_item_ref", side_effect=AssertionError("tracker lookup")) as parent_ref,
         mock.patch.object(CLI.work_item, "create", side_effect=AssertionError("tracker mutation")) as create,
     ):
         assert CLI.resolve_item(None, "title", Path("/work"), parent, []) is None
     parent_ref.assert_not_called()
     create.assert_not_called()
+    existing.assert_not_called()
 
 
 def test_existing_item_and_creation_cannot_be_combined() -> None:

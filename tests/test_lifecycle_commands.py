@@ -158,6 +158,7 @@ class StatusTests(Fixture):
             barrier.wait(timeout=5)
             return {'item': {'ref': ref}, 'sessions': []}
         with mock.patch.object(lifecycle, 'liveness', return_value={}), \
+                mock.patch.object(lifecycle.work_item, 'reference', side_effect=lambda cwd, ref: ref), \
                 mock.patch.object(agent_store, 'run', side_effect=store), \
                 mock.patch.object(lifecycle, 'tj_item', return_value={'state': 'Open'}):
             items = lifecycle.open_items(refs)
@@ -174,6 +175,7 @@ class StatusTests(Fixture):
 
     def test_item_store_failure_remains_fatal(self):
         with mock.patch.object(lifecycle, 'liveness', return_value={}), \
+                mock.patch.object(lifecycle.work_item, 'reference', return_value=ITEM), \
                 mock.patch.object(agent_store, 'run', side_effect=agent_store.AgentStoreError('error', 'store failed')), \
                 self.assertRaises(agent_store.AgentStoreError):
             lifecycle.open_items(['first'])
@@ -286,6 +288,7 @@ def status_backend(monkeypatch: pytest.MonkeyPatch) -> StatusBackend:
     monkeypatch.setattr(agent_store, "run", backend.store)
     monkeypatch.setattr(lifecycle, "command", backend.command)
     monkeypatch.setattr(lifecycle, "tj_item", backend.items)
+    monkeypatch.setattr(tj_status.work_item, "reference", lambda _cwd, ref: ITEM if ref == "98" else ref)
     monkeypatch.setattr(lifecycle, "branch", lambda _worktree: None)
     monkeypatch.setattr(lifecycle, "pull_request", lambda *_arguments: None)
     monkeypatch.setattr(agent_cli, "host_launch", lambda _host: SimpleNamespace(liveness=backend.liveness))
