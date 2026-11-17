@@ -634,93 +634,18 @@ def test_an_invalid_item_field_is_refused(value: str) -> None:
         CLI.item_field(value)
 
 
-def test_an_explicit_parent_overrides_the_calling_session() -> None:
-    environ = {CLI.Host.CLAUDE.session_variable: "abc"}
-    with mock.patch.dict(os.environ, environ, clear=True):
-        assert CLI.parent_session("codex:x") == "codex:x"
-
-
-def test_the_calling_session_is_the_default_parent() -> None:
-    environ = {CLI.Host.CLAUDE.session_variable: "abc"}
-    with mock.patch.dict(os.environ, environ, clear=True):
-        assert CLI.parent_session(None) == "claude:abc"
-
-
-def test_outside_any_session_there_is_no_parent() -> None:
-    with mock.patch.dict(os.environ, {}, clear=True):
-        assert CLI.parent_session(None) is None
-
-
-def test_a_recorded_launchs_bound_session_wins_over_the_session_variable() -> None:
-    environ = {
-        CLI.LAUNCH_ID_ENVIRONMENT: "L1",
-        CLI.Host.CODEX.session_variable: "thread-9",
-    }
-    shown = {"launch": {}, "session": {"session": "claude:abc"}}
-    with (
-        mock.patch.dict(os.environ, environ, clear=True),
-        mock.patch.object(CLI.owned_launch, "current", return_value="L1"),
-        mock.patch.object(CLI.agent_store, "run", return_value=shown) as run,
-    ):
-        assert CLI.parent_session(None) == "claude:abc"
-    run.assert_called_once_with("show", "--launch-id", "L1")
-
-
-def test_an_unrecorded_launch_falls_back_to_the_session_variable() -> None:
-    environ = {
-        CLI.LAUNCH_ID_ENVIRONMENT: "L1",
-        CLI.Host.CODEX.session_variable: "thread-9",
-    }
-    not_found = CLI.agent_store.AgentStoreError("not-found", "no launch")
-    with (
-        mock.patch.dict(os.environ, environ, clear=True),
-        mock.patch.object(CLI.owned_launch, "current", return_value="L1"),
-        mock.patch.object(CLI.agent_store, "run", side_effect=not_found),
-    ):
-        assert CLI.parent_session(None) == "codex:thread-9"
-
-
-def test_a_launch_not_yet_bound_to_a_session_falls_back_to_the_session_variable() -> (
-    None
-):
-    environ = {CLI.LAUNCH_ID_ENVIRONMENT: "L1", CLI.Host.CLAUDE.session_variable: "abc"}
-    shown = {"launch": {}, "session": None}
-    with (
-        mock.patch.dict(os.environ, environ, clear=True),
-        mock.patch.object(CLI.owned_launch, "current", return_value="L1"),
-        mock.patch.object(CLI.agent_store, "run", return_value=shown),
-    ):
-        assert CLI.parent_session(None) == "claude:abc"
-
-
-def test_an_agent_store_failure_other_than_not_found_propagates() -> None:
-    environ = {CLI.LAUNCH_ID_ENVIRONMENT: "L1"}
-    boom = CLI.agent_store.AgentStoreError("unexpected", "boom")
-    with (
-        mock.patch.dict(os.environ, environ, clear=True),
-        mock.patch.object(CLI.owned_launch, "current", return_value="L1"),
-        mock.patch.object(CLI.agent_store, "run", side_effect=boom),
-        pytest.raises(CLI.LaunchError),
-    ):
-        CLI.parent_session(None)
-
-
-def test_inherited_launch_and_conflicting_host_identities_are_not_guessed() -> None:
-    environ = {"TJ_RUN_LAUNCH_ID": "stale", "CLAUDE_CODE_SESSION_ID": "claude",
-               "CODEX_THREAD_ID": "codex"}
-    with (mock.patch.dict(os.environ, environ, clear=True),
-          pytest.raises(CLI.LaunchError, match="multiple inherited identities")):
-        CLI.parent_session(None)
-
-
-@pytest.mark.parametrize("session", ["codex:remote", "claude:nested"])
-def test_verified_launch_identifies_remote_or_nested_parent(session: str) -> None:
+@pytest.mark.parametrize("parent", ["claude:session-1", "codex:thread-9"])
+def test_an_explicit_parent_ignores_ambient_identity(parent: str) -> None:
     environ = {"TJ_RUN_LAUNCH_ID": "stale", "CLAUDE_CODE_SESSION_ID": "nested",
                "CODEX_THREAD_ID": "remote"}
-    with (mock.patch.dict(os.environ, environ, clear=True),
-          mock.patch.object(CLI.owned_launch, "current", return_value="actual"),
-          mock.patch.object(CLI.agent_store, "run", return_value={"session": {"session": session}})):
-        assert CLI.parent_session(None) == session
+    with mock.patch.dict(os.environ, environ, clear=True):
+        assert CLI.parent_session(parent) == parent
+
+
+@pytest.mark.parametrize("parent", ["", "codex", "codex:", "other:id", "claude:a:b", "codex: ", "claude:a\nb"])
+def test_invalid_parent_handles_are_refused(parent: str) -> None:
+    with pytest.raises(CLI.argparse.ArgumentTypeError, match="parent must be"):
+        CLI.parent_session(parent)
 
 
 @pytest.mark.parametrize("parent", ["claude:p", "codex:p"])

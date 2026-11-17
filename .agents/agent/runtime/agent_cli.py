@@ -27,7 +27,6 @@ from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 import agent_store
-import owned_launch
 import work_item
 
 LAUNCH_ID_ENVIRONMENT = 'TJ_RUN_LAUNCH_ID'
@@ -440,29 +439,23 @@ def attach_tmux(
         )
 
 
-def parent_session(value):
-    """The parent's `host:id`: as given, else the calling session as `tj approve` resolves it, else None."""
-    if value is not None:
-        return value
+def parent_session(value: str) -> str:
+    host, separator, session_id = value.partition(":")
     try:
-        launch_id = owned_launch.current()
-    except owned_launch.OwnedLaunchError as error:
-        raise LaunchError(f'Cannot determine the calling launch: {error}') from error
-    if launch_id:
-        try:
-            shown = agent_store.run('show', '--launch-id', launch_id)
-        except agent_store.AgentStoreError as error:
-            if error.code != 'not-found':
-                raise LaunchError(f'agent-store could not read launch {launch_id}: {error}') from error
-        else:
-            session = shown.get('session')
-            if session:
-                return session['session']
-    identities = [f'{host}:{session_id}' for host in Host
-                  if (session_id := os.environ.get(host.session_variable))]
-    if len(identities) > 1:
-        raise LaunchError('Cannot determine the calling session from multiple inherited identities')
-    return identities[0] if identities else None
+        Host(host)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("parent must be claude:<id> or codex:<id>") from error
+    if not separator or not session_id or ":" in session_id or any(character.isspace() for character in session_id):
+        raise argparse.ArgumentTypeError("parent must be claude:<id> or codex:<id>")
+    return value
+
+
+def add_parent_arguments(parser: argparse.ArgumentParser) -> None:
+    relationship = parser.add_mutually_exclusive_group(required=True)
+    relationship.add_argument("--parent", type=parent_session, metavar="HOST:ID",
+                              help="coordinate with this exact parent session")
+    relationship.add_argument("--independent", action="store_true",
+                              help="open without a parent or inherited reporting obligation")
 
 
 def resolve_item(item, title, cwd, parent, fields):
@@ -494,4 +487,4 @@ def parent_rule(parent):
     name = f'"{title}" ({parent})' if title else parent
     return (f' Standing rule: the session {name} started you. Report to it with agent:message '
             'only for your final result, a blocker you cannot resolve or an '
-            "approval Tommy must give; never send it status updates.")
+            "approval the user must give; never send it status updates.")

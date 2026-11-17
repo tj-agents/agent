@@ -81,7 +81,7 @@ def launcher(
 
 @pytest.mark.parametrize("lane", ("L1", "L2", "L3", "L4", "L5", "L6"))
 def test_lane_controls_both_model_and_effort(launcher: Launcher, lane: str) -> None:
-    code, out, err = launcher.run("--lane", lane)
+    code, out, err = launcher.run("--lane", lane, "--independent")
     entry = launcher.cli.resolve_lane(launcher.host, lane=lane)
     if entry.get("handoff"):
         assert code == 1
@@ -123,7 +123,7 @@ def test_lane_controls_both_model_and_effort(launcher: Launcher, lane: str) -> N
 def test_handoff_rejects_selection_bypasses(
     launcher: Launcher, lane_arguments: tuple[str, ...], override: tuple[str, ...]
 ) -> None:
-    code, _, _ = launcher.run(*lane_arguments, *override)
+    code, _, _ = launcher.run(*lane_arguments, *override, "--independent")
     assert code == 2
     launcher.launch.assert_not_called()
     launcher.item.assert_not_called()
@@ -131,7 +131,7 @@ def test_handoff_rejects_selection_bypasses(
 
 
 def test_handoff_requires_a_lane(launcher: Launcher) -> None:
-    code, _, err = launcher.run()
+    code, _, err = launcher.run("--independent")
     assert code == 2
     assert "--lane" in err
     launcher.launch.assert_not_called()
@@ -142,20 +142,21 @@ def test_handoff_requires_a_lane(launcher: Launcher) -> None:
 def test_handoff_refuses_in_session_and_unknown_lanes(
     launcher: Launcher, lane: str
 ) -> None:
-    code, _, _ = launcher.run("--lane", lane)
+    code, _, _ = launcher.run("--lane", lane, "--independent")
     assert code != 0
     launcher.launch.assert_not_called()
     launcher.item.assert_not_called()
 
 
-def test_parent_item_and_fields_reach_launch(launcher: Launcher) -> None:
+@pytest.mark.parametrize("parent", ("claude:p", "codex:p"))
+def test_parent_item_and_fields_reach_launch(launcher: Launcher, parent: str) -> None:
     code, _, err = launcher.run(
         "--lane",
         "L4",
         "--item",
         "98",
         "--parent",
-        "claude:p",
+        parent,
         "--item-field",
         "attribution=TechPlatform",
     )
@@ -164,18 +165,18 @@ def test_parent_item_and_fields_reach_launch(launcher: Launcher) -> None:
         "98",
         "agent#98 review",
         launcher.directory,
-        "claude:p",
+        parent,
         [("attribution", "TechPlatform")],
     )
     assert launcher.launch.call_args.kwargs == {
         "item": "auto-item",
-        "parent": "claude:p",
+        "parent": parent,
     }
-    assert '"parent tab" (claude:p)' in launcher.launch.call_args.args[3][-1]
+    assert f'"parent tab" ({parent})' in launcher.launch.call_args.args[3][-1]
 
 
 def test_without_parent_prompt_has_no_standing_rule(launcher: Launcher) -> None:
-    code, _, err = launcher.run("--lane", "L4")
+    code, _, err = launcher.run("--lane", "L4", "--independent")
     assert code == 0, err
     assert "Standing rule" not in launcher.launch.call_args.args[3][-1]
     launcher.item.assert_called_once_with(
@@ -183,24 +184,44 @@ def test_without_parent_prompt_has_no_standing_rule(launcher: Launcher) -> None:
     )
 
 
-def test_calling_session_becomes_parent(
+def test_independent_launch_ignores_all_ambient_parent_identities(
     launcher: Launcher, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CODEX_THREAD_ID", "caller")
-    code, _, err = launcher.run("--lane", "L4")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "other-caller")
+    monkeypatch.setenv("TJ_RUN_LAUNCH_ID", "ambient-launch")
+    code, out, err = launcher.run("--lane", "L4", "--independent")
     assert code == 0, err
-    assert launcher.launch.call_args.kwargs["parent"] == "codex:caller"
+    assert launcher.launch.call_args.kwargs["parent"] is None
+    assert json.loads(out.splitlines()[-1])["parent"] is None
+    assert "Standing rule" not in launcher.launch.call_args.args[3][-1]
+    launcher.item.assert_called_once_with(
+        None, "agent#98 review", launcher.directory, None, []
+    )
+
+
+@pytest.mark.parametrize(
+    "mode", ((), ("--independent", "--parent", "codex:p"), ("--parent", ""))
+)
+def test_handoff_requires_one_unambiguous_parent_mode(
+    launcher: Launcher, mode: tuple[str, ...]
+) -> None:
+    code, _, _ = launcher.run("--lane", "L4", *mode)
+    assert code == 2
+    launcher.launch.assert_not_called()
+    launcher.item.assert_not_called()
+    launcher.executable.assert_not_called()
 
 
 def test_unconfirmed_launch_exits_three(launcher: Launcher) -> None:
     launcher.launch.side_effect = launcher.cli.LaunchTimeout("launch not confirmed")
-    code, _, err = launcher.run("--lane", "L4")
+    code, _, err = launcher.run("--lane", "L4", "--independent")
     assert code == 3
     assert "check the terminal" in err
 
 
 def test_blank_title_is_refused(launcher: Launcher) -> None:
-    code, _, _ = launcher.run("--lane", "L4", "--title", " ")
+    code, _, _ = launcher.run("--lane", "L4", "--title", " ", "--independent")
     assert code == 1
     launcher.launch.assert_not_called()
 
@@ -208,7 +229,9 @@ def test_blank_title_is_refused(launcher: Launcher) -> None:
 def test_claude_permission_flag_reaches_native_cli(launcher: Launcher) -> None:
     if launcher.host != Host.CLAUDE:
         return
-    code, _, err = launcher.run("--lane", "L4", "--dangerously-skip-permissions")
+    code, _, err = launcher.run(
+        "--lane", "L4", "--dangerously-skip-permissions", "--independent"
+    )
     assert code == 0, err
     assert launcher.launch.call_args.args[3][0] == "--dangerously-skip-permissions"
 
@@ -221,7 +244,7 @@ def test_claude_prepared_tab_keeps_lane_model_and_effort(
         return
     adapter = launcher.cli.host_launch(Host.CLAUDE)
     monkeypatch.setattr(adapter, "executable", lambda: "native-claude")
-    code, _, err = launcher.run("--lane", "L2")
+    code, _, err = launcher.run("--lane", "L2", "--independent")
     assert code == 0, err
     host, directory, title, arguments = launcher.launch.call_args.args
     prepared = adapter.prepare(directory, title, arguments, "tj", {})

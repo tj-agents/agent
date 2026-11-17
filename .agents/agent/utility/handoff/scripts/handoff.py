@@ -42,7 +42,7 @@ def _load_handler(host):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Hand prepared work to an independent Claude or Codex session.')
+    parser = argparse.ArgumentParser(description='Hand prepared work to a parented or independent Claude or Codex session.')
     host_type = _host_type()
     parser.add_argument('--host', type=host_type, choices=list(host_type), required=True)
     argv = list(sys.argv[1:] if argv is None else argv)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hand prepared work to an independent Codex session in a new terminal tab.
+"""Hand prepared work to a parented or independent Codex session in a new terminal tab.
 
 Run as `python launch_codex.py ...` on Windows (where `python3` is often the Microsoft Store alias stub
 rather than a real interpreter) and `python3 launch_codex.py ...` elsewhere; the shebang and exec bit are
@@ -35,14 +35,14 @@ def _load_agent_cli():
 
 
 def parse_args(argv, agent_cli):
-    parser = argparse.ArgumentParser(description='Hand prepared work to an independent Codex session in a new terminal tab.')
+    parser = argparse.ArgumentParser(description='Hand prepared work to a parented or independent Codex session in a new terminal tab.')
     parser.add_argument('--working-directory', required=True)
     parser.add_argument('--prompt-path', required=True)
     parser.add_argument('--title', required=True)
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'), required=True)
     parser.add_argument('--minimum-version', default='0.154.0')
     parser.add_argument('--item', help='work item the child is linked to; one is created when omitted')
-    parser.add_argument('--parent', help='parent session (host:id); defaults to the calling session')
+    agent_cli.add_parent_arguments(parser)
     parser.add_argument('--item-field', action='append', default=[], type=agent_cli.item_field,
                         metavar='NAME=VALUE', help='a create field for the work item made when --item is omitted')
     args = parser.parse_args(argv)
@@ -70,7 +70,7 @@ def main(argv=None):
         adapter = agent_cli.host_launch(agent_cli.Host.CODEX)
         adapter.resolve_executable(minimum=args.minimum_version)
         model, effort, tier = resolve_model(args, agent_cli)
-        parent = agent_cli.parent_session(args.parent)
+        parent = args.parent
         prompt_sentence += agent_cli.parent_rule(parent)
         item = agent_cli.resolve_item(args.item, args.title, working_directory, parent, args.item_field)
         shown = agent_cli.launch(agent_cli.Host.CODEX, working_directory, args.title,
