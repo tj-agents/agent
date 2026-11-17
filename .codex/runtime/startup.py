@@ -288,6 +288,7 @@ def prepare(
                 document, directory, windows=os.name == "nt", wsl=inside_wsl()
             )
             if options is None:
+                require_unloaded(server, str(thread_id))
                 prepared = PreparedLaunch(
                     (native, *arguments, "--remote", "unix://"), f"codex:{thread_id}"
                 )
@@ -323,6 +324,22 @@ def prepare(
             cleanup_failed_launch(sys.exception(), lambda: abandon(prepared, "", False))
 
 
+def require_unloaded(server: Server, thread_id: str) -> None:
+    cursor = None
+    while True:
+        page = server.request("thread/loaded/list", {"cursor": cursor})
+        loaded = page.get("data")
+        if not isinstance(loaded, list):
+            raise LaunchError("Codex returned an invalid loaded thread list")
+        if thread_id in loaded:
+            raise LaunchError(
+                f"Codex {thread_id} is already loaded; use its existing conversation"
+            )
+        cursor = page.get("nextCursor")
+        if not cursor:
+            return
+
+
 def first_turn(path: Path) -> dict[str, object] | None:
     if not path.is_file():
         return None
@@ -348,7 +365,12 @@ def confirm(
     wait: Callable[[float], None] = time.sleep,
 ) -> None:
     if not prepared.created:
-        confirm_resume(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
+        try:
+            confirm_resume(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
+        except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as error:
+            raise LaunchError(
+                f"Cannot verify Codex daemon attachment for {prepared.session}: {error}"
+            ) from error
         return
     directory = Path(prepared.command[2])
     options = start_options(directory, arguments)

@@ -34,6 +34,7 @@ class Native:
     model: str = "fixture-model"
     effort: str = "high"
     status: str = "idle"
+    loaded: list[str] = field(default_factory=list)
 
     def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
         self.events.append((method, params))
@@ -50,6 +51,8 @@ class Native:
             }
         if method in {"thread/name/set", "thread/archive"}:
             return {}
+        if method == "thread/loaded/list":
+            return {"data": self.loaded, "nextCursor": None}
         if method == "thread/read":
             return {
                 "thread": {
@@ -506,6 +509,35 @@ def test_resume_refuses_disabled_daemon_before_dispatch(
             {},
         )
     assert "connect" not in native.events
+
+
+def test_resume_refuses_a_thread_already_loaded_before_dispatch(native: Native) -> None:
+    native.loaded = [THREAD]
+    with pytest.raises(LaunchError, match="already loaded"):
+        startup.prepare(
+            native.directory,
+            "Existing",
+            launch.resume_arguments(native.directory, "Existing", THREAD),
+            "tj",
+            "fixture-codex",
+            {},
+        )
+
+
+def test_resume_confirmation_reports_daemon_errors_as_launch_failures(
+    native: Native,
+) -> None:
+    prepared = startup.prepare(
+        native.directory,
+        "Existing",
+        launch.resume_arguments(native.directory, "Existing", THREAD),
+        "tj",
+        "fixture-codex",
+        {},
+    )
+    native.failure = "thread/read"
+    with pytest.raises(LaunchError, match="Cannot verify Codex daemon attachment"):
+        startup.confirm(prepared, [], "launch")
 
 
 def test_resume_requires_project_trust(
