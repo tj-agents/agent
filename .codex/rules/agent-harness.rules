@@ -1,0 +1,17 @@
+# Generated from the selected plugins' and this repository's harness permissions.
+
+prefix_rule(
+    pattern = [["tj", "tj.exe"], "approve"],
+    decision = "forbidden",
+    justification = "tj approve approves pull requests as the human; only the human runs it, never an agent",
+    match = [["tj", "approve"], ["tj.exe", "approve", "--session", "codex:example"]],
+    not_match = [["tj", "status"]],
+)
+
+prefix_rule(
+    pattern = [["tj-approve", "tj-approve.cmd"]],
+    decision = "forbidden",
+    justification = "tj approve approves pull requests as the human; only the human runs it, never an agent",
+    match = [["tj-approve"], ["tj-approve.cmd", "--session", "codex:example"]],
+    not_match = [["tj-status"]],
+)

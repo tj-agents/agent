@@ -1,6 +1,12 @@
 {
   "permissions": {
-    "allow": []
+    "allow": [],
+    "deny": [
+      "Bash(tj approve:*)",
+      "Bash(tj-approve:*)",
+      "PowerShell(tj approve:*)",
+      "PowerShell(tj-approve:*)"
+    ]
   },
   "enabledPlugins": {
     "agent-store@tj-agents": true,
@@ -10,6 +16,7 @@
     "docs@tj-agents": true,
     "engineering@tj-agents": true,
     "github-actions@tj-agents": true,
+    "github@tj-agents": true,
     "personal@tj-agents": true,
     "python@tj-agents": true,
     "skill@tj-agents": true,
