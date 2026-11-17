@@ -1,21 +1,49 @@
 #!/usr/bin/env python3
-"""Compose and render shipped harness permission declarations (`requires.permissions`)."""
+"""Validate and compose harness permission declarations (`requires.permissions`).
+
+Selected plugins and a repository's own overlay declare Claude `allow`/`deny` entries and Codex prefix rules
+(`allow` or `forbidden`). They are committed literally into that repository's settings, so a declaration
+naming a placeholder such as `${PLUGIN_ROOT}` or a machine-specific absolute path is rejected.
+"""
 
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import lock_io
+import machine_paths
 
-
-PLUGIN_ROOT_TOKEN = "${PLUGIN_ROOT}"
-PROJECT_ROOT_TOKEN = "${PROJECT_ROOT}"
+PLACEHOLDER = re.compile(r"\$\{[^}]*\}")
 SCRIPT_SUFFIXES = (".py", ".ps1")
+CLAUDE_LISTS = ("claude_allow", "claude_deny")
+CODEX_LISTS = ("codex_prefix_rules", "codex_forbidden_prefix_rules")
+REQUIRED_PERMISSIONS = frozenset({"claude_allow", "codex_prefix_rules"})
+OPTIONAL_PERMISSIONS = frozenset(
+    {"claude_deny", "codex_forbidden_prefix_rules", "auto_merge"}
+)
+RULE_FIELDS = frozenset({"pattern", "justification", "match", "not_match"})
+EMPTY_PERMISSIONS: Mapping[str, list[Any]] = {
+    "claude_allow": [],
+    "codex_prefix_rules": [],
+}
 
 
-def _require_tokens(value: Any, label: str) -> None:
+@dataclass(frozen=True, slots=True)
+class Permissions:
+    """The entries one repository commits to its Claude settings and Codex rules."""
+
+    claude_allow: tuple[str, ...] = ()
+    claude_deny: tuple[str, ...] = ()
+    codex_allow: tuple[dict[str, Any], ...] = ()
+    codex_forbidden: tuple[dict[str, Any], ...] = ()
+
+
+def _require_tokens(value: object, label: str) -> None:
     if isinstance(value, str):
         if not value:
             raise lock_io.LockError(f"{label} must be a non-empty string")
@@ -27,35 +55,57 @@ def _require_tokens(value: Any, label: str) -> None:
     raise lock_io.LockError(f"{label} must be a string or a list of strings")
 
 
-def _require_rule_field(value: Any, label: str) -> None:
+def _require_rule_field(value: object, label: str) -> None:
     if not isinstance(value, list) or not value:
         raise lock_io.LockError(f"{label} must be a non-empty list")
     for index, item in enumerate(value):
         _require_tokens(item, f"{label}[{index}]")
 
 
+def _strings(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+
+
+def _require_portable(value: object, label: str) -> None:
+    for text in _strings(value):
+        if PLACEHOLDER.search(text) or machine_paths.MACHINE_PATH.search(text):
+            raise lock_io.LockError(
+                f"{label} names a machine-specific path, which a repository cannot "
+                f"commit: {text}. Declare a command found on PATH or a "
+                "repository-relative path."
+            )
+
+
 def _has_unbounded_script_arguments(command: str) -> bool:
     if not command.startswith("Bash(") or not command.endswith(")"):
         return False
-    if PROJECT_ROOT_TOKEN in command:
-        return False
-    body = command[len("Bash("):-1]
+    body = command[len("Bash(") : -1]
     # Exact native command rules keep their fixed arguments and need no wildcard.
     if not any(character in body for character in "*?[]"):
         return False
-    if body.endswith(":*"):
-        prefix = body[:-2]
-    elif body.endswith(" *"):
-        prefix = body[:-2]
-    else:
-        prefix = None
+    prefix = body[:-2] if body.endswith((":*", " *")) else None
     if prefix and not any(character in prefix for character in "*?[]"):
         return False
     tokens = body.split()
     return any(token.lower().endswith(SCRIPT_SUFFIXES) for token in tokens[:-1])
 
 
-def validate_requires(requires: dict, label: str) -> None:
+def rule_key(rule: Mapping[str, object]) -> str:
+    return json.dumps(rule, sort_keys=True, ensure_ascii=False)
+
+
+def pattern_key(rule: Mapping[str, object]) -> str:
+    return json.dumps(rule["pattern"], ensure_ascii=False)
+
+
+def validate_requires(requires: object, label: str) -> None:
     allowed = {"marketplaces", "plugins", "hooks", "permissions", "setup"}
     if (
         not isinstance(requires, dict)
@@ -73,7 +123,7 @@ def validate_requires(requires: dict, label: str) -> None:
         script = setup.get("script") if valid_setup else None
         path = Path(*PurePosixPath(script).parts) if isinstance(script, str) else None
         if (
-            not isinstance(script, str)
+            path is None
             or not script
             or path.is_absolute()
             or ".." in path.parts
@@ -85,133 +135,143 @@ def validate_requires(requires: dict, label: str) -> None:
     ):
         raise lock_io.LockError(f"{label}: invalid marketplace or hook requirements")
     lock_io.require_string_list(requires["plugins"], f"{label}.plugins")
-    permissions = requires.get(
-        "permissions", {"claude_allow": [], "codex_prefix_rules": []}
-    )
-    if not isinstance(permissions, dict) or set(permissions) not in (
-        {"claude_allow", "codex_prefix_rules"},
-        {"claude_allow", "codex_prefix_rules", "auto_merge"},
+    permissions = requires.get("permissions", EMPTY_PERMISSIONS)
+    if (
+        not isinstance(permissions, dict)
+        or not REQUIRED_PERMISSIONS <= set(permissions)
+        or set(permissions) - REQUIRED_PERMISSIONS - OPTIONAL_PERMISSIONS
     ):
         raise lock_io.LockError(f"{label}: invalid harness permissions")
     _validate_permissions(permissions, label)
     if "auto_merge" in permissions:
         conditional = permissions["auto_merge"]
-        if not isinstance(conditional, dict) or set(conditional) != {
-            "claude_allow",
-            "codex_prefix_rules",
-        }:
+        if (
+            not isinstance(conditional, dict)
+            or set(conditional) != REQUIRED_PERMISSIONS
+        ):
             raise lock_io.LockError(f"{label}: invalid auto-merge permissions")
         _validate_permissions(conditional, f"{label}.auto_merge")
 
 
-def _validate_permissions(permissions: dict, label: str) -> None:
-    lock_io.require_string_list(permissions["claude_allow"], f"{label}.claude_allow")
-    for command in permissions["claude_allow"]:
-        if _has_unbounded_script_arguments(command):
-            raise lock_io.LockError(f"{label}.claude_allow script arguments require :*: {command}")
-    rules = permissions["codex_prefix_rules"]
+def _validate_rules(rules: object, label: str) -> list[dict[str, Any]]:
     if not isinstance(rules, list):
-        raise lock_io.LockError(f"{label}: invalid Codex prefix rules")
+        raise lock_io.LockError(f"{label} must be a list of Codex prefix rules")
+    seen: set[str] = set()
     for rule in rules:
-        if not isinstance(rule, dict) or set(rule) != {"pattern", "justification", "match", "not_match"}:
+        if not isinstance(rule, dict) or set(rule) != RULE_FIELDS:
             raise lock_io.LockError(f"{label}: invalid Codex prefix rule")
         for field in ("pattern", "match", "not_match"):
             _require_rule_field(rule[field], f"{label}.{field}")
         lock_io.require_string(rule["justification"], f"{label}.justification")
+        _require_portable(rule, label)
+        key = rule_key(rule)
+        if key in seen:
+            raise lock_io.LockError(f"{label} contains duplicates")
+        seen.add(key)
+    return rules
 
 
-def contains_template(value: Any) -> bool:
-    if isinstance(value, str):
-        return PLUGIN_ROOT_TOKEN in value
-    if isinstance(value, list):
-        return any(contains_template(item) for item in value)
-    if isinstance(value, dict):
-        return any(contains_template(item) for item in value.values())
-    return False
-
-
-def path_spellings(root: Path | str) -> tuple[str, str]:
-    text = str(root)
-    return text.replace("\\", "/"), text.replace("/", "\\")
-
-
-def _forward_spelling(template: str, root_forward: str, project_forward: str = "") -> str:
-    return template.replace(PLUGIN_ROOT_TOKEN, root_forward).replace(PROJECT_ROOT_TOKEN, project_forward).replace("\\", "/")
-
-
-def _backslash_spelling(template: str, root_backslash: str, project_backslash: str = "") -> str:
-    return template.replace(PLUGIN_ROOT_TOKEN, root_backslash).replace(PROJECT_ROOT_TOKEN, project_backslash).replace("/", "\\")
-
-
-def render_claude_allow(templates: list[str], plugin_root: Path | str, project_root: Path | str | None = None) -> list[str]:
-    root_forward, root_backslash = path_spellings(plugin_root)
-    project_forward, project_backslash = path_spellings(project_root or "")
-    rendered: list[str] = []
-    for template in templates:
-        if PLUGIN_ROOT_TOKEN in template:
-            rendered.append(_forward_spelling(template, root_forward, project_forward))
-            rendered.append(_backslash_spelling(template, root_backslash, project_backslash))
-        else:
-            rendered.append(template)
-    return rendered
-
-
-def _render_codex_token(token: Any, plugin_root: Path | str, alternate: bool, project_root: Path | str | None = None) -> Any:
-    if isinstance(token, list):
-        rendered: list[Any] = []
-        for item in token:
-            result = _render_codex_token(item, plugin_root, alternate, project_root)
-            if isinstance(result, list):
-                rendered.extend(result)
-            else:
-                rendered.append(result)
-        return rendered
-    if isinstance(token, str) and (PLUGIN_ROOT_TOKEN in token or PROJECT_ROOT_TOKEN in token):
-        root_forward, root_backslash = path_spellings(plugin_root)
-        project_forward, project_backslash = path_spellings(project_root or "")
-        if alternate:
-            return [_backslash_spelling(token, root_backslash, project_backslash), _forward_spelling(token, root_forward, project_forward)]
-        return _backslash_spelling(token, root_backslash, project_backslash)
-    return token
-
-
-def render_codex_rule(rule: dict, plugin_root: Path | str, project_root: Path | str | None = None) -> dict:
-    return {
-        "pattern": [_render_codex_token(token, plugin_root, True, project_root) for token in rule["pattern"]],
-        "justification": rule["justification"],
-        "match": [_render_codex_token(example, plugin_root, False, project_root) for example in rule["match"]],
-        "not_match": [_render_codex_token(example, plugin_root, False, project_root) for example in rule["not_match"]],
-    }
-
-
-def render_permissions(permissions: dict, plugin_root: Path | str, project_root: Path | str | None = None, auto_merge: bool = False) -> tuple[list[str], list[dict]]:
-    conditional = permissions.get("auto_merge", {}) if auto_merge else {}
-    claude_allow = render_claude_allow(permissions["claude_allow"] + conditional.get("claude_allow", []), plugin_root, project_root)
-    codex_rules = [render_codex_rule(rule, plugin_root, project_root) for rule in permissions["codex_prefix_rules"] + conditional.get("codex_prefix_rules", [])]
-    return claude_allow, codex_rules
-
-
-def fold_permissions(requirements: list[dict]) -> tuple[list[str], list[dict]]:
-    claude_allow: set[str] = set()
-    codex_rules: dict[str, dict] = {}
-    for requires in requirements:
-        permissions = requires.get(
-            "permissions", {"claude_allow": [], "codex_prefix_rules": []}
+def _validate_permissions(permissions: Mapping[str, object], label: str) -> None:
+    claude: dict[str, list[str]] = {}
+    for key in CLAUDE_LISTS:
+        entries = lock_io.require_string_list(
+            permissions.get(key, []), f"{label}.{key}"
         )
-        claude_allow.update(permissions["claude_allow"])
-        for rule in permissions["codex_prefix_rules"]:
-            codex_rules[json.dumps(rule, sort_keys=True)] = rule
-    return sorted(claude_allow), [codex_rules[key] for key in sorted(codex_rules)]
+        for entry in entries:
+            _require_portable(entry, f"{label}.{key}")
+        claude[key] = entries
+    for command in claude["claude_allow"]:
+        if _has_unbounded_script_arguments(command):
+            raise lock_io.LockError(
+                f"{label}.claude_allow script arguments require :*: {command}"
+            )
+    contradictory = sorted(set(claude["claude_allow"]) & set(claude["claude_deny"]))
+    if contradictory:
+        raise lock_io.LockError(
+            f"{label} both allows and denies: " + ", ".join(contradictory)
+        )
+    codex = {
+        key: _validate_rules(permissions.get(key, []), f"{label}.{key}")
+        for key in CODEX_LISTS
+    }
+    allowed = {pattern_key(rule) for rule in codex["codex_prefix_rules"]}
+    forbidden = {pattern_key(rule) for rule in codex["codex_forbidden_prefix_rules"]}
+    if allowed & forbidden:
+        raise lock_io.LockError(
+            f"{label} both allows and forbids Codex patterns: "
+            + ", ".join(sorted(allowed & forbidden))
+        )
 
 
-def codex_rule_lines(rules: list[dict]) -> list[str]:
+def _rules(rules: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {rule_key(rule): dict(rule) for rule in rules}
+
+
+def compose(
+    declared: Iterable[Mapping[str, Any]], overlay: Mapping[str, Any]
+) -> Permissions:
+    """Merge validated plugin declarations, then apply the repository overlay.
+
+    Plugins combine as a union in which a deny or forbidden rule removes the identical
+    allow entry or Codex pattern. The overlay extends that result and wins: its entry
+    replaces the same Claude entry or Codex pattern from any plugin, whichever way the
+    plugin decided it.
+    """
+    allow: set[str] = set()
+    deny: set[str] = set()
+    codex_allow: dict[str, dict[str, Any]] = {}
+    codex_forbidden: dict[str, dict[str, Any]] = {}
+    for permissions in declared:
+        allow.update(permissions["claude_allow"])
+        deny.update(permissions.get("claude_deny", []))
+        codex_allow.update(_rules(permissions["codex_prefix_rules"]))
+        codex_forbidden.update(
+            _rules(permissions.get("codex_forbidden_prefix_rules", []))
+        )
+    allow -= deny
+    forbidden_patterns = {pattern_key(rule) for rule in codex_forbidden.values()}
+    codex_allow = {
+        key: rule
+        for key, rule in codex_allow.items()
+        if pattern_key(rule) not in forbidden_patterns
+    }
+    overlay_allow = set(overlay["claude_allow"])
+    overlay_deny = set(overlay.get("claude_deny", []))
+    overlay_codex_allow = _rules(overlay["codex_prefix_rules"])
+    overlay_codex_forbidden = _rules(overlay.get("codex_forbidden_prefix_rules", []))
+    overlay_patterns = {
+        pattern_key(rule)
+        for rule in (*overlay_codex_allow.values(), *overlay_codex_forbidden.values())
+    }
+    allow = (allow - overlay_deny) | overlay_allow
+    deny = (deny - overlay_allow) | overlay_deny
+    codex_allow = {
+        key: rule
+        for key, rule in codex_allow.items()
+        if pattern_key(rule) not in overlay_patterns
+    } | overlay_codex_allow
+    codex_forbidden = {
+        key: rule
+        for key, rule in codex_forbidden.items()
+        if pattern_key(rule) not in overlay_patterns
+    } | overlay_codex_forbidden
+    return Permissions(
+        claude_allow=tuple(sorted(allow)),
+        claude_deny=tuple(sorted(deny)),
+        codex_allow=tuple(codex_allow[key] for key in sorted(codex_allow)),
+        codex_forbidden=tuple(codex_forbidden[key] for key in sorted(codex_forbidden)),
+    )
+
+
+def codex_rule_lines(rules: Iterable[Mapping[str, Any]], decision: str) -> list[str]:
     lines: list[str] = []
     for rule in rules:
         lines += [
             "prefix_rule(",
             f"    pattern = {json.dumps(rule['pattern'], ensure_ascii=False)},",
-            '    decision = "allow",',
-            f"    justification = {json.dumps(rule['justification'], ensure_ascii=False)},",
+            f"    decision = {json.dumps(decision)},",
+            "    justification = "
+            f"{json.dumps(rule['justification'], ensure_ascii=False)},",
             f"    match = {json.dumps(rule['match'], ensure_ascii=False)},",
             f"    not_match = {json.dumps(rule['not_match'], ensure_ascii=False)},",
             ")",

@@ -165,6 +165,25 @@ def test_a_committed_worktree_is_only_checked_and_its_drift_reported(
     assert "left " in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("mode", ["write", "check"])
+def test_configure_keeps_permissions_without_a_published_lookup(
+    selected_project: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    commands: list[Sequence[str]] = []
+
+    def configure(
+        command: Sequence[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(process, "run", configure)
+
+    assert tj_prepare.configure(selected_project, mode) == ""
+    assert "--preserve-permissions" in commands[0]
+    assert commands[0][commands[0].index("--mode") + 1] == mode
+
+
 def test_prepare_leaves_unadopted_directories_unchanged(tmp_path: Path) -> None:
     assert not tj_prepare.prepare(tmp_path, Host.CLAUDE)
     assert not (tmp_path / "AGENTS.md").exists()

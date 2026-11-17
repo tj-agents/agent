@@ -280,11 +280,6 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | tests/test_handoff_launchers.py | PT009 | 26 | Repair the existing PT009 diagnostic and remove this exact ignore. |
 | tests/test_handoff_launchers.py | RUF059 | 1 | Repair the existing RUF059 diagnostic and remove this exact ignore. |
 | tests/test_handoff_launchers.py | TID251 | 2 | Repair the existing TID251 diagnostic and remove this exact ignore. |
-| tests/test_harness_permissions_sync.py | E501 | 40 | Repair the existing E501 diagnostic and remove this exact ignore. |
-| tests/test_harness_permissions_sync.py | I001 | 1 | Repair the existing I001 diagnostic and remove this exact ignore. |
-| tests/test_harness_permissions_sync.py | PT009 | 39 | Repair the existing PT009 diagnostic and remove this exact ignore. |
-| tests/test_harness_permissions_sync.py | SIM117 | 4 | Repair the existing SIM117 diagnostic and remove this exact ignore. |
-| tests/test_harness_permissions_sync.py | TID251 | 3 | Repair the existing TID251 diagnostic and remove this exact ignore. |
 | tests/test_history.py | C408 | 49 | Repair the existing C408 diagnostic and remove this exact ignore. |
 | tests/test_history.py | E501 | 50 | Repair the existing E501 diagnostic and remove this exact ignore. |
 | tests/test_history.py | I001 | 1 | Repair the existing I001 diagnostic and remove this exact ignore. |
@@ -431,7 +426,6 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | tests/test_codex_config_writers.py | 1 | Format this existing file and remove this exact exclusion. |
 | tests/test_credential_deny_rules.py | 1 | Format this existing file and remove this exact exclusion. |
 | tests/test_handoff_launchers.py | 1 | Format this existing file and remove this exact exclusion. |
-| tests/test_harness_permissions_sync.py | 1 | Format this existing file and remove this exact exclusion. |
 | tests/test_history.py | 1 | Format this existing file and remove this exact exclusion. |
 | tests/test_hook_control.py | 1 | Format this existing file and remove this exact exclusion. |
 | tests/test_hook_trust.py | 1 | Format this existing file and remove this exact exclusion. |
@@ -471,13 +465,6 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | handoff | no-untyped-call | 6 | Repair the existing no-untyped-call diagnostic and remove this exact override. |
 | handoff | no-untyped-def | 5 | Repair the existing no-untyped-def diagnostic and remove this exact override. |
 | handoff | union-attr | 1 | Repair the existing union-attr diagnostic and remove this exact override. |
-| harness_permissions | type-arg | 7 | Repair the existing type-arg diagnostic and remove this exact override. |
-| harness_permissions | union-attr | 1 | Repair the existing union-attr diagnostic and remove this exact override. |
-| harness_permissions_sync | arg-type | 1 | Repair the existing arg-type diagnostic and remove this exact override. |
-| harness_permissions_sync | attr-defined | 1 | Repair the existing attr-defined diagnostic and remove this exact override. |
-| harness_permissions_sync | index | 1 | Repair the existing index diagnostic and remove this exact override. |
-| harness_permissions_sync | return-value | 1 | Repair the existing return-value diagnostic and remove this exact override. |
-| harness_permissions_sync | type-arg | 18 | Repair the existing type-arg diagnostic and remove this exact override. |
 | history | arg-type | 1 | Repair the existing arg-type diagnostic and remove this exact override. |
 | history | no-untyped-call | 12 | Repair the existing no-untyped-call diagnostic and remove this exact override. |
 | history | no-untyped-def | 10 | Repair the existing no-untyped-def diagnostic and remove this exact override. |
@@ -590,11 +577,6 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | test_handoff_launchers | no-untyped-call | 14 | Repair the existing no-untyped-call diagnostic and remove this exact override. |
 | test_handoff_launchers | no-untyped-def | 16 | Repair the existing no-untyped-def diagnostic and remove this exact override. |
 | test_handoff_launchers | union-attr | 1 | Repair the existing union-attr diagnostic and remove this exact override. |
-| test_harness_permissions_sync | arg-type | 1 | Repair the existing arg-type diagnostic and remove this exact override. |
-| test_harness_permissions_sync | no-untyped-call | 71 | Repair the existing no-untyped-call diagnostic and remove this exact override. |
-| test_harness_permissions_sync | no-untyped-def | 33 | Repair the existing no-untyped-def diagnostic and remove this exact override. |
-| test_harness_permissions_sync | type-arg | 1 | Repair the existing type-arg diagnostic and remove this exact override. |
-| test_harness_permissions_sync | union-attr | 1 | Repair the existing union-attr diagnostic and remove this exact override. |
 | test_history | arg-type | 1 | Repair the existing arg-type diagnostic and remove this exact override. |
 | test_history | no-untyped-call | 21 | Repair the existing no-untyped-call diagnostic and remove this exact override. |
 | test_history | no-untyped-def | 21 | Repair the existing no-untyped-def diagnostic and remove this exact override. |

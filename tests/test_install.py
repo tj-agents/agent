@@ -609,85 +609,6 @@ class InstallerStepTests(Machine):
         )
 
 
-class PermissionStepTests(Machine):
-    def test_dead_owned_rules_converge(self):
-        claude = self.home / ".claude"
-        state = self.home / ".agents-state"
-        package = self.root / "cache" / "tj-agents" / "engineering" / "1"
-        package.mkdir(parents=True)
-        (package / "harness.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "plugin": "tj-agents/engineering",
-                    "source_roots": [],
-                    "requires": {
-                        "marketplaces": [],
-                        "plugins": [],
-                        "hooks": [],
-                        "permissions": {
-                            "claude_allow": ["Bash(shipped)"],
-                            "codex_prefix_rules": [],
-                        },
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-        (claude / "plugins").mkdir(parents=True)
-        (claude / "plugins" / "installed_plugins.json").write_text(
-            json.dumps(
-                {"plugins": {"engineering@tj-agents": [{"installPath": str(package)}]}}
-            ),
-            encoding="utf-8",
-        )
-        (claude / "plugins" / "known_marketplaces.json").write_text(
-            json.dumps(
-                {
-                    "tj-agents": {
-                        "source": {"source": "github", "repo": "tj-agents/marketplace"}
-                    }
-                }
-            ),
-            encoding="utf-8",
-        )
-        dead = "Bash(python -B C:/x/.claude/plugins/cache/base-agents/engineering/1/hooks/gate.py)"
-        settings = claude / "settings.json"
-        settings.write_text(
-            json.dumps({"permissions": {"allow": ["Bash(mine)", dead]}}),
-            encoding="utf-8",
-        )
-        state.mkdir()
-        (state / "harness-permissions.json").write_text(
-            json.dumps(
-                {"schema_version": 2, "claude": {str(settings): [dead]}, "codex": {}}
-            ),
-            encoding="utf-8",
-        )
-
-        self.converge(step("harness permissions"), self.context(windows=False))
-
-        self.assertEqual(
-            ["Bash(mine)", "Bash(shipped)"],
-            json.loads(settings.read_text(encoding="utf-8"))["permissions"]["allow"],
-        )
-
-    def test_a_missing_permission_sync_module_is_reported(self):
-        context = install.Context(
-            home=self.home,
-            project=self.checkout,
-            environ={},
-            windows=False,
-            run=self.unexpected_run,
-            which=lambda name: None,
-            documents=self.documents,
-            root=self.root / "no such runtime root",
-        )
-
-        with self.assertRaises(install.InstallError):
-            install.permission_sync(context)
-
-
 class RuntimeTests(Machine):
     def installed_receipt(self, context):
         return json.loads(
@@ -1042,7 +963,7 @@ class RunStepsTests(Machine):
             ),
             (
                 ["--step", "plugin setup"],
-                ["native CLI", "harness permissions", "plugin setup"],
+                ["native CLI", "plugin setup"],
             ),
             (
                 ["--step", "tj lifecycle commands"],
@@ -1085,7 +1006,7 @@ class RunStepsTests(Machine):
         pass
 
     def file_steps(self):
-        return [step(name) for name in ("shell profiles", "harness permissions")]
+        return [step("shell profiles")]
 
     def test_check_writes_nothing_and_reports_drift_until_converged(self):
         self.legacy_machine()
@@ -1151,23 +1072,6 @@ class RunStepsTests(Machine):
         )
         later.assert_not_called()
 
-    def test_failed_prerequisite_skips_plugin_setup_even_when_scoped(self):
-        permissions = install.Step(
-            "harness permissions",
-            mock.Mock(side_effect=RuntimeError("offline")),
-            mock.Mock(),
-        )
-        plugin = install.Step(
-            "plugin setup", mock.Mock(return_value=["needed"]), mock.Mock()
-        )
-        out, err = io.StringIO(), io.StringIO()
-        self.assertEqual(
-            2, install.run_steps([permissions, plugin], self.context(), False, out, err)
-        )
-        plugin.check.assert_not_called()
-        plugin.apply.assert_not_called()
-        self.assertIn("prerequisite install step failed", out.getvalue())
-
     def test_windows_only_steps_skip_on_linux_without_running_anything(self):
         out = io.StringIO()
         self.assertEqual(
@@ -1197,7 +1101,6 @@ class RunStepsTests(Machine):
                 "tj lifecycle commands",
                 "shell profiles",
                 "hidden Git Bash for Claude",
-                "harness permissions",
                 "plugin setup",
                 "Codex profile agents",
                 "plugin scope",
