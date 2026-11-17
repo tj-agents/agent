@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agent_store
 import lifecycle
+from launch_errors import LaunchError
 
 
 def report(items: list[lifecycle.Item]) -> list[dict]:
@@ -87,7 +88,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         rows = report(lifecycle.open_items(args.items or None, cwd=Path.cwd()))
-    except (lifecycle.LifecycleError, agent_store.AgentStoreError) as error:
+    except (lifecycle.LifecycleError, agent_store.AgentStoreError, LaunchError) as error:
         print(f"tj status: {error}", file=sys.stderr)
         return 1
     print(json.dumps(rows, indent=2) if args.json else render(rows))

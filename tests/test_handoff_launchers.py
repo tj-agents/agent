@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -32,6 +33,7 @@ class Launcher:
     launch: Mock
     item: Mock
     executable: Mock
+    resolve_item: Callable[[str | None, Path, str | None], str]
 
     def run(self, *arguments: str) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
@@ -62,6 +64,7 @@ def launcher(
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Do the work.", encoding="utf-8")
     cli = load(PACKAGE / "runtime/agent_cli.py", f"handoff_cli_{host}")
+    resolve_item = cli.resolve_item
     launch = Mock(return_value={"launch": {"launch_id": "launch-1"}})
     item = Mock(return_value="auto-item")
     executable = Mock(return_value=("/bin/codex", {}))
@@ -76,7 +79,9 @@ def launcher(
     monkeypatch.setattr(module, "_load_agent_cli", lambda: cli)
     if host == Host.CODEX:
         monkeypatch.setattr(cli.host_launch(host), "resolve_executable", executable)
-    return Launcher(host, module, cli, tmp_path, prompt, launch, item, executable)
+    return Launcher(
+        host, module, cli, tmp_path, prompt, launch, item, executable, resolve_item
+    )
 
 
 @pytest.mark.parametrize("lane", ("L1", "L2", "L3", "L4", "L5", "L6"))
@@ -148,7 +153,7 @@ def test_handoff_refuses_in_session_and_unknown_lanes(
     launcher.item.assert_not_called()
 
 
-def test_parent_item_and_fields_reach_launch(launcher: Launcher) -> None:
+def test_parent_and_item_reach_launch(launcher: Launcher) -> None:
     code, _, err = launcher.run(
         "--lane",
         "L4",
@@ -156,16 +161,12 @@ def test_parent_item_and_fields_reach_launch(launcher: Launcher) -> None:
         "98",
         "--parent",
         "claude:p",
-        "--item-field",
-        "attribution=TechPlatform",
     )
     assert code == 0, err
     launcher.item.assert_called_once_with(
         "98",
-        "agent#98 review",
         launcher.directory,
         "claude:p",
-        [("attribution", "TechPlatform")],
     )
     assert launcher.launch.call_args.kwargs == {
         "item": "auto-item",
@@ -174,13 +175,74 @@ def test_parent_item_and_fields_reach_launch(launcher: Launcher) -> None:
     assert '"parent tab" (claude:p)' in launcher.launch.call_args.args[3][-1]
 
 
+def test_handoff_without_existing_item_refuses_before_launch(
+    launcher: Launcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(launcher.cli, "resolve_item", launcher.resolve_item)
+    monkeypatch.setattr(
+        launcher.cli.agent_store,
+        "run",
+        Mock(return_value={"session": {"title": "parent", "links": []}}),
+    )
+    reference = Mock(side_effect=AssertionError("unexpected tracker call"))
+    monkeypatch.setattr(launcher.cli.work_item, "reference", reference)
+    code, _, err = launcher.run("--lane", "L4", "--parent", "claude:p")
+    assert code == 1
+    assert "No existing work item" in err
+    assert "--item" in err
+    launcher.launch.assert_not_called()
+    reference.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "https://dev.azure.com/contoso/Project/_workitems/edit/42",
+        "https://tracker.example/browse/ABC-12",
+    ],
+)
+def test_handoff_links_tracker_urls_without_creating(
+    launcher: Launcher, monkeypatch: pytest.MonkeyPatch, ref: str
+) -> None:
+    monkeypatch.setattr(launcher.cli, "resolve_item", launcher.resolve_item)
+    code, _, err = launcher.run("--lane", "L4", "--item", ref)
+    assert code == 0, err
+    assert launcher.launch.call_args.kwargs["item"] == ref
+
+
+def test_handoff_reuses_the_existing_parent_item(
+    launcher: Launcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ref = "azure-devops:dev.azure.com/contoso:42"
+    monkeypatch.setattr(launcher.cli, "resolve_item", launcher.resolve_item)
+    monkeypatch.setattr(
+        launcher.cli.agent_store,
+        "run",
+        Mock(
+            return_value={
+                "session": {"links": [{"role": "owner", "item": {"ref": ref}}]}
+            }
+        ),
+    )
+    code, _, err = launcher.run("--lane", "L4", "--parent", "claude:p")
+    assert code == 0, err
+    assert launcher.launch.call_args.kwargs["item"] == ref
+
+
+def test_handoff_rejects_retired_creation_fields(launcher: Launcher) -> None:
+    code, _, err = launcher.run(
+        "--lane", "L4", "--item-field", "attribution=TechPlatform"
+    )
+    assert code == 2
+    assert "unrecognized arguments" in err
+    launcher.launch.assert_not_called()
+
+
 def test_without_parent_prompt_has_no_standing_rule(launcher: Launcher) -> None:
     code, _, err = launcher.run("--lane", "L4")
     assert code == 0, err
     assert "Standing rule" not in launcher.launch.call_args.args[3][-1]
-    launcher.item.assert_called_once_with(
-        None, "agent#98 review", launcher.directory, None, []
-    )
+    launcher.item.assert_called_once_with(None, launcher.directory, None)
 
 
 def test_calling_session_becomes_parent(

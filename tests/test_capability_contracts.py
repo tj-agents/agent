@@ -18,6 +18,7 @@ import host_plugins
 import owned_launch
 import pytest
 import session_hook
+import work_item
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from codex import launch as codex_launch
@@ -128,6 +129,13 @@ def test_handoff_preserves_item_parent_and_standing_rule(
         "run",
         lambda *arguments: {"session": {"title": "parent"}},
     )
+    canonical = "azure-devops:dev.azure.com/contoso:130"
+
+    def reference(directory: Path, value: str) -> str:
+        assert directory == tmp_path and value == "130"
+        return canonical
+
+    monkeypatch.setattr(work_item, "reference", reference)
     calls: list[tuple[Host, list[str], dict[str, str]]] = []
 
     def launch(
@@ -165,7 +173,7 @@ def test_handoff_preserves_item_parent_and_standing_rule(
     )
     selected, arguments, options = calls.pop()
     assert selected is host
-    assert options == {"item": "130", "parent": "claude:parent"}
+    assert options == {"item": canonical, "parent": "claude:parent"}
     assert str(prompt) in arguments[-1] and "Standing rule:" in arguments[-1]
 
 
