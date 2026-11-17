@@ -10,6 +10,7 @@ import required_plugins
 import standards
 from tj_agent.host import Host
 from tj_cli import process
+from tj_cli.git import repository_file
 
 CONFIGURATION = Path(__file__).parent.parent / "utility/plugins/scripts/repo_config.py"
 
@@ -71,7 +72,7 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
         roots = required_plugins.install_and_recheck(
             directory, host, error, inventory_options=inventory_options
         )
-    if (project / ".agents/repo-capabilities.local.json").is_file():
+    if repository_file(project, ".agents/repo-capabilities.local.json").is_file():
         raise standards.StandardsError(
             "Local-only adoption preserves this repository's instruction files; "
             "its owner must supply standards routing."
