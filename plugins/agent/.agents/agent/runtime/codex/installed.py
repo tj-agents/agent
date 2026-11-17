@@ -17,6 +17,7 @@ import standards
 from codex import catalog, hook_trust, launch, user_plugins
 from launch_errors import LaunchError
 from tj_agent.host import Host
+from tj_cli.git import repository_file
 from tree_digest import Digests
 
 HOST = Host.CODEX
@@ -68,7 +69,7 @@ def loaded_directories(server: Server) -> set[Path]:
 
 def update_project_standards(directory: Path) -> None:
     project = required_plugins.project_root(directory)
-    if (project / ".agents/repo-capabilities.local.json").is_file():
+    if repository_file(project, ".agents/repo-capabilities.local.json").is_file():
         return
     selected = required_plugins.selected(project)
     if not selected:
