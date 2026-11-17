@@ -1,7 +1,7 @@
 """Shared launch primitives for the native agent CLIs, on Windows and POSIX.
 
-Every agent tab runs under `tj run`, opened in Windows Terminal or tmux; a launch is confirmed when
-`tj run` records it in agent-store.
+Managed agent tabs open in Windows Terminal or tmux; a launch is confirmed when the
+managed wrapper records it in agent-store.
 """
 
 from __future__ import annotations
@@ -316,7 +316,7 @@ def open_tab(
 
 def await_launch(launch_id, want_session=False, timeout=TJ_RUN_TIMEOUT_SECONDS,
                  session_timeout=SESSION_TIMEOUT_SECONDS, clock=time.monotonic, wait=time.sleep):
-    """The `show --launch-id` data once tj run records the launch, and its session when asked for."""
+    """The recorded `show --launch-id` data, with a native session when requested."""
     start = clock()
     while True:
         try:
@@ -325,7 +325,7 @@ def await_launch(launch_id, want_session=False, timeout=TJ_RUN_TIMEOUT_SECONDS,
             if error.code != 'not-found':
                 raise LaunchError(f'agent-store could not read launch {launch_id}: {error}') from error
             if clock() - start >= timeout:
-                raise LaunchTimeout(f'tj run did not record launch {launch_id} within {timeout} seconds; '
+                raise LaunchTimeout(f'the managed wrapper did not record launch {launch_id} within {timeout} seconds; '
                                     'check the new tab before launching again.') from None
         else:
             if not want_session or shown.get('session'):
@@ -350,7 +350,7 @@ def launch(
     run=subprocess.run,
     tmux_session=None,
 ):
-    """Open a `tj run` tab for one agent and return its confirmed launch."""
+    """Open a managed tab for one agent and return its confirmed launch."""
     adapter = host_launch(host)
     tj = shutil.which("tj")
     if not tj:
@@ -483,6 +483,8 @@ def parent_rule(parent):
     except agent_store.AgentStoreError:
         title = None
     name = f'"{title}" ({parent})' if title else parent
-    return (f' Standing rule: the session {name} started you. Report to it with agent:message '
-            'only for your final result, a blocker you cannot resolve or an '
-            "approval the user must give; never send it status updates.")
+    return (f' Standing rule: the session {name} started you. Use tj message to report '
+            'a blocker you cannot resolve or an approval the user must give; never send status updates. '
+            'After the whole requested outcome and its validation are complete, request tj finish '
+            'and give the final response. Managed completion delivers that response to the recorded parent '
+            'and preserves the delivery and closeout receipts.')

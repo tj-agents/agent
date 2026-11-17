@@ -24,8 +24,8 @@ For L1, use `--host codex` because Claude L1 routes there.
 
 - `--title` is required, short and unique: it becomes the tab title and the session's native name, so other sessions address the child by it.
 - Choose exactly one relationship: `--parent <host:id>` or `--independent`. Both hosts support either parent host. Parent identity is never inferred from the calling environment.
-- A parented prompt gains a standing rule to report to that exact parent under [agent:message](../message/SKILL.md), which owns transport selection, receipts and any required parent wait. Preserve explicit task standing rules and user transport instructions in the prepared prompt.
+- A parented prompt gains a standing rule to use `tj message` for blockers and required approvals, following [agent:message](../message/SKILL.md). Managed completion delivers the final response to the exact recorded parent once. Preserve explicit task standing rules and any required parent wait in the prepared prompt.
 - An independent session has no parent or inherited reporting obligation. Prepare its complete goal directly for the user; omit parent history and reporting instructions. Independence separates conversation and ownership, not operating-system access.
 - `--item` links the session to an explicitly chosen work item, so it appears in `tj status` and `tj recover`. Without it, `tj item create` makes one titled after `--title`: under the named parent's item for a parented launch, or a root item for an independent launch. Pass profile-required fields with `--item-field NAME=VALUE`.
 
-Success prints the launch as JSON once `tj run` has recorded it. Exit 3 means the tab may have opened without being confirmed: check the tab before launching again.
+Success prints the launch as JSON once the managed wrapper has recorded it. Exit 3 means the tab may have opened without being confirmed: check the tab before launching again.

@@ -1,8 +1,8 @@
 """Session hooks: SessionStart registers this session in agent-store, and SessionEnd ends it for an
 explicit user exit and otherwise leaves it active for `tj recover`.
 
-A session owned by a `tj run` launch, as `tj launch` reports it, binds to that launch and inherits its title,
-parent, terminal, wrapper and work item; a session that only inherited `tj run` environment registers
+A session owned by a managed launch, as `tj launch` reports it, binds to that launch and inherits its title,
+parent, terminal, wrapper and work item; a session that only inherited the wrapper environment registers
 unbound. When `tj launch` cannot answer, the session is left unregistered and the failure reported, never
 registered unbound beside the launch it may own. A Codex thread is also named after its title, so it is addressable by name. Exit 0 always:
 bookkeeping never stops a session.

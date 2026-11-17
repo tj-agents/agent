@@ -1646,10 +1646,10 @@ def published_path(context: Context, host: Host) -> Path:
 def publish_update(
     context: Context, outcomes: dict[Host, plugin_update.Outcome]
 ) -> int:
-    """Tell running tj run tabs of a host to reload when its plugins moved or its published revision is stale.
+    """Tell managed sessions to reload changed plugins or a stale published revision.
 
-    `tj run`'s launch check compares the marketplace HEAD with the last published revision, so a host whose
-    published revision is behind is republished even when nothing else changed.
+    The managed wrapper compares marketplace HEAD with the last published revision,
+    so a host whose published revision is behind is republished even without changes.
     """
     code = 0
     for host, outcome in outcomes.items():
@@ -1679,7 +1679,8 @@ def publish_update(
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(outcome.revision, encoding="utf-8")
         print(
-            f"apply  {host} update: published {outcome.revision[:12]} to running tj run tabs"
+            f"apply  {host} update: published {outcome.revision[:12]} "
+            f"to running tj {host.value} sessions"
         )
     return code
 

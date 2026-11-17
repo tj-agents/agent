@@ -649,15 +649,16 @@ def test_invalid_parent_handles_are_refused(parent: str) -> None:
 
 
 @pytest.mark.parametrize("parent", ["claude:p", "codex:p"])
-def test_the_standing_rule_names_the_parent_without_forcing_a_transport(parent: str) -> None:
+def test_the_standing_rule_uses_common_messaging_and_one_final_delivery(parent: str) -> None:
     with mock.patch.object(
         CLI.agent_store, "run", return_value={"session": {"title": "agent#98"}}
     ):
         rule = CLI.parent_rule(parent)
     assert f'"agent#98" ({parent})' in rule
-    assert 'agent:message' in rule
-    assert 'tj message' not in rule
-    assert "never send it status updates" in rule
+    assert 'tj message' in rule
+    assert 'tj finish' in rule
+    assert 'Managed completion delivers that response to the recorded parent' in rule
+    assert "never send status updates" in rule
     assert CLI.parent_rule(None) == ""
 
 
