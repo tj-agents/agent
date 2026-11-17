@@ -62,7 +62,7 @@ class SelectionConvergenceTests(unittest.TestCase):
     def test_installer_check_is_read_only_and_apply_repairs_before_native_inventory(self):
         before = (self.project / ".agents/plugins.json").read_bytes()
         with mock.patch.object(required_plugins, "collect") as collect:
-            drift = required_plugins.check_setup(self.project, (Host.CODEX,), {})
+            drift = required_plugins.check_setup(self.project, (Host.CODEX,), {}, self.project / "state")
         self.assertIn("Drift in:", drift[0])
         collect.assert_not_called()
         self.assertEqual(before, (self.project / ".agents/plugins.json").read_bytes())
