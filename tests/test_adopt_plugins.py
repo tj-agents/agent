@@ -1,11 +1,15 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import re
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
 
+import pytest
 from published_plugins import none_declared
 
 
@@ -189,6 +193,148 @@ class RemovePluginTests(unittest.TestCase):
             ADOPT.run(self.root, [], [], "write", removals=["base"])
         self.assertEqual(before, (self.root / ".agents" / "plugins.json").read_bytes())
 
+
+EMPLOYER = {"all": [{"remote_host": "example.test"}, {"remote": "^example-employer/"}]}
+
+
+@pytest.fixture
+def installed_employers(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """The employer declarations adoption sees as installed; none unless a test adds one."""
+    employers: list[object] = []
+    monkeypatch.setattr(ADOPT.declarations, "installed_employers", lambda _root, _environ: employers)
+    return employers
+
+
+@pytest.fixture
+def profile_roster(installed_employers: list[object]) -> dict[str, object]:
+    """The bundled roster declaring each kind, with example-employer an organization extending work."""
+    snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK)
+    entries = snapshot["marketplace"]["plugins"]
+    for entry in entries:
+        entry.pop("profile", None)
+        entry["kind"] = ("profile" if entry["name"] in {"personal", "work"}
+                         else "organization" if "extends" in entry else "shared")
+    entries.append({"name": "example-employer", "repository": "example-employer", "revision": "a" * 40,
+                    "requires": ["work"], "kind": "organization", "extends": "work"})
+    roster: dict[str, object] = ADOPT.load_roster(snapshot)
+    return roster
+
+
+@pytest.fixture
+def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", none_declared)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    (tmp_path / ".agents").mkdir()
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True, timeout=15)
+    return tmp_path
+
+
+def set_origin(root: Path, url: str) -> None:
+    subprocess.run(["git", "-C", str(root), "config", "remote.origin.url", url], check=True, timeout=15)
+
+
+def employer(marketplace: str = "tj-agents") -> object:
+    return ADOPT.declarations.Employer("example-employer", marketplace, EMPLOYER, ("publisher/example-employer",))
+
+
+def selection(root: Path) -> list[str]:
+    plugins: list[str] = json.loads((root / ".agents" / "plugins.json").read_text(encoding="utf-8"))["plugins"]
+    return plugins
+
+
+def test_load_roster_reads_profiles_and_the_profile_each_organization_extends(
+    profile_roster: dict[str, object],
+) -> None:
+    organizations = profile_roster["organizations"]
+    assert profile_roster["profiles"] == {"personal", "work"}
+    assert isinstance(organizations, dict)
+    assert organizations["example-employer"] == "work"
+
+
+def test_load_roster_refuses_an_organization_without_the_profile_it_extends() -> None:
+    snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK)
+    snapshot["marketplace"]["plugins"].append(
+        {"name": "example-employer", "repository": "example-employer", "revision": "a" * 40, "kind": "organization"})
+    with pytest.raises(LockError, match="organization example-employer must extend a profile"):
+        ADOPT.load_roster(snapshot)
+
+
+def test_run_selects_a_single_profile(project: Path, profile_roster: dict[str, object]) -> None:
+    ADOPT.run(project, [], ["personal"], "write", roster=profile_roster)
+    assert "personal@tj-agents" in selection(project)
+
+
+def test_run_adds_the_profile_an_organization_extends(project: Path, profile_roster: dict[str, object]) -> None:
+    ADOPT.run(project, [], ["example-employer"], "write", roster=profile_roster)
+    assert {"example-employer@tj-agents", "work@tj-agents"} <= set(selection(project))
+
+
+@pytest.mark.parametrize("plugins", [["personal", "work"], ["personal", "example-employer"]])
+def test_run_refuses_two_profiles_without_writing(
+    project: Path, profile_roster: dict[str, object], plugins: list[str]
+) -> None:
+    with pytest.raises(LockError, match="one profile, not personal and work"):
+        ADOPT.run(project, [], plugins, "write", roster=profile_roster)
+    assert not (project / ".agents" / "plugins.json").exists()
+
+
+def test_reconcile_refuses_an_existing_selection_of_two_profiles(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
+    path = project / ".agents" / "plugins.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "marketplaces": {"tj-agents": {"repository": "tj-agents/marketplace"}},
+        "plugins": ["personal@tj-agents", "work@tj-agents"],
+    }), encoding="utf-8")
+    before = path.read_bytes()
+    with mock.patch.object(ADOPT, "current_roster", return_value=profile_roster),             pytest.raises(LockError, match="one profile"):
+        ADOPT.reconcile(project, "write")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(("url", "evidence"), [
+    ("git@example.test:example-employer/service.git", "origin host example.test, origin example-employer/service"),
+    ("https://github.com/publisher/example-employer.git", "source repository publisher/example-employer"),
+])
+def test_run_refuses_personal_where_an_installed_employer_matches_without_writing(
+    project: Path, profile_roster: dict[str, object], installed_employers: list[object], url: str, evidence: str
+) -> None:
+    installed_employers.append(employer())
+    set_origin(project, url)
+    message = ("Cannot select personal: the installed employer declaration example-employer@tj-agents matches "
+               f"this repository ({evidence}); select work, the profile example-employer extends")
+    with pytest.raises(LockError, match=re.escape(message)):
+        ADOPT.run(project, [], ["personal"], "write", roster=profile_roster)
+    assert not (project / ".agents" / "plugins.json").exists()
+
+
+def test_run_selects_the_profile_a_matching_employer_extends(
+    project: Path, profile_roster: dict[str, object], installed_employers: list[object]
+) -> None:
+    installed_employers.append(employer())
+    set_origin(project, "git@example.test:example-employer/service.git")
+    ADOPT.run(project, [], ["example-employer"], "write", roster=profile_roster)
+    assert {"example-employer@tj-agents", "work@tj-agents"} <= set(selection(project))
+
+
+def test_run_selects_personal_where_no_installed_employer_matches(
+    project: Path, profile_roster: dict[str, object], installed_employers: list[object]
+) -> None:
+    installed_employers.append(employer())
+    set_origin(project, "git@example.test:someone/service.git")
+    ADOPT.run(project, [], ["personal"], "write", roster=profile_roster)
+    assert "personal@tj-agents" in selection(project)
+
+
+def test_run_refuses_every_profile_where_an_employer_outside_the_roster_matches(
+    project: Path, profile_roster: dict[str, object], installed_employers: list[object]
+) -> None:
+    installed_employers.append(employer("elsewhere"))
+    set_origin(project, "git@example.test:example-employer/service.git")
+    with pytest.raises(LockError, match="example-employer@elsewhere is not an organization in the tj-agents roster"):
+        ADOPT.run(project, [], ["work"], "write", roster=profile_roster)
 
 if __name__ == "__main__":
     unittest.main()
