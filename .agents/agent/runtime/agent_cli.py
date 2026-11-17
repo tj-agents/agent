@@ -6,7 +6,6 @@ Every agent tab runs under `tj run`, opened in Windows Terminal or tmux; a launc
 
 from __future__ import annotations
 
-import argparse
 from collections.abc import Callable
 import importlib.util
 import os

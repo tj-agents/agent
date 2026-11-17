@@ -754,7 +754,7 @@ def test_an_absent_item_refuses_when_no_existing_reference_is_found(
 ) -> None:
     with (
         mock.patch.object(CLI.work_item, "parent_item_ref", return_value=None),
-        pytest.raises(CLI.LaunchError, match="No existing work item.*--item"),
+        pytest.raises(CLI.LaunchError, match=r"No existing work item.*--item"),
     ):
         CLI.resolve_item(None, Path("/work"), parent)
 
