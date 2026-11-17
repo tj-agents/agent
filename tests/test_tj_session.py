@@ -78,7 +78,9 @@ class Backend:
 
 @pytest.fixture(params=list(Host))
 def backend(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Backend:
-    result = Backend(Host(request.param))
+    host = request.param
+    assert isinstance(host, Host)
+    result = Backend(host)
     monkeypatch.setattr(agent_store, "run", result.show)
     monkeypatch.setattr(agent_cli, "host_launch", result.adapter)
 

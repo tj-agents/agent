@@ -108,18 +108,21 @@ def test_claude_abandon_preserves_existing_session_without_external_calls(
     assert prepared.session == "claude:existing-session" and not prepared.created
 
 
+@pytest.mark.parametrize("item", [None, "130"])
 def test_handoff_preserves_item_parent_and_standing_rule(
     host: Host,
-    adapter: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    item: str | None,
 ) -> None:
     path = ROOT / f".agents/agent/resources/handoff/launch_{host}.py"
     spec = importlib.util.spec_from_file_location(f"parity_handoff_{host}", path)
     assert spec is not None and spec.loader is not None
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
-    monkeypatch.setattr(launcher, "_load_agent_cli", lambda: agent_cli)
+    cli = launcher._load_agent_cli()
+    monkeypatch.setattr(launcher, "_load_agent_cli", lambda: cli)
+    adapter = cli.host_launch(host)
     monkeypatch.setattr(
         adapter, "resolve_executable", lambda **kwargs: ("fixture-agent", {})
     )
@@ -128,20 +131,25 @@ def test_handoff_preserves_item_parent_and_standing_rule(
         "run",
         lambda *arguments: {"session": {"title": "parent"}},
     )
-    calls: list[tuple[Host, list[str], dict[str, str]]] = []
+
+    def unexpected_creation(*args: object, **kwargs: object) -> None:
+        pytest.fail("An existing or omitted handoff item must not create tracker work")
+
+    monkeypatch.setattr(cli.work_item, "create", unexpected_creation)
+    calls: list[tuple[Host, list[str], dict[str, str | None]]] = []
 
     def launch(
         selected: Host,
         directory: Path,
         title: str,
         arguments: list[str],
-        **options: str,
+        **options: str | None,
     ) -> dict[str, dict[str, str]]:
         assert directory == tmp_path and title == "parity"
         calls.append((selected, arguments, options))
         return {"launch": {"launch_id": "fixture"}}
 
-    monkeypatch.setattr(agent_cli, "launch", launch)
+    monkeypatch.setattr(cli, "launch", launch)
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Work on the fixture.", encoding="utf-8")
     assert (
@@ -155,8 +163,7 @@ def test_handoff_preserves_item_parent_and_standing_rule(
                 "parity",
                 "--lane",
                 "L4",
-                "--item",
-                "130",
+                *(["--item", item] if item is not None else []),
                 "--parent",
                 "claude:parent",
             ]
@@ -165,8 +172,9 @@ def test_handoff_preserves_item_parent_and_standing_rule(
     )
     selected, arguments, options = calls.pop()
     assert selected is host
-    assert options == {"item": "130", "parent": "claude:parent"}
+    assert options == {"item": item, "parent": "claude:parent"}
     assert str(prompt) in arguments[-1] and "Standing rule:" in arguments[-1]
+    assert "tj finish" in arguments[-1]
 
 
 def test_session_start_binds_the_launch(

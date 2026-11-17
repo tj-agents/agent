@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_cli
 import agent_store
 import lifecycle
+from launch_errors import LaunchError
 from tj_agent.host import Host
 
 
@@ -214,7 +215,7 @@ def snapshot(refs: list[str] | None, cwd: Path) -> StatusReport:
             continue
         try:
             live[host.value] = agent_cli.host_launch(host).liveness(strict=True)
-        except (agent_cli.LaunchError, OSError, RuntimeError) as error:
+        except (LaunchError, OSError, RuntimeError) as error:
             host_errors[host.value] = f"Host liveness unavailable: {error}"
     agents = {handle: lifecycle.Agent(row, live.get(row["host"], {}).get(row["native_id"]))
               for handle, row in records.items()}

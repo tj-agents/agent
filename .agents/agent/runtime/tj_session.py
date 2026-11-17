@@ -60,7 +60,9 @@ def session_liveness(session: str, launch_id: str) -> dict[str, str]:
         or any(character.isspace() for character in launch_id)
     ):
         raise LivenessError("An exact host:id and launch id are required")
-    host = Host(host_name)
+    host = {host.value: host for host in Host}.get(host_name)
+    if host is None:
+        raise LivenessError(f"Unsupported session host: {host_name}")
     require_binding(host, native_id, launch_id)
     inventory = agent_cli.host_launch(host).liveness(strict=True)
     if not isinstance(inventory, dict) or any(
