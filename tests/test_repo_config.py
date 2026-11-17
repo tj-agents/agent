@@ -181,6 +181,45 @@ def test_run_commits_selected_plugins_allow_and_deny_rules(
     assert REPO_CONFIG.run(selection, "check") == []
 
 
+def test_main_reads_a_primary_selection_and_overlay_but_writes_to_the_linked_worktree(
+    tmp_path: Path, published: list[list[str]]
+) -> None:
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    (primary / "README.md").write_text("primary\n", encoding="utf-8")
+    git(primary, "init", "--quiet")
+    git(primary, "add", "README.md")
+    git(
+        primary,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.test",
+        "commit",
+        "-qm",
+        "initial",
+    )
+    linked = tmp_path / "linked"
+    git(primary, "worktree", "add", "--quiet", str(linked))
+    selection = select(primary, "alpha@tj-agents")
+    overlay(primary, {"claude_allow": ["Bash(local overlay:*)"]})
+
+    inherited = REPO_CONFIG.plugin_selection.resolve(linked)
+    assert inherited == selection
+    assert (
+        REPO_CONFIG.main(
+            ["--root", str(linked), "--lock", str(inherited), "--mode", "write"]
+        )
+        == 0
+    )
+
+    linked_settings = linked / ".claude/settings.json"
+    assert linked_settings.is_file()
+    assert "Bash(local overlay:*)" in linked_settings.read_text(encoding="utf-8")
+    assert not (primary / ".claude/settings.json").exists()
+    assert published == [["alpha@tj-agents"]]
+
+
 def test_run_lets_the_repository_overlay_extend_and_override_plugins(
     repository: Path, published: list[list[str]]
 ) -> None:

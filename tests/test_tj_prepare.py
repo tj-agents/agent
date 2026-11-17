@@ -391,6 +391,49 @@ def test_local_adoption_preserves_the_repositorys_instructions(
     assert not (selected_project / "CLAUDE.md").exists()
 
 
+def test_inherited_local_adoption_preserves_linked_worktree_instructions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    (primary / "README.md").write_text("primary\n", encoding="utf-8")
+    git(primary, "init", "-q")
+    git(primary, "add", "README.md")
+    git(
+        primary,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.test",
+        "commit",
+        "-qm",
+        "initial",
+    )
+    linked = tmp_path / "linked"
+    git(primary, "worktree", "add", "-q", str(linked))
+    selection = primary / ".agents/plugins.json"
+    selection.parent.mkdir(parents=True)
+    selection.write_text(
+        json.dumps({"schema_version": 1, "plugins": ["python@tj-agents"]}),
+        encoding="utf-8",
+    )
+    (primary / ".agents/repo-capabilities.local.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    path = linked / "AGENTS.md"
+    path.write_text("Owner's instructions\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        process,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(required_plugins, "check", lambda *args, **kwargs: {})
+    with pytest.raises(standards.StandardsError, match="Local-only adoption"):
+        tj_prepare.prepare(linked, Host.CLAUDE)
+    assert path.read_text(encoding="utf-8") == "Owner's instructions\n"
+
+
 def test_claude_pairing_preserves_distinct_existing_instructions(
     tmp_path: Path,
 ) -> None:
