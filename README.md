@@ -320,6 +320,10 @@ Launch confirmation checks daemon attachment and the first recorded turn against
 first turn fails visibly and preserves the tab for inspection. The store holds links only. Its release is pinned in
 `.agents/agent/runtime/agent-store.json`, which Renovate bumps.
 
+Managed Codex reopen and recovery use the same daemon admission and native version requirement as new
+handoffs. They preserve the existing thread, respect project trust and disabled-daemon settings, and
+confirm attachment without starting a new turn. A missing attachment is a visible recovery failure.
+
 `tj status` lists registered sessions and their linked open work by default, including sessions without a
 work item. Use `tj item mine` to list all open work assigned to you. Status shows native liveness separately
 from durable completion state, including pending work, holds and failures, together with the launch and

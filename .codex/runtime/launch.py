@@ -225,8 +225,7 @@ def executable() -> str:
 
 
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
-    minimum = "0.154.0" if arguments[2:3] == ["resume"] else startup.MINIMUM_VERSION
-    native = str(resolve_executable(minimum=minimum)[0])
+    native = str(resolve_executable(minimum=startup.MINIMUM_VERSION)[0])
     return startup.prepare(directory, title, arguments, cli, native, environ)
 
 

@@ -470,9 +470,109 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
         str(native.directory),
         "resume",
         THREAD,
+        "--remote",
+        "unix://",
     )
     assert prepared.session == f"codex:{THREAD}" and not prepared.created
-    assert native.events == [["tj", "_session", "--help"]]
+    assert "admit" in native.events
+    assert ["fixture-codex", "app-server", "daemon", "start"] in native.events
+    assert (
+        "config/read",
+        {"cwd": str(native.directory), "includeLayers": True},
+    ) in native.events
+    assert ("thread/read", {"threadId": THREAD, "includeTurns": False}) in native.events
+    assert not any(
+        isinstance(event, tuple)
+        and event[0] in {"thread/start", "thread/name/set", "thread/archive"}
+        for event in native.events
+    )
+
+
+def test_resume_refuses_disabled_daemon_before_dispatch(
+    native: Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        startup.projects,
+        "user_config",
+        lambda: {"features": {"daemon_auto_start": False}},
+    )
+    with pytest.raises(LaunchError, match="disabled"):
+        startup.prepare(
+            native.directory,
+            "Existing",
+            launch.resume_arguments(native.directory, "Existing", THREAD),
+            "tj",
+            "fixture-codex",
+            {},
+        )
+    assert "connect" not in native.events
+
+
+def test_resume_requires_project_trust(
+    native: Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native.projects = {}
+    monkeypatch.setattr(
+        permissions.worktrees, "repository_root", lambda _: native.directory
+    )
+    with pytest.raises(LaunchError, match="trust"):
+        startup.prepare(
+            native.directory,
+            "Existing",
+            launch.resume_arguments(native.directory, "Existing", THREAD),
+            "tj",
+            "fixture-codex",
+            {},
+        )
+
+
+def test_resume_confirmation_waits_for_attachment_without_a_new_turn(
+    native: Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepared = startup.prepare(
+        native.directory,
+        "Existing",
+        launch.resume_arguments(native.directory, "Existing", THREAD),
+        "tj",
+        "fixture-codex",
+        {},
+    )
+    (native.directory / "rollout.jsonl").unlink()
+    native.status = "notLoaded"
+    monkeypatch.setattr(
+        agent_store,
+        "run",
+        lambda *args: {"launch": {"launch_id": "launch", "state": "active"}},
+    )
+    waits = []
+
+    def wait(seconds: float) -> None:
+        waits.append(seconds)
+        native.status = "idle"
+
+    startup.confirm(prepared, [], "launch", clock=lambda: 0, wait=wait)
+    assert waits == [0.5]
+
+
+def test_resume_confirmation_rejects_a_session_outside_the_daemon(
+    native: Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepared = startup.prepare(
+        native.directory,
+        "Existing",
+        launch.resume_arguments(native.directory, "Existing", THREAD),
+        "tj",
+        "fixture-codex",
+        {},
+    )
+    native.status = "notLoaded"
+    monkeypatch.setattr(
+        agent_store,
+        "run",
+        lambda *args: {"launch": {"launch_id": "launch", "state": "active"}},
+    )
+    with pytest.raises(LaunchTimeout, match="daemon"):
+        startup.confirm(prepared, [], "launch", timeout=0, clock=lambda: 0)
 
 
 @pytest.mark.parametrize(
@@ -602,15 +702,20 @@ def test_abandon_preserves_thread_when_dispatch_times_out_without_receipt(
     assert native.events == before
 
 
+@pytest.mark.parametrize("resuming", [False, True])
 def test_prepare_requires_proven_native_version_before_any_creation(
-    native: Native, monkeypatch: pytest.MonkeyPatch
+    native: Native, monkeypatch: pytest.MonkeyPatch, resuming: bool
 ) -> None:
     def resolve(*, minimum: str) -> None:
         assert minimum == "0.167.1"
         raise LaunchError("below the required 0.167.1")
 
     monkeypatch.setattr(launch, "resolve_executable", resolve)
-    arguments = launch.start_arguments(native.directory, "Title", "Prompt", None, None)
+    arguments = (
+        launch.resume_arguments(native.directory, "Title", THREAD)
+        if resuming
+        else launch.start_arguments(native.directory, "Title", "Prompt", None, None)
+    )
     with pytest.raises(LaunchError, match=r"required 0\.167\.1"):
         launch.prepare(native.directory, "Title", arguments, "tj", {})
     assert native.events == []

@@ -269,10 +269,11 @@ def prepare(
     completed = False
     try:
         require_binding(cli)
-        if arguments[:3] == ["--cd", str(directory), "resume"] and len(arguments) == 4:
-            thread_id = native_id(arguments[3])
-            return PreparedLaunch((native, *arguments), f"codex:{thread_id}")
-        options = start_options(directory, arguments)
+        resuming = (
+            arguments[:3] == ["--cd", str(directory), "resume"] and len(arguments) == 4
+        )
+        thread_id = native_id(arguments[3]) if resuming else None
+        options = None if resuming else start_options(directory, arguments)
         admit(directory, arguments)
         if daemon.disabled(projects.user_config()):
             raise LaunchError(
@@ -286,23 +287,30 @@ def prepare(
             permissions.require_project_trust(
                 document, directory, windows=os.name == "nt", wsl=inside_wsl()
             )
-            thread_id = create(server, directory, title, options.model, options.effort)
-            prepared = PreparedLaunch(
-                (
-                    native,
-                    "--cd",
-                    str(directory),
-                    "resume",
-                    thread_id,
-                    *arguments[2:-1],
-                    "--remote",
-                    "unix://",
-                    "--",
-                    options.prompt,
-                ),
-                f"codex:{thread_id}",
-                created=True,
-            )
+            if options is None:
+                prepared = PreparedLaunch(
+                    (native, *arguments, "--remote", "unix://"), f"codex:{thread_id}"
+                )
+            else:
+                thread_id = create(
+                    server, directory, title, options.model, options.effort
+                )
+                prepared = PreparedLaunch(
+                    (
+                        native,
+                        "--cd",
+                        str(directory),
+                        "resume",
+                        thread_id,
+                        *arguments[2:-1],
+                        "--remote",
+                        "unix://",
+                        "--",
+                        options.prompt,
+                    ),
+                    f"codex:{thread_id}",
+                    created=True,
+                )
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as error:
         raise LaunchError(
             f"Cannot prepare exact Codex session binding: {error}"
@@ -340,6 +348,7 @@ def confirm(
     wait: Callable[[float], None] = time.sleep,
 ) -> None:
     if not prepared.created:
+        confirm_resume(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
         return
     directory = Path(prepared.command[2])
     options = start_options(directory, arguments)
@@ -428,6 +437,48 @@ def confirm(
             f"Codex {thread_id} first turn is not attached to the shared daemon; "
             "check its tab"
         )
+
+
+def confirm_resume(
+    prepared: PreparedLaunch,
+    launch_id: str,
+    *,
+    timeout: float,
+    clock: Callable[[], float],
+    wait: Callable[[float], None],
+) -> None:
+    thread_id = native_id(str(prepared.session).removeprefix("codex:"))
+    deadline = clock() + timeout
+    with connection(prepared.command[0], Path(prepared.command[2])) as server:
+        while True:
+            response = server.request(
+                "thread/read", {"threadId": thread_id, "includeTurns": False}
+            )
+            thread = response.get("thread")
+            if not isinstance(thread, dict) or thread.get("id") != thread_id:
+                raise LaunchError(
+                    f"Codex did not return the resumed thread {thread_id}"
+                )
+            status = thread.get("status")
+            if isinstance(status, dict) and status.get("type") in {"idle", "active"}:
+                return
+            shown = agent_store.run("show", "--launch-id", launch_id)
+            record = shown.get("launch")
+            if not isinstance(record, dict) or record.get("launch_id") != launch_id:
+                raise LaunchError(
+                    f"agent-store returned an invalid launch for {launch_id}"
+                )
+            if record.get("state") == "ended":
+                raise LaunchError(
+                    f"Codex launch {launch_id} exited before attaching "
+                    "to the shared daemon"
+                )
+            if clock() >= deadline:
+                raise LaunchTimeout(
+                    f"Codex {thread_id} did not attach to the shared daemon "
+                    f"within {timeout:g} seconds; check its tab"
+                )
+            wait(0.5)
 
 
 def not_started(
