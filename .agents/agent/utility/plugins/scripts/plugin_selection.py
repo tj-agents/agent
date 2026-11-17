@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
-import re
 
 import lock_io
+from tj_cli.git import repository_file
 
 
 def runtime_module(name):
@@ -40,7 +41,7 @@ GIT_SUFFIX = ".git"
 
 
 def resolve(root: Path) -> Path:
-    return root / ".agents" / SELECTION_NAME
+    return repository_file(root, Path(".agents") / SELECTION_NAME)
 
 
 def is_current(lock: dict) -> bool:

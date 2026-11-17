@@ -383,6 +383,35 @@ def test_run_selects_personal_where_no_installed_employer_matches(
     assert "personal@tj-agents" in selection(project)
 
 
+def test_adoption_copies_an_inherited_selection_to_the_linked_checkout_and_excludes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", none_declared)
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    (primary / "README.md").write_text("primary\n", encoding="utf-8")
+    subprocess.run(["git", "init", "--quiet", str(primary)], check=True, timeout=15)
+    subprocess.run(["git", "-C", str(primary), "add", "README.md"], check=True, timeout=15)
+    subprocess.run(["git", "-C", str(primary), "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "initial"], check=True, timeout=15)
+    subprocess.run(["git", "-C", str(primary), "remote", "add", "origin", "https://github.com/employer/project.git"], check=True, timeout=15)
+    linked = tmp_path / "linked"
+    subprocess.run(["git", "-C", str(primary), "worktree", "add", "--quiet", str(linked)], check=True, timeout=15)
+    (primary / ".agents").mkdir()
+    inherited = {
+        "schema_version": 1,
+        "marketplaces": {"tj-agents": {"repository": "tj-agents/marketplace"}},
+        "plugins": ["base@tj-agents"],
+    }
+    (primary / ".agents/plugins.json").write_text(json.dumps(inherited), encoding="utf-8")
+
+    ADOPT.run(linked, [], [], "write")
+
+    local = linked / ".agents/plugins.json"
+    assert local.is_file()
+    assert json.loads(local.read_text(encoding="utf-8"))["plugins"] == inherited["plugins"]
+    assert subprocess.run(["git", "check-ignore", "-q", ".agents/plugins.json"], cwd=linked, timeout=15).returncode == 0
+
+
 def test_run_refuses_every_profile_where_an_employer_outside_the_roster_matches(
     project: Path, profile_roster: dict[str, object], installed_employers: list[object]
 ) -> None:

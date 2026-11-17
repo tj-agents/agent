@@ -7,17 +7,18 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
-import harness_permissions
 import config_conflicts
+import harness_permissions
 import lock_io
 import machine_paths
 import plugin_selection
 import published_harness
 from plugin_runtime import Host, process
+from tj_cli.git import repository_file
 
 if sys.version_info < (3, 11):
     raise SystemExit("Repository settings generation requires Python 3.11 or newer")
@@ -45,7 +46,7 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
 
 
 def declarations(
-    lock_path: Path, lock: dict, *, published: bool = True
+    lock_path: Path, lock: dict, root: Path, *, published: bool = True
 ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
     """Return the selection's marketplaces, enabled plugins and committed permissions.
 
@@ -57,7 +58,7 @@ def declarations(
     identities = {identity: True for identity in selected_identities}
     selected = {plugin_selection.overlay_id(identity) for identity in selected_identities}
     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
-    overlay_path = lock_path.resolve().parent / "repository-harness.json"
+    overlay_path = repository_file(root, ".agents/repository-harness.json")
     if overlay_path.is_file():
         overlay = lock_io.load_json(overlay_path)
         if not isinstance(overlay, dict) or set(overlay) != {"schema_version", "requires"} or overlay["schema_version"] != 1:
@@ -441,12 +442,12 @@ def plan(
     rules_path = root / ".codex/rules/agent-harness.rules"
     state_path = root / LOCAL_STATE
     paths = [claude, codex, rules_path] + ([state_path] if scope == "local" else [])
-    inputs = [*read_paths, lock_path.resolve().parent / "repository-harness.json", root / ".agents/settings.json"]
+    inputs = [*read_paths, repository_file(root, ".agents/repository-harness.json"), root / ".agents/settings.json"]
     if lock_document is None:
         inputs.append(lock_path)
     exclude = preflight_paths(root, [*paths, *prospective_paths], scope=scope, read_paths=inputs, run=execute)
     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
-    sources, identities, permissions = declarations(lock_path, lock, published=not preserve_permissions)
+    sources, identities, permissions = declarations(lock_path, lock, root, published=not preserve_permissions)
     actual_rules = text_at(rules_path)
     expected_rules = actual_rules if permissions is None else codex_rules(permissions)
     if scope == "local":
@@ -550,8 +551,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="keep the current permissions instead of resolving the selected plugins' published ones")
     args = parser.parse_args(argv)
     try:
-        lock = args.lock or plugin_selection.resolve((args.root or Path.cwd()).expanduser().resolve())
-        drift = run(lock, args.mode, root=args.root, scope=args.scope, preserve_permissions=args.preserve_permissions)
+        root = (args.root or Path.cwd()).expanduser().resolve()
+        lock = args.lock or plugin_selection.resolve(root)
+        drift = run(lock, args.mode, root=root, scope=args.scope, preserve_permissions=args.preserve_permissions)
     except (lock_io.LockError, OSError, UnicodeError) as error:
         print(str(error), file=sys.stderr)
         return 1

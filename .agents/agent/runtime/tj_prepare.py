@@ -10,6 +10,7 @@ import required_plugins
 import standards
 from tj_agent.host import Host
 from tj_cli import process
+from tj_cli.git import repository_file
 
 CONFIGURATION = Path(__file__).parent.parent / "utility/plugins/scripts/repo_config.py"
 
@@ -41,6 +42,14 @@ def configure(project: Path, mode: str) -> str:
     return drift
 
 
+def check_instruction_scope(project: Path) -> None:
+    if repository_file(project, ".agents/repo-capabilities.local.json").is_file():
+        raise standards.StandardsError(
+            "Local-only adoption preserves this repository's instruction files; "
+            "its owner must supply standards routing."
+        )
+
+
 def prepare(
     directory: Path, host: Host, arguments: tuple[str, ...] = (), *, write: bool = False
 ) -> bool:
@@ -54,11 +63,7 @@ def prepare(
     selected = required_plugins.selected(project)
     if not selected:
         return False
-    if (project / ".agents/repo-capabilities.local.json").is_file():
-        raise standards.StandardsError(
-            "Local-only adoption preserves this repository's instruction files; "
-            "its owner must supply standards routing."
-        )
+    check_instruction_scope(project)
     with ThreadPoolExecutor(max_workers=1) as pool:
         inventory = pool.submit(
             required_plugins.check,
@@ -67,6 +72,7 @@ def prepare(
             inventory_options=inventory_options,
         )
         configured = configure(project, "write" if write else "check")
+    check_instruction_scope(project)
     try:
         roots = (
             required_plugins.check(directory, host, inventory_options=inventory_options)

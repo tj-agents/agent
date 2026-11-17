@@ -109,25 +109,28 @@ def tree_snapshot(directory: Path) -> dict[Path, bytes]:
 
 
 @pytest.mark.parametrize("host", list(Host))
-@pytest.mark.parametrize("linked", [False, True])
+@pytest.mark.parametrize(
+    ("linked", "inherited"), [(False, False), (True, False), (True, True)]
+)
 def test_prepare_never_rewrites_an_authored_checkout(
     tmp_path: Path,
+    plugin_source: Path,
     monkeypatch: pytest.MonkeyPatch,
     host: Host,
     linked: bool,
+    inherited: bool,
 ) -> None:
-    primary = tmp_path / "primary"
-    primary.mkdir()
+    primary = plugin_source
     (primary / "README.md").write_text("Committed guidance\n", encoding="utf-8")
-    git(primary, "init", "-q")
     git(primary, "add", ".")
     git(primary, "-c", "user.name=t", "-c", "user.email=t", "commit", "-q", "-m", "s")
     project = primary
     if linked:
         project = tmp_path / "linked"
         git(primary, "worktree", "add", "-q", str(project))
-    (project / ".agents").mkdir()
-    (project / ".agents/plugins.json").write_text(
+    selection_root = primary if inherited else project
+    (selection_root / ".agents").mkdir()
+    (selection_root / ".agents/plugins.json").write_text(
         '{"schema_version": 1, "plugins": ["python@tj-agents"]}', encoding="utf-8"
     )
     (project / "README.md").write_text("Authored dirtiness\n", encoding="utf-8")
@@ -154,9 +157,11 @@ def test_prepare_never_rewrites_an_authored_checkout(
         lambda *_arguments, **_kwargs: {"python@tj-agents": plugin},
     )
     before = tree_snapshot(project)
+    primary_before = tree_snapshot(primary)
 
     assert tj_prepare.prepare(project, host)
     assert tree_snapshot(project) == before
+    assert tree_snapshot(primary) == primary_before
     assert modes == ["check"]
 
 
@@ -428,6 +433,85 @@ def test_local_adoption_preserves_the_repositorys_instructions(
         tj_prepare.prepare(selected_project, Host.CLAUDE)
     assert path.read_text(encoding="utf-8") == original
     assert not (selected_project / "CLAUDE.md").exists()
+
+
+@pytest.mark.parametrize("host", list(Host))
+@pytest.mark.parametrize("write", [False, True])
+def test_inherited_local_adoption_preserves_linked_worktree_instructions(
+    tmp_path: Path,
+    plugin_source: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: Host,
+    write: bool,
+) -> None:
+    primary = plugin_source
+    (primary / "README.md").write_text("primary\n", encoding="utf-8")
+    git(primary, "add", "README.md")
+    git(
+        primary,
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.test",
+        "commit",
+        "-qm",
+        "initial",
+    )
+    linked = tmp_path / "linked"
+    git(primary, "worktree", "add", "-q", str(linked))
+    selection = primary / ".agents/plugins.json"
+    selection.parent.mkdir(parents=True)
+    selection.write_text(
+        json.dumps({"schema_version": 1, "plugins": ["python@tj-agents"]}),
+        encoding="utf-8",
+    )
+    (primary / ".agents/repo-capabilities.local.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    path = linked / "AGENTS.md"
+    path.write_text("Owner's instructions\n", encoding="utf-8")
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        pytest.fail("Local adoption must be checked before configuration or inventory")
+
+    monkeypatch.setattr(tj_prepare, "configure", unexpected)
+    monkeypatch.setattr(required_plugins, "check", unexpected)
+    before = tree_snapshot(linked)
+    primary_before = tree_snapshot(primary)
+    with pytest.raises(standards.StandardsError, match="Local-only adoption"):
+        tj_prepare.prepare(linked, host, write=write)
+    assert tree_snapshot(linked) == before
+    assert tree_snapshot(primary) == primary_before
+
+
+@pytest.mark.parametrize("host", list(Host))
+def test_prepare_write_preserves_instructions_when_configuration_creates_local_adoption(
+    plugin_source: Path, monkeypatch: pytest.MonkeyPatch, host: Host
+) -> None:
+    selection = plugin_source / ".agents/plugins.json"
+    selection.parent.mkdir()
+    selection.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "marketplaces": {"tj-agents": {"repository": "tj-agents/marketplace"}},
+                "plugins": ["python@tj-agents"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = b"Owner's instructions\r\n"
+    (plugin_source / "AGENTS.md").write_bytes(original)
+    (plugin_source / "CLAUDE.md").write_bytes(original)
+    monkeypatch.setattr(required_plugins, "check", lambda *args, **kwargs: {})
+
+    with pytest.raises(standards.StandardsError, match="Local-only adoption"):
+        tj_prepare.prepare(plugin_source, host, write=True)
+
+    assert (plugin_source / ".agents/repo-capabilities.local.json").is_file()
+    assert (plugin_source / ".claude/settings.local.json").is_file()
+    assert (plugin_source / "AGENTS.md").read_bytes() == original
+    assert (plugin_source / "CLAUDE.md").read_bytes() == original
 
 
 def test_claude_pairing_preserves_distinct_existing_instructions(

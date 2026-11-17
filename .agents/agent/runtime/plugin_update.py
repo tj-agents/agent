@@ -23,6 +23,7 @@ from codex import catalog as codex_catalog
 from codex import installed as codex_installed
 from tj_agent.host import Host
 from tj_cli import process
+from tj_cli.git import repository_file
 from tree_digest import Digests
 
 MARKETPLACES = ("tj-agents", "agents")
@@ -127,7 +128,7 @@ def already_current(host: Host, digests: Digests) -> bool:
 def prefetch_standards(host: Host) -> list[object] | None:
     directory = Path.cwd()
     project = required_plugins.project_root(directory)
-    if (project / ".agents/repo-capabilities.local.json").is_file():
+    if repository_file(project, ".agents/repo-capabilities.local.json").is_file():
         return None
     required = required_plugins.selected(project)
     if not required:
@@ -140,7 +141,7 @@ def update_standards(
 ) -> None:
     directory = Path.cwd()
     project = required_plugins.project_root(directory)
-    if (project / ".agents/repo-capabilities.local.json").is_file():
+    if repository_file(project, ".agents/repo-capabilities.local.json").is_file():
         return
     try:
         entries = prefetched.result() if prefetched is not None else None

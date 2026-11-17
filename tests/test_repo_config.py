@@ -258,6 +258,91 @@ def test_run_commits_selected_plugins_allow_and_deny_rules(
     assert REPO_CONFIG.run(selection, "check", scope="project") == []
 
 
+@pytest.fixture
+def inherited_checkout(tmp_path: Path, plugin_source: Path) -> tuple[Path, Path]:
+    primary = plugin_source
+    (primary / "README.md").write_text("primary\n", encoding="utf-8")
+    git(primary, "add", "README.md")
+    git(primary, "commit", "-qm", "initial")
+    linked = tmp_path / "linked"
+    git(primary, "worktree", "add", "--quiet", str(linked))
+    select(primary, "alpha@tj-agents")
+    overlay(primary, {"claude_allow": ["Bash(local overlay:*)"]})
+    return primary, linked
+
+
+@pytest.mark.parametrize("scope", [None, "local", "project"])
+@pytest.mark.parametrize("explicit_lock", [False, True])
+def test_main_reads_a_primary_selection_and_overlay_but_writes_to_the_linked_worktree(
+    inherited_checkout: tuple[Path, Path],
+    published: list[list[str]],
+    scope: str | None,
+    explicit_lock: bool,
+) -> None:
+    primary, linked = inherited_checkout
+    inherited = REPO_CONFIG.plugin_selection.resolve(linked)
+    assert inherited == primary / ".agents/plugins.json"
+    before = inherited.read_bytes()
+    arguments = ["--root", str(linked), "--mode", "write"]
+    if scope is not None:
+        arguments.extend(["--scope", scope])
+    if explicit_lock:
+        arguments.extend(["--lock", str(inherited)])
+    assert REPO_CONFIG.main(arguments) == 0
+
+    filename = "settings.json" if scope == "project" else "settings.local.json"
+    linked_settings = linked / ".claude" / filename
+    assert linked_settings.is_file()
+    assert "Bash(local overlay:*)" in linked_settings.read_text(encoding="utf-8")
+    claude = json.loads(linked_settings.read_text(encoding="utf-8"))
+    codex = tomllib.loads((linked / ".codex/config.toml").read_text(encoding="utf-8"))
+    assert "defaultMode" not in claude["permissions"]
+    assert (
+        not {"approval_policy", "default_permissions", "sandbox_mode", "projects"}
+        & codex.keys()
+    )
+    assert (linked / ".agents/repo-capabilities.local.json").exists() == (
+        scope != "project"
+    )
+    assert inherited.read_bytes() == before
+    assert not (linked / ".agents/plugins.json").exists()
+    assert not (primary / ".claude").exists()
+    assert not (primary / ".codex").exists()
+    assert published == [["alpha@tj-agents"]]
+
+
+@pytest.mark.parametrize("mode", ["check", "write"])
+@pytest.mark.parametrize("malformed", ["json", "directory"])
+def test_main_refuses_a_malformed_local_selection_instead_of_inheriting(
+    inherited_checkout: tuple[Path, Path],
+    published: list[list[str]],
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+    malformed: str,
+) -> None:
+    primary, linked = inherited_checkout
+    local = linked / ".agents/plugins.json"
+    local.parent.mkdir()
+    if malformed == "json":
+        local.write_text("{broken", encoding="utf-8")
+    else:
+        local.mkdir()
+    primary_selection = (primary / ".agents/plugins.json").read_bytes()
+
+    assert REPO_CONFIG.main(["--root", str(linked), "--mode", mode]) == 1
+
+    assert "Cannot read JSON" in capsys.readouterr().err
+    assert not published
+    assert not (linked / ".claude").exists()
+    assert not (linked / ".codex").exists()
+    assert not (linked / ".agents/repo-capabilities.local.json").exists()
+    assert (primary / ".agents/plugins.json").read_bytes() == primary_selection
+    if malformed == "json":
+        assert local.read_text(encoding="utf-8") == "{broken"
+    else:
+        assert local.is_dir()
+
+
 def test_run_lets_the_repository_overlay_extend_and_override_plugins(
     repository: Path, published: list[list[str]]
 ) -> None:

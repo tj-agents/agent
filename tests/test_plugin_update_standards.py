@@ -116,6 +116,81 @@ def test_loaded_repository_standards_require_verified_installed_builds(
     assert instructions.read_text(encoding="utf-8") == "Existing instructions\n"
 
 
+@pytest.mark.parametrize("local", [False, True])
+def test_loaded_worktree_standards_preserve_inherited_local_adoption(
+    tmp_path: Path,
+    plugin_source: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    local: bool,
+) -> None:
+    (plugin_source / "README.md").write_text("Primary checkout\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(plugin_source), "add", "README.md"], check=True, timeout=15
+    )
+    subprocess.run(
+        ["git", "-C", str(plugin_source), "commit", "-qm", "initial"],
+        check=True,
+        timeout=15,
+    )
+    linked = tmp_path / "linked checkout"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(plugin_source),
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            str(linked),
+        ],
+        check=True,
+        timeout=15,
+    )
+    selection = plugin_source / ".agents/plugins.json"
+    selection.parent.mkdir()
+    selection.write_text(
+        '{"schema_version": 1, "plugins": ["python@tj-agents"]}', encoding="utf-8"
+    )
+    if local:
+        (selection.parent / "repo-capabilities.local.json").write_text(
+            "{}", encoding="utf-8"
+        )
+    instructions = linked / "AGENTS.md"
+    original = b"Owner's instructions\r\n"
+    instructions.write_bytes(original)
+    installed = tmp_path / "installed"
+    standard = installed / ".agents/python/convention/modules/SKILL.md"
+    standard.parent.mkdir(parents=True)
+    standard.write_text(
+        "---\nname: modules\nkind: convention\nprofile: core\n"
+        "applicability: Python projects\n---\nFull modules standard\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
+    monkeypatch.setattr(
+        codex_installed.catalog,
+        "recorded",
+        lambda _state: {
+            "python@tj-agents": codex_installed.catalog.Build("fixture", "test", None)
+        },
+    )
+    monkeypatch.setattr(codex_installed.catalog, "root", lambda *_args: installed)
+    monkeypatch.setattr(codex_installed.catalog, "current", lambda *_args: True)
+
+    codex_installed.update_project_standards(linked)
+
+    assert instructions.read_bytes() == original
+    diagnostic = capsys.readouterr().err
+    if local:
+        assert not diagnostic
+    else:
+        assert "tj prepare --host codex --write" in diagnostic
+        assert str(linked) in diagnostic
+    assert not (linked / ".agents/repo-capabilities.local.json").exists()
+
+
 def test_an_interrupted_update_still_activates_on_the_next_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report_commands: list[list[str]]
 ) -> None:
