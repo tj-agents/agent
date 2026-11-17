@@ -1,11 +1,11 @@
-"""Resolve or create the work item a handoff launch is linked to."""
+"""Resolve existing work-item references for session links."""
 
 from __future__ import annotations
 
 import json
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 
 import agent_store
@@ -16,7 +16,7 @@ COMMAND_TIMEOUT_SECONDS = 30
 
 
 def parent_item_ref(parent: str) -> str | None:
-    """The ref of `parent`'s first linked item, owner role first, or None."""
+    """The parent's unambiguous linked item, preferring its owner links."""
     try:
         shown = agent_store.run("show", parent)
     except agent_store.AgentStoreError as error:
@@ -26,27 +26,35 @@ def parent_item_ref(parent: str) -> str | None:
     links = shown["session"]["links"]
     if not links:
         return None
-    owner = next((link for link in links if link["role"] == "owner"), None)
-    ref = (owner or links[0])["item"]["ref"]
-    return ref if isinstance(ref, str) else None
+    owners = [link for link in links if link["role"] == "owner"]
+    refs = {link["item"]["ref"] for link in owners or links}
+    if len(refs) != 1:
+        raise LaunchError(
+            "The parent has several work items; pass --item with the intended one."
+        )
+    ref = refs.pop()
+    if not isinstance(ref, str) or not ref.strip():
+        raise LaunchError(
+            "The parent has an invalid link; pass --item with an existing reference."
+        )
+    return ref
 
 
-def create(
+def reference(
     cwd: Path,
-    title: str,
-    parent: str | None,
-    fields: Mapping[str, str],
+    value: str,
     run: Callable[..., subprocess.CompletedProcess[str]] = process.run,
 ) -> str:
-    """Create a work item titled `title` for `cwd`, under `parent` if given."""
+    """Resolve a bare id through the project's tracker without a network lookup."""
+    value = value.strip()
+    if not value:
+        raise LaunchError("Pass --item with an existing work-item reference.")
+    if ":" in value:
+        return value
     tj = shutil.which("tj")
     if not tj:
         raise LaunchError("tj is not on PATH; run the Agent install.")
-    command = [tj, "item", "--cwd", str(cwd), "create", "--title", title]
-    if parent:
-        command += ["--parent", parent]
-    for name, value in fields.items():
-        command += ["--field", f"{name}={value}"]
+    command = [tj, "item", "--cwd", str(cwd), "reference", value]
     try:
         result = run(
             command,
@@ -57,18 +65,20 @@ def create(
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        raise LaunchError(f"tj item create could not run: {error}") from error
+        raise LaunchError(f"tj item reference could not run: {error}") from error
     if result.returncode != 0:
         raise LaunchError(
-            f"tj item create failed: {(result.stderr or result.stdout).strip()}"
+            f"tj item reference failed: {(result.stderr or result.stdout).strip()}"
         )
     try:
         document = json.loads(result.stdout)
     except ValueError as error:
         raise LaunchError(
-            f"tj item create printed no JSON: {result.stdout.strip()}"
+            f"tj item reference printed no JSON: {result.stdout.strip()}"
         ) from error
     ref = document.get("ref") if isinstance(document, dict) else None
     if not isinstance(ref, str) or not ref:
-        raise LaunchError(f'tj item create printed no "ref": {result.stdout.strip()}')
+        raise LaunchError(
+            f'tj item reference printed no "ref": {result.stdout.strip()}'
+        )
     return ref

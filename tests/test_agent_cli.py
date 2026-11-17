@@ -621,19 +621,6 @@ class PosixInnerCommandExecutionTests(unittest.TestCase):
         self.run_and_check(inner)
 
 
-def test_an_item_field_needs_a_name_and_a_value() -> None:
-    assert CLI.item_field("attribution=User Management") == (
-        "attribution",
-        "User Management",
-    )
-
-
-@pytest.mark.parametrize("value", ["attribution", "=Techops", "attribution="])
-def test_an_invalid_item_field_is_refused(value: str) -> None:
-    with pytest.raises(CLI.argparse.ArgumentTypeError):
-        CLI.item_field(value)
-
-
 def test_an_explicit_parent_overrides_the_calling_session() -> None:
     environ = {CLI.Host.CLAUDE.session_variable: "abc"}
     with mock.patch.dict(os.environ, environ, clear=True):
@@ -736,44 +723,40 @@ def test_the_standing_rule_names_the_parent_without_forcing_a_transport(parent: 
     assert CLI.parent_rule(None) == ""
 
 
-def test_a_given_item_passes_through_unchanged() -> None:
-    assert CLI.resolve_item("98", "title", Path("/work"), "claude:p", []) == "98"
-
-
-def test_item_fields_with_a_given_item_are_refused() -> None:
-    with pytest.raises(CLI.LaunchError, match="--item-field applies only"):
-        CLI.resolve_item(
-            "98", "title", Path("/work"), None, [("attribution", "Techops")]
-        )
-
-
-def test_an_absent_item_is_created_under_the_parents_item_with_its_fields() -> None:
-    with (
-        mock.patch.object(
-            CLI.work_item, "parent_item_ref", return_value="42"
-        ) as parent_ref,
-        mock.patch.object(CLI.work_item, "create", return_value="99") as create,
-    ):
+def test_a_given_item_resolves_in_the_target_project() -> None:
+    with mock.patch.object(
+        CLI.work_item, "reference", return_value="jira:tracker:ABC-12"
+    ) as reference:
         assert (
-            CLI.resolve_item(
-                None, "title", Path("/work"), "claude:p", [("attribution", "Techops")]
-            )
-            == "99"
+            CLI.resolve_item("ABC-12", Path("/work"), "claude:p")
+            == "jira:tracker:ABC-12"
         )
+    reference.assert_called_once_with(Path("/work"), "ABC-12")
+
+
+def test_a_work_item_url_passes_through_unchanged() -> None:
+    url = "https://dev.azure.com/contoso/Product/_workitems/edit/98"
+    assert CLI.resolve_item(url, Path("/work"), "claude:p") == url
+
+
+def test_an_absent_item_reuses_the_parents_existing_reference() -> None:
+    ref = "azure-devops:dev.azure.com/contoso:42"
+    with mock.patch.object(
+        CLI.work_item, "parent_item_ref", return_value=ref
+    ) as parent_ref:
+        assert CLI.resolve_item(None, Path("/work"), "claude:p") == ref
     parent_ref.assert_called_once_with("claude:p")
-    create.assert_called_once_with(
-        Path("/work"), "title", "42", {"attribution": "Techops"}
-    )
 
 
-def test_an_absent_item_with_no_parent_is_created_with_no_parent_ref() -> None:
+@pytest.mark.parametrize("parent", [None, "claude:p"])
+def test_an_absent_item_refuses_when_no_existing_reference_is_found(
+    parent: str | None,
+) -> None:
     with (
-        mock.patch.object(CLI.work_item, "parent_item_ref") as parent_ref,
-        mock.patch.object(CLI.work_item, "create", return_value="7") as create,
+        mock.patch.object(CLI.work_item, "parent_item_ref", return_value=None),
+        pytest.raises(CLI.LaunchError, match="No existing work item.*--item"),
     ):
-        assert CLI.resolve_item(None, "title", Path("/work"), None, []) == "7"
-    parent_ref.assert_not_called()
-    create.assert_called_once_with(Path("/work"), "title", None, {})
+        CLI.resolve_item(None, Path("/work"), parent)
 
 
 if __name__ == "__main__":
