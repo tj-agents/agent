@@ -11,7 +11,7 @@ package = false
 mypy-groups = [[".agents", "tests"], [".claude/runtime"], [".codex/runtime"]]
 
 [tool.uv.sources]
-tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "9608c76960c1b0aba7d0f1a05ae335679ffbbf47", subdirectory = "packages/tj-cli" }
+tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "12910dd6da06b283e9b00833ecd7945398590d61", subdirectory = "packages/tj-cli" }
 
 [dependency-groups]
 dev = ["mypy>=2.4.1", "pytest>=9.1.1", "ruff>=0.17.4", "pytest-socket>=0.7.0"]

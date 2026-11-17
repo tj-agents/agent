@@ -4,21 +4,20 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
+from pathlib import Path
 from types import MappingProxyType
 
 import lock_io
 import plugin_selection
 import repo_config
 from plugin_runtime import declarations, process
-
 
 LOCK = Path(__file__).resolve().parent / "marketplace_plugins.lock.json"
 STACKS = Path(__file__).resolve().parent / "plugin_stacks.json"
@@ -199,7 +198,7 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
 def run(root: Path, stacks: list[str], plugins: list[str], mode: str, scope: str | None = None, marketplaces: list[str] = (), removals: list[str] = (), *, roster: dict | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> list[str]:
     targets, root = plan(root, stacks, plugins, removals, scope, marketplaces, roster=roster, environ=environ)
     changed = {path: value for path, value in targets.items() if repo_config.text_at(path) != value}
-    drift = [path.relative_to(root).as_posix() for path in changed]
+    drift = [path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path) for path in changed]
     if mode == "write":
         repo_config.write_batch(changed)
     return drift

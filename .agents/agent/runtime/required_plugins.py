@@ -15,6 +15,7 @@ import sys
 import time
 
 from tj_cli import process
+from tj_cli.git import repository_file
 from tj_agent.host import Host
 import host_plugins
 
@@ -55,7 +56,12 @@ class MissingRequiredPluginsError(RequiredPluginsError):
 def project_root(project: Path) -> Path:
     project = project.resolve()
     for directory in (project, *project.parents):
-        if (directory / ".agents/plugins.json").exists() or (directory / ".git").exists():
+        selection = repository_file(directory, ".agents/plugins.json")
+        if (
+            selection.exists()
+            or selection.is_symlink()
+            or (directory / ".git").exists()
+        ):
             return directory
     return project
 
@@ -142,7 +148,7 @@ def readable_payload(path: Path, host: Host, name: str) -> bool:
 
 
 def selected(project: Path) -> tuple[str, ...]:
-    path = project / ".agents" / "plugins.json"
+    path = repository_file(project, ".agents/plugins.json")
     try:
         document = json.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
@@ -487,7 +493,7 @@ def reconcile_selection(project: Path, *, check_only: bool = False) -> list[str]
 
 def reconcile_selections(projects: Sequence[Path], *, check_only: bool = False) -> list[str]:
     projects = sorted({project_root(project) for project in projects
-                       if (project_root(project) / ".agents/plugins.json").is_file()})
+                       if repository_file(project_root(project), ".agents/plugins.json").is_file()})
     if not projects:
         return []
     script = Path(__file__).resolve().parents[1] / "utility/plugins/scripts/adopt_plugins.py"
