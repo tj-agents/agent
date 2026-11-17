@@ -147,7 +147,7 @@ same Claude entry or Codex pattern from any plugin, whichever way the plugin dec
 ## Lifecycle
 
 ```text
-tj start 461 --lane L4 [--codex]     worktree via worktrunk, card In Progress, agent in a tj run tab
+tj start 461 --lane L4 [--codex]     Core worktree creator, card In Progress, agent in a tj run tab
 tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
 tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
 tj recover --dry-run                 preview restores and stale sessions to end without changing anything
@@ -156,6 +156,9 @@ tj prepare --host claude|codex       prepare this repository's selected plugins 
 ```
 
 `tj` dispatches these to the lifecycle shims the installer writes beside it.
+New worktrees use [Core's shared creator](https://github.com/tj-agents/core/blob/main/.agents/engineering/operation/open-worktree/SKILL.md)
+from the enabled Base plugin. `tj start` no longer reads or seeds worktrunk configuration; a missing
+creator stops the launch before tracker progress changes.
 Every agent tab is a Windows Terminal or tmux tab whose root process is `tj run`, from
 [TJ CLI](https://github.com/tj-agents/cli). `tj run` records the launch in agent-store. The SessionStart
 hook then binds the native session to that launch, so the session inherits its title, work item and parent,
