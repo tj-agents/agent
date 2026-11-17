@@ -29,6 +29,7 @@ from tree_digest import Digests
 MARKETPLACES = ("tj-agents", "agents")
 TIMEOUT_SECONDS = 600
 CONCURRENT_STEPS = 4
+DIAGNOSTIC_LINES = 8
 REVISION = re.compile(r"[0-9a-f]{40}")
 
 
@@ -59,7 +60,11 @@ class Report:
         if result.returncode:
             detail = (result.stderr.strip() or result.stdout.strip()).splitlines()
             self.fail(
-                host, label, detail[-1] if detail else f"exit {result.returncode}"
+                host,
+                label,
+                "\n".join(detail[-DIAGNOSTIC_LINES:])
+                if detail
+                else f"exit {result.returncode}",
             )
             return None
         print(f"{host}: {label} ok")
@@ -215,6 +220,8 @@ def update(host: Host, digests: Digests, environ: Mapping[str, str]) -> Outcome:
         tuple(name for name, stale in zip(MARKETPLACES, behind, strict=True) if stale),
     )
     if report.failures:
+        if host is Host.CODEX:
+            codex_installed.trust_hooks(report)
         return Outcome(report.failures, False, before)
     if any(behind):
         pins_current = already_current(host, digests)

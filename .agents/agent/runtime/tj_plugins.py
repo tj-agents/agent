@@ -19,6 +19,9 @@ from tj_agent.host import Host
 from tj_cli import process
 from tree_digest import Digests
 
+GIT_COMMAND_CONFIGURATION = frozenset({"GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"})
+GIT_COMMAND_ENTRIES = ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+
 
 def host_argument(value: str) -> Host:
     try:
@@ -79,6 +82,13 @@ def main(argv: list[str] | None = None) -> int:
         host = selected_host(arguments.host, os.environ)
     except ValueError as error:
         parser.error(str(error))
+    # Machine maintenance follows the current installed credential configuration,
+    # not one Git command's overrides inherited from a long-running session.
+    for name in tuple(os.environ):
+        if name.upper() in GIT_COMMAND_CONFIGURATION or name.upper().startswith(
+            GIT_COMMAND_ENTRIES
+        ):
+            del os.environ[name]
     outcome = plugin_update.update(host, Digests(jobs.state_directory()), os.environ)
     if outcome.failures:
         for failure in outcome.failures:
