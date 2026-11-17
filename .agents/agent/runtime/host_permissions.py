@@ -26,7 +26,7 @@ MODES = {
 }
 
 
-def permissions(root: Path) -> str:
+def permissions(root: Path) -> str | None:
     directory = Path(__file__).resolve().parent
     candidates = (directory / "repository_configuration.py",
                   directory.parents[1] / "workflows" / "repository_configuration.py")
@@ -39,7 +39,9 @@ def permissions(root: Path) -> str:
     raise ValueError("The shipped repository_configuration.py was not found")
 
 
-def claude_settings(text: str, mode: str, *, project: bool = False) -> str:
+def claude_settings(text: str, mode: str | None, *, project: bool = False) -> str:
+    if mode is None:
+        return text
     if mode not in MODES:
         raise ValueError("Permission mode must be bypass or standard")
     settings = json.loads(text) if text.strip() else {}
@@ -59,7 +61,9 @@ def claude_settings(text: str, mode: str, *, project: bool = False) -> str:
     return json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
 
 
-def codex_settings(text: str, mode: str) -> str:
+def codex_settings(text: str, mode: str | None) -> str:
+    if mode is None:
+        return text
     if mode not in MODES:
         raise ValueError("Permission mode must be bypass or standard")
     before = tomllib.loads(text)
@@ -161,7 +165,9 @@ def codex_app_settings(text: str) -> str:
     return json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
 
 
-def plan(claude: Path, codex: Path, mode: str) -> dict[Path, str]:
+def plan(claude: Path, codex: Path, mode: str | None) -> dict[Path, str]:
+    if mode is None:
+        return {}
     targets = {}
     for path, render in ((claude, claude_settings), (codex, codex_settings)):
         if path.is_symlink() or path.exists() and not path.is_file():

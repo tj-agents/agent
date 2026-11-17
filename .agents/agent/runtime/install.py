@@ -1309,26 +1309,28 @@ def plugin_setup_project(context: Context) -> Path:
     return context.project or Path.cwd().resolve()
 
 
-def plugin_setup_executables(context: Context) -> dict[Host, str | None]:
-    return {host: context.which(host.value) for host in Host}
+def plugin_setup_executables(context: Context) -> dict[Host, str]:
+    return {host: executable for host in Host if (executable := context.which(host.value))}
 
 
 def check_plugin_setup(context: Context) -> list[str]:
     if native_runtime.pending():
         return check_native_cli(context)
+    executables = plugin_setup_executables(context)
     return required_plugins.check_setup(
         plugin_setup_project(context),
-        tuple(Host),
-        plugin_setup_executables(context),
+        tuple(executables),
+        executables,
         context.state_directory,
     )
 
 
 def apply_plugin_setup(context: Context) -> list[str]:
+    executables = plugin_setup_executables(context)
     errors = required_plugins.converge_setup(
         plugin_setup_project(context),
-        tuple(Host),
-        plugin_setup_executables(context),
+        tuple(executables),
+        executables,
         context.state_directory,
         context.onboard,
     )

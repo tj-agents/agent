@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import re
 import sys
-import subprocess
 
 import harness_permissions
 import config_conflicts
@@ -30,63 +29,19 @@ MANAGED_START = "# BEGIN repo-declared agent capabilities"
 MANAGED_END = "# END repo-declared agent capabilities"
 TABLE = re.compile(r"^\s*\[\s*(marketplaces|plugins)(?:\.|\])")
 HEADER = re.compile(r"^\s*\[")
-OWNERS_FILE = "repo-owners.json"
-GITHUB_OWNER = re.compile(r"github\.com[:/]+([^/]+)/", re.IGNORECASE)
-
-
-def repo_owners() -> frozenset[str]:
-    for parent in Path(__file__).resolve().parents:
-        markers = (parent / ".git", parent / ".codex-plugin" / "plugin.json", parent / ".claude-plugin" / "plugin.json",
-                   parent / "source.json")
-        candidate = parent / ".agents" / "agent" / "resources" / OWNERS_FILE
-        if candidate.is_file() and any(marker.exists() for marker in markers):
-            owners = lock_io.load_json(candidate).get("owners", [])
-            return frozenset(owner.casefold() for owner in owners if isinstance(owner, str) and owner)
-    return frozenset()
-
-
-def remote_urls(root: Path, run=process.run) -> list[str]:
-    completed = run(
-        [lock_io.executable("git"), "config", "--null", "--get-regexp", r"^(remote\..*\.url|url\..*\.insteadof)$"],
-        cwd=root, text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    if completed.returncode not in {0, 1}:
-        raise lock_io.LockError(f"git config failed: {completed.stderr.strip() or completed.stdout.strip()}")
-    urls, rewrites = [], {}
-    for entry in filter(None, completed.stdout.split("\0")):
-        key, _, value = entry.partition("\n")
-        if key.startswith("remote."):
-            urls.append(value)
-        else:
-            rewrites[value] = key.removeprefix("url.").removesuffix(".insteadof")
-    rewritten = []
-    for url in urls:
-        prefix = max((prefix for prefix in rewrites if url.startswith(prefix)), key=len, default=None)
-        rewritten.append(url if prefix is None else rewrites[prefix] + url.removeprefix(prefix))
-    return rewritten
-
-
-def remote_owners(root: Path, run=process.run) -> set[str]:
-    owners = set()
-    for url in remote_urls(root, run):
-        match = GITHUB_OWNER.search(url)
-        owners.add(match.group(1).casefold() if match else url)
-    return owners
 
 
 def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
     if scope not in {None, "project", "local"}:
         raise lock_io.LockError(f"Unknown repository scope: {scope}")
+    if scope is not None:
+        return scope
     if not (root / ".git").exists():
-        return scope or "project"
-    foreign = sorted(remote_owners(root, run) - repo_owners())
-    if not foreign:
-        return scope or "project"
-    if scope == "project":
-        raise lock_io.LockError(
-            f"{root} belongs to {', '.join(foreign)}: agent settings there are local and git-excluded only; use --scope local"
-        )
-    return "local"
+        return "project"
+    tracked = lock_io.git(
+        run, ["--literal-pathspecs", "ls-files", "--cached", "-z", "--", ".agents/plugins.json"], root
+    )
+    return "project" if tracked else "local"
 
 
 def declarations(

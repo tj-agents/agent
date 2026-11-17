@@ -76,9 +76,10 @@ class SelectionConvergenceTests(unittest.TestCase):
             return None
 
         context = install.Context(home=self.project, environ={}, windows=False, project=self.project)
-        with mock.patch.object(required_plugins, "check", side_effect=inventory), \
-                mock.patch.object(install, "plugin_setup_executables", return_value={}):
+        with mock.patch.object(required_plugins, "check", side_effect=inventory) as checked, \
+                mock.patch.object(install, "plugin_setup_executables", return_value={Host.CODEX: "codex-fixture"}):
             install.apply_plugin_setup(context)
+        checked.assert_called_once()
         self.assertEqual([], required_plugins.reconcile_selection(self.project, check_only=True))
 
     def test_managed_installed_runtime_converges_without_a_checkout_or_plugin_manifest(self):

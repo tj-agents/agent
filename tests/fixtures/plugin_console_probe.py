@@ -115,7 +115,8 @@ def main() -> None:
 
             match operation:
                 case "selection":
-                    repo_config.remote_owners(root)
+                    (root / ".git").mkdir()
+                    repo_config.resolve_scope(root, None)
                 case "clone":
                     adopt_plugins.current_roster()
                 case "snapshot":

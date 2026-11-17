@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -28,31 +29,72 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def git(root: Path, *arguments: str) -> None:
-    subprocess.run(
-        ["git", *arguments], cwd=root, capture_output=True, timeout=15, check=True
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"git {arguments!r} exited {result.returncode}; "
+        f"stdout={result.stdout!r}; stderr={result.stderr!r}"
     )
 
 
-def test_remote_owners_reads_every_fetch_url_with_its_rewrite(
-    repository: Path,
+@pytest.mark.parametrize("scope", ["project", "local"])
+def test_explicit_scope_does_not_depend_on_repository_owner(
+    repository: Path, scope: str
 ) -> None:
-    git(repository, "remote", "add", "origin", "https://github.com/first/x.git")
     git(
-        repository,
-        "remote",
-        "set-url",
-        "--add",
-        "origin",
-        "https://github.com/second/y.git",
+        repository, "remote", "add", "origin", "https://github.com/example-user/app.git"
     )
-    git(repository, "remote", "set-url", "--push", "origin", "https://github.com/p/q")
-    git(repository, "config", "url.https://github.com/rewritten/.insteadOf", "gh:")
-    git(repository, "remote", "add", "short", "gh:z.git")
-    assert REPO_CONFIG.remote_owners(repository) == {"first", "second", "rewritten"}
+    assert REPO_CONFIG.resolve_scope(repository, scope) == scope
 
 
-def test_remote_owners_is_empty_without_remotes(repository: Path) -> None:
-    assert REPO_CONFIG.remote_owners(repository) == set()
+@pytest.mark.parametrize("owner", [None, "example-user", "tj-agents", "Concertable"])
+def test_untracked_selection_defaults_local_regardless_of_owner(
+    repository: Path, owner: str | None
+) -> None:
+    if owner is not None:
+        git(
+            repository, "remote", "add", "origin", f"https://github.com/{owner}/app.git"
+        )
+    select(repository, "beta@tj-agents")
+    assert REPO_CONFIG.resolve_scope(repository, None) == "local"
+
+
+def test_a_missing_selection_defaults_local(repository: Path) -> None:
+    assert REPO_CONFIG.resolve_scope(repository, None) == "local"
+
+
+def test_tracked_selection_preserves_project_scope(repository: Path) -> None:
+    git(
+        repository, "remote", "add", "origin", "https://github.com/example-user/app.git"
+    )
+    select(repository, "beta@tj-agents")
+    git(repository, "add", ".agents/plugins.json")
+    assert REPO_CONFIG.resolve_scope(repository, None) == "project"
+    assert REPO_CONFIG.resolve_scope(repository, "local") == "local"
+
+
+def test_selection_scope_does_not_guess_after_git_failure(repository: Path) -> None:
+    def failed(
+        arguments: list[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            arguments, 128, stdout="", stderr="index unavailable"
+        )
+
+    with pytest.raises(REPO_CONFIG.lock_io.LockError, match="index unavailable"):
+        REPO_CONFIG.resolve_scope(repository, None, run=failed)
+
+
+def test_unversioned_root_defaults_project(tmp_path: Path) -> None:
+    assert REPO_CONFIG.resolve_scope(tmp_path, None) == "project"
+    assert REPO_CONFIG.resolve_scope(tmp_path, "local") == "local"
 
 
 def test_preflight_rejects_a_root_below_the_checkout(repository: Path) -> None:
@@ -161,12 +203,47 @@ def rules(root: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
+@pytest.mark.parametrize("existing_settings", [False, True])
+def test_adoption_without_permission_choice_preserves_native_controls(
+    repository: Path, published: list[list[str]], existing_settings: bool
+) -> None:
+    selection = select(repository, "beta@tj-agents")
+    claude = repository / ".claude/settings.json"
+    codex = repository / ".codex/config.toml"
+    native_claude = {"defaultMode": "plan", "disableBypassPermissionsMode": "disable"}
+    native_codex = {"approval_policy": "untrusted", "sandbox_mode": "read-only"}
+    if existing_settings:
+        claude.parent.mkdir()
+        claude.write_text(json.dumps({"permissions": native_claude}), encoding="utf-8")
+        codex.parent.mkdir()
+        codex.write_text(
+            'approval_policy = "untrusted"\nsandbox_mode = "read-only"\n',
+            encoding="utf-8",
+        )
+
+    REPO_CONFIG.run(selection, "write", scope="project")
+
+    actual_claude = json.loads(claude.read_text(encoding="utf-8"))["permissions"]
+    actual_codex = tomllib.loads(codex.read_text(encoding="utf-8"))
+    assert actual_claude == {
+        "allow": ["Bash(uv sync)"],
+        **(native_claude if existing_settings else {}),
+    }
+    for key, value in native_codex.items():
+        if existing_settings:
+            assert actual_codex[key] == value
+        else:
+            assert key not in actual_codex
+    assert "default_permissions" not in actual_codex
+    assert published == [["beta@tj-agents"]]
+
+
 def test_run_commits_selected_plugins_allow_and_deny_rules(
     repository: Path, published: list[list[str]]
 ) -> None:
     selection = select(repository, "alpha@tj-agents", "beta@tj-agents")
 
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
 
     assert permissions(repository) == {
         "allow": ["Bash(tj item:*)", "Bash(uv sync)"],
@@ -178,7 +255,7 @@ def test_run_commits_selected_plugins_allow_and_deny_rules(
     assert text.count('decision = "forbidden"') == 1
     assert 'pattern = ["gh", "auth", "login"],\n    decision = "forbidden"' in text
     assert published == [["alpha@tj-agents", "beta@tj-agents"]]
-    assert REPO_CONFIG.run(selection, "check") == []
+    assert REPO_CONFIG.run(selection, "check", scope="project") == []
 
 
 def test_run_lets_the_repository_overlay_extend_and_override_plugins(
@@ -196,7 +273,7 @@ def test_run_lets_the_repository_overlay_extend_and_override_plugins(
         },
     )
 
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
 
     assert permissions(repository) == {
         "allow": ["Bash(gh auth login *)", "Edit(/docs/**)"],
@@ -212,7 +289,7 @@ def test_deselecting_a_plugin_reports_drift_then_removes_its_rules(
     repository: Path, published: list[list[str]]
 ) -> None:
     selection = select(repository, "alpha@tj-agents", "beta@tj-agents")
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
     git(repository, "add", "--all")
     git(
         repository,
@@ -227,16 +304,16 @@ def test_deselecting_a_plugin_reports_drift_then_removes_its_rules(
     )
     select(repository, "beta@tj-agents")
 
-    assert REPO_CONFIG.run(selection, "check") == [
+    assert REPO_CONFIG.run(selection, "check", scope="project") == [
         ".claude/settings.json",
         ".codex/config.toml",
         ".codex/rules/agent-harness.rules",
     ]
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
 
     assert permissions(repository) == {"allow": ["Bash(uv sync)"]}
     assert rules(repository) is None
-    assert REPO_CONFIG.run(selection, "check") == []
+    assert REPO_CONFIG.run(selection, "check", scope="project") == []
 
 
 def test_run_rejects_deny_entries_nobody_declares(
@@ -255,7 +332,7 @@ def test_run_rejects_deny_entries_nobody_declares(
     with pytest.raises(
         REPO_CONFIG.lock_io.LockError, match=r"unmanaged permissions\.deny entries"
     ):
-        REPO_CONFIG.run(selection, "write")
+        REPO_CONFIG.run(selection, "write", scope="project")
 
 
 def test_run_rejects_an_overlay_rule_naming_a_machine_path(
@@ -265,7 +342,7 @@ def test_run_rejects_an_overlay_rule_naming_a_machine_path(
     overlay(repository, {"claude_deny": ["Read(C:/Users/name/.ssh/**)"]})
 
     with pytest.raises(REPO_CONFIG.lock_io.LockError, match="machine-specific path"):
-        REPO_CONFIG.run(selection, "write")
+        REPO_CONFIG.run(selection, "write", scope="project")
     assert not (repository / ".claude").exists()
 
 
@@ -273,12 +350,14 @@ def test_preserved_permissions_need_no_published_lookup(
     repository: Path, published: list[list[str]]
 ) -> None:
     selection = select(repository, "alpha@tj-agents")
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
     committed = permissions(repository)
     committed_rules = rules(repository)
     select(repository, "alpha@tj-agents", "beta@tj-agents")
 
-    assert REPO_CONFIG.run(selection, "write", preserve_permissions=True) == [
+    assert REPO_CONFIG.run(
+        selection, "write", scope="project", preserve_permissions=True
+    ) == [
         ".claude/settings.json",
         ".codex/config.toml",
     ]
@@ -309,7 +388,7 @@ def test_run_writes_nothing_to_user_settings(
     monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(home / ".agents-state"))
     before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
 
-    REPO_CONFIG.run(select(repository, "alpha@tj-agents"), "write")
+    REPO_CONFIG.run(select(repository, "alpha@tj-agents"), "write", scope="project")
 
     assert {
         path: path.read_bytes() for path in home.rglob("*") if path.is_file()

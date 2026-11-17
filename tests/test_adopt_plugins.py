@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -263,6 +264,60 @@ def test_load_roster_refuses_an_organization_without_the_profile_it_extends() ->
 def test_run_selects_a_single_profile(project: Path, profile_roster: dict[str, object]) -> None:
     ADOPT.run(project, [], ["personal"], "write", roster=profile_roster)
     assert "personal@tj-agents" in selection(project)
+
+
+@pytest.mark.parametrize("scope", [None, "local", "project"])
+def test_generic_adoption_does_not_select_personal_or_an_account_profile(
+    project: Path, profile_roster: dict[str, object], scope: str | None
+) -> None:
+    set_origin(project, "https://github.com/example-user/project.git")
+
+    ADOPT.run(project, [], [], "write", scope=scope, roster=profile_roster)
+
+    selected = set(selection(project))
+    assert {"agent@tj-agents", "base@tj-agents", "workflow@tj-agents"} <= selected
+    assert not selected & {"personal@tj-agents", "work@tj-agents", "example-employer@tj-agents"}
+    assert not (project / ".agents/settings.json").exists()
+    claude_name = "settings.json" if scope == "project" else "settings.local.json"
+    claude = json.loads((project / ".claude" / claude_name).read_text(encoding="utf-8"))
+    codex = tomllib.loads((project / ".codex/config.toml").read_text(encoding="utf-8"))
+    assert "defaultMode" not in claude.get("permissions", {})
+    assert not {"approval_policy", "default_permissions", "sandbox_mode", "projects"} & codex.keys()
+    if scope != "project":
+        assert not (project / ".claude/settings.json").exists()
+        excluded = subprocess.run(
+            ["git", "check-ignore", ".agents/plugins.json", ".claude/settings.local.json", ".codex/config.toml"],
+            cwd=project, capture_output=True, text=True, check=True, timeout=15,
+        )
+        assert set(excluded.stdout.splitlines()) == {
+            ".agents/plugins.json", ".claude/settings.local.json", ".codex/config.toml",
+        }
+
+
+def test_adoption_preserves_tracked_selection_scope_for_an_external_owner(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
+    set_origin(project, "https://github.com/example-user/project.git")
+    ADOPT.run(project, [], [], "write", scope="project", roster=profile_roster)
+    subprocess.run(["git", "add", ".agents/plugins.json"], cwd=project, check=True, timeout=15)
+
+    ADOPT.run(project, [], ["python"], "write", roster=profile_roster)
+
+    assert "python@tj-agents" in selection(project)
+    assert "python@tj-agents" in (project / ".claude/settings.json").read_text(encoding="utf-8")
+    assert not (project / ".claude/settings.local.json").exists()
+    assert not (project / ".agents/repo-capabilities.local.json").exists()
+
+
+def test_adoption_accepts_a_custom_marketplace_from_an_external_owner(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
+    ADOPT.run(project, [], ["tools@custom"], "write", scope="project",
+              marketplaces=["custom=Example-Org/custom-plugins"], roster=profile_roster)
+
+    assert selection(project) == ["tools@custom"]
+    document = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
+    assert document["extraKnownMarketplaces"]["custom"]["source"]["repo"] == "Example-Org/custom-plugins"
 
 
 def test_run_adds_the_profile_an_organization_extends(project: Path, profile_roster: dict[str, object]) -> None:
