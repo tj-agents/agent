@@ -16,7 +16,6 @@ import codecs
 import contextlib
 from dataclasses import dataclass, field
 import hashlib
-import importlib.util
 import io
 import json
 import os
@@ -881,39 +880,6 @@ def skip_codex_observer(context: Context) -> str | None:
     return None
 
 
-def permission_sync(context: Context) -> ModuleType:
-    directory = context.root / ".agents" / "agent" / "utility" / "plugins" / "scripts"
-    path = directory / "harness_permissions_sync.py"
-    if not path.is_file():
-        raise InstallError(f"harness_permissions_sync.py is unavailable in {directory}")
-    if str(directory) not in sys.path:
-        sys.path.insert(0, str(directory))
-    spec = importlib.util.spec_from_file_location(
-        "tj_agents_harness_permissions_sync", path
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def permissions_environment(context: Context) -> dict:
-    return {
-        **context.environ,
-        Host.CLAUDE.home_variable: str(context.claude_home),
-        Host.CODEX.home_variable: str(context.codex_home),
-        "AGENT_STATE_DIRECTORY": str(context.state_directory),
-    }
-
-
-def synchronize_permissions(context: Context, mode: str) -> list[str]:
-    changes, warnings = permission_sync(context).synchronize(
-        permissions_environment(context), mode
-    )
-    for warning in warnings:
-        print(f"warning harness permissions: {warning}", file=sys.stderr)
-    return changes
-
-
 def runtime_receipt(root: Path) -> dict:
     try:
         contents = runtime_delivery.closure(root, list(RUNTIME_EXPORTS))
@@ -1530,11 +1496,6 @@ STEPS = (
     Step(
         "hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only
     ),
-    Step(
-        "harness permissions",
-        lambda context: synchronize_permissions(context, "check"),
-        lambda context: synchronize_permissions(context, "apply"),
-    ),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
     Step(
         "Codex profile agents",
@@ -1569,9 +1530,6 @@ def run_steps(
     for step in steps:
         if "native CLI" in failed_steps:
             print(f"n/a    {step.name}: native CLI prerequisite unavailable", file=out)
-            continue
-        if step.name == "plugin setup" and failed_steps & {"harness permissions"}:
-            print("n/a    plugin setup: prerequisite install step failed", file=out)
             continue
         if (
             step.name == "Codex update observer"
@@ -1617,8 +1575,6 @@ def selected_steps(names: set[str]) -> tuple[Step, ...]:
     selected = set(names)
     if selected & {"shell profiles", "tj lifecycle commands"}:
         selected.add("launch-check runtime")
-    if "plugin setup" in selected:
-        selected.add("harness permissions")
     return tuple(
         step for step in STEPS if not selected or step.required or step.name in selected
     )
