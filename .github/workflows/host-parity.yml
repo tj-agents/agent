@@ -34,6 +34,12 @@ jobs:
         run: |
           $cliRef = uv run python -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['tool']['uv']['sources']['tj-cli']['rev'])"
           cargo install --locked --git https://github.com/tj-agents/cli --rev $cliRef --bin tj_hook tj-cli
+      - name: Generate host payloads from authored sources
+        shell: pwsh
+        run: ./.agents/sync-generated.ps1
+      - name: Check generated host payloads
+        shell: pwsh
+        run: ./.agents/sync-generated.ps1 -Check
       - name: Resolve implementations and tests at their pinned sources
         run: uv run python -B .agents/agent/runtime/capabilities.py --root .
       - name: Exercise both host adapters with fakes
