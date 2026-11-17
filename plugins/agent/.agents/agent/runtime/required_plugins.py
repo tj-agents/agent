@@ -56,7 +56,12 @@ class MissingRequiredPluginsError(RequiredPluginsError):
 def project_root(project: Path) -> Path:
     project = project.resolve()
     for directory in (project, *project.parents):
-        if repository_file(directory, ".agents/plugins.json").is_file() or (directory / ".git").exists():
+        selection = repository_file(directory, ".agents/plugins.json")
+        if (
+            selection.exists()
+            or selection.is_symlink()
+            or (directory / ".git").exists()
+        ):
             return directory
     return project
 
