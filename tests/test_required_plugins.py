@@ -117,6 +117,42 @@ class RequiredPluginInventoryTests(unittest.TestCase):
         )
 
 
+def git(directory: Path, *arguments: str) -> None:
+    subprocess.run(["git", *arguments], cwd=directory, check=True, capture_output=True)
+
+
+def test_selected_uses_a_primary_worktrees_selection_unless_local_override_exists(
+    tmp_path: Path,
+) -> None:
+    primary = tmp_path / "primary"
+    primary.mkdir()
+    (primary / "README.md").write_text("primary\n", encoding="utf-8")
+    git(primary, "init", "-q")
+    git(primary, "add", "README.md")
+    git(primary, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "initial")
+    linked = tmp_path / "linked"
+    git(primary, "worktree", "add", "-q", str(linked))
+
+    source = primary / ".agents/plugins.json"
+    source.parent.mkdir()
+    source.write_text(
+        json.dumps({"schema_version": 1, "plugins": ["base@tj-agents"]}),
+        encoding="utf-8",
+    )
+
+    assert REQUIRED.selected(linked) == ("base@tj-agents",)
+
+    local = linked / ".agents/plugins.json"
+    local.parent.mkdir(exist_ok=True)
+    local.write_text("{broken", encoding="utf-8")
+    with pytest.raises(REQUIRED.RequiredPluginsError, match="Cannot read required plugin selection"):
+        REQUIRED.selected(linked)
+
+
+def test_selected_leaves_an_ordinary_unconfigured_directory_unselected(tmp_path: Path) -> None:
+    assert REQUIRED.selected(tmp_path) == ()
+
+
 @pytest.mark.parametrize(
     "setup",
     [
