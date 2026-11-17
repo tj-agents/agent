@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -52,17 +51,17 @@ def run_native(
 
 def main(
     host: Host,
-    arguments: Sequence[str] | None = None,
+    arguments: Sequence[str],
     *,
-    cwd: Path | None = None,
-    environ: Mapping[str, str] | None = None,
+    cwd: Path,
+    environ: Mapping[str, str],
     resolver: Callable[[], str] | None = None,
     run: Callable[..., subprocess.CompletedProcess[object]] | None = None,
 ) -> int:
     """Run a native command directly or through one foreground managed session."""
-    values = tuple(sys.argv[1:] if arguments is None else arguments)
-    directory = (Path.cwd() if cwd is None else cwd).resolve()
-    environment = independent_environment(os.environ if environ is None else environ)
+    values = tuple(arguments)
+    directory = cwd.resolve()
+    environment = independent_environment(environ)
     execute = process.run if run is None else run
     try:
         executable = native_executable(host, resolver)

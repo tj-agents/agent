@@ -257,9 +257,11 @@ def test_claim_worktree_keeps_its_existing_owner_and_output(
 ) -> None:
     owner = worktrees.Owner(Host.CODEX, "current", "launch") if owned else None
     claimed: list[Path] = []
+    environment: dict[str, str] = {"TJ_RUN_LAUNCH_ID": "current-launch"}
+    monkeypatch.setattr(os, "environ", environment)
 
-    def current(environment: object) -> worktrees.Owner | None:
-        assert environment is os.environ
+    def current(received_environment: object) -> worktrees.Owner | None:
+        assert received_environment is environment
         return owner
 
     def claim(path: Path, received: worktrees.Owner) -> worktrees.Ownership:

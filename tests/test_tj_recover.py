@@ -339,7 +339,7 @@ def test_recover_uses_windows_terminal_or_tmux_with_fake_processes(
     assert recovery.run()[0] == 0
     expected = "new-tab" if windows else "new-window"
     assert expected in commands[0]
-    assert "run" in commands[0]
+    assert "_session" in commands[0]
     assert "resume" in commands[0]
     assert "recent" in commands[0]
 

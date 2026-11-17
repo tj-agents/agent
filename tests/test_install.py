@@ -742,7 +742,7 @@ class RuntimeTests(Machine):
         install.apply_runtime(context)
         runtime = context.state_directory / "bin" / ".agents" / "agent" / "runtime"
         native_help = subprocess.run(
-            [sys.executable, "--help"],
+            [str(Path(sys.executable).resolve()), "--help"],
             capture_output=True, text=True, check=True, timeout=15,
         ).stdout
         for command, script in install.LIFECYCLE_COMMANDS.items():

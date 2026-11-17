@@ -242,10 +242,11 @@ class StatusBackend:
                 return {"sessions": self.sessions}
             case ("sessions", "--item", ref):
                 canonical = ITEM if ref == "98" else ref
-                return {"item": {"ref": canonical}, "sessions": [
-                    row for row in self.sessions
-                    if any(link["item"]["ref"] == canonical for link in row["links"])
-                ]}
+                sessions = []
+                for row in self.sessions:
+                    if any(link["item"]["ref"] == canonical for link in row["links"]):
+                        sessions.append(row)
+                return {"item": {"ref": canonical}, "sessions": sessions}
             case ("launches",):
                 return {"launches": self.launches}
             case _:

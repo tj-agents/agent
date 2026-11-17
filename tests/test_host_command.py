@@ -1,3 +1,4 @@
+import json
 import runpy
 import shutil
 import subprocess
@@ -146,7 +147,7 @@ def test_native_maintenance_commands_bypass_preparation_and_session_wrapper(
 
 @pytest.mark.parametrize("host", ("claude", "codex"))
 def test_packaged_host_entry_loads_only_its_bundled_runtime(
-    tmp_path: Path, host: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str
 ) -> None:
     package = tmp_path / "package"
     (package / ".codex-plugin").mkdir(parents=True)
@@ -165,11 +166,18 @@ def test_packaged_host_entry_loads_only_its_bundled_runtime(
         encoding="utf-8",
     )
     (runtime / "host_command.py").write_text(
-        "def main(host):\n print(host.value)\n return 0\n", encoding="utf-8"
+        "import json\n"
+        "def main(host, arguments, *, cwd, environ):\n"
+        " print(json.dumps({'host': host.value, 'arguments': arguments,\n"
+        " 'cwd': str(cwd), 'environment': environ['TJ_COMMAND_TEST']}))\n"
+        " return 0\n",
+        encoding="utf-8",
     )
+    monkeypatch.setenv("TJ_COMMAND_TEST", "fixture environment")
+    arguments = ["--model", "native model", "prompt & | café"]
 
     result = subprocess.run(
-        [sys.executable, "-E", "-s", "-B", str(adapter)],
+        [sys.executable, "-E", "-s", "-B", str(adapter), *arguments],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -178,4 +186,9 @@ def test_packaged_host_entry_loads_only_its_bundled_runtime(
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{host}\n"
+    assert json.loads(result.stdout) == {
+        "host": host,
+        "arguments": arguments,
+        "cwd": str(tmp_path),
+        "environment": "fixture environment",
+    }
