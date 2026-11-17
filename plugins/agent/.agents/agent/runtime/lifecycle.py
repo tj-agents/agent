@@ -17,6 +17,7 @@ from tj_agent.host import Host
 from launch_contract import Liveness
 import agent_cli
 import agent_store
+import work_item
 from tj_cli import process
 
 DONE = "Done"
@@ -97,6 +98,7 @@ def open_items(refs: list[str] | None = None, cwd: Path | None = None) -> list[I
             mine = []
         refs = list(dict.fromkeys([*linked, *mine]))
     def resolve(ref: str) -> Item:
+        ref = work_item.reference(cwd or Path.cwd(), ref)
         sessions = agent_store.run("sessions", "--item", ref)
         canonical = sessions["item"]["ref"]
         agents = [Agent(session, live[Host(session["host"])].get(session["native_id"]))

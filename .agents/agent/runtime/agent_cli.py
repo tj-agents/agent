@@ -6,7 +6,6 @@ Every agent tab runs under `tj run`, opened in Windows Terminal or tmux; a launc
 
 from __future__ import annotations
 
-import argparse
 from collections.abc import Callable
 import importlib.util
 import os
@@ -465,22 +464,17 @@ def parent_session(value):
     return identities[0] if identities else None
 
 
-def resolve_item(item, title, cwd, parent, fields):
-    """The handoff's work item ref: `item` as given, or a new item titled `title` under `cwd`."""
-    if item:
-        if fields:
-            raise LaunchError('--item-field applies only to the work item created when --item is omitted.')
-        return item
+def resolve_item(item: str | None, cwd: Path, parent: str | None) -> str:
+    """Link a handoff to an explicit or unambiguous existing work item."""
+    if item is not None:
+        return work_item.reference(cwd, item)
     parent_ref = work_item.parent_item_ref(parent) if parent else None
-    return work_item.create(cwd, title, parent_ref, dict(fields))
-
-
-def item_field(value):
-    """One `NAME=VALUE` create field for the handoff's new work item."""
-    name, separator, field_value = value.partition('=')
-    if not separator or not name or not field_value:
-        raise argparse.ArgumentTypeError(f'expected NAME=VALUE, got {value!r}')
-    return name, field_value
+    if parent_ref:
+        return parent_ref
+    raise LaunchError(
+        "No existing work item was found. Pass --item with its URL or reference. "
+        "If a new item is needed, use the project's work-item workflow and its creation policy first."
+    )
 
 
 def parent_rule(parent):

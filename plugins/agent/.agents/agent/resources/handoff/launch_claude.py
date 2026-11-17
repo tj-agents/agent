@@ -41,10 +41,8 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--title', required=True)
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'), required=True)
     parser.add_argument('--dangerously-skip-permissions', action='store_true')
-    parser.add_argument('--item', help='work item the child is linked to; one is created when omitted')
+    parser.add_argument('--item', help='existing work-item URL or reference; defaults to an unambiguous parent link')
     parser.add_argument('--parent', help='parent session (host:id); defaults to the calling session')
-    parser.add_argument('--item-field', action='append', default=[], type=agent_cli.item_field,
-                        metavar='NAME=VALUE', help='a create field for the work item made when --item is omitted')
     args = parser.parse_args(argv)
     if not args.title.strip():
         raise agent_cli.LaunchError('--title must name the session; it becomes the tab title.')
@@ -77,7 +75,7 @@ def main(argv=None):
         model, effort, tier = resolve_model(args, agent_cli)
         parent = agent_cli.parent_session(args.parent)
         prompt_sentence += agent_cli.parent_rule(parent)
-        item = agent_cli.resolve_item(args.item, args.title, working_directory, parent, args.item_field)
+        item = agent_cli.resolve_item(args.item, working_directory, parent)
         adapter = agent_cli.host_launch(agent_cli.Host.CLAUDE)
         arguments = adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort)
         if args.dangerously_skip_permissions:
