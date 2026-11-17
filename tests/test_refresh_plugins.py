@@ -793,8 +793,8 @@ def test_open_codex_sessions_install_through_the_daemon(
     ]
 
 
-def test_codex_reloads_after_the_updated_repository_standards_are_written(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_codex_refresh_reports_standards_drift_without_rewriting_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     selection = tmp_path / ".agents/plugins.json"
     selection.parent.mkdir()
@@ -814,15 +814,13 @@ def test_codex_reloads_after_the_updated_repository_standards_are_written(
     )
     outcome, _commands, _trusted = daemon_refresh(tmp_path, monkeypatch, FakeDaemon())
     assert not outcome.failures
-    content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
-    assert "agent:lanes" in content
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert "--write to update repository standards" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-    ("local", "failed"), [(False, False), (True, False), (False, True)]
-)
-def test_codex_reconciles_other_loaded_repositories_while_activating(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local: bool, failed: bool
+@pytest.mark.parametrize("local", [False, True])
+def test_codex_refresh_checks_loaded_repository_standards_without_rewriting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local: bool
 ) -> None:
     other = tmp_path / "other-repository"
     selection = other / ".agents/plugins.json"
@@ -838,16 +836,6 @@ def test_codex_reconciles_other_loaded_repositories_while_activating(
         )
     daemon = FakeDaemon()
     native_request = daemon.request
-    update_standards = codex_installed.update_project_standards
-
-    def update(project: Path) -> None:
-        if failed:
-            raise required_plugins.RequiredPluginsError(
-                "Cannot verify updated standards"
-            )
-        update_standards(project)
-
-    monkeypatch.setattr(codex_installed, "update_project_standards", update)
 
     def request(method: str, params: dict[str, object]) -> dict[str, object]:
         response = native_request(method, params)
@@ -870,19 +858,10 @@ def test_codex_reconciles_other_loaded_repositories_while_activating(
 
     monkeypatch.setattr(daemon, "request", request)
     outcome, _commands, _trusted = daemon_refresh(tmp_path, monkeypatch, daemon)
-    assert bool(outcome.failures) == failed
-    if not failed:
-        content = instructions.read_text(encoding="utf-8")
-        assert ("agent:lanes" in content) is not local
-        assert "Existing repository instructions" in content
-    else:
-        failed = False
-        report = plugin_update.Report()
-        with _patched_homes(tmp_path):
-            codex_installed.activate(report)
-        assert not report.failures
-        content = instructions.read_text(encoding="utf-8")
-        assert ("agent:lanes" in content) is not local
+    assert not outcome.failures
+    assert (
+        instructions.read_text(encoding="utf-8") == "Existing repository instructions\n"
+    )
 
 
 def test_a_failed_daemon_install_is_reported_and_the_rest_still_install(

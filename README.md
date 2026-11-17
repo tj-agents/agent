@@ -68,8 +68,9 @@ automatic checks and session reloads.
 Install and a Codex session selecting Agent ensure one observer follows the existing Codex daemon while it has
 loaded threads. It checks for published updates and reloads the daemon without restarting those conversations;
 it exits when the daemon disconnects or has no loaded threads.
-Updates regenerate the calling repository's standards index before activation. Codex also reconciles
-the adopted repositories of loaded threads from verified installed builds before publishing.
+Updates check the calling repository's standards index before activation and report the explicit
+repository command when it drifts. Codex also checks the adopted repositories of loaded threads from
+verified installed builds before publishing.
 Local-only adoption preserves owner-supplied instruction files. Failed verification retains existing
 instructions and reports the update failure.
 
@@ -152,7 +153,8 @@ tj status [--json]                   open items with agents (live/idle/dead from
 tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
 tj recover --dry-run                 preview restores and stale sessions to end without changing anything
 tj recover --open [461]              reopen exactly the tabs that were open whose agent is not running
-tj prepare --host claude|codex       prepare this repository's selected plugins and standards index
+tj prepare --host claude|codex       check this repository's selected plugins and standards index
+tj prepare --host claude|codex --write apply selected plugin configuration and instructions explicitly
 ```
 
 `tj` dispatches these to the lifecycle shims the installer writes beside it.
@@ -175,13 +177,16 @@ Missing or inconsistent agent identities fail visibly and leave the created work
 Claude's synchronous registration hook exports its native identity through `CLAUDE_ENV_FILE` for
 subsequent tool commands; Codex provides `CODEX_THREAD_ID`.
 
-Before starting or resuming a host, `tj run` calls `tj prepare`. It derives native project settings
-from `.agents/plugins.json`, installs missing selected plugins, and updates a small marked standards
-index in `AGENTS.md`. It keeps the committed permissions as they are, so a launch needs no published
-harness lookup; adoption and `tj install` own them. The index requires applicable skill bodies to be read before relevant edits;
+Before starting or resuming a host, `tj run` calls `tj prepare`. It checks native project settings
+and the small marked standards index in `AGENTS.md` against `.agents/plugins.json`, and installs missing
+selected plugins. Startup and plugin refresh never rewrite repository instruction or configuration files;
+they report the explicit `tj prepare --host … --cwd … --write` command that owns convergence. It keeps the
+committed permissions as they are, so a launch needs no published harness lookup; adoption and `tj install`
+own them. The index requires applicable skill bodies to be read before relevant edits;
 ordinary skills remain loaded on demand. Claude imports the shared instructions through `CLAUDE.md`.
 Preparation preserves authored guidance and reports a nonempty Codex override that would hide it.
-Run `tj prepare --host codex --cwd PATH` directly when starting the native host outside `tj run`.
+Run `tj prepare --host codex --cwd PATH` directly when starting the native host outside `tj run`; add
+`--write` only to explicitly apply its reported repository changes.
 
 Claude installs a missing plugin once at user scope and disables it there unless the user already
 enabled it; the repository's project or local settings enable it. Project- and local-scope installations

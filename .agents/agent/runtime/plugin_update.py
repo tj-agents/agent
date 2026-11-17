@@ -149,8 +149,13 @@ def update_standards(
             if entries is not None
             else required_plugins.check(directory, host)
         )
-        if roots is not None and not required_plugins.committed_worktree(project):
-            standards.update(project, roots)
+        if roots is not None and standards.update(project, roots, check=True):
+            print(
+                f"{host}: left {project} unchanged; from that checkout run "
+                f"tj prepare --host {host.value} --write "
+                "to update repository standards",
+                file=sys.stderr,
+            )
     except (
         OSError,
         ValueError,

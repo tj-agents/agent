@@ -86,7 +86,12 @@ def update_project_standards(directory: Path) -> None:
             )
         roots[identity] = root
     digests.save()
-    standards.update(project, roots)
+    if standards.update(project, roots, check=True):
+        print(
+            f"{HOST}: left {project} unchanged; from that checkout run "
+            f"tj prepare --host {HOST.value} --write to update repository standards",
+            file=sys.stderr,
+        )
 
 
 class InventoryError(Exception):

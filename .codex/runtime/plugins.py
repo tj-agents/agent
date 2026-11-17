@@ -169,12 +169,13 @@ def ensure_hooks(
     return None
 
 
-def prepare_instructions(project: Path) -> None:
+def prepare_instructions(project: Path, *, write: bool = False) -> bool:
     override = project / "AGENTS.override.md"
     if override.is_file() and override.read_text(encoding="utf-8").strip():
         raise standards.StandardsError(
             f"{override} shadows the repository standards index"
         )
+    return False
 
 
 def install(project: Path, identities: Sequence[str]) -> None:

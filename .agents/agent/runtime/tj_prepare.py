@@ -41,7 +41,9 @@ def configure(project: Path, mode: str) -> str:
     return drift
 
 
-def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> bool:
+def prepare(
+    directory: Path, host: Host, arguments: tuple[str, ...] = (), *, write: bool = False
+) -> bool:
     effective_directory, inventory_options = required_plugins.launch_context(
         directory, host, arguments
     )
@@ -52,7 +54,11 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
     selected = required_plugins.selected(project)
     if not selected:
         return False
-    frozen = required_plugins.committed_worktree(project)
+    if (project / ".agents/repo-capabilities.local.json").is_file():
+        raise standards.StandardsError(
+            "Local-only adoption preserves this repository's instruction files; "
+            "its owner must supply standards routing."
+        )
     with ThreadPoolExecutor(max_workers=1) as pool:
         inventory = pool.submit(
             required_plugins.check,
@@ -60,36 +66,34 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
             host,
             inventory_options=inventory_options,
         )
-        configured = configure(project, "check" if frozen else "write")
+        configured = configure(project, "write" if write else "check")
     try:
         roots = (
             required_plugins.check(directory, host, inventory_options=inventory_options)
-            if configured and not frozen
+            if configured and write
             else inventory.result()
         )
     except required_plugins.MissingRequiredPluginsError as error:
         roots = required_plugins.install_and_recheck(
             directory, host, error, inventory_options=inventory_options
         )
-    if (project / ".agents/repo-capabilities.local.json").is_file():
-        raise standards.StandardsError(
-            "Local-only adoption preserves this repository's instruction files; "
-            "its owner must supply standards routing."
-        )
-    if not frozen:
-        host_plugins.PLUGINS[Host.CLAUDE].prepare_instructions(project)
+    instructions_changed = host_plugins.PLUGINS[Host.CLAUDE].prepare_instructions(
+        project, write=write
+    )
     if host != Host.CLAUDE:
-        host_plugins.PLUGINS[host].prepare_instructions(project)
-    changed = standards.update(project, roots or {}, check=frozen)
-    if not frozen:
-        return changed
-    if configured or changed:
+        instructions_changed = (
+            host_plugins.PLUGINS[host].prepare_instructions(project, write=write)
+            or instructions_changed
+        )
+    changed = standards.update(project, roots or {}, check=not write)
+    if not write and (configured or instructions_changed or changed):
         print(
-            f"tj prepare: left {project} unchanged; its committed agent "
-            "configuration differs from the installed plugins",
+            f"tj prepare: left {project} unchanged; from that checkout run "
+            f"tj prepare --host {host.value} --write "
+            "to apply the selected plugin configuration and instructions",
             file=sys.stderr,
         )
-    return False
+    return configured != "" or instructions_changed or changed
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -100,6 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", choices=list(hosts), required=True)
     parser.add_argument("--cwd", type=Path, default=Path.cwd())
     parser.add_argument("--arguments-stdin", action="store_true")
+    parser.add_argument(
+        "--write",
+        action="store_true",
+        help="Apply repository configuration and instruction updates explicitly.",
+    )
     arguments = parser.parse_args(argv)
     try:
         host_arguments = (
@@ -109,7 +118,12 @@ def main(argv: list[str] | None = None) -> int:
             not isinstance(value, str) for value in host_arguments
         ):
             raise ValueError("Host arguments must be a JSON string array")
-        prepare(arguments.cwd, hosts[arguments.host], tuple(host_arguments))
+        prepare(
+            arguments.cwd,
+            hosts[arguments.host],
+            tuple(host_arguments),
+            write=arguments.write,
+        )
     except (
         OSError,
         ValueError,

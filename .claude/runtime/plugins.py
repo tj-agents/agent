@@ -122,7 +122,7 @@ def ensure_hooks(project: Path, executable: str | None = None, *, running_sessio
     return None
 
 
-def prepare_instructions(project: Path) -> None:
+def prepare_instructions(project: Path, *, write: bool = False) -> bool:
     pointer = project / "CLAUDE.md"
     shared = project / "AGENTS.md"
     for path in (pointer, shared):
@@ -132,7 +132,9 @@ def prepare_instructions(project: Path) -> None:
             )
     original = pointer.read_text(encoding="utf-8") if pointer.exists() else ""
     if original.strip() == "@AGENTS.md":
-        return
+        return False
+    if not write:
+        return True
     if original.strip():
         current = shared.read_text(encoding="utf-8") if shared.exists() else ""
         content = "\n".join(
@@ -140,7 +142,7 @@ def prepare_instructions(project: Path) -> None:
         ).strip()
         shared.write_text(current.rstrip() + "\n\n" + content + "\n", encoding="utf-8")
     pointer.write_text("@AGENTS.md\n", encoding="utf-8")
-
+    return True
 
 def user_enabled() -> Mapping[str, object]:
     try:

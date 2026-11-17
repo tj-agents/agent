@@ -44,10 +44,12 @@ def report_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     return commands
 
 
-@pytest.mark.parametrize("failed", [False, True])
 @pytest.mark.parametrize("host", list(Host))
-def test_plugin_updates_rebuild_standards_before_activation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool, host: Host
+def test_plugin_updates_report_standards_drift_without_rewriting_the_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: Host,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     selection = tmp_path / ".agents/plugins.json"
     selection.parent.mkdir()
@@ -80,33 +82,19 @@ def test_plugin_updates_rebuild_standards_before_activation(
     def roots(directory: Path, selected: Host) -> dict[str, Path]:
         assert directory == tmp_path and selected is host
         events.append("inventory")
-        if failed:
-            raise required_plugins.RequiredPluginsError("native inventory failed")
         return {"python@tj-agents": installed}
-
-    def activate(report: plugin_update.Report) -> None:
-        assert "python:modules" in instructions.read_text(encoding="utf-8")
-        assert "python:style" not in instructions.read_text(encoding="utf-8")
-        events.append("activate")
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
     monkeypatch.setattr(plugin_update, "already_current", lambda *args: False)
     adapter = claude_installed if host is Host.CLAUDE else codex_installed
     monkeypatch.setattr(adapter, "refresh", download)
-    monkeypatch.setattr(adapter, "activate", activate)
+    monkeypatch.setattr(adapter, "activate", lambda _report: events.append("activated"))
     monkeypatch.setattr(required_plugins, "check", roots)
-    assert update_plugins(host.value) == int(failed)
-    assert events == (
-        ["download", "inventory"] if failed else ["download", "inventory", "activate"]
-    )
-    assert "Repository instructions" in instructions.read_text(encoding="utf-8")
-    if failed:
-        assert instructions.read_text(encoding="utf-8") == original
-        failed = False
-        monkeypatch.setattr(plugin_update, "already_current", lambda *args: True)
-        assert update_plugins(host.value) == 0
-        assert events == ["download", "inventory", "inventory", "activate"]
+    assert update_plugins(host.value) == 0
+    assert events == ["download", "inventory", "activated"]
+    assert instructions.read_text(encoding="utf-8") == original
+    assert "--write to update repository standards" in capsys.readouterr().err
 
 
 def test_loaded_repository_standards_require_verified_installed_builds(
@@ -268,6 +256,8 @@ def test_inventory_prefetch_is_reused_only_without_marketplace_or_plugin_mutatio
             encoding="utf-8",
         )
         builds[version] = build
+    standards.update(tmp_path, {"python@tj-agents": builds["before"]})
+    original = instructions.read_text(encoding="utf-8")
     inventory_started = Event()
     pins_started = Event()
     heads_started = Event()
@@ -316,7 +306,7 @@ def test_inventory_prefetch_is_reused_only_without_marketplace_or_plugin_mutatio
 
     def marketplaces(_report: plugin_update.Report, names: tuple[str, ...]) -> None:
         decisions_started.set()
-        assert instructions.read_text(encoding="utf-8") == "Keep these instructions\n"
+        assert instructions.read_text(encoding="utf-8") == original
         if names:
             mutations.append("marketplace")
 
@@ -348,9 +338,12 @@ def test_inventory_prefetch_is_reused_only_without_marketplace_or_plugin_mutatio
         ["before"] if change == "unchanged" else ["before", "after"]
     )
     if failed:
-        assert instructions.read_text(encoding="utf-8") == "Keep these instructions\n"
-        assert not remembered
-    else:
+        assert instructions.read_text(encoding="utf-8") == original
         expected = "before" if change == "unchanged" else "after"
-        assert f"python:{expected}" in instructions.read_text(encoding="utf-8")
+        assert remembered == (
+            [] if prefetch_fails or host is Host.CLAUDE else [expected]
+        )
+    else:
+        assert instructions.read_text(encoding="utf-8") == original
+        expected = "before" if change == "unchanged" else "after"
         assert remembered == ([expected] if host is Host.CODEX else [])
