@@ -18,6 +18,7 @@ import agent_cli
 import agent_store
 import boot_history
 import lifecycle
+import session_resume
 import work_item
 from host_sessions import SESSIONS
 from launch_contract import Liveness
@@ -140,6 +141,11 @@ def open_plan(item: str | None) -> list[Recovery]:
             )
         elif agent.live and agent.live.background:
             row = replace(row, action=Action.RESPAWN, background=agent.live.background)
+        if row.action == Action.RESUME and row.launch_id:
+            try:
+                session_resume.check(row.session, row.launch_id)
+            except agent_cli.LaunchError as error:
+                row = replace(row, action=Action.FAILED, error=str(error))
         results.append(row)
     return results
 
@@ -191,6 +197,8 @@ def plan(
         try:
             if host in errors:
                 raise agent_cli.LaunchError(errors[host])
+            if row.launch_id and not (agent.live and agent.live.background):
+                session_resume.check(row.session, row.launch_id)
             if cutoff is not None:
                 row = replace(
                     row,
@@ -257,6 +265,7 @@ def restore(row: Recovery) -> Recovery:
         parent=row.parent,
         want_session=True,
         tmux_session="tj-recover",
+        resume_from=row.launch_id,
     )
     return close_launches(
         replace(

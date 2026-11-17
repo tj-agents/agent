@@ -7,6 +7,7 @@ import shutil
 import shlex
 import subprocess
 from collections.abc import Callable, Mapping
+from uuid import UUID
 
 from launch_contract import Liveness, PreparedLaunch
 from launch_errors import LaunchError
@@ -62,7 +63,16 @@ def executable() -> str:
 
 
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
-    return PreparedLaunch((executable(), *arguments))
+    session = None
+    if len(arguments) == 4 and arguments[0] == "--resume" and arguments[2:] == ["--name", title]:
+        try:
+            native_id = str(UUID(arguments[1]))
+        except ValueError as error:
+            raise LaunchError("Claude resume requires a canonical native UUID") from error
+        if native_id != arguments[1]:
+            raise LaunchError("Claude resume requires a canonical native UUID")
+        session = f"claude:{native_id}"
+    return PreparedLaunch((executable(), *arguments), session)
 
 
 def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:

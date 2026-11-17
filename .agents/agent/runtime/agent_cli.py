@@ -27,6 +27,7 @@ from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 import agent_store
+import session_resume
 import work_item
 
 LAUNCH_ID_ENVIRONMENT = 'TJ_RUN_LAUNCH_ID'
@@ -349,6 +350,7 @@ def launch(
     environ=os.environ,
     run=subprocess.run,
     tmux_session=None,
+    resume_from=None,
 ):
     """Open a managed tab for one agent and return its confirmed launch."""
     adapter = host_launch(host)
@@ -364,6 +366,12 @@ def launch(
     }
     cleared, forced = launch_environment(clear=clear, force=force)
     prepared = adapter.prepare(directory, title, arguments, tj, environ)
+    if resume_from is not None and prepared.session is None:
+        raise LaunchError("Recovery requires the provider's exact native session")
+    if prepared.session is not None and not prepared.created:
+        resume_from = session_resume.predecessor(prepared.session, resume_from)
+        if resume_from is not None:
+            session_resume.check(prepared.session, resume_from)
     dispatched, completed = False, False
 
     def dispatch(command, **options):
@@ -376,7 +384,7 @@ def launch(
     try:
         shown = _launch_prepared(
             host, directory, title, prepared, tj, launch_id, item, parent, want_session,
-            cleared, forced, environ, dispatch, tmux_session,
+            cleared, forced, environ, dispatch, tmux_session, resume_from,
         )
         adapter.confirm(prepared, arguments, launch_id)
         completed = True
@@ -391,6 +399,7 @@ def launch(
 def _launch_prepared(
     host, directory, title, prepared, tj, launch_id, item, parent, want_session,
     cleared, forced, environ, run, tmux_session,
+    resume_from,
 ):
     command = [
         tj,
@@ -406,6 +415,7 @@ def _launch_prepared(
         launch_id,
         *(["--parent", parent] if parent else []),
         *(["--session", prepared.session] if prepared.session else []),
+        *(["--resume-from", resume_from] if resume_from else []),
         "--",
         *prepared.command,
     ]

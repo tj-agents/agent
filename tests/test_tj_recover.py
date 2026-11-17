@@ -169,6 +169,7 @@ def recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Recovery:
     monkeypatch.setattr(agent_cli, "launch", fixture.launch)
     monkeypatch.setattr(tj_recover, "SESSIONS", hosts)
     monkeypatch.setattr(boot_history, "previous_boot", lambda: 100.0)
+    monkeypatch.setattr(tj_recover.session_resume, "check", lambda *args: None)
     monkeypatch.setattr(sys, "platform", "win32")
     return fixture
 
@@ -263,6 +264,30 @@ def test_recover_preserves_launch_metadata_and_existing_links(
     assert recovery.records[0]["links"][0]["role"] == "reviewer"
     assert rows[0]["previous_launch_id"] == "original"
     assert recovery.launches[0]["launch_id"] == "original"
+    assert recovery.launched[0]["resume_from"] == "original"
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("modified", [99.0, 101.0])
+def test_recovery_admission_failure_preserves_owner_and_continues_other_sessions(
+    recovery: Recovery, monkeypatch: pytest.MonkeyPatch, dry_run: bool, modified: float
+) -> None:
+    recovery.session(
+        Host.CODEX, "still-wrapped", modified=modified, launch_id="old-launch"
+    )
+    recovery.session(Host.CLAUDE, "available")
+
+    def refuse(*args: str) -> None:
+        raise agent_cli.LaunchError("the predecessor wrapper is still running")
+
+    monkeypatch.setattr(tj_recover.session_resume, "check", refuse)
+    code, rows = recovery.run(*(["--dry-run"] if dry_run else []))
+    assert code == 1
+    assert rows[0]["action"] == "failed"
+    assert "wrapper is still running" in rows[0]["error"]
+    assert recovery.records[0]["launch_id"] == "old-launch"
+    assert recovery.ended == []
+    assert len(recovery.launched) == (0 if dry_run else 1)
 
 
 def test_recover_missing_directory_is_reported_and_others_continue(

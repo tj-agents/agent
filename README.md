@@ -367,6 +367,11 @@ with managed completion unverified when the required lifecycle hooks are unavail
 Recovery considers every registered session, including those without a work item. It leaves live sessions
 alone and restores dead sessions whose host transcript changed after the previous boot. Older dead sessions
 are marked ended; `--older` includes them again, and `--ended` includes sessions that ended cleanly.
+For a managed predecessor, both its exact wrapper process and native conversation must be stopped;
+unknown liveness, a closing request or a changed binding prevents recovery. Before starting the provider,
+Agent Store atomically binds the replacement launch and moves that predecessor's worktree claims, retaining
+their timestamps. A competing recovery fails without starting another provider. Historical launch and
+completion records remain available, including the user's keep-open decision.
 `--open` instead reopens the newest launch of each session whose managed wrapper recorded it as open and
 whose agent is not running. On Windows an ordinary tab close records it closed; logoff, shutdown or a
 crash can leave it open. On Linux a tab hangup can arrive before the wrapper records the close.
