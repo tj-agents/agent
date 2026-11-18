@@ -83,7 +83,6 @@ PLUGIN_RESOURCE_DIRS = {"runtime", "resources"}
 TJ_AGENTS_MARKETPLACE = "tj-agents"
 TJ_AGENTS_MARKETPLACE_REPOSITORY = "tj-agents/marketplace"
 DEPENDENCY = re.compile(rf"^{TJ_AGENTS_MARKETPLACE}/[a-z0-9][a-z0-9-]*$")
-CLAUDE_DEPENDENCY = re.compile(rf"^[a-z0-9][a-z0-9-]*(@{TJ_AGENTS_MARKETPLACE})?$")
 STACK_CORE_DEPENDENCIES = (
     "tj-agents/base",
     "tj-agents/engineering",
@@ -1037,14 +1036,10 @@ def load_manifests(
         for host in HOSTS:
             if "version" in manifests[host][plugin]:
                 raise ValueError(f"{plugin}: the {host} manifest must omit version")
-            needs = manifests[host][plugin].get("dependencies", [])
-            if not isinstance(needs, list) or not all(
-                isinstance(need, str) and CLAUDE_DEPENDENCY.fullmatch(need)
-                for need in needs
-            ):
+            if "dependencies" in manifests[host][plugin]:
                 raise ValueError(
-                    f"{plugin}: the {host} manifest dependencies are bare packages "
-                    f"of this repository or <package>@{TJ_AGENTS_MARKETPLACE}"
+                    f"{plugin}: the {host} manifest must omit dependencies; declare "
+                    "them in .agents/plugins/payloads.json"
                 )
         interface = codex.get("interface") or {}
         if not claude.get("displayName") or claude["displayName"] != interface.get(
@@ -1190,7 +1185,6 @@ def harness_body(
     package: str,
     output: dict[str, bytes],
     dependencies: list[str],
-    inherit_core: bool,
 ) -> str | None:
     relative = f"{MANIFEST_ROOT}/harness/{package}.json"
     path = root / relative
@@ -1248,17 +1242,13 @@ def harness_body(
         isinstance(value, dict) for value in marketplaces
     ):
         raise ValueError(f"{relative}: requires.marketplaces must be a list of objects")
-    listed = requires.get("plugins", [])
-    if not isinstance(listed, list) or not all(
-        isinstance(value, str) and DEPENDENCY.fullmatch(value) for value in listed
-    ):
+    if "plugins" in requires:
         raise ValueError(
-            f"{relative}: requires.plugins lists only "
-            f"{TJ_AGENTS_MARKETPLACE}/<package> identities"
+            f"{relative}: requires.plugins is generated; declare dependencies in "
+            ".agents/plugins/payloads.json"
         )
     plugins = [
         identity,
-        *([] if inherit_core else listed),
         *(
             need if "/" in need else f"{TJ_AGENTS_MARKETPLACE}/{need}"
             for need in dependencies
@@ -1286,9 +1276,9 @@ def claude_dependencies(dependencies: list[str]) -> list[str]:
     for dependency in dependencies:
         if "/" in dependency:
             marketplace, package = dependency.split("/", 1)
-            result.append(f"{package}@{marketplace}")
         else:
-            result.append(dependency)
+            marketplace, package = TJ_AGENTS_MARKETPLACE, dependency
+        result.append(f"{package}@{marketplace}")
     return result
 
 
@@ -1762,19 +1752,15 @@ def build(root: Path) -> dict[str, bytes]:
         emit(
             f"plugins/{package}/tier.json", read(root / f".agents/tiers/{source}.json")
         )
-        harness = harness_body(
-            root,
-            package,
-            output,
-            effective,
-            config["type"] in ("stack", "profile"),
-        )
+        harness = harness_body(root, package, output, effective)
         if harness is not None:
             emit(f"plugins/{package}/harness.json", harness)
         for host in HOSTS:
             manifest = manifests[host][package]
-            if host == "claude" and config["type"] in ("stack", "profile"):
-                manifest = {**manifest, "dependencies": claude_dependencies(effective)}
+            if host == "claude":
+                claude_deps = claude_dependencies(effective)
+                if claude_deps:
+                    manifest = {**manifest, "dependencies": claude_deps}
             if host == "codex" and source in plugins_with_host_adapters:
                 manifest = {**manifest, "skills": "./codex-skills/"}
             emit(f"plugins/{package}/.{host}-plugin/plugin.json", dump(manifest))
