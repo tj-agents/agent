@@ -13,7 +13,7 @@ Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 ## Packages
 
 - `agent-store`: the skill that reads the [agent-store](https://github.com/tj-agents/agent-store) link store.
-- `agent`: the lifecycle commands, session hooks, handoff, history, lanes and refresh.
+- `agent`: the lifecycle commands, session hooks, handoff, history, lanes, lane agents and refresh.
 - `codex`: Codex-specific hooks and memory.
 
 The generated packages have no dependency on a Core checkout. Shared runtime is authored beneath
@@ -47,7 +47,7 @@ the wrapping; authored hook manifests keep the payload executable and arguments.
 Codex's shared daemon auto-start (a `daemon_auto_start = false` override is removed so refresh can reload open
 Codex sessions in place),
 the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
-profile agents, provisioning a verified PowerShell runtime when no usable PowerShell is available, plugin
+profile agents, Codex lane agents, provisioning a verified PowerShell runtime when no usable PowerShell is available, plugin
 setup, plugin scope, Codex trust for tj-agents plugin hooks (verified against their
 published source, so no Codex launch asks to trust them) and plugin copies. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
@@ -214,6 +214,18 @@ in the systemd journal and opens tmux windows, creating and attaching to `tj-rec
   `agent:recent`, `agent:recover`, `agent:search`
 - `agent-store:inspect`
 - `codex:hooks`, `codex:memory`
+
+## Lane agents
+
+Agent publishes one lane agent per rung, rendered from the lane tables in `.agents/agent/resources/lanes`:
+Claude loads the `agent` plugin's `lane-l1` to `lane-l7` agents from its `agents/` directory, and the Codex
+lane agents step delivers `lane_l1` to `lane_l7` into `<CODEX_HOME>/agents`. It owns the files it wrote
+and adopts in place a copy that differs only in line endings; it refuses any other file. After changing a lane table or agent body, rerun the renderer and regenerate:
+
+```powershell
+python -B .agents/agent/resources/lanes/render_agents.py
+pwsh .agents/sync-generated.ps1
+```
 
 ## Authoring and verification
 
