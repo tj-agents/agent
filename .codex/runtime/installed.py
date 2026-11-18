@@ -15,6 +15,7 @@ import plugin_payload
 import required_plugins
 import standards
 from codex import catalog, hook_trust, launch, user_plugins
+from launch_contract import Liveness
 from launch_errors import LaunchError
 from tj_agent.host import Host
 from tj_cli.git import repository_file
@@ -279,14 +280,12 @@ def inventory(
     return entries
 
 
-def refresh(
-    report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
-) -> None:
+def refresh_sessions(report: Any) -> dict[str, Liveness] | None:
     try:
         sessions = launch.liveness(strict=True)
     except LaunchError as error:
         report.fail(HOST, "open sessions", str(error))
-        return
+        return None
     embedded = sorted(
         identity
         for identity, session in sessions.items()
@@ -299,6 +298,18 @@ def refresh(
             "Installed plugins were left unchanged because these running Codex "
             "engines cannot reload their hook approvals: " + ", ".join(embedded),
         )
+        return None
+    return sessions
+
+
+def refresh(
+    report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
+) -> None:
+    pending = any(
+        not current(identity.rpartition("@")[2], identity.rpartition("@")[0])
+        for identity in refresh_identities(marketplaces)
+    )
+    if pending and refresh_sessions(report) is None:
         return
     if direct_update(marketplaces, current) and all(
         current(identity.rpartition("@")[2], identity.rpartition("@")[0])
@@ -354,6 +365,9 @@ def refresh(
         for identity in installed
         if not current(identity.rpartition("@")[2], identity.rpartition("@")[0])
     ]
+    sessions = refresh_sessions(report) if stale else {}
+    if sessions is None:
+        return
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
     if any(

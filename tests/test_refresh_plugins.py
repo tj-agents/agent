@@ -81,6 +81,11 @@ def test_codex_refresh_uses_only_selected_marketplace_inventories(
     }
     calls: list[str] = []
     remembered: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        codex_launch,
+        "liveness",
+        lambda **_kwargs: {"embedded": Liveness(True, process_ids=(42,))},
+    )
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         assert command[:3] == ["codex", "plugin", "list"]
@@ -907,7 +912,7 @@ def test_codex_rejects_unsafe_refresh_before_direct_cache_replacement(
         codex_installed, "refresh_identities", lambda *_args: {"agent@tj-agents"}
     )
     report = plugin_update.Report()
-    codex_installed.refresh(report, ("tj-agents",), lambda *_args: True)
+    codex_installed.refresh(report, ("tj-agents",), lambda *_args: False)
 
     assert cached_hook.read_text(encoding="utf-8") == "approved hook"
     assert report.failures
