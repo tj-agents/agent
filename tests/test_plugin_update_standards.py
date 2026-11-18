@@ -318,26 +318,30 @@ def test_activation_reloads_approved_hooks_in_the_executing_backend(
 ) -> None:
     events: list[str] = []
 
+    @dataclass(frozen=True, slots=True)
     class Backend:
-        @staticmethod
-        def request(method: str, params: dict[str, object]) -> dict[str, object]:
+        directory: Path
+        failed: bool
+        events: list[str]
+
+        def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
             if method == "config/batchWrite":
                 assert params == {"edits": [], "reloadUserConfig": True}
-                events.append("reload approvals")
-                if failed:
+                self.events.append("reload approvals")
+                if self.failed:
                     raise RuntimeError("owning backend reload failed")
                 return {"status": "ok"}
             if method == "thread/loaded/list":
-                events.append("loaded threads")
+                self.events.append("loaded threads")
                 return {"data": ["existing-thread"]}
             assert method == "thread/read"
             assert params["threadId"] == "existing-thread"
-            return {"thread": {"cwd": str(tmp_path)}}
+            return {"thread": {"cwd": str(self.directory)}}
 
     @contextmanager
     def connect(timeout: int) -> Iterator[Backend]:
         assert timeout == codex_installed.INSTALL_TIMEOUT_SECONDS
-        yield Backend()
+        yield Backend(tmp_path, failed, events)
 
     monkeypatch.setattr(codex_launch, "daemon", connect)
     monkeypatch.setattr(required_plugins, "project_root", lambda directory: directory)
