@@ -586,6 +586,16 @@ class InstallerStepTests(Machine):
         )
         self.converge(step("Codex profile agents"), context)
 
+    def test_codex_lane_agents_converge_from_this_package(self):
+        (self.home / ".codex").mkdir()
+        self.converge(step("Codex lane agents"), self.context(windows=False))
+        self.assertTrue((self.home / ".codex" / "agents" / "lane-l4.toml").is_file())
+
+    def test_codex_lane_agents_skip_without_codex_profile(self):
+        out = io.StringIO()
+        install.run_steps([step("Codex lane agents")], self.context(), False, out)
+        self.assertIn("n/a    Codex lane agents: Codex is not set up", out.getvalue())
+
     def test_codex_agents_skip_without_codex_profile(self):
         out = io.StringIO()
         install.run_steps([step("Codex profile agents")], self.context(), False, out)
@@ -1116,6 +1126,7 @@ class RunStepsTests(Machine):
                 "hidden Git Bash for Claude",
                 "plugin setup",
                 "Codex profile agents",
+                "Codex lane agents",
                 "plugin scope",
                 "Codex hook trust",
                 "plugin copies",
