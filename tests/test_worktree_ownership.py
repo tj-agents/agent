@@ -280,7 +280,7 @@ def test_startup_does_not_downgrade_an_unknown_launch_to_unmanaged_ownership(
 
 
 @pytest.mark.parametrize("failure", ["claim", "name"])
-def test_codex_naming_and_ownership_capture_are_independent(
+def test_codex_ownership_precedes_optional_naming(
     repository: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -292,6 +292,7 @@ def test_codex_naming_and_ownership_capture_are_independent(
     names: list[tuple[str, str]] = []
 
     def name_session(session_id: str, title: str) -> None:
+        assert store.claims == [str(root.resolve())]
         names.append((session_id, title))
         if failure == "name":
             raise RuntimeError("name failed")
@@ -306,6 +307,9 @@ def test_codex_naming_and_ownership_capture_are_independent(
     monkeypatch.setattr(agent_store, "run", run_store)
     with pytest.raises(RuntimeError, match=f"{failure} failed"):
         session_hook.start(Host.CODEX, "native", str(root), {})
-    assert names == [("native", "Owned title")]
     if failure == "name":
+        assert names == [("native", "Owned title")]
         assert store.claims == [str(root.resolve())]
+    else:
+        assert names == []
+        assert store.claims == []

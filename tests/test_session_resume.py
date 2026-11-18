@@ -16,13 +16,31 @@ import session_resume
 from claude import launch as claude_launch
 from codex import launch as codex_launch
 from codex import processes as codex_processes
-from launch_contract import PreparedLaunch
+from launch_contract import Liveness, PreparedLaunch
 from launch_errors import LaunchError
 from tj_agent import worktrees
 from tj_agent.host import Host
 from tj_cli import process
 
 THREAD = "123e4567-e89b-12d3-a456-426614174000"
+type NativeInventory = Callable[[list[dict[str, object]]], dict[str, Liveness]]
+
+
+@pytest.fixture
+def native_inventory(monkeypatch: pytest.MonkeyPatch) -> NativeInventory:
+    monkeypatch.setattr(claude_launch, "executable", lambda: "fixture-claude")
+
+    def inventory(rows: list[dict[str, object]]) -> dict[str, Liveness]:
+        def run(
+            command: list[str], **_options: object
+        ) -> subprocess.CompletedProcess[str]:
+            assert command == ["fixture-claude", "agents", "--json", "--all"]
+            return subprocess.CompletedProcess(command, 0, json.dumps(rows), "")
+
+        result: dict[str, Liveness] = claude_launch.liveness(run=run, strict=True)
+        return result
+
+    return inventory
 
 
 @pytest.mark.parametrize("registered", [None, "old"])
@@ -234,28 +252,23 @@ def test_public_resume_binds_before_claiming_and_never_reregisters(
     assert events == ([(THREAD, "new")] if host is Host.CODEX else []) + expected
 
 
-def test_native_inventory_keeps_every_live_process_for_one_conversation() -> None:
-    rows = [
-        {"sessionId": THREAD, "pid": 42},
-        {"sessionId": THREAD, "pid": 43},
-        {"sessionId": THREAD},
-    ]
-    inventory = claude_launch.liveness(
-        run=lambda *args, **kwargs: subprocess.CompletedProcess(
-            [], 0, json.dumps(rows), ""
-        ),
-        strict=True,
+def test_native_inventory_keeps_every_live_process_for_one_conversation(
+    native_inventory: NativeInventory,
+) -> None:
+    inventory = native_inventory(
+        [
+            {"sessionId": THREAD, "pid": 42},
+            {"sessionId": THREAD, "pid": 43},
+            {"sessionId": THREAD},
+        ]
     )
     assert inventory[THREAD].alive
     assert inventory[THREAD].process_ids == (42, 43)
 
 
 @pytest.mark.parametrize("pid", [0, -1, True, "42", None])
-def test_native_inventory_rejects_unverifiable_processes(pid: object) -> None:
+def test_native_inventory_rejects_unverifiable_processes(
+    native_inventory: NativeInventory, pid: object
+) -> None:
     with pytest.raises(LaunchError, match="invalid process id"):
-        claude_launch.liveness(
-            run=lambda *args, **kwargs: subprocess.CompletedProcess(
-                [], 0, json.dumps([{"sessionId": THREAD, "pid": pid}]), ""
-            ),
-            strict=True,
-        )
+        native_inventory([{"sessionId": THREAD, "pid": pid}])

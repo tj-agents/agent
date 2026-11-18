@@ -1,10 +1,14 @@
 import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import agent_cli
 import pytest
-from launch_contract import PreparedLaunch
+import session_resume
+from codex import processes
+from launch_contract import Confirmation, Liveness, PreparedLaunch
 from tj_agent.host import Host
 
 
@@ -12,6 +16,8 @@ from tj_agent.host import Host
 def test_codex_launch_removes_inherited_monochrome_environment(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, windows: bool
 ) -> None:
+    thread = "123e4567-e89b-12d3-a456-426614174000"
+    session = f"codex:{thread}"
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
@@ -24,12 +30,34 @@ def test_codex_launch_removes_inherited_monochrome_environment(
         adapter,
         "prepare",
         lambda directory, title, arguments, cli, environ: PreparedLaunch(
-            ("codex", *arguments)
+            ("codex", *arguments), session
         ),
+    )
+    monkeypatch.setattr(session_resume, "predecessor", lambda *args: None)
+
+    def record(session_id: str, launch_id: str) -> bool:
+        assert session_id == thread
+        assert launch_id
+        return True
+
+    monkeypatch.setattr(processes, "record_prepared", record)
+    monkeypatch.setattr(
+        processes,
+        "inventory",
+        lambda *, launch_id: {
+            thread: Liveness(True, process_ids=(42,), launch_ids=(launch_id,))
+        },
     )
     monkeypatch.setattr(agent_cli, "IS_WINDOWS", windows)
     monkeypatch.setattr(shutil, "which", lambda name: name)
-    monkeypatch.setattr(agent_cli, "await_launch", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        agent_cli,
+        "await_launch",
+        lambda launch_id, **kwargs: {
+            "launch": {"state": "active"},
+            "session": {"session": session, "launch_id": launch_id},
+        },
+    )
     parent_environment = {
         "NO_COLOR": "1",
         "TERM": "dumb" if windows else "screen-256color",
@@ -38,17 +66,19 @@ def test_codex_launch_removes_inherited_monochrome_environment(
     }
 
     # Exercise the untyped legacy launcher, including its real environment handling.
-    agent_cli.launch(  # type: ignore[no-untyped-call]
+    call_launch = cast(Callable[..., dict[str, object]], agent_cli.launch)
+    result = call_launch(
         Host.CODEX,
         tmp_path,
         "Native Codex handoff",
-        ["resume", "existing-session"],
+        ["resume", thread],
         environ=parent_environment,
         run=run,
     )
 
+    assert result["confirmation"] is Confirmation.PROCESS_STARTED
     command, options = calls[0]
-    assert command[-3:] == ["codex", "resume", "existing-session"]
+    assert command[-3:] == ["codex", "resume", thread]
     if windows:
         child_environment = options["env"]
         assert isinstance(child_environment, dict)
