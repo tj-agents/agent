@@ -98,3 +98,19 @@ def test_status_passes_canonical_filter_to_managed_session_snapshot(
     reference.assert_called_once_with(Path.cwd(), "ABC-42")
     snapshot.assert_called_once_with([canonical], Path.cwd())
     assert '"sessions"' in capsys.readouterr().out
+
+
+def test_absence_from_daemon_inventory_does_not_authorize_item_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(work_item, "reference", lambda _cwd, ref: ref)
+    monkeypatch.setattr(
+        agent_store, "run",
+        lambda *args: {"item": {"ref": "item"}, "sessions": [
+            {"host": "codex", "native_id": "thread", "session": "codex:thread"}
+        ]},
+    )
+    monkeypatch.setattr(lifecycle, "liveness", lambda _hosts: {Host.CODEX: {}})
+    monkeypatch.setattr(lifecycle, "tj_item", lambda *args, **kwargs: {})
+    with pytest.raises(lifecycle.LifecycleError, match="no native process evidence"):
+        lifecycle.open_items(["item"], cwd=tmp_path)

@@ -10,7 +10,7 @@ import subprocess
 from collections.abc import Mapping
 
 from tj_cli import process
-from codex import startup
+from codex import processes, startup
 
 import agent_store
 from launch_contract import Liveness, PreparedLaunch
@@ -257,8 +257,10 @@ def daemon(timeout=DAEMON_TIMEOUT_SECONDS):
 
 
 def liveness(*, strict: bool = False) -> dict[str, Liveness]:
-    """Threads loaded in the shared app-server daemon, by thread id; an absent daemon has none."""
+    """Combine native process evidence with loaded shared-daemon threads."""
+    observed: dict[str, Liveness] = {}
     try:
+        observed = processes.inventory()
         if strict:
             result = process.run(
                 [executable(), "app-server", "daemon", "version"],
@@ -270,7 +272,7 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
                 if "failed to connect to" in detail and any(
                     f"(os error {code})" in detail for code in (2, 111, 10061)
                 ):
-                    return {}
+                    return observed
                 raise LaunchError(f"Cannot determine Codex daemon state: {detail}")
             if not isinstance(json.loads(result.stdout), dict):
                 raise LaunchError("Codex daemon version returned invalid JSON")
@@ -290,8 +292,13 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
     ) as error:
         if strict:
             raise LaunchError(f"Cannot determine Codex liveness: {error}") from error
-        return {}
-    return {thread: Liveness(alive=status != "notLoaded", activity=status) for thread, status in statuses.items()}
+        return observed
+    for thread, status in statuses.items():
+        if status != "notLoaded":
+            # A loaded daemon thread has no exclusive frontend PID. Never let a
+            # replacement process receipt hide another running daemon owner.
+            observed[thread] = Liveness(alive=status != "notLoaded", activity=status)
+    return observed
 
 
 def respawn(background):

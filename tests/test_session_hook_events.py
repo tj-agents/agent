@@ -19,6 +19,7 @@ Host = hook.Host
 @pytest.fixture(autouse=True)
 def isolated_worktree_claim(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hook.worktrees, 'claim_started_worktree', lambda *_: None)
+    monkeypatch.setattr(hook.codex_processes, 'record', lambda *_: None)
 
 
 class AgentStoreCalls:

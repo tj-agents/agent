@@ -26,6 +26,7 @@ sys.path.insert(0, str(HERE))
 from tj_agent.host import Host
 from tj_agent import worktrees
 from codex import launch as codex_launch
+from codex import processes as codex_processes
 import agent_cli
 import agent_store
 import owned_launch
@@ -97,6 +98,8 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
     if session is None:
         if launch:
             environ[LAUNCH_ENV] = launch
+            if host is Host.CODEX:
+                codex_processes.record(session_id, launch)
             session = (
                 session_resume.bind_started(f"{host}:{session_id}", launch)
                 if host is Host.CLAUDE else None

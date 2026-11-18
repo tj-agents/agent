@@ -112,6 +112,12 @@ def test_liveness_uses_strict_native_state_with_exact_binding(
     backend.inventory = {"another-native": Liveness(True)}
     if observed is not None:
         backend.inventory[backend.native_id] = observed
+    if backend.host is Host.CODEX and observed is None:
+        assert backend.check() != 0
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "liveness is unverified" in captured.err
+        return
     assert backend.check() == 0
     captured = capsys.readouterr()
     assert captured.err == ""
@@ -308,11 +314,14 @@ class LoadedThreads:
         return {"thread": {"status": {"type": "idle"}}}
 
 
-@pytest.mark.parametrize("loaded", [False, True])
+@pytest.mark.parametrize(
+    ("loaded", "recorded"), [(False, False), (False, True), (True, False)]
+)
 def test_codex_strict_inventory_checks_every_page_for_a_loaded_conversation(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     loaded: bool,
+    recorded: bool,
 ) -> None:
     backend = Backend(Host.CODEX)
     adapter = agent_cli.host_launch(Host.CODEX)
@@ -327,12 +336,22 @@ def test_codex_strict_inventory_checks_every_page_for_a_loaded_conversation(
     monkeypatch.setattr(agent_store, "run", backend.show)
     monkeypatch.setattr(adapter, "executable", lambda: "fixture-codex")
     monkeypatch.setattr(adapter, "daemon", lambda: server)
+    monkeypatch.setattr(
+        adapter.processes, "inventory",
+        lambda: {backend.native_id: Liveness(False)} if recorded else {},
+    )
     # The adapter's sole process query and all daemon requests are fixture replies.
     monkeypatch.setattr("tj_cli.process.run", version)
-    assert backend.check() == 0
-    assert json.loads(capsys.readouterr().out)["state"] == (
-        "live" if loaded else "dead"
-    )
+    if loaded or recorded:
+        assert backend.check() == 0
+        assert json.loads(capsys.readouterr().out)["state"] == (
+            "live" if loaded else "dead"
+        )
+    else:
+        assert backend.check() != 0
+        captured = capsys.readouterr()
+        assert not captured.out
+        assert "liveness is unverified" in captured.err
     assert server.calls[:2] == [
         ("thread/loaded/list", {"cursor": None}),
         ("thread/loaded/list", {"cursor": "last-page"}),

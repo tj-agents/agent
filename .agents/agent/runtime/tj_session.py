@@ -73,10 +73,14 @@ def session_liveness(session: str, launch_id: str) -> dict[str, object]:
         for key, value in inventory.items()
     ):
         raise LivenessError("The native host returned an invalid liveness inventory")
-    # Strict adapters distinguish an exhausted native inventory from a failed
-    # probe. Codex inventories loaded daemon threads, including idle threads;
-    # wrapper exit alone is never evidence that a conversation is unloaded.
+    # Codex also runs embedded engines that the daemon cannot inventory. Only a
+    # recorded native process or explicit provider state can prove their death.
     observed = inventory.get(native_id)
+    if host is Host.CODEX and observed is None:
+        raise LivenessError(
+            "No native process evidence exists for this Codex conversation; "
+            "its liveness is unverified"
+        )
     # A concurrent resume can replace the launch/session binding during the probe.
     require_binding(host, native_id, launch_id)
     result: dict[str, object] = {
