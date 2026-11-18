@@ -98,6 +98,7 @@ function cw {
 
     $target = Select-Worktree -Query ($Query -join ' ')
     if (-not $target) { return }
+    if (Get-Command tj -ErrorAction SilentlyContinue) { & tj _checkout-freshness --cwd $target }
     Write-Host "-> $target ($agent)" -ForegroundColor DarkGray
     Set-Location -LiteralPath $target
     if ($agent -eq 'Codex') { codex } else { claude }
