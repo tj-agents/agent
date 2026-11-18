@@ -107,27 +107,28 @@ def liveness(run=process.run, *, strict: bool = False) -> dict[str, Liveness]:
         rows = json.loads(result.stdout)
         if not isinstance(rows, list):
             raise LaunchError("Claude liveness returned an invalid session list")
+        sessions: dict[str, Liveness] = {}
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("sessionId"), str):
+                continue
+            pid = row.get("pid")
+            if "pid" in row and (type(pid) is not int or pid <= 0):
+                raise LaunchError("Claude liveness returned an invalid process id")
+            prior = sessions.get(row["sessionId"])
+            processes = set(prior.process_ids or ()) if prior else set()
+            if pid is not None:
+                processes.add(pid)
+            background = row.get("id") if row.get("kind") == "background" else None
+            sessions[row["sessionId"]] = Liveness(
+                alive=bool(processes),
+                activity=row.get("status") or row.get("state"),
+                background=background or (prior.background if prior else None),
+                process_ids=tuple(sorted(processes)),
+            )
     except (OSError, subprocess.SubprocessError, ValueError, LaunchError) as error:
         if strict:
             raise LaunchError(f"Cannot determine Claude liveness: {error}") from error
         return {}
-    sessions: dict[str, Liveness] = {}
-    for row in rows:
-        if not isinstance(row, dict) or not isinstance(row.get("sessionId"), str):
-            continue
-        pid = row.get("pid")
-        if "pid" in row and (type(pid) is not int or pid <= 0):
-            raise LaunchError("Claude liveness returned an invalid process id")
-        prior = sessions.get(row["sessionId"])
-        processes = set(prior.process_ids or ()) if prior else set()
-        if pid is not None:
-            processes.add(pid)
-        sessions[row["sessionId"]] = Liveness(
-            alive=bool(processes),
-            activity=row.get("status") or row.get("state"),
-            background=row.get("id") if row.get("kind") == "background" else None,
-            process_ids=tuple(sorted(processes)),
-        )
     return sessions
 
 

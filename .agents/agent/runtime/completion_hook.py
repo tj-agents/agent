@@ -47,6 +47,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     hosts = {host.value: host for host in Host}
     parser.add_argument("--host", choices=list(hosts), required=True)
+    parser.add_argument("--hook-mode", choices=("prompt", "status"), default="status")
     args = parser.parse_args(argv)
     message = None
     event = None
@@ -55,6 +56,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(data, dict):
             raise completion_event.EventError(
                 "Native completion event must be an object"
+            )
+        if hosts[args.host] is Host.CLAUDE and (
+            (data.get("hook_event_name") == "UserPromptSubmit")
+            != (args.hook_mode == "prompt")
+        ):
+            raise completion_event.EventError(
+                "Claude hook event does not match its mode"
             )
         event = EVENTS[hosts[args.host]].parse(cast(Mapping[str, object], data))
         if event is not None:
@@ -65,11 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         subprocess.SubprocessError,
     ) as error:
         message = f"TJ completion remains unverified: {error}"
-        if (
-            hosts[args.host] is Host.CLAUDE
-            and event is not None
-            and event.kind is completion_event.Kind.START
-        ):
+        if hosts[args.host] is Host.CLAUDE and args.hook_mode == "prompt":
             try:
                 managed = owned_launch.current() is not None
             except owned_launch.OwnedLaunchError:

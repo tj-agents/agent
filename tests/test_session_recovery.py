@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 from contextlib import closing
@@ -147,3 +148,35 @@ def test_codex_default_probe_keeps_status_working_without_native_executable(
 
     monkeypatch.setattr(codex_launch, "daemon", daemon)
     assert codex_launch.liveness() == {}
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_claude_liveness_preserves_background_and_all_processes(
+    monkeypatch: pytest.MonkeyPatch, reverse: bool
+) -> None:
+    monkeypatch.setattr(claude_launch, "executable", lambda: "fake-agent")
+    rows = [
+        {"sessionId": "thread", "kind": "background", "id": "bg", "pid": 42},
+        {"sessionId": "thread", "pid": 43},
+    ]
+    if reverse:
+        rows.reverse()
+    result = SimpleNamespace(returncode=0, stdout=json.dumps(rows))
+    live = claude_launch.liveness(run=lambda *args, **kwargs: result, strict=True)
+    assert live["thread"].background == "bg"
+    assert live["thread"].process_ids == (42, 43)
+
+
+@pytest.mark.parametrize("pid", [0, -1, True, "42", None])
+def test_claude_invalid_pid_invalidates_entire_inventory(
+    monkeypatch: pytest.MonkeyPatch, pid: object
+) -> None:
+    monkeypatch.setattr(claude_launch, "executable", lambda: "fake-agent")
+    rows = [{"sessionId": "valid", "pid": 12}, {"sessionId": "bad", "pid": pid}]
+    result = SimpleNamespace(returncode=0, stdout=json.dumps(rows))
+    def run(*args: Any, **kwargs: Any) -> SimpleNamespace:
+        return result
+
+    assert claude_launch.liveness(run=run) == {}
+    with pytest.raises(LaunchError, match="invalid process id"):
+        claude_launch.liveness(run=run, strict=True)

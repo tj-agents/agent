@@ -6,6 +6,8 @@ parent, terminal, wrapper and work item; a session that only inherited the wrapp
 unbound. When `tj launch` cannot answer, the session is left unregistered and the failure reported, never
 registered unbound beside the launch it may own. A Codex thread is also named after its title, so it is addressable by name.
 Bookkeeping errors remain non-blocking; the managed prompt hook enforces admission before native work.
+Claude's outer hook budget includes ownership reads, the 90-second resume admission and linked-worktree
+checks: their individual subprocess limits total 275 seconds, below the 300-second native hook limit.
 """
 
 from __future__ import annotations
