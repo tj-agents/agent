@@ -109,8 +109,9 @@ Install and a Codex session selecting Agent ensure one observer follows the exis
 loaded threads. It checks for published updates and reloads the daemon without restarting those conversations;
 it exits when the daemon disconnects or has no loaded threads.
 Managed Codex conversations use an owned native process instead of that daemon. Plugin refresh leaves
-cached builds unchanged while one of these processes is running, because replacing them would invalidate
-its loaded hook approvals. The update reports the affected sessions and remains unverified. A shared
+cached builds unchanged while one of these processes is running, because it retains paths to the loaded
+hook files. Replacing the build would remove files that process still needs. The update reports the
+affected sessions and remains unverified. A shared
 daemon loading the same conversation does not make the separate process reloadable.
 Managed launches apply Codex's native `--dangerously-bypass-hook-trust` policy to all enabled plugin
 hooks, including newly created threads and resumes. This permits changed plugin contents to execute

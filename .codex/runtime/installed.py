@@ -296,7 +296,8 @@ def refresh_sessions(report: Any) -> dict[str, Liveness] | None:
             HOST,
             "open sessions",
             "Installed plugins were left unchanged because these running Codex "
-            "engines cannot reload their hook approvals: " + ", ".join(embedded),
+            "engines still use the cached hook files and cannot reload them: "
+            + ", ".join(embedded),
         )
         return None
     return sessions
