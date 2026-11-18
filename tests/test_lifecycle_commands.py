@@ -327,6 +327,32 @@ def test_status_includes_independent_sessions_without_work_items(
     assert "launch launch-first; independent" in text
 
 
+@pytest.mark.parametrize(
+    ("observed", "state", "expected"),
+    [(None, "active", "unverified"), (False, "active", "dead"), (None, "ended", "ended")],
+)
+def test_codex_status_distinguishes_absent_process_evidence_from_death(
+    status_backend: StatusBackend,
+    capsys: pytest.CaptureFixture[str],
+    observed: bool | None,
+    state: str,
+    expected: str,
+) -> None:
+    status_backend.add()
+    status_backend.sessions[0]["state"] = state
+    if observed is None:
+        status_backend.live.clear()
+    else:
+        status_backend.live["first"] = Liveness(observed)
+
+    assert tj_status.main(["--json"]) == 0
+    [session] = json.loads(capsys.readouterr().out)["sessions"]
+    assert session["liveness"] == expected
+    if expected == "unverified":
+        assert "Host is not running" not in str(session)
+        assert "unverified" in str(session["issues"]).lower()
+
+
 def test_status_shows_held_result_and_exact_pending_steps(
     status_backend: StatusBackend, tmp_path: Path,
 ) -> None:
@@ -498,7 +524,7 @@ def test_status_displays_completed_only_from_a_complete_current_receipt(
     status = tj_status.snapshot(None, tmp_path)
     [session] = status.sessions
     assert session.managed.state == "completed"
-    assert session.liveness == "dead"
+    assert session.liveness == "unverified"
     assert session.issues == ()
     assert "lifecycle: completed" in tj_status.render(status)
 

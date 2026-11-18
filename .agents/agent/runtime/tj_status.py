@@ -172,8 +172,11 @@ def _session_status(session: dict, launches: dict, agent: lifecycle.Agent,
         else:
             relationship = "parented" if parent is not None else "independent"
         managed = _receipt(launch_id, handle)
-    if not host_error and not agent.alive and managed.state != "completed":
-        issues.append(f"Host is not running; inspect tj recover --session {handle} --dry-run")
+    if not host_error and managed.state != "completed":
+        if agent.status == "unverified":
+            issues.append("Native process liveness is unverified; no process observation is available")
+        elif not agent.alive:
+            issues.append(f"Host is not running; inspect tj recover --session {handle} --dry-run")
     return SessionStatus(
         handle, (launch or {}).get("title") or session.get("title") or handle,
         session["host"], "unverified" if host_error else agent.status,

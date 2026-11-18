@@ -74,6 +74,8 @@ class Agent:
             return self.live.activity or "live"
         if self.session["state"] == "ended":
             return "ended"
+        if self.live is None and self.host is Host.CODEX:
+            return "unverified"
         return "dead"
 
 
