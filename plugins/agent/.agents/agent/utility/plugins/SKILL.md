@@ -68,7 +68,10 @@ settings are current, not that native trust, installation or session loading suc
              "dotnet@tj-agents", "concertable@agents"]}
 ```
 
-The selection lists every required package explicitly as `<plugin>@<marketplace>`. A marketplace key must
+The selection lists the packages the repository chose as `<plugin>@<marketplace>`, never their
+dependencies: settings generation enables each selected plugin's transitive dependencies in both hosts from
+the `dependencies` its marketplace's published Claude catalog declares, including dependencies a later
+release adds. A dependency must come from a declared marketplace. A marketplace key must
 match its published identity, and its repository must belong to `tj-agents` or `Concertable`. The `tj-agents`
 name belongs only to `tj-agents/marketplace`. Each declared marketplace supplies a selected plugin, and
 two marketplace names cannot refer to the same repository. The schema is `plugins/selection.schema.json`.
@@ -85,18 +88,18 @@ python -B '<skill-directory>\scripts\adopt_plugins.py' --root C:\path\to\reposit
 
 A stack (`dotnet`, `azure`, `react`, `cpp-gcc`, `cpp-msvc`, `win32`, `neovim`, `rust`, `python`, `github-actions`,
 `plugin-repository`) resolves to its plugins through `scripts/plugin_roster.json`, so nobody guesses which
-plugins a project type needs. Repeat `--stack`, or add `--plugin <name>`. Required plugins are added and
-existing selections are kept. With no requested stack or plugin, a new selection uses Agent, Agent Store, Base,
-Engineering and Workflow. `preview` lists the changed files, `write` applies them together, and `check`
+plugins a project type needs. Repeat `--stack`, or add `--plugin <name>`. Only the requested plugins are
+written, existing selections are kept, and removing a plugin that a remaining one depends on is refused.
+With no requested stack or plugin, a new selection uses Agent, Agent Store, Base, Engineering and Workflow. `preview` lists the changed files, `write` applies them together, and `check`
 exits nonzero on drift, which is what CI runs. An unknown stack or plugin is rejected with the valid choices.
 
 Personal is only for personal projects explicitly adopting `personal@tj-agents`. Read the repository's
 README.md and AGENTS.md before selection; a GitHub owner, home directory or publisher account never
 establishes personal scope. When the user explicitly confirms personal scope, include `--plugin personal`;
 otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it.
-A repository selects one `kind: profile` plugin; an `organization` brings the profile it extends through
-`requires`. Selection, adoption and reconciliation refuse a second profile, and refuse any profile other than
-the one an organization extends when that organization's installed employer declaration matches the
+A repository selects one `kind: profile` plugin, counting the profiles its selection depends on; an
+`organization` brings the profile it extends as a dependency. Selection, adoption and reconciliation refuse
+a second profile, and refuse any profile other than the one an organization extends when that organization's installed employer declaration matches the
 repository's origin or names it as its source repository. See
 [Plugin kinds](https://github.com/tj-agents/docs/blob/main/PLUGINS.md#plugin-kinds).
 Owner-based project/local file placement is independent of this policy boundary.
@@ -132,12 +135,15 @@ python -B '<skill-directory>\scripts\repo_config.py' --root C:\path\to\repositor
 
 `--lock` defaults to `<root>/.agents/plugins.json`. The generator owns Claude's marketplace,
 enabled-plugin, `permissions.allow` and `permissions.deny` keys and Codex's marketplace and plugin tables plus
-`.codex/rules/agent-harness.rules`; other project settings stay. Those permissions are every selected plugin's
+`.codex/rules/agent-harness.rules`; other project settings stay. Both hosts enable the selection's transitive
+dependency closure. Those permissions are every enabled plugin's
 published `requires.permissions` merged with `.agents/repository-harness.json`, whose entries win; see
 [repository permissions](https://github.com/tj-agents/agent#repository-permissions). A committed entry nobody
 declares any more is removed; an uncommitted Claude allow or deny entry outside the declared harness is refused
 rather than discarded, so move it into that overlay first. `--preserve-permissions` keeps the current
-permissions, which is how `tj prepare` runs without a published harness lookup. Project scope also rejects
+permissions, which is how `tj prepare` runs without a published harness lookup; it resolves the dependency
+closure from the marketplace catalogs Claude, or else Codex, last fetched onto this machine and keeps every
+plugin the previous generation enabled. Project scope also rejects
 machine-specific absolute paths (Windows drive and UNC paths, `/home/<user>`, `/Users/<user>`, `/mnt/<drive>`)
 anywhere in the committed `.claude/settings.json`, `.codex/config.toml` or `.codex/hooks.json`, in every mode,
 reporting `file:line`. Replace such a path with a repository-relative one, or move the setting to an
