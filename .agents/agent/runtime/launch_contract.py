@@ -11,6 +11,7 @@ class Liveness:
     alive: bool
     activity: str | None = None
     background: str | None = None
+    process_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

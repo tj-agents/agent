@@ -4,8 +4,8 @@ explicit user exit and otherwise leaves it active for `tj recover`.
 A session owned by a managed launch, as `tj launch` reports it, binds to that launch and inherits its title,
 parent, terminal, wrapper and work item; a session that only inherited the wrapper environment registers
 unbound. When `tj launch` cannot answer, the session is left unregistered and the failure reported, never
-registered unbound beside the launch it may own. A Codex thread is also named after its title, so it is addressable by name. Exit 0 always:
-bookkeeping never stops a session.
+registered unbound beside the launch it may own. A Codex thread is also named after its title, so it is addressable by name.
+Bookkeeping errors remain non-blocking; the managed prompt hook enforces admission before native work.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from codex import launch as codex_launch
 import agent_cli
 import agent_store
 import owned_launch
+import session_resume
 from tj_cli import process
 
 LAUNCH_ENV = "TJ_RUN_LAUNCH_ID"
@@ -94,7 +95,12 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
     if session is None:
         if launch:
             environ[LAUNCH_ENV] = launch
-            session = register(host, session_id, cwd, root, ["--launch-id", launch])
+            session = (
+                session_resume.bind_started(f"{host}:{session_id}", launch)
+                if host is Host.CLAUDE else None
+            )
+            if session is None:
+                session = register(host, session_id, cwd, root, ["--launch-id", launch])
         else:
             session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
     else:

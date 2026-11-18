@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import completion_event
 import completion_hook
+import owned_launch
 import pytest
 from tj_agent.host import Host
 from tj_cli import process
@@ -128,3 +129,44 @@ def test_malformed_input_reports_unverified_state_without_continuation(
     output = json.loads(capsys.readouterr().out)
     assert set(output) == {"systemMessage"}
     assert "remains unverified" in output["systemMessage"]
+
+
+@pytest.mark.parametrize("managed", [True, False, None])
+def test_failed_prompt_admission_blocks_only_managed_or_unverified_owners(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    managed: bool | None,
+) -> None:
+    def owner() -> str | None:
+        if managed is None:
+            raise owned_launch.OwnedLaunchError(
+                "cannot inspect wrapper"
+            )
+        return "launch" if managed else None
+
+    monkeypatch.setattr(owned_launch, "current", owner)
+    monkeypatch.setattr(
+        process,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess(
+                [], 1, "", "managed session binding is missing"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps(native_payload(Host.CLAUDE, "UserPromptSubmit"))),
+    )
+    assert completion_hook.main(["--host", "claude"]) == 0
+    reply = json.loads(capsys.readouterr().out)
+    if managed is False:
+        assert set(reply) == {"systemMessage"}
+    else:
+        assert reply == {
+            "decision": "block",
+            "reason": (
+                "TJ completion remains unverified: managed session binding is missing"
+            ),
+        }

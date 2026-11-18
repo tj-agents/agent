@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 import completion_event
+import owned_launch
 from claude import completion as claude_completion
 from codex import completion as codex_completion
 from tj_agent.host import Host
@@ -48,6 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--host", choices=list(hosts), required=True)
     args = parser.parse_args(argv)
     message = None
+    event = None
     try:
         data = json.load(sys.stdin)
         if not isinstance(data, dict):
@@ -63,6 +65,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         subprocess.SubprocessError,
     ) as error:
         message = f"TJ completion remains unverified: {error}"
+        if (
+            hosts[args.host] is Host.CLAUDE
+            and event is not None
+            and event.kind is completion_event.Kind.START
+        ):
+            try:
+                managed = owned_launch.current() is not None
+            except owned_launch.OwnedLaunchError:
+                managed = True
+            if managed:
+                print(json.dumps(claude_completion.rejected_prompt(message)))
+                return 0
     # A Stop block or additionalContext can submit another model turn. Only a
     # user-visible status message is allowed; failure must not synthesize input.
     print(json.dumps({"systemMessage": message} if message else {}))

@@ -49,3 +49,44 @@ def check(session: str, launch_id: str) -> None:
             raise LaunchError("Recovery admission returned a different owner")
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         raise LaunchError(f"Cannot verify recovery admission: {error}") from error
+
+
+def bind_started(session: str, launch_id: str) -> dict[str, object] | None:
+    """Transfer a prior owner from the new native process's verified startup hook."""
+    try:
+        prior = predecessor(session)
+        if prior is None or prior == launch_id:
+            return None
+        result = process.run(
+            [
+                "tj",
+                "_resume-bind",
+                "--session",
+                session,
+                "--launch-id",
+                launch_id,
+                "--from-launch-id",
+                prior,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=90,
+            check=False,
+        )
+        if result.returncode:
+            raise LaunchError(
+                result.stderr.strip() or "Native resume admission failed"
+            )
+        document = json.loads(result.stdout)
+        record = document.get("session") if isinstance(document, dict) else None
+        if (
+            not isinstance(record, dict)
+            or record.get("session") != session
+            or record.get("launch_id") != launch_id
+            or record.get("state") != "active"
+        ):
+            raise LaunchError("Native resume returned a different owner")
+    except (OSError, subprocess.SubprocessError, ValueError, LaunchError) as error:
+        raise LaunchError(f"Cannot bind native resume: {error}") from error
+    return record

@@ -111,14 +111,24 @@ def liveness(run=process.run, *, strict: bool = False) -> dict[str, Liveness]:
         if strict:
             raise LaunchError(f"Cannot determine Claude liveness: {error}") from error
         return {}
-    return {
-        row["sessionId"]: Liveness(
-            alive="pid" in row,
+    sessions: dict[str, Liveness] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("sessionId"), str):
+            continue
+        pid = row.get("pid")
+        if "pid" in row and (type(pid) is not int or pid <= 0):
+            raise LaunchError("Claude liveness returned an invalid process id")
+        prior = sessions.get(row["sessionId"])
+        processes = set(prior.process_ids or ()) if prior else set()
+        if pid is not None:
+            processes.add(pid)
+        sessions[row["sessionId"]] = Liveness(
+            alive=bool(processes),
             activity=row.get("status") or row.get("state"),
             background=row.get("id") if row.get("kind") == "background" else None,
+            process_ids=tuple(sorted(processes)),
         )
-        for row in rows if isinstance(row, dict) and isinstance(row.get("sessionId"), str)
-    }
+    return sessions
 
 
 def respawn(background, run=process.run):

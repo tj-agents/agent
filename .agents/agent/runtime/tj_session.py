@@ -49,7 +49,7 @@ def require_binding(host: Host, native_id: str, launch_id: str) -> None:
         raise LivenessError("The launch does not reciprocally bind the native session")
 
 
-def session_liveness(session: str, launch_id: str) -> dict[str, str]:
+def session_liveness(session: str, launch_id: str) -> dict[str, object]:
     host_name, separator, native_id = session.partition(":")
     if (
         not separator
@@ -79,11 +79,14 @@ def session_liveness(session: str, launch_id: str) -> dict[str, str]:
     observed = inventory.get(native_id)
     # A concurrent resume can replace the launch/session binding during the probe.
     require_binding(host, native_id, launch_id)
-    return {
+    result: dict[str, object] = {
         "session": session,
         "launch_id": launch_id,
         "state": "live" if observed is not None and observed.alive else "dead",
     }
+    if observed is not None and observed.process_ids is not None:
+        result["process_ids"] = list(observed.process_ids)
+    return result
 
 
 def report_liveness(session: str, launch_id: str) -> int:

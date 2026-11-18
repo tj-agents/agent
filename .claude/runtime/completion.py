@@ -5,6 +5,10 @@ from collections.abc import Mapping
 import completion_event
 
 
+def rejected_prompt(reason: str) -> dict[str, str]:
+    return {"decision": "block", "reason": reason}
+
+
 def parse(payload: Mapping[str, object]) -> completion_event.Event | None:
     if payload.get("agent_id"):
         return None

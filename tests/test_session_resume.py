@@ -10,6 +10,7 @@ from typing import cast
 import agent_cli
 import agent_store
 import pytest
+import session_hook
 import session_resume
 from claude import launch as claude_launch
 from launch_contract import PreparedLaunch
@@ -143,3 +144,105 @@ def test_claude_resume_prepares_an_exact_native_session(
     assert prepared.session == f"claude:{THREAD}"
     assert prepared.command == ("native-claude", *arguments)
     assert not prepared.created
+
+
+@pytest.mark.parametrize("prior", [None, "new"])
+def test_started_session_without_a_different_owner_needs_no_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+    prior: str | None,
+) -> None:
+    monkeypatch.setattr(session_resume, "predecessor", lambda _: prior)
+    monkeypatch.setattr(
+        process, "run", lambda *args, **kwargs: pytest.fail("unexpected transfer")
+    )
+    assert session_resume.bind_started(f"claude:{THREAD}", "new") is None
+
+
+@pytest.mark.parametrize("admitted", [True, False])
+def test_public_resume_binds_before_claiming_and_never_reregisters(
+    monkeypatch: pytest.MonkeyPatch,
+    admitted: bool,
+) -> None:
+    handle = f"claude:{THREAD}"
+    current = {"session": handle, "launch_id": "new", "state": "active"}
+    events: list[object] = []
+
+    def store(*args: str) -> dict[str, object]:
+        assert args == ("show", handle)
+        return {"session": {"session": handle, "launch_id": "old"}}
+
+    def execute(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert command == [
+            "tj",
+            "_resume-bind",
+            "--session",
+            handle,
+            "--launch-id",
+            "new",
+            "--from-launch-id",
+            "old",
+        ]
+        events.append("admission")
+        return subprocess.CompletedProcess(
+            command,
+            0 if admitted else 1,
+            json.dumps({"session": current}),
+            "predecessor is live",
+        )
+
+    adapter = SimpleNamespace(
+        record_session_environment=lambda *args, **kwargs: events.append("environment")
+    )
+    monkeypatch.setattr(agent_store, "run", store)
+    monkeypatch.setattr(process, "run", execute)
+    monkeypatch.setattr(session_hook.owned_launch, "for_session", lambda _: "new")
+    monkeypatch.setattr(session_hook, "worktree", lambda _: "/repo")
+    monkeypatch.setattr(agent_cli, "host_launch", lambda _: adapter)
+    monkeypatch.setattr(
+        session_hook.worktrees,
+        "claim_started_worktree",
+        lambda *args: events.append("claim"),
+    )
+    if admitted:
+        assert (
+            session_hook.start(
+                Host.CLAUDE, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"}
+            )
+            == current
+        )
+        assert events == ["admission", "environment", "claim"]
+    else:
+        with pytest.raises(LaunchError, match="predecessor is live"):
+            session_hook.start(
+                Host.CLAUDE, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"}
+            )
+        assert events == ["admission"]
+
+
+def test_native_inventory_keeps_every_live_process_for_one_conversation() -> None:
+    rows = [
+        {"sessionId": THREAD, "pid": 42},
+        {"sessionId": THREAD, "pid": 43},
+        {"sessionId": THREAD},
+    ]
+    inventory = claude_launch.liveness(
+        run=lambda *args, **kwargs: subprocess.CompletedProcess(
+            [], 0, json.dumps(rows), ""
+        ),
+        strict=True,
+    )
+    assert inventory[THREAD].alive
+    assert inventory[THREAD].process_ids == (42, 43)
+
+
+@pytest.mark.parametrize("pid", [0, -1, True, "42", None])
+def test_native_inventory_rejects_unverifiable_processes(pid: object) -> None:
+    with pytest.raises(LaunchError, match="invalid process id"):
+        claude_launch.liveness(
+            run=lambda *args, **kwargs: subprocess.CompletedProcess(
+                [], 0, json.dumps([{"sessionId": THREAD, "pid": pid}]), ""
+            ),
+            strict=True,
+        )
