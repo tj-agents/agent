@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 import config_conflicts
@@ -31,6 +32,7 @@ MANAGED_START = "# BEGIN repo-declared agent capabilities"
 MANAGED_END = "# END repo-declared agent capabilities"
 TABLE = re.compile(r"^\s*\[\s*(marketplaces|plugins)(?:\.|\])")
 HEADER = re.compile(r"^\s*\[")
+GENERATED_PLUGIN = re.compile(r'^\[plugins\."([^"]+)"\]\r?\nenabled = true\r?$', re.MULTILINE)
 OWNERS_FILE = "repo-owners.json"
 GITHUB_OWNER = re.compile(r"github\.com[:/]+([^/]+)/", re.IGNORECASE)
 
@@ -91,17 +93,27 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
 
 
 def declarations(
-    lock_path: Path, lock: dict, root: Path, *, published: bool = True
+    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = ()
 ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
     """Return the selection's marketplaces, enabled plugins and committed permissions.
 
-    Permissions compose every selected plugin's published declaration with the repository overlay
-    (`harness_permissions.compose`). Without `published` they are None: the caller keeps its current ones.
+    The enabled plugins are the selection's transitive dependency closure, from the marketplaces' published
+    catalogs. Permissions compose every enabled plugin's published declaration with the repository overlay
+    (`harness_permissions.compose`). Without `published` there is no network lookup: the closure comes from
+    this machine's fetched catalogs, the `generated` identities the previous generation enabled stay
+    enabled, and permissions are None so the caller keeps its current ones.
     """
     marketplaces, selected_identities = plugin_selection.validate(lock)
     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
-    identities = {identity: True for identity in selected_identities}
-    selected = {plugin_selection.overlay_id(identity) for identity in selected_identities}
+    if published:
+        plugins = published_harness.declarations(marketplaces, selected_identities)
+        enabled = set(plugins) | set(selected_identities)
+    else:
+        enabled = set(published_harness.local_closure(marketplaces, selected_identities))
+        enabled |= {identity for identity in generated
+                    if plugin_selection.valid_identity(identity) and plugin_selection.split(identity)[1] in marketplaces}
+    identities = {identity: True for identity in sorted(enabled)}
+    selected = {plugin_selection.overlay_id(identity) for identity in enabled}
     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
     overlay_path = repository_file(root, ".agents/repository-harness.json")
     if overlay_path.is_file():
@@ -121,7 +133,6 @@ def declarations(
         overlay_permissions = overlay["requires"].get("permissions", overlay_permissions)
     if not published:
         return sources, identities, None
-    plugins = published_harness.declarations(marketplaces, selected_identities)
     return sources, identities, harness_permissions.compose(plugins.values(), overlay_permissions)
 
 
@@ -213,6 +224,15 @@ def unmanaged_codex(text: str) -> str:
         if not skip:
             kept.append(line)
     return "".join(kept).rstrip()
+
+
+def generated_plugins(path: Path) -> set[str]:
+    """Return the plugins the managed Codex section enables: the previous generation's closure."""
+    text = text_at(path) or ""
+    if text.count(MANAGED_START) != 1 or text.count(MANAGED_END) != 1:
+        return set()
+    block = text.split(MANAGED_START, 1)[1].split(MANAGED_END, 1)[0]
+    return set(GENERATED_PLUGIN.findall(block))
 
 
 def codex_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool]) -> str:
@@ -492,7 +512,10 @@ def plan(
         inputs.append(lock_path)
     exclude = preflight_paths(root, [*paths, *prospective_paths], scope=scope, read_paths=inputs, run=execute)
     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
-    sources, identities, permissions = declarations(lock_path, lock, root, published=not preserve_permissions)
+    sources, identities, permissions = declarations(
+        lock_path, lock, root, published=not preserve_permissions,
+        generated=generated_plugins(codex) if preserve_permissions else (),
+    )
     actual_rules = text_at(rules_path)
     expected_rules = actual_rules if permissions is None else codex_rules(permissions)
     if scope == "local":

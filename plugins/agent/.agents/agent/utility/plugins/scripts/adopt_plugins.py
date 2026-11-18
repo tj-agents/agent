@@ -147,12 +147,15 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
                       and plugin_selection.split(identity)[0] in roster["plugins"]}
     elif not requested and not foreign and not removals:
         requested = set(plugin_selection.CORE_PLUGINS)
-    selected = {plugin_selection.plugin_id(name) for name in expand(requested, roster)} | set(kept) | foreign
+    unknown = sorted(requested - roster["plugins"].keys())
+    if unknown:
+        raise lock_io.LockError("Unknown plugin: " + ", ".join(unknown))
+    selected = {plugin_selection.plugin_id(name) for name in requested} | set(kept) | foreign
     selected -= removals
     local = {plugin_selection.split(identity)[0] for identity in selected
              if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
              and plugin_selection.split(identity)[0] in roster["plugins"]}
-    profiles = sorted(local & roster["profiles"])
+    profiles = sorted(set(expand(local, roster)) & roster["profiles"])
     if len(profiles) > 1:
         raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
                                 + "; keep one and drop the others with --remove-plugin <name>")

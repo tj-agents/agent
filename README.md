@@ -87,14 +87,27 @@ Managed launches repair only the failing install step and retry readiness once: 
 (plugin setup).
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
+Readiness verifies the selection and every dependency the installed builds' `.claude-plugin/plugin.json`
+declare, transitively. A plugin Claude demotes because a dependency is disabled, missing or the wrong
+version is reported by name with that dependency.
+
+A selection lists only the plugins a repository chose. Neither host enables a plugin's dependencies on its
+own, so settings generation enables the selection's transitive dependency closure in both hosts, read from
+the `dependencies` of each marketplace's published Claude catalog on `main`. A dependency added in a later
+plugin release is enabled at the next reconciliation without editing the selection. A dependency in a
+marketplace the selection does not declare is refused. `tj prepare` regenerates offline
+(`--preserve-permissions`): it resolves the closure from the marketplace catalogs Claude, or else Codex,
+last fetched onto this machine, and keeps every plugin the previous generation enabled, so it never
+disables a dependency the published resolution added.
 
 Before checking native installations, launch and installer plugin setup reconcile an existing
 repository selection and regenerate both hosts' settings through the same scope and ownership checks
-as explicit adoption. The current Marketplace `main` dependency graph adds missing dependencies and
-removes retired TJ Agents packages, including retirements after the bundled offline snapshot.
+as explicit adoption. Reconciliation against the current Marketplace `main` roster removes retired
+TJ Agents packages, including retirements after the bundled offline snapshot; it never adds dependencies
+to the selection.
 An unreachable marketplace leaves repository files untouched and reports the failure.
-The same reconciliation commits each selected plugin's published harness permissions into the repository's
-settings, never into user settings; see [repository permissions](#repository-permissions).
+The same reconciliation commits the published harness permissions of every enabled plugin into the
+repository's settings, never into user settings; see [repository permissions](#repository-permissions).
 Unconfigured projects are not enrolled. Installer `--check` reports
 selection drift without changing repository files, and a converged rerun writes nothing.
 
@@ -130,7 +143,8 @@ installed runtime and reports the update failure.
 
 A repository's committed `.claude/settings.json` (`permissions.allow` and `permissions.deny`) and
 `.codex/rules/agent-harness.rules` (`allow` and `forbidden` prefix rules) carry the permissions its selected
-plugins declare in `requires.permissions`, merged with its own `.agents/repository-harness.json` overlay.
+plugins and their transitive dependencies declare in `requires.permissions`, merged with its own
+`.agents/repository-harness.json` overlay.
 Adoption and the `tj install` plugin setup reconciliation write them; `--check` reports drift, and a committed
 rule that no selected plugin or the overlay declares any more is removed. An uncommitted Claude entry nobody
 declares is refused rather than discarded. Nothing is written to user settings.
