@@ -59,10 +59,32 @@ def test_apply_replaces_an_owned_agent_whose_package_changed(profile: Path) -> N
     assert path.read_bytes() == packaged()["lane-l4.toml"]
 
 
-def test_apply_refuses_to_overwrite_an_agent_it_does_not_own(profile: Path) -> None:
+def test_apply_takes_over_a_crlf_copy_of_the_packaged_agent_in_place(
+    profile: Path,
+) -> None:
     agents = profile / "agents"
     agents.mkdir()
-    personal = b'name = "lane_l4"\nmodel = "mine"\n'
+    path = agents / "lane-l4.toml"
+    crlf = packaged()["lane-l4.toml"].replace(b"\n", b"\r\n")
+    path.write_bytes(crlf)
+    assert f"adopt {path}" in lane_agents.check(ROOT, profile)
+    lane_agents.apply(ROOT, profile)
+    # The bytes stay as found, so the installer that wrote them can still retire them.
+    assert path.read_bytes() == crlf
+    ownership = json.loads((agents / lane_agents.OWNERSHIP).read_text(encoding="utf-8"))
+    assert ownership["files"]["lane-l4.toml"] == lane_agents.digest(crlf)
+    assert lane_agents.check(ROOT, profile) == []
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_apply_refuses_to_overwrite_an_agent_it_does_not_own(
+    profile: Path, newline: bytes
+) -> None:
+    agents = profile / "agents"
+    agents.mkdir()
+    packaged_agent = packaged()["lane-l4.toml"]
+    personal = packaged_agent.replace(b"gpt-6.1-terra", b"mine").replace(b"\n", newline)
+    assert personal.splitlines() != packaged_agent.splitlines()
     (agents / "lane-l4.toml").write_bytes(personal)
     with pytest.raises(lane_agents.LaneAgentError, match="did not deliver it"):
         lane_agents.apply(ROOT, profile)

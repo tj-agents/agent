@@ -219,8 +219,8 @@ in the systemd journal and opens tmux windows, creating and attaching to `tj-rec
 
 Agent publishes one lane agent per rung, rendered from the lane tables in `.agents/agent/resources/lanes`:
 Claude loads the `agent` plugin's `lane-l1` to `lane-l7` agents from its `agents/` directory, and the Codex
-lane agents step delivers `lane_l1` to `lane_l7` into `<CODEX_HOME>/agents`, owning only the files it
-wrote. After changing a lane table or agent body, rerun the renderer and regenerate:
+lane agents step delivers `lane_l1` to `lane_l7` into `<CODEX_HOME>/agents`. It owns the files it wrote
+and adopts in place a copy that differs only in line endings; it refuses any other file. After changing a lane table or agent body, rerun the renderer and regenerate:
 
 ```powershell
 python -B .agents/agent/resources/lanes/render_agents.py
