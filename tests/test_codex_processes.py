@@ -308,18 +308,17 @@ def test_daemon_state_never_erases_an_embedded_owner(
     monkeypatch: pytest.MonkeyPatch,
     status: str,
 ) -> None:
-    class Server:
-        @staticmethod
-        def request(method: str, arguments: object = None) -> dict[str, object]:
-            if method == "thread/loaded/list":
-                return {"data": [SESSION], "nextCursor": None}
-            assert method == "thread/read"
-            return {"thread": {"status": {"type": status}}}
+    def request(method: str, arguments: object = None) -> dict[str, object]:
+        if method == "thread/loaded/list":
+            return {"data": [SESSION], "nextCursor": None}
+        assert method == "thread/read"
+        return {"thread": {"status": {"type": status}}}
 
     monkeypatch.setattr(
         processes, "inventory", lambda: {SESSION: Liveness(True, process_ids=(11,))}
     )
-    monkeypatch.setattr(codex_launch, "daemon", lambda: nullcontext(Server()))
+    server = SimpleNamespace(request=request)
+    monkeypatch.setattr(codex_launch, "daemon", lambda: nullcontext(server))
     live = codex_launch.liveness()[SESSION]
     assert live.alive
     assert live.process_ids == (11,)

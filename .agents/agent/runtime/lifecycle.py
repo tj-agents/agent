@@ -124,7 +124,10 @@ def open_items(refs: list[str] | None = None, cwd: Path | None = None) -> list[I
 
     with ThreadPoolExecutor(max_workers=LOOKUP_WORKERS) as pool:
         entries = list(pool.map(linked_sessions, refs))
-        live = liveness({Host(session["host"]) for entry in entries for session in entry["sessions"]})
+        hosts: set[Host] = set()
+        for entry in entries:
+            hosts.update(Host(session["host"]) for session in entry["sessions"])
+        live = liveness(hosts)
         items = list(pool.map(resolve, entries))
     return [item for item in items if not item.card or item.card.get("state") != DONE]
 

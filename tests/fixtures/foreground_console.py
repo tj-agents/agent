@@ -16,5 +16,9 @@ def identity() -> int | list[int]:
     return result
 
 
-if __name__ == "__main__":
+def main() -> None:
     Path(sys.argv[1]).write_text(json.dumps(identity()), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()

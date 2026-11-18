@@ -36,7 +36,7 @@ def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> 
         Host.CODEX,
         (str(fixture), str(receipt), "--help"),
         cwd=tmp_path,
-        environ=os.environ,
+        environ={},
         resolver=lambda: sys.executable,
     )
     assert code == 0
