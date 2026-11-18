@@ -14,6 +14,6 @@
   "displayName": "Codex",
   "dependencies": [
     "base@tj-agents",
-    "agent"
+    "agent@tj-agents"
   ]
 }
