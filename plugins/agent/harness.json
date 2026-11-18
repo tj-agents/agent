@@ -11,12 +11,6 @@
         "repository": "tj-agents/marketplace"
       }
     ],
-    "plugins": [
-      "tj-agents/agent",
-      "tj-agents/base",
-      "tj-agents/agent-store",
-      "tj-agents/cli"
-    ],
     "hooks": [
       {
         "path": ".agents/agent/runtime/session_hook.py",
@@ -35,6 +29,12 @@
     "permissions": {
       "claude_allow": [],
       "codex_prefix_rules": []
-    }
+    },
+    "plugins": [
+      "tj-agents/agent",
+      "tj-agents/base",
+      "tj-agents/agent-store",
+      "tj-agents/cli"
+    ]
   }
 }
