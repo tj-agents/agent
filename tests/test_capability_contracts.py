@@ -171,7 +171,7 @@ def test_handoff_preserves_item_parent_and_standing_rule(
     ) -> dict[str, dict[str, str]]:
         assert directory == tmp_path and title == "parity"
         calls.append((selected, arguments, options))
-        return {"launch": {"launch_id": "fixture"}}
+        return {"launch": {"launch_id": "fixture"}, "confirmation": "dispatched"}
 
     monkeypatch.setattr(cli, "launch", launch)
     prompt = tmp_path / "prompt.md"

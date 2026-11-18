@@ -325,8 +325,12 @@ The store holds links only. Its release is pinned in
 
 Managed Codex reopen and recovery use the same ownership admission and native version requirement as new
 handoffs. They preserve the existing thread and project trust, retain the user's daemon settings, and
-confirm the replacement's exact native process without starting a new turn. Missing process evidence is a
-visible recovery failure.
+verify the replacement's exact native process without starting a new turn. Recovery reports `started`
+with `confirmation: "process-started"`; this does not establish that Codex has loaded the conversation.
+Codex defers its startup hook until the first real user turn, so conversation confirmation remains pending
+until that native evidence exists. Missing native history or process evidence is a visible recovery failure.
+Launch results distinguish `dispatched`, `process-started` and `first-turn` evidence. A new Codex handoff
+reports `first-turn` only after verifying the requested model and effort in its genuine first turn.
 
 `tj status` lists registered sessions and their linked open work by default, including sessions without a
 work item. Use `tj item mine` to list all open work assigned to you. Status shows native liveness separately

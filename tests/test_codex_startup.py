@@ -16,7 +16,7 @@ import agent_cli
 import agent_store
 import pytest
 from codex import launch, permissions, startup
-from launch_contract import Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch
 from launch_errors import LaunchError, LaunchTimeout
 from tj_agent.host import Host
 from tj_cli import process
@@ -132,6 +132,7 @@ def native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Native:
     monkeypatch.setattr(startup, "connection", fake.connect)
     monkeypatch.setattr(startup, "admit", lambda *args: fake.events.append("admit"))
     monkeypatch.setattr(startup.processes, "inventory", inventory)
+    monkeypatch.setattr(startup.processes, "record_prepared", lambda *_args: True)
     monkeypatch.setattr(
         launch,
         "liveness",
@@ -488,7 +489,7 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
         {},
     )
     startup.abandon(prepared, "new-launch", False)
-    startup.confirm(prepared, [], "launch")
+    assert startup.confirm(prepared, [], "launch") == Confirmation.PROCESS_STARTED
     assert prepared.command == (
         "fixture-codex",
         "--cd",
@@ -524,6 +525,19 @@ def test_resume_preserves_disabled_daemon_without_starting_it(
     )
     assert "--no-daemon" in prepared.command
     assert native.features == {"daemon_auto_start": False}
+
+
+def test_resume_refuses_missing_native_history_before_dispatch(native: Native) -> None:
+    native.failure = "thread/read"
+    with pytest.raises(LaunchError, match="failed thread/read"):
+        startup.prepare(
+            native.directory,
+            "Existing",
+            launch.resume_arguments(native.directory, "Existing", THREAD),
+            "tj",
+            "fixture-codex",
+            {},
+        )
 
 
 def test_resume_refuses_a_thread_already_loaded_before_dispatch(native: Native) -> None:
@@ -572,7 +586,7 @@ def test_resume_requires_project_trust(
         )
 
 
-def test_resume_confirmation_waits_for_attachment_without_a_new_turn(
+def test_resume_reports_only_process_start_without_a_new_turn(
     native: Native, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepared = startup.prepare(
@@ -596,7 +610,10 @@ def test_resume_confirmation_waits_for_attachment_without_a_new_turn(
         waits.append(seconds)
         native.status = "idle"
 
-    startup.confirm(prepared, [], "launch", clock=lambda: 0, wait=wait)
+    assert (
+        startup.confirm(prepared, [], "launch", clock=lambda: 0, wait=wait)
+        == Confirmation.PROCESS_STARTED
+    )
     assert waits == [0.5]
 
 
@@ -640,12 +657,13 @@ def test_resume_confirmation_waits_for_the_spawned_child_without_submitting_a_tu
     observed: dict[str, Liveness] = {}
     calls: list[tuple[str, str]] = []
 
-    def record_prepared(session: str, launch_id: str) -> None:
+    def record_prepared(session: str, launch_id: str) -> bool:
         calls.append((session, launch_id))
         if spawned:
             observed[session] = Liveness(
                 True, process_ids=(22,), launch_ids=(launch_id,)
             )
+        return spawned
 
     monkeypatch.setattr(startup.processes, "inventory", lambda **_options: observed)
     monkeypatch.setattr(startup.processes, "record_prepared", record_prepared)
@@ -661,6 +679,21 @@ def test_resume_confirmation_waits_for_the_spawned_child_without_submitting_a_tu
             startup.confirm(prepared, [], "replacement", timeout=0, clock=lambda: 0)
     assert calls == [(THREAD, "replacement")]
     assert not rollout.exists()
+
+
+def test_saved_live_process_cannot_confirm_a_superseded_binding(
+    native: Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepared = PreparedLaunch(
+        ("fixture-codex", "--cd", str(native.directory)), f"codex:{THREAD}"
+    )
+
+    def refused(*_args: str) -> bool:
+        raise LaunchError("native session is not reciprocally bound to this launch")
+
+    monkeypatch.setattr(startup.processes, "record_prepared", refused)
+    with pytest.raises(LaunchError, match="not reciprocally bound"):
+        startup.confirm(prepared, [], "launch", timeout=0)
 
 
 @pytest.mark.parametrize(

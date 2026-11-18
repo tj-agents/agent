@@ -106,11 +106,11 @@ def record(session: str, launch: str) -> None:
     save(Observation(session, launch, native))
 
 
-def record_prepared(session: str, launch: str) -> None:
+def record_prepared(session: str, launch: str) -> bool:
     """Observe an exact prebound native child before its first interactive turn."""
     receipt = query(["spawned", "--launch-id", launch, "--session", f"codex:{session}"])
     if receipt is None:
-        return
+        return False
     if (
         not isinstance(receipt, dict)
         or receipt.get("launch_id") != launch
@@ -120,6 +120,7 @@ def record_prepared(session: str, launch: str) -> None:
             "Native spawn receipt belongs to a different launch or session"
         )
     save(Observation(session, launch, Identity.parse(receipt.get("native"))))
+    return True
 
 
 def save(observation: Observation) -> None:

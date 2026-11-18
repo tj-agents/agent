@@ -15,7 +15,7 @@ import agent_store
 import boot_history
 import pytest
 import tj_recover
-from launch_contract import Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch
 from tj_agent.host import Host
 
 ITEM = "github:github.com/tj-agents/agent:124"
@@ -69,8 +69,8 @@ class FakeHost:
 
     def confirm(
         self, prepared: PreparedLaunch, arguments: list[str], launch_id: str
-    ) -> None:
-        pass
+    ) -> Confirmation:
+        return Confirmation.PROCESS_STARTED
 
 
 @dataclass
@@ -149,7 +149,10 @@ class Recovery:
                 **options,
             }
         )
-        return {"launch": {"launch_id": "new-launch"}}
+        return {
+            "launch": {"launch_id": "new-launch"},
+            "confirmation": Confirmation.PROCESS_STARTED,
+        }
 
     def run(self, *arguments: str) -> tuple[int, list[dict[str, Any]]]:
         output = io.StringIO()
@@ -183,7 +186,8 @@ def test_recover_previous_uptime_session_without_item(
     recovery.session(host, "recent")
     code, rows = recovery.run()
     assert code == 0
-    assert rows[0]["action"] == "resumed"
+    assert rows[0]["action"] == "started"
+    assert rows[0]["confirmation"] == "process-started"
     assert recovery.launched[0]["arguments"] == ["resume", "recent"]
     assert recovery.launched[0]["item"] is None
     assert recovery.launched[0]["want_session"] is True
@@ -233,7 +237,7 @@ def test_recover_cleanly_ended_sessions_require_explicit_ended(
 ) -> None:
     recovery.session(Host.CODEX, "finished", state="ended", end_reason="closed")
     assert recovery.run("--older")[1] == []
-    assert recovery.run("--ended")[1][0]["action"] == "resumed"
+    assert recovery.run("--ended")[1][0]["action"] == "started"
 
 
 def test_recover_dry_run_changes_nothing(recovery: Recovery) -> None:
@@ -318,7 +322,7 @@ def test_recover_missing_directory_is_reported_and_others_continue(
     recovery.session(Host.CLAUDE, "okay")
     code, rows = recovery.run()
     assert code == 1
-    assert [row["action"] for row in rows] == ["failed", "resumed"]
+    assert [row["action"] for row in rows] == ["failed", "started"]
     assert "missing" in rows[0]["error"]
     assert len(recovery.launched) == 1
 
@@ -464,7 +468,7 @@ def test_recover_open_reopens_exactly_the_open_tabs_whose_agent_is_dead(
     code, rows = recovery.run("--open")
     assert code == 0
     assert [(row["session"], row["action"]) for row in rows] == [
-        ("claude:was-open", "resumed")
+        ("claude:was-open", "started")
     ]
     assert recovery.launched[0]["title"] == "latest"
     assert recovery.launched[0]["arguments"] == ["resume", "was-open"]
@@ -489,7 +493,7 @@ def test_recover_open_reports_a_launch_with_no_session(recovery: Recovery) -> No
 def test_recover_closes_the_launch_it_reopens(recovery: Recovery) -> None:
     recovery.session(Host.CODEX, "recent", launch_id="original")
     open_launch(recovery, "original", "codex:recent")
-    assert recovery.run()[1][0]["action"] == "resumed"
+    assert recovery.run()[1][0]["action"] == "started"
     assert recovery.launches[0]["open"] is False
 
 
@@ -510,7 +514,7 @@ def test_recover_open_reports_a_resume_whose_old_tab_could_not_be_closed(
     open_launch(recovery, "unwritable", "claude:was-open")
     code, rows = recovery.run("--open")
     assert code == 0
-    assert rows[0]["action"] == "resumed"
+    assert rows[0]["action"] == "started"
     assert rows[0]["launch_id"] == "new-launch"
     assert "database is locked" in rows[0]["error"]
 

@@ -81,7 +81,8 @@ def main(argv=None):
             selection += f' at {effort}'
         print(f"Launched Codex handoff tab '{args.title}' in {working_directory} on {selection} with prompt {prompt_path}")
         print(json.dumps({"worktree": str(working_directory), "prompt_path": str(prompt_path), "title": args.title,
-                          "parent": parent, "launch_id": shown["launch"]["launch_id"]}))
+                          "parent": parent, "launch_id": shown["launch"]["launch_id"],
+                          "confirmation": shown["confirmation"]}))
         return 0
     except agent_cli.LaunchError as exc:
         return agent_cli.report_launch_failure(exc)

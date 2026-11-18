@@ -61,7 +61,9 @@ def test_start_resolves_lane_before_creating_worktree(
         "url": "issue",
     }
     tracker = Mock(return_value=card)
-    launch = Mock(return_value={"launch": {"launch_id": "launch-1"}})
+    launch = Mock(
+        return_value={"launch": {"launch_id": "launch-1"}, "confirmation": "first-turn"}
+    )
     creator = Mock(return_value=str(tmp_path))
     monkeypatch.setattr(lifecycle, "tj_item", tracker)
     monkeypatch.setattr(lifecycle, "open_items", Mock(return_value=[]))
@@ -103,7 +105,7 @@ def test_start_releases_creator_claim_before_the_child_starts(
             "--path",
             str(tmp_path),
         )
-        return {"launch": {"launch_id": "child-launch"}}
+        return {"launch": {"launch_id": "child-launch"}, "confirmation": "first-turn"}
 
     monkeypatch.setattr(lifecycle, "tj_item", tracker)
     monkeypatch.setattr(lifecycle, "open_items", Mock(return_value=[]))

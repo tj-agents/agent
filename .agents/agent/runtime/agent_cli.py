@@ -1,7 +1,7 @@
 """Shared launch primitives for the native agent CLIs, on Windows and POSIX.
 
-Managed agent tabs open in Windows Terminal or tmux; a launch is confirmed when the
-managed wrapper records it in agent-store.
+Managed agent tabs open in Windows Terminal or tmux. The result distinguishes wrapper
+registration from the provider's observed startup stage.
 """
 
 from __future__ import annotations
@@ -352,7 +352,7 @@ def launch(
     tmux_session=None,
     resume_from=None,
 ):
-    """Open a managed tab for one agent and return its confirmed launch."""
+    """Open a managed tab and return its recorded launch and observed startup stage."""
     adapter = host_launch(host)
     tj = shutil.which("tj")
     if not tj:
@@ -386,7 +386,7 @@ def launch(
             host, directory, title, prepared, tj, launch_id, item, parent, want_session,
             cleared, forced, environ, dispatch, tmux_session, resume_from,
         )
-        adapter.confirm(prepared, arguments, launch_id)
+        shown["confirmation"] = adapter.confirm(prepared, arguments, launch_id)
         completed = True
         return shown
     finally:

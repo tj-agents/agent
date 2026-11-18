@@ -15,7 +15,7 @@ from uuid import UUID
 import agent_store
 import transcripts
 from codex import hook_trust, permissions, processes
-from launch_contract import PreparedLaunch
+from launch_contract import Confirmation, PreparedLaunch
 from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 from tj_cli import process
@@ -184,6 +184,13 @@ def prepare(
                 document, directory, windows=os.name == "nt", wsl=inside_wsl()
             )
             if options is None:
+                existing = server.request(
+                    "thread/read", {"threadId": thread_id, "includeTurns": False}
+                ).get("thread")
+                if not isinstance(existing, dict) or existing.get("id") != thread_id:
+                    raise LaunchError(
+                        "Codex did not return the requested existing thread"
+                    )
                 prepared = PreparedLaunch(
                     (native, *arguments, "--no-daemon"), f"codex:{thread_id}"
                 )
@@ -241,10 +248,12 @@ def confirm(
     timeout: float = 180,
     clock: Callable[[], float] = time.monotonic,
     wait: Callable[[float], None] = time.sleep,
-) -> None:
+) -> Confirmation:
     if not prepared.created:
-        confirm_resume(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
-        return
+        await_native_process(
+            prepared, launch_id, timeout=timeout, clock=clock, wait=wait
+        )
+        return Confirmation.PROCESS_STARTED
     directory = Path(prepared.command[2])
     options = start_options(directory, arguments)
     thread_id = native_id(str(prepared.session).removeprefix("codex:"))
@@ -311,10 +320,11 @@ def confirm(
             f"effort={effort!r}; requested model={options.model!r}, "
             f"effort={options.effort!r}. Check its tab before continuing"
         )
-    confirm_resume(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
+    await_native_process(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
+    return Confirmation.FIRST_TURN
 
 
-def confirm_resume(
+def await_native_process(
     prepared: PreparedLaunch,
     launch_id: str,
     *,
@@ -326,15 +336,15 @@ def confirm_resume(
     deadline = clock() + timeout
     while True:
         try:
+            # Immutable observations retain liveness evidence after ownership changes.
+            # Only a fresh reciprocal binding check can confirm this particular launch.
+            current = processes.record_prepared(thread_id, launch_id)
             observed = processes.inventory(launch_id=launch_id).get(thread_id)
-            if observed is None:
-                processes.record_prepared(thread_id, launch_id)
-                observed = processes.inventory(launch_id=launch_id).get(thread_id)
         except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as error:
             raise LaunchError(
                 f"Cannot verify Codex native process for {prepared.session}: {error}"
             ) from error
-        if observed is not None and observed.alive:
+        if current and observed is not None and observed.alive:
             return
         shown = agent_store.run("show", "--launch-id", launch_id)
         record = shown.get("launch")

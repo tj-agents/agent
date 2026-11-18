@@ -2,8 +2,15 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
+
+
+class Confirmation(StrEnum):
+    DISPATCHED = "dispatched"
+    PROCESS_STARTED = "process-started"
+    FIRST_TURN = "first-turn"
 
 
 @dataclass(frozen=True)
@@ -35,7 +42,7 @@ class Launch(Protocol):
 
     def abandon(self, prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None: ...
 
-    def confirm(self, prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> None: ...
+    def confirm(self, prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> Confirmation: ...
 
     def start_arguments(self, directory: Path, title: str, prompt: str, model: str | None,
                         effort: str | None) -> list[str]: ...

@@ -21,7 +21,7 @@ import lifecycle
 import session_resume
 import work_item
 from host_sessions import SESSIONS
-from launch_contract import Liveness
+from launch_contract import Confirmation, Liveness
 from tj_agent.host import Host
 
 STALE_REASON = "recovery-stale"
@@ -33,7 +33,7 @@ class Action(StrEnum):
     END = "end"
     FAILED = "failed"
     ENDED = "ended"
-    RESUMED = "resumed"
+    STARTED = "started"
     RESPAWNED = "respawned"
     SKIP = "skip"
 
@@ -52,6 +52,7 @@ class Recovery:
     error: str | None = None
     previous_launch_id: str | None = None
     open_launches: tuple[str, ...] = ()
+    confirmation: Confirmation | None = None
 
     @property
     def host(self) -> Host:
@@ -172,7 +173,8 @@ def plan(
     dead = [agent for agent in agents if not agent.alive]
     cutoff = (
         None
-        if older or not any(
+        if older
+        or not any(
             agent.host not in errors
             and (agent.host is not Host.CODEX or agent.live is not None)
             for agent in dead
@@ -278,9 +280,10 @@ def restore(row: Recovery) -> Recovery:
     return close_launches(
         replace(
             row,
-            action=Action.RESUMED,
+            action=Action.STARTED,
             launch_id=shown["launch"]["launch_id"],
             previous_launch_id=row.launch_id,
+            confirmation=Confirmation(shown["confirmation"]),
         )
     )
 
@@ -345,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         not args.dry_run
         and sys.platform == "linux"
         and not os.environ.get("TMUX")
-        and any(row.action == Action.RESUMED for row in rows)
+        and any(row.action == Action.STARTED for row in rows)
     ):
         try:
             agent_cli.attach_tmux("tj-recover")

@@ -13,7 +13,7 @@ from tj_cli import process
 from codex import processes, startup
 
 import agent_store
-from launch_contract import Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch
 from launch_errors import LaunchError
 from native_executable import is_script
 
@@ -256,8 +256,8 @@ def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
     startup.abandon(prepared, launch_id, dispatched)
 
 
-def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> None:
-    startup.confirm(prepared, arguments, launch_id)
+def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> Confirmation:
+    return startup.confirm(prepared, arguments, launch_id)
 
 
 def start_arguments(directory, title, prompt, model, effort):

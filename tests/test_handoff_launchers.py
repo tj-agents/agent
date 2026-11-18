@@ -65,7 +65,9 @@ def launcher(
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Do the work.", encoding="utf-8")
     cli = load(PACKAGE / "runtime/agent_cli.py", f"handoff_cli_{host}")
-    launch = Mock(return_value={"launch": {"launch_id": "launch-1"}})
+    launch = Mock(
+        return_value={"launch": {"launch_id": "launch-1"}, "confirmation": "dispatched"}
+    )
     item = Mock(side_effect=cli.resolve_item)
     executable = Mock(return_value=("/bin/codex", {}))
     monkeypatch.setattr(cli, "launch", launch)
