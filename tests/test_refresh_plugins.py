@@ -832,6 +832,7 @@ def test_open_codex_sessions_install_through_the_daemon(
     assert daemon.requests == [
         ("plugin/install", {"marketplacePath": manifest, "pluginName": "agent"}),
         ("plugin/install", {"marketplacePath": manifest, "pluginName": "base"}),
+        ("config/batchWrite", {"edits": [], "reloadUserConfig": True}),
         ("thread/loaded/list", {"cursor": None}),
     ]
     assert trusted == [
