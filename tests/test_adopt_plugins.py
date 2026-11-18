@@ -103,8 +103,26 @@ class RemovePluginTests(unittest.TestCase):
 
     def test_default_selection_never_selects_the_retired_machine_package(self):
         ADOPT.run(self.root, [], [], "write")
-        self.assertIn("cli@tj-agents", self.selected())
+        self.assertEqual(sorted(ADOPT.plugin_selection.plugin_id(name) for name in ADOPT.plugin_selection.CORE_PLUGINS),
+                         self.selected())
         self.assertNotIn("machine@tj-agents", self.selected())
+
+    def test_adoption_writes_only_the_requested_plugins_not_their_dependencies(self):
+        ADOPT.run(self.root, [], ["python"], "write")
+        self.assertEqual(["python@tj-agents"], self.selected())
+
+    def test_adoption_keeps_an_existing_flattened_selection_unchanged(self):
+        flattened = ["agent-store@tj-agents", "agent@tj-agents", "base@tj-agents", "cli@tj-agents"]
+        self.write_selection(flattened)
+        ADOPT.run(self.root, [], ["python"], "write")
+        self.assertEqual(sorted([*flattened, "python@tj-agents"]), self.selected())
+
+    def test_removal_of_an_unlisted_dependency_of_a_remaining_plugin_refuses(self):
+        self.write_selection(["agent@tj-agents"])
+        before = (self.root / ".agents" / "plugins.json").read_bytes()
+        with self.assertRaisesRegex(LockError, "prerequisite required by remaining plugins: cli"):
+            ADOPT.run(self.root, [], [], "write", removals=["cli"])
+        self.assertEqual(before, (self.root / ".agents" / "plugins.json").read_bytes())
 
     def test_automatic_reconciliation_checks_then_repairs_both_hosts_and_is_idempotent(self):
         self.write_selection(["engineering@tj-agents", "machine@tj-agents", "python@tj-agents"])
@@ -114,8 +132,7 @@ class RemovePluginTests(unittest.TestCase):
             self.assertEqual(before, (self.root / ".agents/plugins.json").read_bytes())
             self.assertFalse((self.root / ".codex").exists())
             ADOPT.reconcile(self.root, "write")
-        for identity in ("agent@tj-agents", "cli@tj-agents", "python@tj-agents"):
-            self.assertIn(identity, self.selected())
+        self.assertEqual(["engineering@tj-agents", "python@tj-agents"], self.selected())
         for path in (".agents/plugins.json", ".claude/settings.json", ".codex/config.toml"):
             self.assertNotIn("machine@tj-agents", (self.root / path).read_text(encoding="utf-8"))
         before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
@@ -265,9 +282,11 @@ def test_run_selects_a_single_profile(project: Path, profile_roster: dict[str, o
     assert "personal@tj-agents" in selection(project)
 
 
-def test_run_adds_the_profile_an_organization_extends(project: Path, profile_roster: dict[str, object]) -> None:
+def test_run_leaves_the_profile_an_organization_extends_to_its_dependencies(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
     ADOPT.run(project, [], ["example-employer"], "write", roster=profile_roster)
-    assert {"example-employer@tj-agents", "work@tj-agents"} <= set(selection(project))
+    assert selection(project) == ["example-employer@tj-agents"]
 
 
 @pytest.mark.parametrize("plugins", [["personal", "work"], ["personal", "example-employer"]])
@@ -316,7 +335,7 @@ def test_run_selects_the_profile_a_matching_employer_extends(
     installed_employers.append(employer())
     set_origin(project, "git@example.test:example-employer/service.git")
     ADOPT.run(project, [], ["example-employer"], "write", roster=profile_roster)
-    assert {"example-employer@tj-agents", "work@tj-agents"} <= set(selection(project))
+    assert selection(project) == ["example-employer@tj-agents"]
 
 
 def test_run_selects_personal_where_no_installed_employer_matches(

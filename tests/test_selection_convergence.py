@@ -36,7 +36,9 @@ class SelectionConvergenceTests(unittest.TestCase):
             self.project / "producer", dict.fromkeys(names, published_plugins.EMPTY))
         (source / ".claude-plugin").mkdir()
         (source / ".claude-plugin/marketplace.json").write_text(
-            published_plugins.catalog(names, commit), encoding="utf-8")
+            published_plugins.catalog(names, commit, {plugin["name"]: plugin.get("requires", [])
+                                                      for plugin in snapshot["marketplace"]["plugins"]}),
+            encoding="utf-8")
         for arguments in (["init", "--initial-branch=main"], ["add", "plugins.json", ".claude-plugin"],
                           ["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
                            "-c", "core.hooksPath=", "commit", "-m", "Marketplace fixture"]):
@@ -68,11 +70,11 @@ class SelectionConvergenceTests(unittest.TestCase):
         self.assertEqual(before, (self.project / ".agents/plugins.json").read_bytes())
 
         def inventory(project, *_args):
-            selection = required_plugins.selected(project)
-            self.assertIn("agent@tj-agents", selection)
-            self.assertIn("cli@tj-agents", selection)
+            self.assertEqual(("engineering@tj-agents",), required_plugins.selected(project))
             self.assertTrue((project / ".codex/config.toml").is_file())
-            self.assertTrue((project / ".claude/settings.json").is_file())
+            enabled = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))["enabledPlugins"]
+            self.assertTrue(enabled["agent@tj-agents"])
+            self.assertTrue(enabled["cli@tj-agents"])
             return None
 
         context = install.Context(home=self.project, environ={}, windows=False, project=self.project)
@@ -91,7 +93,8 @@ class SelectionConvergenceTests(unittest.TestCase):
                                  "--converge-existing", "--mode", "write"],
                                 capture_output=True, text=True, encoding="utf-8", timeout=15, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("cli@tj-agents", required_plugins.selected(self.project))
+        self.assertEqual(("engineering@tj-agents",), required_plugins.selected(self.project))
+        self.assertIn('[plugins."cli@tj-agents"]', (self.project / ".codex/config.toml").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
