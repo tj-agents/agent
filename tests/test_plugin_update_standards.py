@@ -1,6 +1,7 @@
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -20,12 +21,23 @@ from tree_digest import Digests
 
 HOSTS = {host.value: host for host in Host}
 PREFETCH_STANDARDS = plugin_update.prefetch_standards
+TRUST_HOOKS: Callable[[plugin_update.Report], bool] = codex_installed.trust_hooks
 
 
 def test_failed_marketplace_still_settles_installed_hook_trust(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[str] = []
+    state = tmp_path / "state"
+    state.mkdir()
+    activated = state / "activated-codex.txt"
+    activated.write_text("previously activated", encoding="utf-8")
+    monkeypatch.setattr(jobs, "state_directory", lambda: state)
+    monkeypatch.setattr(codex_launch, "executable", lambda: "fixture-codex")
+    monkeypatch.setattr(codex_installed.hook_trust, "pending", lambda _state: ["trust"])
+    monkeypatch.setattr(
+        codex_installed.hook_trust, "trust_installed", lambda *_args: {}
+    )
 
     def fail_marketplace(
         report: plugin_update.Report, marketplaces: tuple[str, ...]
@@ -34,7 +46,7 @@ def test_failed_marketplace_still_settles_installed_hook_trust(
 
     def trust_hooks(_report: plugin_update.Report) -> bool:
         events.append("trust")
-        return True
+        return TRUST_HOOKS(_report)
 
     monkeypatch.setattr(plugin_update, "already_current", lambda *_args: True)
     monkeypatch.setattr(codex_installed, "update_marketplaces", fail_marketplace)
@@ -275,6 +287,7 @@ def test_current_plugins_activate_once_per_marketplace_revision(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(plugin_update, "already_current", lambda *args: True)
     monkeypatch.setattr(required_plugins, "check", lambda *args: None)
+    monkeypatch.setattr(codex_installed, "trust_hooks", lambda _report: False)
     events: list[str] = []
     monkeypatch.setattr(
         codex_installed, "activate", lambda *args: events.append("activated")
@@ -287,6 +300,96 @@ def test_current_plugins_activate_once_per_marketplace_revision(
             Host.CODEX, Digests(tmp_path / "state"), {}
         ).failures
     assert events == ["activated", "activated"]
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_activation_reloads_approved_hooks_in_the_executing_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
+) -> None:
+    events: list[str] = []
+
+    @dataclass(frozen=True, slots=True)
+    class Backend:
+        directory: Path
+        failed: bool
+        events: list[str]
+
+        def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
+            if method == "config/batchWrite":
+                assert params == {"edits": [], "reloadUserConfig": True}
+                self.events.append("reload approvals")
+                if self.failed:
+                    raise RuntimeError("owning backend reload failed")
+                return {"status": "ok"}
+            if method == "thread/loaded/list":
+                self.events.append("loaded threads")
+                return {"data": ["existing-thread"]}
+            assert method == "thread/read"
+            assert params["threadId"] == "existing-thread"
+            return {"thread": {"cwd": str(self.directory)}}
+
+    @contextmanager
+    def connect(timeout: int) -> Iterator[Backend]:
+        assert timeout == codex_installed.INSTALL_TIMEOUT_SECONDS
+        yield Backend(tmp_path, failed, events)
+
+    monkeypatch.setattr(codex_launch, "daemon", connect)
+    monkeypatch.setattr(required_plugins, "project_root", lambda directory: directory)
+    monkeypatch.setattr(
+        codex_installed,
+        "update_project_standards",
+        lambda _directory: events.append("standards"),
+    )
+    report = plugin_update.Report()
+    codex_installed.activate_open_sessions(report)
+
+    assert events == (
+        ["reload approvals"]
+        if failed
+        else ["reload approvals", "loaded threads", "standards"]
+    )
+    assert report.failures == (
+        ["codex: open sessions: owning backend reload failed"] if failed else []
+    )
+
+
+def test_repaired_approvals_invalidate_activation_until_backend_reload_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(plugin_update, "already_current", lambda *_args: True)
+    monkeypatch.setattr(required_plugins, "check", lambda *_args: None)
+    revision = "a" * 40
+    monkeypatch.setattr(plugin_update, "marketplace_revision", lambda *_args: revision)
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(jobs, "state_directory", lambda: state)
+    pending = iter([["trust updated hooks"], [], []])
+    monkeypatch.setattr(codex_installed, "trust_hooks", TRUST_HOOKS)
+    monkeypatch.setattr(
+        codex_installed.hook_trust, "pending", lambda _state: next(pending)
+    )
+    monkeypatch.setattr(
+        codex_installed.hook_trust, "trust_installed", lambda *_args: {}
+    )
+    monkeypatch.setattr(codex_launch, "executable", lambda: "fixture-codex")
+    receipt = state / "activated-codex.txt"
+    receipt.write_text(revision, encoding="utf-8")
+    attempts: list[str] = []
+
+    def activate(report: plugin_update.Report) -> None:
+        attempts.append("reload")
+        if len(attempts) == 1:
+            report.fail(Host.CODEX, "open sessions", "reload failed")
+
+    monkeypatch.setattr(codex_installed, "activate", activate)
+    first = plugin_update.update(Host.CODEX, Digests(state), {})
+    assert first.failures == ["codex: open sessions: reload failed"]
+    assert not receipt.exists()
+    assert not plugin_update.update(Host.CODEX, Digests(state), {}).failures
+    assert receipt.read_text(encoding="utf-8") == revision
+    assert not plugin_update.update(Host.CODEX, Digests(state), {}).failures
+    assert attempts == ["reload", "reload"]
 
 
 def test_a_liveness_check_failure_is_reported_until_it_answers(

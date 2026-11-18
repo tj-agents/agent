@@ -491,6 +491,7 @@ def trust_hooks(report: Any) -> bool:
     if not hook_trust.pending(state):
         return False
     try:
+        (state / f"activated-{HOST}.txt").unlink(missing_ok=True)
         trusted = hook_trust.trust_installed(
             launch.executable(), state, MARKETPLACE_OVERRIDES
         )
@@ -547,6 +548,7 @@ def install_through_daemon(report: Any, identities: list[str]) -> None:
 def activate_open_sessions(report: Any) -> None:
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
+            server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
             projects = {
                 required_plugins.project_root(directory)
                 for directory in loaded_directories(server)
