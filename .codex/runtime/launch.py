@@ -235,9 +235,8 @@ def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
             "Managed Codex requires a locally owned native process; "
             "tj codex cannot manage a remote connection"
         )
-    if "--no-daemon" in before_prompt:
-        return options
-    return ("--no-daemon", *options)
+    missing = tuple(option for option in startup.MANAGED_OPTIONS if option not in before_prompt)
+    return (*missing, *options)
 
 
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:

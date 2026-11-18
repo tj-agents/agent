@@ -170,9 +170,36 @@ def test_native_maintenance_commands_bypass_preparation_and_session_wrapper(
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [
-        (("--no-daemon", "prompt"), ("--no-daemon", "prompt")),
-        (("--", "--no-daemon"), ("--no-daemon", "--", "--no-daemon")),
-        (("--", "--remote=literal"), ("--no-daemon", "--", "--remote=literal")),
+        (
+            ("--no-daemon", "prompt"),
+            ("--dangerously-bypass-hook-trust", "--no-daemon", "prompt"),
+        ),
+        (
+            ("--", "--no-daemon"),
+            ("--no-daemon", "--dangerously-bypass-hook-trust", "--", "--no-daemon"),
+        ),
+        (
+            ("--", "--remote=literal"),
+            (
+                "--no-daemon",
+                "--dangerously-bypass-hook-trust",
+                "--",
+                "--remote=literal",
+            ),
+        ),
+        (
+            ("--", "--dangerously-bypass-hook-trust"),
+            (
+                "--no-daemon",
+                "--dangerously-bypass-hook-trust",
+                "--",
+                "--dangerously-bypass-hook-trust",
+            ),
+        ),
+        (
+            ("--no-daemon", "--dangerously-bypass-hook-trust", "prompt"),
+            ("--no-daemon", "--dangerously-bypass-hook-trust", "prompt"),
+        ),
     ],
 )
 def test_managed_codex_keeps_explicit_flags_and_literal_prompts(

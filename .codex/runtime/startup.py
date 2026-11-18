@@ -21,6 +21,7 @@ from package_root import find_package_root
 from tj_cli import process
 
 MINIMUM_VERSION = "0.169.0"
+MANAGED_OPTIONS = ("--no-daemon", "--dangerously-bypass-hook-trust")
 
 
 class Server(Protocol):
@@ -132,10 +133,12 @@ def create(
         "threadSource": "user",
         "ephemeral": False,
     }
+    config: dict[str, object] = {"bypass_hook_trust": True}
+    parameters["config"] = config
     if model is not None:
         parameters["model"] = model
     if effort is not None:
-        parameters["config"] = {"model_reasoning_effort": effort}
+        config["model_reasoning_effort"] = effort
     response = server.request("thread/start", parameters)
     thread = response.get("thread")
     thread_id = native_id(thread.get("id") if isinstance(thread, dict) else None)
@@ -192,7 +195,7 @@ def prepare(
                         "Codex did not return the requested existing thread"
                     )
                 prepared = PreparedLaunch(
-                    (native, *arguments, "--no-daemon"), f"codex:{thread_id}"
+                    (native, *arguments, *MANAGED_OPTIONS), f"codex:{thread_id}"
                 )
             else:
                 thread_id = create(
@@ -206,7 +209,7 @@ def prepare(
                         "resume",
                         thread_id,
                         *arguments[2:-1],
-                        "--no-daemon",
+                        *MANAGED_OPTIONS,
                         "--",
                         options.prompt,
                     ),

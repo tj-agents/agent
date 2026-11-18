@@ -112,6 +112,10 @@ Managed Codex conversations use an owned native process instead of that daemon. 
 cached builds unchanged while one of these processes is running, because replacing them would invalidate
 its loaded hook approvals. The update reports the affected sessions and remains unverified. A shared
 daemon loading the same conversation does not make the separate process reloadable.
+Managed launches apply Codex's native `--dangerously-bypass-hook-trust` policy to all enabled plugin
+hooks, including newly created threads and resumes. This permits changed plugin contents to execute
+without another per-content hook approval. Tool approvals and sandbox settings retain their configured
+values. Installation still verifies the selected plugin payloads against their declared sources.
 Updates check the calling repository's standards index before activation and report the explicit
 repository command when it drifts. Codex also checks the adopted repositories of loaded threads from
 verified installed builds before publishing.

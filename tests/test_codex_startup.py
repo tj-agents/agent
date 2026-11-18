@@ -176,6 +176,7 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
             "-c",
             "model_reasoning_effort=high",
             "--no-daemon",
+            "--dangerously-bypass-hook-trust",
             "--",
             'Read "file"; $value λ',
         ),
@@ -195,7 +196,7 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
                 "threadSource": "user",
                 "ephemeral": False,
                 "model": "fixture-model",
-                "config": {"model_reasoning_effort": "high"},
+                "config": {"bypass_hook_trust": True, "model_reasoning_effort": "high"},
             },
         ),
         ("thread/name/set", {"threadId": THREAD, "name": "Actual title"}),
@@ -497,6 +498,7 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
         "resume",
         THREAD,
         "--no-daemon",
+        "--dangerously-bypass-hook-trust",
     )
     assert prepared.session == f"codex:{THREAD}" and not prepared.created
     assert "admit" in native.events
@@ -728,7 +730,7 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
     call_launch(Host.CODEX, native.directory, "Actual title", arguments, run=run)
     command = commands[0]
     assert command[command.index("--session") + 1] == f"codex:{THREAD}"
-    assert command[-12:] == [
+    assert command[-13:] == [
         "fixture-codex",
         "--cd",
         str(native.directory),
@@ -739,10 +741,44 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
         "-c",
         "model_reasoning_effort=high",
         "--no-daemon",
+        "--dangerously-bypass-hook-trust",
         "--",
         prompt,
     ]
     assert command.count(prompt) == 1
+
+
+@pytest.mark.parametrize("effort", [None, "high"])
+def test_hook_policy_precedes_thread_start_without_changing_tool_permissions(
+    native: Native, monkeypatch: pytest.MonkeyPatch, effort: str | None
+) -> None:
+    request = native.request
+    hook_attempts: list[dict[str, object]] = []
+
+    def request_with_hook(method: str, params: dict[str, object]) -> dict[str, object]:
+        if method == "thread/start":
+            config = params.get("config")
+            assert isinstance(config, dict)
+            assert config.get("bypass_hook_trust") is True
+            assert config.get("model_reasoning_effort") == effort
+            assert "approvalPolicy" not in params and "sandbox" not in params
+            hook_attempts.append(params)
+        return request(method, params)
+
+    monkeypatch.setattr(native, "request", request_with_hook)
+    prompt = "Keep --dangerously-bypass-hook-trust as literal prompt text"
+    arguments = launch.start_arguments(
+        native.directory, "Title", prompt, "fixture-model", effort
+    )
+    prepared = startup.prepare(
+        native.directory, "Title", arguments, "tj", "fixture-codex", {}
+    )
+    assert len(hook_attempts) == 1
+    assert prepared.session == f"codex:{THREAD}"
+    options = prepared.command[: prepared.command.index("--")]
+    assert options.count("--dangerously-bypass-hook-trust") == 1
+    assert "--no-daemon" in options
+    assert prepared.command[-1] == prompt
 
 
 @pytest.mark.parametrize("dispatched", [False, True])
