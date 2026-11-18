@@ -129,7 +129,8 @@ def test_codex_network_failure_requires_proof_that_the_endpoint_is_absent(
         codex_launch.process,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
-            returncode=1, stdout="",
+            returncode=1,
+            stdout="",
             stderr=f"failed to connect to {endpoint}: dead network (os error 10050)",
         ),
     )
@@ -149,7 +150,8 @@ def test_codex_inaccessible_endpoint_is_not_absence(
         codex_launch.process,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
-            returncode=1, stdout="",
+            returncode=1,
+            stdout="",
             stderr="failed to connect to native control socket (os error 10050)",
         ),
     )
