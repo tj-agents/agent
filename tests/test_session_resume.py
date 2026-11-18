@@ -9,12 +9,16 @@ from typing import cast
 
 import agent_cli
 import agent_store
+import owned_launch
 import pytest
 import session_hook
 import session_resume
 from claude import launch as claude_launch
+from codex import launch as codex_launch
+from codex import processes as codex_processes
 from launch_contract import PreparedLaunch
 from launch_errors import LaunchError
+from tj_agent import worktrees
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -199,21 +203,21 @@ def test_public_resume_binds_before_claiming_and_never_reregisters(
     )
     monkeypatch.setattr(agent_store, "run", store)
     monkeypatch.setattr(process, "run", execute)
-    monkeypatch.setattr(session_hook.owned_launch, "for_session", lambda _: "new")
+    monkeypatch.setattr(owned_launch, "for_session", lambda _: "new")
     monkeypatch.setattr(
-        session_hook.codex_launch,
+        codex_launch,
         "registered_session",
         lambda _: {"session": handle, "launch_id": "old", "state": "active"},
     )
     monkeypatch.setattr(
-        session_hook.codex_processes,
+        codex_processes,
         "record",
         lambda session, launch: events.append((session, launch)),
     )
     monkeypatch.setattr(session_hook, "worktree", lambda _: "/repo")
     monkeypatch.setattr(agent_cli, "host_launch", lambda _: adapter)
     monkeypatch.setattr(
-        session_hook.worktrees,
+        worktrees,
         "claim_started_worktree",
         lambda *args: events.append("claim"),
     )

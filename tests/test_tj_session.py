@@ -10,6 +10,7 @@ import agent_cli
 import agent_store
 import pytest
 import tj_session
+from codex import processes as codex_processes
 from launch_contract import Liveness
 from launch_errors import LaunchError
 from tj_agent import worktrees
@@ -372,7 +373,7 @@ def test_codex_strict_inventory_checks_every_page_for_a_loaded_conversation(
     monkeypatch.setattr(adapter, "executable", lambda: "fixture-codex")
     monkeypatch.setattr(adapter, "daemon", lambda: server)
     monkeypatch.setattr(
-        adapter.processes,
+        codex_processes,
         "inventory",
         lambda: {backend.native_id: Liveness(False)} if recorded else {},
     )

@@ -4,12 +4,16 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
+import agent_cli
+import owned_launch
 import pytest
 import session_hook
+import session_resume
 from codex import launch as codex_launch
 from codex import processes
 from launch_contract import Liveness
 from launch_errors import LaunchError
+from tj_agent import worktrees
 from tj_agent.host import Host
 
 SESSION = "123e4567-e89b-12d3-a456-426614174000"
@@ -186,9 +190,7 @@ def test_failed_native_process_proof_precedes_registration_and_claims(
     events: list[str] = []
     monkeypatch.setattr(session_hook, "worktree", lambda _cwd: None)
     monkeypatch.setattr(codex_launch, "registered_session", lambda _session: None)
-    monkeypatch.setattr(
-        session_hook.owned_launch, "for_session", lambda _session: "owned"
-    )
+    monkeypatch.setattr(owned_launch, "for_session", lambda _session: "owned")
     monkeypatch.setattr(
         session_hook, "register", lambda *args: events.append("register")
     )
@@ -215,7 +217,7 @@ def test_every_owned_start_records_the_current_process_before_binding(
     monkeypatch.setattr(
         codex_launch, "registered_session", lambda _: session if registered else None
     )
-    monkeypatch.setattr(session_hook.owned_launch, "for_session", lambda _: "owned")
+    monkeypatch.setattr(owned_launch, "for_session", lambda _: "owned")
     monkeypatch.setattr(processes, "record", lambda *args: events.append(args))
 
     def bind(*args: object) -> None:
@@ -226,13 +228,13 @@ def test_every_owned_start_records_the_current_process_before_binding(
         return session
 
     monkeypatch.setattr(
-        session_hook.session_resume,
+        session_resume,
         "bind_started",
         bind,
     )
     monkeypatch.setattr(session_hook, "register", register)
     monkeypatch.setattr(
-        session_hook.agent_cli,
+        agent_cli,
         "host_launch",
         lambda _: SimpleNamespace(
             record_session_environment=lambda *args, **kwargs: None
@@ -255,7 +257,7 @@ def test_startup_claims_precede_optional_native_naming(
     monkeypatch.setattr(session_hook, "worktree", lambda _: "/fixture")
     monkeypatch.setattr(codex_launch, "registered_session", lambda _: session)
     monkeypatch.setattr(
-        session_hook.worktrees,
+        worktrees,
         "claim_started_worktree",
         lambda *args: events.append("claim"),
     )
@@ -265,7 +267,7 @@ def test_startup_claims_precede_optional_native_naming(
         raise LaunchError("Name service unavailable")
 
     monkeypatch.setattr(
-        session_hook.agent_cli,
+        agent_cli,
         "host_launch",
         lambda _: SimpleNamespace(
             record_session_environment=lambda *args, **kwargs: None,

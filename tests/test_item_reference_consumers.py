@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import agent_cli
 import agent_store
 import lifecycle
 import pytest
@@ -79,7 +80,7 @@ def test_item_lookup_requires_verified_liveness_only_for_its_linked_hosts(
             assert host is Host.CLAUDE, "an unrelated provider must not block this item"
         return SimpleNamespace(liveness=inventory)
 
-    monkeypatch.setattr(lifecycle.agent_cli, "host_launch", adapter)
+    monkeypatch.setattr(agent_cli, "host_launch", adapter)
     if invalid:
         with pytest.raises(lifecycle.LifecycleError, match="liveness is unverified"):
             lifecycle.open_items(["item"], cwd=tmp_path)
