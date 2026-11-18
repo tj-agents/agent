@@ -320,7 +320,8 @@ def test_daemon_state_never_erases_an_embedded_owner(
     monkeypatch.setattr(codex_launch, "daemon", lambda: nullcontext(Server()))
     live = codex_launch.liveness()[SESSION]
     assert live.alive
-    assert live.process_ids == (None if status == "idle" else (11,))
+    assert live.process_ids == (11,)
+    assert live.activity == ("idle" if status == "idle" else None)
 
 
 def test_status_keeps_verified_processes_when_daemon_inspection_fails(

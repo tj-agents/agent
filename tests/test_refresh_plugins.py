@@ -841,24 +841,26 @@ def test_dead_receipts_use_cli_without_daemon(
     assert daemon.requests == []
 
 
-def test_embedded_session_installs_without_daemon_and_reports_reload_needed(
+def test_embedded_session_keeps_its_installed_hooks_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     daemon = FakeDaemon()
     outcome, commands, _ = daemon_refresh(
         tmp_path, monkeypatch, daemon, {"embedded": Liveness(True, process_ids=(42,))}
     )
-    assert len(
-        [command for command in commands if command[:3] == ["codex", "plugin", "add"]]
-    ) == 2
+    assert not [
+        command for command in commands if command[:3] == ["codex", "plugin", "add"]
+    ]
     assert daemon.requests == []
     assert any(
-        "embedded" in failure and "restart" in failure for failure in outcome.failures
+        "embedded" in failure and "left unchanged" in failure
+        for failure in outcome.failures
     )
 
 
-def test_daemon_and_embedded_sessions_report_embedded_reload(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("same_thread", [False, True])
+def test_daemon_cannot_authorize_replacement_of_an_embedded_sessions_hooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_thread: bool
 ) -> None:
     daemon = FakeDaemon()
     outcome, commands, _ = daemon_refresh(
@@ -867,21 +869,48 @@ def test_daemon_and_embedded_sessions_report_embedded_reload(
         daemon,
         {
             "daemon": Liveness(True, activity="idle"),
-            "embedded": Liveness(True, process_ids=(42,)),
+            "embedded": Liveness(
+                True, activity="idle" if same_thread else None, process_ids=(42,)
+            ),
             "dead": Liveness(False, process_ids=()),
         },
     )
     assert not [
         command for command in commands if command[:3] == ["codex", "plugin", "add"]
     ]
-    assert [method for method, _ in daemon.requests] == [
-        "plugin/install",
-        "plugin/install",
-        "thread/loaded/list",
-    ]
+    assert daemon.requests == []
     assert any(
-        "embedded" in failure and "restart" in failure for failure in outcome.failures
+        "embedded" in failure and "left unchanged" in failure
+        for failure in outcome.failures
     )
+
+
+@pytest.mark.parametrize("inspection_failed", [False, True])
+def test_codex_rejects_unsafe_refresh_before_direct_cache_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inspection_failed: bool
+) -> None:
+    cached_hook = tmp_path / "cached-hook.py"
+    cached_hook.write_text("approved hook", encoding="utf-8")
+
+    def replace(*_args: object) -> list[str]:
+        cached_hook.write_text("changed hook", encoding="utf-8")
+        return ["agent@tj-agents"]
+
+    def sessions(**_kwargs: object) -> dict[str, Liveness]:
+        if inspection_failed:
+            raise codex_launch.LaunchError("native process inspection failed")
+        return {"embedded": Liveness(True, process_ids=(42,))}
+
+    monkeypatch.setattr(codex_launch, "liveness", sessions)
+    monkeypatch.setattr(codex_installed, "direct_update", replace)
+    monkeypatch.setattr(
+        codex_installed, "refresh_identities", lambda *_args: {"agent@tj-agents"}
+    )
+    report = plugin_update.Report()
+    codex_installed.refresh(report, ("tj-agents",), lambda *_args: True)
+
+    assert cached_hook.read_text(encoding="utf-8") == "approved hook"
+    assert report.failures
 
 
 def test_open_codex_sessions_install_through_the_daemon(

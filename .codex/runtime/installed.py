@@ -282,6 +282,24 @@ def inventory(
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
+    try:
+        sessions = launch.liveness(strict=True)
+    except LaunchError as error:
+        report.fail(HOST, "open sessions", str(error))
+        return
+    embedded = sorted(
+        identity
+        for identity, session in sessions.items()
+        if session.alive and (session.activity is None or session.process_ids)
+    )
+    if embedded:
+        report.fail(
+            HOST,
+            "open sessions",
+            "Installed plugins were left unchanged because these running Codex "
+            "engines cannot reload their hook approvals: " + ", ".join(embedded),
+        )
+        return
     if direct_update(marketplaces, current) and all(
         current(identity.rpartition("@")[2], identity.rpartition("@")[0])
         for identity in refresh_identities(marketplaces)
@@ -338,11 +356,6 @@ def refresh(
     ]
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
-    try:
-        sessions = launch.liveness(strict=True) if stale else {}
-    except LaunchError as error:
-        report.fail(HOST, "open sessions", str(error))
-        return
     if any(
         session.alive and session.activity is not None for session in sessions.values()
     ):
@@ -552,7 +565,7 @@ def activate(report: Any) -> None:
     embedded = [
         identity
         for identity, session in sessions.items()
-        if session.alive and session.activity is None
+        if session.alive and (session.activity is None or session.process_ids)
     ]
     if embedded:
         report.fail(

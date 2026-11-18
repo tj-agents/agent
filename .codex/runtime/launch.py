@@ -318,9 +318,15 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
         return observed
     for thread, status in statuses.items():
         if status != "notLoaded":
-            # A loaded daemon thread has no exclusive frontend PID. Never let a
-            # replacement process receipt hide another running daemon owner.
-            observed[thread] = Liveness(alive=status != "notLoaded", activity=status)
+            # A loaded daemon thread and an embedded frontend can coexist. Keep
+            # both observations: reloading the daemon does not reload that process.
+            previous = observed.get(thread)
+            observed[thread] = Liveness(
+                alive=True,
+                activity=status,
+                process_ids=previous.process_ids if previous else None,
+                launch_ids=previous.launch_ids if previous else None,
+            )
     return observed
 
 

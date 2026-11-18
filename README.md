@@ -108,8 +108,10 @@ automatic checks and session reloads.
 Install and a Codex session selecting Agent ensure one observer follows the existing Codex daemon while it has
 loaded threads. It checks for published updates and reloads the daemon without restarting those conversations;
 it exits when the daemon disconnects or has no loaded threads.
-Managed Codex conversations use an owned native process instead of that daemon. Updates report when these
-conversations need a restart to load changed plugins; they do not claim that a daemon reload updated them.
+Managed Codex conversations use an owned native process instead of that daemon. Plugin refresh leaves
+cached builds unchanged while one of these processes is running, because replacing them would invalidate
+its loaded hook approvals. The update reports the affected sessions and remains unverified. A shared
+daemon loading the same conversation does not make the separate process reloadable.
 Updates check the calling repository's standards index before activation and report the explicit
 repository command when it drifts. Codex also checks the adopted repositories of loaded threads from
 verified installed builds before publishing.
