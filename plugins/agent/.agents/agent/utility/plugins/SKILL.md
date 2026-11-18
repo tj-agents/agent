@@ -89,7 +89,8 @@ python -B '<skill-directory>\scripts\adopt_plugins.py' --root C:\path\to\reposit
 A stack (`dotnet`, `azure`, `react`, `cpp-gcc`, `cpp-msvc`, `win32`, `neovim`, `rust`, `python`, `github-actions`,
 `plugin-repository`) resolves to its plugins through `scripts/plugin_roster.json`, so nobody guesses which
 plugins a project type needs. Repeat `--stack`, or add `--plugin <name>`. Only the requested plugins are
-written, existing selections are kept, and removing a plugin that a remaining one depends on is refused.
+written, existing selections are kept, and removing a plugin that a remaining one depends on through the
+published catalogs' dependencies is refused.
 With no requested stack or plugin, a new selection uses Agent, Agent Store, Base, Engineering and Workflow. `preview` lists the changed files, `write` applies them together, and `check`
 exits nonzero on drift, which is what CI runs. An unknown stack or plugin is rejected with the valid choices.
 
@@ -97,7 +98,8 @@ Personal is only for personal projects explicitly adopting `personal@tj-agents`.
 README.md and AGENTS.md before selection; a GitHub owner, home directory or publisher account never
 establishes personal scope. When the user explicitly confirms personal scope, include `--plugin personal`;
 otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it.
-A repository selects one `kind: profile` plugin, counting the profiles its selection depends on; an
+A repository selects one `kind: profile` plugin, counting the profiles its selection reaches through the
+published catalogs' dependencies; an
 `organization` brings the profile it extends as a dependency. Selection, adoption and reconciliation refuse
 a second profile, and refuse any profile other than the one an organization extends when that organization's installed employer declaration matches the
 repository's origin or names it as its source repository. See
@@ -141,9 +143,10 @@ published `requires.permissions` merged with `.agents/repository-harness.json`, 
 [repository permissions](https://github.com/tj-agents/agent#repository-permissions). A committed entry nobody
 declares any more is removed; an uncommitted Claude allow or deny entry outside the declared harness is refused
 rather than discarded, so move it into that overlay first. `--preserve-permissions` keeps the current
-permissions, which is how `tj prepare` runs without a published harness lookup; it resolves the dependency
-closure from the marketplace catalogs Claude, or else Codex, last fetched onto this machine and keeps every
-plugin the previous generation enabled. Project scope also rejects
+permissions, which is how `tj prepare` runs without a published harness lookup; it enables the plugins the
+previous generation enabled, the last published closure, plus the selection, and resolves the closure from
+the marketplace catalogs Claude, or else Codex, last fetched onto this machine only when there is no
+previous generation. Project scope also rejects
 machine-specific absolute paths (Windows drive and UNC paths, `/home/<user>`, `/Users/<user>`, `/mnt/<drive>`)
 anywhere in the committed `.claude/settings.json`, `.codex/config.toml` or `.codex/hooks.json`, in every mode,
 reporting `file:line`. Replace such a path with a repository-relative one, or move the setting to an

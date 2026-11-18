@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 PRODUCER = "https://github.com/tj-agents/fixture-producer.git"
@@ -16,6 +16,36 @@ def none_declared(
 ) -> dict[str, dict[str, list[object]]]:
     """Stand in for `published_harness.declarations`: no plugin declares anything."""
     return {identity: dict(EMPTY) for identity in identities}
+
+
+def declared_with(
+    dependencies: Mapping[str, Iterable[str]],
+) -> Callable[
+    [Mapping[str, Mapping[str, str]], Iterable[str]], dict[str, dict[str, list[object]]]
+]:
+    """Stand in for `published_harness.declarations` with dependencies by plugin name.
+
+    Bare names resolve in the dependent's marketplace; no plugin declares permissions.
+    """
+
+    def declarations(
+        marketplaces: Mapping[str, Mapping[str, str]], identities: Iterable[str]
+    ) -> dict[str, dict[str, list[object]]]:
+        resolved: set[str] = set()
+        pending = list(identities)
+        while pending:
+            identity = pending.pop()
+            if identity in resolved:
+                continue
+            resolved.add(identity)
+            name, _, marketplace = identity.partition("@")
+            pending.extend(
+                f"{dependency}@{marketplace}"
+                for dependency in dependencies.get(name, ())
+            )
+        return {identity: dict(EMPTY) for identity in resolved}
+
+    return declarations
 
 
 def git(directory: Path, *arguments: str) -> str:

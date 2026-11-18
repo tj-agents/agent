@@ -323,5 +323,64 @@ def test_setup_targets_include_the_dependencies_of_the_selection(tmp_path: Path)
     assert [target.identity for target in targets] == ["docs@tj-agents", "company@tj-agents"]
 
 
+def codex_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, list[dict[str, object]]]:
+    """Cached Codex builds of agent@tj-agents, which depends on kit@other, listed by marketplace."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    rows: dict[str, list[dict[str, object]]] = {}
+    for identity, dependencies in (("agent@tj-agents", ["kit@other"]), ("kit@other", [])):
+        name, marketplace = identity.split("@")
+        root = tmp_path / "codex/plugins/cache" / marketplace / name / "version"
+        for directory in (".codex-plugin", ".claude-plugin"):
+            (root / directory).mkdir(parents=True)
+            (root / directory / "plugin.json").write_text(
+                json.dumps({"name": name, "dependencies": dependencies}), encoding="utf-8")
+        rows[marketplace] = [{"name": name, "marketplaceName": marketplace, "version": "version", "enabled": True}]
+    return rows
+
+
+def serve_codex_inventory(rows: dict[str, list[dict[str, object]]], queried: list[str]) -> object:
+    def response(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        marketplace = command[command.index("--marketplace") + 1]
+        queried.append(marketplace)
+        return subprocess.CompletedProcess(command, 0, json.dumps({"installed": rows.get(marketplace, [])}), "")
+    return response
+
+
+def test_codex_check_inventories_the_marketplace_of_a_closure_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = codex_rows(tmp_path, monkeypatch)
+    project = claude_project(tmp_path, "agent@tj-agents")
+    queried: list[str] = []
+
+    with mock.patch.object(REQUIRED.process, "run", side_effect=serve_codex_inventory(rows, queried)):
+        roots = REQUIRED.check(project, Host.CODEX, "native-codex")
+
+    assert roots is not None
+    assert sorted(roots) == ["agent@tj-agents", "kit@other"]
+    assert queried == ["tj-agents", "other"]
+
+
+def test_standards_prefetch_inventories_the_marketplace_of_a_closure_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import plugin_update
+
+    rows = codex_rows(tmp_path, monkeypatch)
+    project = claude_project(tmp_path, "agent@tj-agents")
+    monkeypatch.chdir(project)
+    monkeypatch.setattr(REQUIRED.shutil, "which", lambda _name: "native-codex")
+    queried: list[str] = []
+
+    with mock.patch.object(REQUIRED.process, "run", side_effect=serve_codex_inventory(rows, queried)):
+        prefetched = plugin_update.prefetch_standards(Host.CODEX)
+
+    assert prefetched is not None
+    assert queried == ["tj-agents", "other"]
+    roots = REQUIRED.check(project, Host.CODEX, "native-codex", entries=prefetched)
+    assert roots is not None
+    assert sorted(roots) == ["agent@tj-agents", "kit@other"]
+
+
 if __name__ == "__main__":
     unittest.main()

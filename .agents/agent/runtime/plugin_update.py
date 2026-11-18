@@ -138,7 +138,7 @@ def prefetch_standards(host: Host) -> list[object] | None:
     required = required_plugins.selected(project)
     if not required:
         return None
-    return list(required_plugins.inventory_rows(directory, host, identities=required))
+    return list(required_plugins.closure_rows(directory, host, identities=required))
 
 
 def update_standards(

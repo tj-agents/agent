@@ -16,6 +16,7 @@ from types import MappingProxyType
 
 import lock_io
 import plugin_selection
+import published_harness
 import repo_config
 from plugin_runtime import declarations, process
 
@@ -38,7 +39,7 @@ def load_roster(snapshot: dict | None = None) -> dict:
     entries = marketplace.get("plugins")
     if not isinstance(entries, list):
         raise lock_io.LockError(f"{LOCK}: plugins must be a list")
-    plugins = {}
+    plugins: set[str] = set()
     profiles = set()
     organizations = {}
     for entry in entries:
@@ -47,16 +48,13 @@ def load_roster(snapshot: dict | None = None) -> dict:
         name = entry["name"]
         if name in plugins:
             raise lock_io.LockError(f"{LOCK}: duplicate plugin: {name}")
-        plugins[name] = lock_io.require_string_list(entry.get("requires", []), f"{name}.requires")
+        plugins.add(name)
         if entry.get("kind") == "profile":
             profiles.add(name)
         elif entry.get("kind") == "organization":
             if not isinstance(entry.get("extends"), str):
                 raise lock_io.LockError(f"{LOCK}: organization {name} must extend a profile")
             organizations[name] = entry["extends"]
-    for name, required in plugins.items():
-        if any(dependency not in plugins for dependency in required):
-            raise lock_io.LockError(f"{LOCK}: unknown dependency in {name}")
     if live:
         return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": {}}
     stacks = lock_io.load_json(STACKS)
@@ -67,20 +65,6 @@ def load_roster(snapshot: dict | None = None) -> dict:
         if any(name not in plugins for name in selected):
             raise lock_io.LockError(f"{STACKS}: unknown plugin in stack {stack}")
     return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": stacks["stacks"]}
-
-
-def expand(requested: set[str], roster: dict) -> list[str]:
-    known = roster["plugins"]
-    pending = sorted(requested)
-    selected: set[str] = set()
-    while pending:
-        name = pending.pop()
-        if name not in known:
-            raise lock_io.LockError(f"Unknown plugin: {name}")
-        if name not in selected:
-            selected.add(name)
-            pending.extend(known[name])
-    return sorted(selected)
 
 
 def requested_plugins(stacks: list[str], plugins: list[str], roster: dict) -> tuple[set[str], set[str]]:
@@ -132,7 +116,12 @@ def refuse_employer_conflict(root: Path, profile: str, roster: dict, environ: Ma
                                     f"matches this repository ({', '.join(evidence)}); {reason}")
 
 
-def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> dict:
+def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> tuple[dict, dict[str, dict]]:
+    """Return the selection document and the published declarations of its dependency closure.
+
+    The one-profile rule, the employer check and the removal guard evaluate the closure that the published
+    catalogs' dependencies define, the same closure settings generation enables.
+    """
     selection = plugin_selection.resolve(root)
     kept: list[str] = []
     marketplaces = {}
@@ -147,24 +136,11 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
                       and plugin_selection.split(identity)[0] in roster["plugins"]}
     elif not requested and not foreign and not removals:
         requested = set(plugin_selection.CORE_PLUGINS)
-    unknown = sorted(requested - roster["plugins"].keys())
+    unknown = sorted(requested - roster["plugins"])
     if unknown:
         raise lock_io.LockError("Unknown plugin: " + ", ".join(unknown))
     selected = {plugin_selection.plugin_id(name) for name in requested} | set(kept) | foreign
     selected -= removals
-    local = {plugin_selection.split(identity)[0] for identity in selected
-             if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
-             and plugin_selection.split(identity)[0] in roster["plugins"]}
-    profiles = sorted(set(expand(local, roster)) & roster["profiles"])
-    if len(profiles) > 1:
-        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
-                                + "; keep one and drop the others with --remove-plugin <name>")
-    if profiles:
-        refuse_employer_conflict(root, profiles[0], roster, environ)
-    required = set().union(*(expand({name}, roster) for name in local)) if local else set()
-    blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
-    if blocked:
-        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
     if requested:
         marketplaces.setdefault(plugin_selection.MARKETPLACE_NAME, {"repository": plugin_selection.MARKETPLACE_REPOSITORY})
     marketplaces.update(declared)
@@ -175,8 +151,21 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
         "marketplaces": dict(sorted(marketplaces.items())),
         "plugins": sorted(selected),
     }
-    plugin_selection.validate(document)
-    return document
+    validated_marketplaces, identities = plugin_selection.validate(document)
+    published = published_harness.declarations(validated_marketplaces, identities)
+    closure = set(published) | set(identities)
+    profiles = sorted(plugin_selection.split(identity)[0] for identity in closure
+                      if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
+                      and plugin_selection.split(identity)[0] in roster["profiles"])
+    if len(profiles) > 1:
+        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
+                                + "; keep one and drop the others with --remove-plugin <name>")
+    if profiles:
+        refuse_employer_conflict(root, profiles[0], roster, environ)
+    blocked = sorted(closure & removals)
+    if blocked:
+        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
+    return document, published
 
 
 def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> tuple[dict[Path, str | None], Path]:
@@ -191,9 +180,10 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
         if name in declared:
             raise lock_io.LockError(f"--marketplace {name} is given more than once")
         declared[name] = source
-    document = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
+    document, published = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
     selection = root / ".agents" / plugin_selection.SELECTION_NAME
-    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document, exclusions=exclusions)
+    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document,
+                                    exclusions=exclusions, declared=published)
     targets = {selection: json.dumps(document, indent=2, ensure_ascii=False) + "\n", **host_targets}
     return targets, root
 

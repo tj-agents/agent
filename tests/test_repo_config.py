@@ -382,15 +382,13 @@ def test_preserved_generation_keeps_dependencies_a_stale_fetched_catalog_omits(
     assert enabled(repository) == {"delta@tj-agents": True, "gamma@tj-agents": True}
 
 
-def test_preserved_generation_enables_new_dependencies_from_the_fetched_catalog(
+def test_first_preserved_generation_resolves_dependencies_from_the_fetched_catalog(
     repository: Path,
     published: list[list[str]],
     fetched: Callable[[Mapping[str, list[object]]], None],
 ) -> None:
-    selection = select(repository, "alpha@tj-agents")
-    REPO_CONFIG.run(selection, "write")
     fetched({"delta": ["gamma"]})
-    select(repository, "alpha@tj-agents", "delta@tj-agents")
+    selection = select(repository, "alpha@tj-agents", "delta@tj-agents")
 
     REPO_CONFIG.run(selection, "write", preserve_permissions=True)
 
@@ -399,7 +397,23 @@ def test_preserved_generation_enables_new_dependencies_from_the_fetched_catalog(
         "delta@tj-agents": True,
         "gamma@tj-agents": True,
     }
-    assert published == [["alpha@tj-agents"]]
+    assert published == []
+
+
+def test_preserved_generation_never_restores_a_dependency_the_published_one_dropped(
+    repository: Path,
+    published: list[list[str]],
+    fetched: Callable[[Mapping[str, list[object]]], None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(DEPENDENCIES, "delta", [])
+    fetched({"delta": ["gamma"]})
+    selection = select(repository, "delta@tj-agents")
+    REPO_CONFIG.run(selection, "write")
+
+    assert REPO_CONFIG.run(selection, "write", preserve_permissions=True) == []
+    assert enabled(repository) == {"delta@tj-agents": True}
+    assert REPO_CONFIG.run(selection, "check") == []
 
 
 def test_preserved_permissions_need_no_published_lookup(

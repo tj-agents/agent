@@ -168,8 +168,13 @@ def selected(project: Path) -> tuple[str, ...]:
 
 
 def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
+    return readable_roots(plugins, project, plugins.installations(project, entries))
+
+
+def readable_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
+    """Return the readable payload of each enabled, error-free row, without recording the native inventory."""
     roots = {}
-    for entry in plugins.installations(project, entries):
+    for entry in entries:
         if not isinstance(entry, dict) or entry.get("enabled") is not True:
             continue
         if entry.get("installed") is False or entry.get("error") or entry.get("errors"):
@@ -276,8 +281,8 @@ def check(project: Path, host: Host, executable: str | None = None,
     binary = executable or shutil.which(host.value)
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
-    rows = entries if entries is not None else inventory_rows(
-        launch_directory, host, binary, inventory_options, identities=required)
+    rows = entries if entries is not None else closure_rows(launch_directory, host, binary, inventory_options,
+                                                             identities=required)
     roots = enabled_roots(plugins, launch_directory, rows)
     needed = closure(required, roots.get)
     missing = sorted(set(needed) - roots.keys())
@@ -309,6 +314,30 @@ def inventory_roots(project: Path, host: Host, executable: str | None = None,
     entries = inventory_rows(project, host, executable, inventory_options, identities=identities)
     roots = enabled_roots(host_plugins.PLUGINS[host], project.resolve(), entries)
     return roots if identities is None else {identity: root for identity, root in roots.items() if identity in identities}
+
+
+def closure_rows(project: Path, host: Host, executable: str | None = None,
+                 inventory_options: tuple[str, ...] = (), *, identities: Sequence[str]) -> list:
+    """Read native inventory covering every marketplace of the identities' transitive dependency closure.
+
+    A dependency in another marketplace is only listed once that marketplace is queried, which may in turn
+    reveal further dependencies, so querying repeats until the closure adds no new marketplace.
+    """
+    plugins = host_plugins.PLUGINS[host]
+    launch_directory = project.resolve()
+    queried = tuple(identities)
+    rows = inventory_rows(project, host, executable, inventory_options, identities=queried)
+    if None in plugins.inventory_marketplaces(queried):
+        return rows
+    while True:
+        needed = closure(identities, readable_roots(plugins, launch_directory, rows).get)
+        known = set(plugins.inventory_marketplaces(queried))
+        extra = tuple(identity for identity in needed
+                      if not set(plugins.inventory_marketplaces((identity,))) <= known)
+        if not extra:
+            return rows
+        rows = [*rows, *inventory_rows(project, host, executable, inventory_options, identities=extra)]
+        queried = (*queried, *extra)
 
 
 def inventory_rows(project: Path, host: Host, executable: str | None = None,

@@ -6,11 +6,12 @@ import re
 import subprocess
 import sys
 import tempfile
+from typing import Any
 import unittest
 from unittest import mock
 
 import pytest
-from published_plugins import none_declared
+from published_plugins import declared_with
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,23 @@ def load(name):
 
 ADOPT = load("adopt_plugins")
 LockError = ADOPT.lock_io.LockError
+DEPENDENCIES = {
+    "agent": ["base", "agent-store", "cli"],
+    "agent-store": ["base"],
+    "cli": ["base"],
+    "example-employer": ["work"],
+    "helper": ["personal"],
+}
+PUBLISHED = declared_with(DEPENDENCIES)
+
+
+def roster_without_requires(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The bundled roster once the marketplace no longer publishes requires."""
+    snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK) if snapshot is None else snapshot
+    for entry in snapshot["marketplace"]["plugins"]:
+        entry.pop("requires", None)
+    roster: dict[str, Any] = ADOPT.load_roster(snapshot)
+    return roster
 
 
 class RemovePluginTests(unittest.TestCase):
@@ -34,7 +52,7 @@ class RemovePluginTests(unittest.TestCase):
         live = mock.patch.object(ADOPT, "current_roster", side_effect=ADOPT.load_roster)
         live.start()
         self.addCleanup(live.stop)
-        published = mock.patch.object(ADOPT.repo_config.published_harness, "declarations", none_declared)
+        published = mock.patch.object(ADOPT.repo_config.published_harness, "declarations", PUBLISHED)
         published.start()
         self.addCleanup(published.stop)
         temporary = tempfile.TemporaryDirectory()
@@ -117,6 +135,13 @@ class RemovePluginTests(unittest.TestCase):
         ADOPT.run(self.root, [], ["python"], "write")
         self.assertEqual(sorted([*flattened, "python@tj-agents"]), self.selected())
 
+    def test_removal_guard_follows_published_dependencies_not_the_roster(self):
+        self.write_selection(["agent@tj-agents", "cli@tj-agents"])
+        before = (self.root / ".agents" / "plugins.json").read_bytes()
+        with self.assertRaisesRegex(LockError, "prerequisite required by remaining plugins: cli@tj-agents"):
+            ADOPT.run(self.root, [], [], "write", removals=["cli"], roster=roster_without_requires())
+        self.assertEqual(before, (self.root / ".agents" / "plugins.json").read_bytes())
+
     def test_removal_of_an_unlisted_dependency_of_a_remaining_plugin_refuses(self):
         self.write_selection(["agent@tj-agents"])
         before = (self.root / ".agents" / "plugins.json").read_bytes()
@@ -144,7 +169,7 @@ class RemovePluginTests(unittest.TestCase):
     def test_automatic_reconciliation_does_not_drop_newer_published_plugins(self):
         self.write_selection(["base@tj-agents", "new-plugin@tj-agents"])
         roster = ADOPT.load_roster()
-        roster["plugins"]["new-plugin"] = ["base"]
+        roster["plugins"].add("new-plugin")
         with mock.patch.object(ADOPT, "current_roster", return_value=roster) as current:
             ADOPT.reconcile(self.root, "write")
         current.assert_called_once()
@@ -190,7 +215,7 @@ class RemovePluginTests(unittest.TestCase):
         self.write_selection(["base@tj-agents", "docs@tj-agents"])
         roster = ADOPT.load_roster()
         self.assertIn("docs", roster["plugins"])
-        del roster["plugins"]["docs"]
+        roster["plugins"].discard("docs")
         with mock.patch.object(ADOPT, "current_roster", return_value=roster):
             ADOPT.reconcile(self.root, "write")
         self.assertEqual(["base@tj-agents"], self.selected())
@@ -232,14 +257,15 @@ def profile_roster(installed_employers: list[object]) -> dict[str, object]:
         entry["kind"] = ("profile" if entry["name"] in {"personal", "work"}
                          else "organization" if "extends" in entry else "shared")
     entries.append({"name": "example-employer", "repository": "example-employer", "revision": "a" * 40,
-                    "requires": ["work"], "kind": "organization", "extends": "work"})
-    roster: dict[str, object] = ADOPT.load_roster(snapshot)
+                    "kind": "organization", "extends": "work"})
+    entries.append({"name": "helper", "repository": "helper", "revision": "b" * 40, "kind": "shared"})
+    roster: dict[str, object] = roster_without_requires(snapshot)
     return roster
 
 
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", none_declared)
+    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", PUBLISHED)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     (tmp_path / ".agents").mkdir()
@@ -338,6 +364,16 @@ def test_run_selects_the_profile_a_matching_employer_extends(
     assert selection(project) == ["example-employer@tj-agents"]
 
 
+def test_run_refuses_a_profile_reached_only_through_published_dependencies_where_an_employer_matches(
+    project: Path, profile_roster: dict[str, object], installed_employers: list[object]
+) -> None:
+    installed_employers.append(employer())
+    set_origin(project, "git@example.test:example-employer/service.git")
+    with pytest.raises(LockError, match="Cannot select personal"):
+        ADOPT.run(project, [], ["helper"], "write", roster=profile_roster)
+    assert not (project / ".agents" / "plugins.json").exists()
+
+
 def test_run_selects_personal_where_no_installed_employer_matches(
     project: Path, profile_roster: dict[str, object], installed_employers: list[object]
 ) -> None:
@@ -350,7 +386,7 @@ def test_run_selects_personal_where_no_installed_employer_matches(
 def test_adoption_copies_an_inherited_selection_to_the_linked_checkout_and_excludes_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", none_declared)
+    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", PUBLISHED)
     primary = tmp_path / "primary"
     primary.mkdir()
     (primary / "README.md").write_text("primary\n", encoding="utf-8")

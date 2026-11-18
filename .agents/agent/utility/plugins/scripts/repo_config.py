@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 import config_conflicts
@@ -93,25 +93,31 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
 
 
 def declarations(
-    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = ()
+    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = (),
+    declared: Mapping[str, dict] | None = None,
 ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
     """Return the selection's marketplaces, enabled plugins and committed permissions.
 
     The enabled plugins are the selection's transitive dependency closure, from the marketplaces' published
-    catalogs. Permissions compose every enabled plugin's published declaration with the repository overlay
-    (`harness_permissions.compose`). Without `published` there is no network lookup: the closure comes from
-    this machine's fetched catalogs, the `generated` identities the previous generation enabled stay
-    enabled, and permissions are None so the caller keeps its current ones.
+    catalogs, or from `declared` when the caller already resolved them with `published_harness.declarations`.
+    Permissions compose every enabled plugin's published declaration with the repository overlay
+    (`harness_permissions.compose`). Without `published` there is no network lookup and permissions are None
+    so the caller keeps its current ones. The enabled plugins are then the `generated` identities the
+    previous generation enabled, the last published closure, plus the selection; only without a previous
+    generation does the closure come from this machine's fetched catalogs. Offline generation therefore never
+    restores a dependency the published closure dropped.
     """
     marketplaces, selected_identities = plugin_selection.validate(lock)
     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
     if published:
-        plugins = published_harness.declarations(marketplaces, selected_identities)
+        plugins = (published_harness.declarations(marketplaces, selected_identities) if declared is None
+                   else dict(declared))
         enabled = set(plugins) | set(selected_identities)
     else:
-        enabled = set(published_harness.local_closure(marketplaces, selected_identities))
-        enabled |= {identity for identity in generated
+        previous = {identity for identity in generated
                     if plugin_selection.valid_identity(identity) and plugin_selection.split(identity)[1] in marketplaces}
+        enabled = (previous | set(selected_identities) if previous
+                   else set(published_harness.local_closure(marketplaces, selected_identities)))
     identities = {identity: True for identity in sorted(enabled)}
     selected = {plugin_selection.overlay_id(identity) for identity in enabled}
     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
@@ -499,6 +505,7 @@ def plan(
     execute=process.run,
     exclusions: dict[Path, str] | None = None,
     preserve_permissions: bool = False,
+    declared: Mapping[str, dict] | None = None,
 ) -> dict[Path, str | None]:
     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
     scope = resolve_scope(root, scope, execute)
@@ -514,7 +521,7 @@ def plan(
     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
     sources, identities, permissions = declarations(
         lock_path, lock, root, published=not preserve_permissions,
-        generated=generated_plugins(codex) if preserve_permissions else (),
+        generated=generated_plugins(codex) if preserve_permissions else (), declared=declared,
     )
     actual_rules = text_at(rules_path)
     expected_rules = actual_rules if permissions is None else codex_rules(permissions)

@@ -88,7 +88,7 @@ Managed launches repair only the failing install step and retry readiness once: 
 Claude installs missing transitive dependencies before dependents and verifies their persisted native
 registrations; startup still requires successful native admission and hooks.
 Readiness verifies the selection and every dependency the installed builds' `.claude-plugin/plugin.json`
-declare, transitively. A plugin Claude demotes because a dependency is disabled, missing or the wrong
+declare, transitively, inventorying every marketplace that closure reaches. A plugin Claude demotes because a dependency is disabled, missing or the wrong
 version is reported by name with that dependency.
 
 A selection lists only the plugins a repository chose. Neither host enables a plugin's dependencies on its
@@ -96,15 +96,18 @@ own, so settings generation enables the selection's transitive dependency closur
 the `dependencies` of each marketplace's published Claude catalog on `main`. A dependency added in a later
 plugin release is enabled at the next reconciliation without editing the selection. A dependency in a
 marketplace the selection does not declare is refused. `tj prepare` regenerates offline
-(`--preserve-permissions`): it resolves the closure from the marketplace catalogs Claude, or else Codex,
-last fetched onto this machine, and keeps every plugin the previous generation enabled, so it never
-disables a dependency the published resolution added.
+(`--preserve-permissions`): it enables the plugins the previous generation enabled, which is the last
+published closure, plus the selection, so it neither disables a dependency the published resolution added
+nor restores one it dropped. Only a repository without a previous generation resolves the closure from the
+marketplace catalogs Claude, or else Codex, last fetched onto this machine. A dependency a later release
+adds is enabled by the next published reconciliation; until then readiness reports it by name.
 
 Before checking native installations, launch and installer plugin setup reconcile an existing
 repository selection and regenerate both hosts' settings through the same scope and ownership checks
 as explicit adoption. Reconciliation against the current Marketplace `main` roster removes retired
 TJ Agents packages, including retirements after the bundled offline snapshot; it never adds dependencies
-to the selection.
+to the selection. Adoption's one-profile rule, employer check and prerequisite removal guard evaluate the
+same published catalog dependency closure that settings generation enables, never the roster.
 An unreachable marketplace leaves repository files untouched and reports the failure.
 The same reconciliation commits the published harness permissions of every enabled plugin into the
 repository's settings, never into user settings; see [repository permissions](#repository-permissions).
