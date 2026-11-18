@@ -11,14 +11,14 @@
         "repository": "tj-agents/marketplace"
       }
     ],
-    "plugins": [
-      "tj-agents/agent-store",
-      "tj-agents/base"
-    ],
     "hooks": [],
     "permissions": {
       "claude_allow": [],
       "codex_prefix_rules": []
-    }
+    },
+    "plugins": [
+      "tj-agents/agent-store",
+      "tj-agents/base"
+    ]
   }
 }
