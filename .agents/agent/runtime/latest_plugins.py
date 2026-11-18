@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     if refusal is None:
         return 0
     if event == "UserPromptSubmit":
-        print(json.dumps({"decision": "block", "reason": refusal}))
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": refusal}}))
     else:
         context = {
             "hookEventName": event or "SessionStart",
