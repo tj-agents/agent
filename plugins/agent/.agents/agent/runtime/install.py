@@ -39,6 +39,7 @@ from claude import plugins as claude_plugins
 from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
+from codex import lane_agents as codex_lane_agents
 from codex import launch as codex_launch
 from codex import observer as codex_observer
 from codex import powershell as codex_powershell
@@ -858,6 +859,20 @@ def apply_codex_agents(context: Context) -> list[str]:
     return [lines[-1] if lines else "delivered Codex profile agents"]
 
 
+def skip_codex_lane_agents(context: Context) -> str | None:
+    if not context.codex_home.is_dir():
+        return f"Codex is not set up ({context.codex_home} is missing)"
+    return None
+
+
+def check_codex_lane_agents(context: Context) -> list[str]:
+    return codex_lane_agents.check(context.root, context.codex_home)
+
+
+def apply_codex_lane_agents(context: Context) -> list[str]:
+    return codex_lane_agents.apply(context.root, context.codex_home)
+
+
 def check_codex_observer(context: Context) -> list[str]:
     return (
         []
@@ -1502,6 +1517,12 @@ STEPS = (
         check_codex_agents,
         apply_codex_agents,
         skip_codex_agents,
+    ),
+    Step(
+        "Codex lane agents",
+        check_codex_lane_agents,
+        apply_codex_lane_agents,
+        skip_codex_lane_agents,
     ),
     Step("plugin scope", check_plugin_scope, apply_plugin_scope),
     Step(
