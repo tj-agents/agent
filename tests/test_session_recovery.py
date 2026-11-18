@@ -10,7 +10,9 @@ import pytest
 from claude import launch as claude_launch
 from claude import sessions as claude_sessions
 from codex import launch as codex_launch
+from codex import observer as codex_observer
 from codex import sessions as codex_sessions
+from launch_contract import Liveness
 from launch_errors import LaunchError
 
 
@@ -107,6 +109,58 @@ def test_codex_absent_daemon_is_dead_without_opening_server(
     monkeypatch.setattr(codex_launch.process, "run", run)
     monkeypatch.setattr(codex_launch, "daemon", daemon)
     assert codex_launch.liveness(strict=True) == {}
+
+
+@pytest.mark.parametrize("endpoint_exists", [False, True])
+def test_codex_network_failure_requires_proof_that_the_endpoint_is_absent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint_exists: bool,
+) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    endpoint = codex_observer.socket_path(tmp_path)
+    if endpoint_exists:
+        endpoint.parent.mkdir()
+        endpoint.touch()
+    expected = {"embedded": Liveness(True, process_ids=(42,), launch_ids=("owned",))}
+    monkeypatch.setattr(codex_launch.processes, "inventory", lambda: expected)
+    monkeypatch.setattr(codex_launch, "executable", lambda: "fake-agent")
+    monkeypatch.setattr(
+        codex_launch.process,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1, stdout="",
+            stderr=f"failed to connect to {endpoint}: dead network (os error 10050)",
+        ),
+    )
+    if endpoint_exists:
+        with pytest.raises(LaunchError, match="dead network"):
+            codex_launch.liveness(strict=True)
+    else:
+        assert codex_launch.liveness(strict=True) == expected
+
+
+def test_codex_inaccessible_endpoint_is_not_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(codex_launch.processes, "inventory", dict)
+    monkeypatch.setattr(codex_launch, "executable", lambda: "fake-agent")
+    monkeypatch.setattr(
+        codex_launch.process,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1, stdout="",
+            stderr="failed to connect to native control socket (os error 10050)",
+        ),
+    )
+
+    def denied(*args: Any, **kwargs: Any) -> None:
+        raise PermissionError("Cannot inspect control socket")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "stat", denied)
+        with pytest.raises(LaunchError, match="Cannot inspect control socket"):
+            codex_launch.liveness(strict=True)
 
 
 @pytest.mark.parametrize("probe_failure", [True, False])

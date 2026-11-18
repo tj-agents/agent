@@ -10,7 +10,8 @@ import subprocess
 from collections.abc import Mapping, Sequence
 
 from tj_cli import process
-from codex import processes, startup
+from codex import observer, processes, startup
+from tj_agent.host import Host
 
 import agent_store
 from launch_contract import Confirmation, Liveness, PreparedLaunch
@@ -291,10 +292,13 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
             )
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip()
-                if "failed to connect to" in detail and any(
-                    f"(os error {code})" in detail for code in (2, 111, 10061)
-                ):
-                    return observed
+                if "failed to connect to" in detail:
+                    try:
+                        observer.socket_path(Host.CODEX.configuration_root).stat()
+                    except FileNotFoundError:
+                        return observed
+                    if any(f"(os error {code})" in detail for code in (2, 111, 10061)):
+                        return observed
                 raise LaunchError(f"Cannot determine Codex daemon state: {detail}")
             if not isinstance(json.loads(result.stdout), dict):
                 raise LaunchError("Codex daemon version returned invalid JSON")
