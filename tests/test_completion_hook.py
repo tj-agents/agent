@@ -1,5 +1,6 @@
 import io
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -134,6 +135,7 @@ def test_malformed_input_reports_unverified_state_without_continuation(
 
 @pytest.mark.parametrize("managed", [True, False, None])
 def test_failed_prompt_admission_blocks_only_managed_or_unverified_owners(
+    host: Host,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     managed: bool | None,
@@ -156,9 +158,9 @@ def test_failed_prompt_admission_blocks_only_managed_or_unverified_owners(
     monkeypatch.setattr(
         sys,
         "stdin",
-        io.StringIO(json.dumps(native_payload(Host.CLAUDE, "UserPromptSubmit"))),
+        io.StringIO(json.dumps(native_payload(host, "UserPromptSubmit"))),
     )
-    assert completion_hook.main(["--host", "claude", "--hook-mode", "prompt"]) == 0
+    assert completion_hook.main(["--host", host.value, "--hook-mode", "prompt"]) == 0
     reply = json.loads(capsys.readouterr().out)
     if managed is False:
         assert set(reply) == {"systemMessage"}
@@ -183,6 +185,7 @@ def test_failed_prompt_admission_blocks_only_managed_or_unverified_owners(
 )
 @pytest.mark.parametrize("managed", [True, False, None])
 def test_invalid_prompt_fails_closed_for_managed_or_unknown_owner(
+    host: Host,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     payload: str,
@@ -195,7 +198,7 @@ def test_invalid_prompt_fails_closed_for_managed_or_unknown_owner(
 
     monkeypatch.setattr(owned_launch, "current", owner)
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
-    assert completion_hook.main(["--host", "claude", "--hook-mode", "prompt"]) == 0
+    assert completion_hook.main(["--host", host.value, "--hook-mode", "prompt"]) == 0
     reply = json.loads(capsys.readouterr().out)
     assert set(reply) == (
         {"systemMessage"} if managed is False else {"decision", "reason"}
@@ -214,28 +217,33 @@ def test_invalid_prompt_fails_closed_for_managed_or_unknown_owner(
         '{"hook_event_name":"UserPromptSubmit"}',
     ],
 )
-def test_invalid_claude_stop_only_reports_status(
+def test_invalid_stop_only_reports_status(
+    host: Host,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     payload: str,
 ) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
-    assert completion_hook.main(["--host", "claude", "--hook-mode", "status"]) == 0
+    assert completion_hook.main(["--host", host.value, "--hook-mode", "status"]) == 0
     assert set(json.loads(capsys.readouterr().out)) == {"systemMessage"}
 
 
-@pytest.mark.parametrize("event", ["UserPromptSubmit", "Stop", "StopFailure"])
+@pytest.mark.parametrize("event", ["UserPromptSubmit", "Stop"])
 def test_declared_hook_routes_malformed_input_without_confusing_prompt_and_stop(
+    host: Host,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     event: str,
 ) -> None:
-    manifest = Path(__file__).resolve().parents[1] / ".claude/hooks/agent.json"
+    manifest = Path(__file__).resolve().parents[1] / f".{host}/hooks/agent.json"
     hooks = json.loads(manifest.read_text(encoding="utf-8"))["hooks"]
     hook = hooks[event][0]["hooks"][0]
     monkeypatch.setattr(owned_launch, "current", lambda: "managed-launch")
     monkeypatch.setattr(sys, "stdin", io.StringIO("{"))
-    assert completion_hook.main(hook["args"][2:]) == 0
+    arguments = (
+        hook["args"][2:] if host is Host.CLAUDE else shlex.split(hook["command"])[3:]
+    )
+    assert completion_hook.main(arguments) == 0
     reply = json.loads(capsys.readouterr().out)
     if event == "UserPromptSubmit":
         assert reply.get("decision") == "block"

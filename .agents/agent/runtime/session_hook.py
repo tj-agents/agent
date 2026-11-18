@@ -84,7 +84,7 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
     session = codex_launch.registered_session(session_id) if host is Host.CODEX else None
     inherited = environ.get(LAUNCH_ENV)
     cleared: tuple[str, ...] = ()
-    launch = owned_launch.for_session(f"{host}:{session_id}") if session is None and inherited else None
+    launch = owned_launch.for_session(f"{host}:{session_id}") if inherited else None
     environ = {name: value for name, value in environ.items() if name != LAUNCH_ENV}
     if session is None and inherited and launch is None:
         cleared = tuple(
@@ -95,28 +95,24 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
             name: value for name, value in environ.items()
             if not name.startswith("TJ_RUN_") and name not in {TITLE_ENV, "WT_SESSION", "TMUX_PANE"}
         }
-    if session is None:
-        if launch:
-            environ[LAUNCH_ENV] = launch
-            if host is Host.CODEX:
-                codex_processes.record(session_id, launch)
-            session = (
-                session_resume.bind_started(f"{host}:{session_id}", launch)
-                if host is Host.CLAUDE else None
-            )
-            if session is None:
-                session = register(host, session_id, cwd, root, ["--launch-id", launch])
-        else:
-            session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
+    if launch:
+        environ[LAUNCH_ENV] = launch
+        if host is Host.CODEX:
+            codex_processes.record(session_id, launch)
+        resumed = session_resume.bind_started(f"{host}:{session_id}", launch)
+        if resumed is not None:
+            session = resumed
+        elif session is None or session.get("launch_id") != launch:
+            session = register(host, session_id, cwd, root, ["--launch-id", launch])
+    elif session is None:
+        session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
     else:
         environ = {host.session_variable: session_id, LAUNCH_ENV: session["launch_id"]}
-    try:
-        if host is Host.CODEX and session.get("title"):
-            adapter.name_session(session_id, session["title"])
-    finally:
-        adapter.record_session_environment(session_id, environ, cleared=cleared)
-        if root:
-            worktrees.claim_started_worktree(host, session_id, Path(root), environ)
+    adapter.record_session_environment(session_id, environ, cleared=cleared)
+    if root:
+        worktrees.claim_started_worktree(host, session_id, Path(root), environ)
+    if host is Host.CODEX and session.get("title"):
+        adapter.name_session(session_id, session["title"])
     return session
 
 

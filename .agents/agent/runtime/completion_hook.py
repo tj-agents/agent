@@ -57,12 +57,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise completion_event.EventError(
                 "Native completion event must be an object"
             )
-        if hosts[args.host] is Host.CLAUDE and (
+        if (
             (data.get("hook_event_name") == "UserPromptSubmit")
             != (args.hook_mode == "prompt")
         ):
             raise completion_event.EventError(
-                "Claude hook event does not match its mode"
+                "Native hook event does not match its mode"
             )
         event = EVENTS[hosts[args.host]].parse(cast(Mapping[str, object], data))
         if event is not None:
@@ -73,13 +73,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         subprocess.SubprocessError,
     ) as error:
         message = f"TJ completion remains unverified: {error}"
-        if hosts[args.host] is Host.CLAUDE and args.hook_mode == "prompt":
+        if args.hook_mode == "prompt":
             try:
                 managed = owned_launch.current() is not None
             except owned_launch.OwnedLaunchError:
                 managed = True
             if managed:
-                print(json.dumps(claude_completion.rejected_prompt(message)))
+                print(json.dumps(EVENTS[hosts[args.host]].rejected_prompt(message)))
                 return 0
     # A Stop block or additionalContext can submit another model turn. Only a
     # user-visible status message is allowed; failure must not synthesize input.

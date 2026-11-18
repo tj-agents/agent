@@ -43,6 +43,8 @@ class StartTests(unittest.TestCase):
             if arguments[:2] == ('show', '--launch-id'):
                 return {'launch': {'launch_id': launch, 'host': str(host),
                                    'state': 'active', 'session': None}, 'session': None}
+            if arguments[0] == 'show':
+                raise hook.agent_store.AgentStoreError('not-found', 'new native session')
             return {'session': {'title': title}}
 
         run = mock.Mock(side_effect=response)

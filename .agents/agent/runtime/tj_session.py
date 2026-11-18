@@ -81,6 +81,15 @@ def session_liveness(session: str, launch_id: str) -> dict[str, object]:
             "No native process evidence exists for this Codex conversation; "
             "its liveness is unverified"
         )
+    if (
+        host is Host.CODEX and observed is not None
+        and observed.process_ids is not None
+        and launch_id not in (observed.launch_ids or ())
+    ):
+        raise LivenessError(
+            "This Codex launch has no native process evidence; "
+            "a replacement observation cannot establish its predecessor's liveness"
+        )
     # A concurrent resume can replace the launch/session binding during the probe.
     require_binding(host, native_id, launch_id)
     result: dict[str, object] = {

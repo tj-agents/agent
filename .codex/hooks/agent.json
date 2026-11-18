@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "timeout": 30,
+            "timeout": 360,
             "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" start --host codex",
             "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" start --host codex"
           }
@@ -25,7 +25,7 @@
     ],
     "UserPromptSubmit": [
       {
-        "hooks": [{"type": "command", "timeout": 5, "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex", "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex"}]
+        "hooks": [{"type": "command", "timeout": 30, "command": "python3 -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex --hook-mode prompt", "commandWindows": "python -B \"${PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py\" --host codex --hook-mode prompt"}]
       }
     ],
     "Stop": [

@@ -108,7 +108,8 @@ def open_items(refs: list[str] | None = None, cwd: Path | None = None) -> list[I
         canonical = sessions["item"]["ref"]
         agents = [Agent(session, live[Host(session["host"])].get(session["native_id"]))
                   for session in sessions["sessions"]]
-        if any(agent.host is Host.CODEX and agent.live is None for agent in agents):
+        if any(agent.host is Host.CODEX and agent.live is None and agent.session.get("state") != "ended"
+               for agent in agents):
             raise LifecycleError(
                 "Linked Codex session liveness is unverified: no native process evidence"
             )

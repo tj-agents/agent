@@ -338,8 +338,14 @@ def refresh(
     ]
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
-    open_sessions = bool(stale) and bool(launch.liveness())
-    if open_sessions:
+    try:
+        sessions = launch.liveness(strict=True) if stale else {}
+    except LaunchError as error:
+        report.fail(HOST, "open sessions", str(error))
+        return
+    if any(
+        session.alive and session.activity is not None for session in sessions.values()
+    ):
         install_through_daemon(report, stale)
     else:
         for identity in stale:
@@ -543,5 +549,19 @@ def activate(report: Any) -> None:
     except LaunchError as error:
         report.fail(HOST, "open sessions", str(error))
         return
-    if sessions:
+    embedded = [
+        identity
+        for identity, session in sessions.items()
+        if session.alive and session.activity is None
+    ]
+    if embedded:
+        report.fail(
+            HOST,
+            "open sessions",
+            "Embedded Codex sessions cannot be reloaded through the shared daemon; "
+            f"restart them: {', '.join(sorted(embedded))}",
+        )
+    if any(
+        session.alive and session.activity is not None for session in sessions.values()
+    ):
         activate_open_sessions(report)

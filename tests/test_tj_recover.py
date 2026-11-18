@@ -98,6 +98,8 @@ class Recovery:
             **fields,
         }
         self.records.append(row)
+        if host is Host.CODEX:
+            self.hosts[host].live[native] = Liveness(False)
         return row
 
     def store(self, *arguments: str) -> dict[str, Any]:
@@ -185,6 +187,25 @@ def test_recover_previous_uptime_session_without_item(
     assert recovery.launched[0]["arguments"] == ["resume", "recent"]
     assert recovery.launched[0]["item"] is None
     assert recovery.launched[0]["want_session"] is True
+
+
+@pytest.mark.parametrize("opened", [False, True])
+@pytest.mark.parametrize("modified", [99.0, 101.0])
+def test_recover_refuses_codex_without_process_evidence(
+    recovery: Recovery, opened: bool, modified: float
+) -> None:
+    recovery.session(Host.CODEX, "unknown", modified)
+    del recovery.hosts[Host.CODEX].live["unknown"]
+    if opened:
+        open_launch(recovery, "tab", "codex:unknown")
+
+    code, rows = recovery.run(*(["--open"] if opened else []))
+
+    assert code == 1
+    assert rows[0]["action"] == "failed"
+    assert "no native process evidence" in rows[0]["error"]
+    assert recovery.ended == []
+    assert recovery.launched == []
 
 
 def test_recover_auto_ends_old_dead_and_leaves_live_alone(recovery: Recovery) -> None:

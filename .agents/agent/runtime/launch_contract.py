@@ -12,6 +12,7 @@ class Liveness:
     activity: str | None = None
     background: str | None = None
     process_ids: tuple[int, ...] | None = None
+    launch_ids: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

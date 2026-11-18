@@ -52,7 +52,7 @@ class Fixture(unittest.TestCase):
         self.hosts = {
             agent_cli.Host.CLAUDE: DummyHost({'live': Liveness(True, 'busy'),
                                               'background': Liveness(False, background='bg-1')}),
-            agent_cli.Host.CODEX: DummyHost({}),
+            agent_cli.Host.CODEX: DummyHost({'dead': Liveness(False)}),
         }
         self.cards = {ITEM: {'ref': ITEM, 'title': 'Cut over', 'state': 'In Progress'}}
         self.launched = []

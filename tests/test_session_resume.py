@@ -159,11 +159,13 @@ def test_started_session_without_a_different_owner_needs_no_transfer(
 
 
 @pytest.mark.parametrize("admitted", [True, False])
+@pytest.mark.parametrize("host", list(Host))
 def test_public_resume_binds_before_claiming_and_never_reregisters(
     monkeypatch: pytest.MonkeyPatch,
     admitted: bool,
+    host: Host,
 ) -> None:
-    handle = f"claude:{THREAD}"
+    handle = f"{host}:{THREAD}"
     current = {"session": handle, "launch_id": "new", "state": "active"}
     events: list[object] = []
 
@@ -198,6 +200,16 @@ def test_public_resume_binds_before_claiming_and_never_reregisters(
     monkeypatch.setattr(agent_store, "run", store)
     monkeypatch.setattr(process, "run", execute)
     monkeypatch.setattr(session_hook.owned_launch, "for_session", lambda _: "new")
+    monkeypatch.setattr(
+        session_hook.codex_launch,
+        "registered_session",
+        lambda _: {"session": handle, "launch_id": "old", "state": "active"},
+    )
+    monkeypatch.setattr(
+        session_hook.codex_processes,
+        "record",
+        lambda session, launch: events.append((session, launch)),
+    )
     monkeypatch.setattr(session_hook, "worktree", lambda _: "/repo")
     monkeypatch.setattr(agent_cli, "host_launch", lambda _: adapter)
     monkeypatch.setattr(
@@ -208,17 +220,18 @@ def test_public_resume_binds_before_claiming_and_never_reregisters(
     if admitted:
         assert (
             session_hook.start(
-                Host.CLAUDE, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"}
+                host, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"}
             )
             == current
         )
-        assert events == ["admission", "environment", "claim"]
+        expected = ["admission", "environment", "claim"]
     else:
         with pytest.raises(LaunchError, match="predecessor is live"):
             session_hook.start(
-                Host.CLAUDE, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"}
+                host, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"}
             )
-        assert events == ["admission"]
+        expected = ["admission"]
+    assert events == ([(THREAD, "new")] if host is Host.CODEX else []) + expected
 
 
 def test_native_inventory_keeps_every_live_process_for_one_conversation() -> None:

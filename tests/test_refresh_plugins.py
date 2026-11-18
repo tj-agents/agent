@@ -31,6 +31,7 @@ from fake_machine import (
     update_claude_plugin,
 )
 from git_isolation import without_git_config
+from launch_contract import Liveness
 from tj_agent.host import Host
 from tj_cli import process
 from tree_digest import Digests
@@ -780,6 +781,7 @@ def daemon_refresh(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     daemon: FakeDaemon,
+    sessions: dict[str, Liveness] | None = None,
 ) -> tuple[plugin_update.Outcome, list[list[str]], list[tuple[object, ...]]]:
     inventory = CodexPlugins(
         tmp_path / "codex", {"agent@tj-agents": "local", "base@tj-agents": "local"}
@@ -794,11 +796,17 @@ def daemon_refresh(
             return completed(0, inventory.listing())
         if command[:4] == ["codex", "plugin", "marketplace", "list"]:
             return completed(0, roots)
+        if command[:3] == ["codex", "plugin", "add"]:
+            inventory.install(command[3])
         return completed(0)
 
     trusted: list[tuple[object, ...]] = []
     monkeypatch.setattr(
-        codex_launch, "liveness", lambda **_kwargs: {"thread": object()}
+        codex_launch,
+        "liveness",
+        lambda **_kwargs: sessions
+        if sessions is not None
+        else {"thread": Liveness(True, activity="idle")},
     )
     monkeypatch.setattr(codex_launch, "daemon", lambda _timeout: daemon)
     monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
@@ -816,6 +824,63 @@ def daemon_refresh(
         outcome,
         [claude_plugin_arguments(call.args[0]) for call in spawned.call_args_list],
         trusted,
+    )
+
+
+def test_dead_receipts_use_cli_without_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon = FakeDaemon()
+    outcome, commands, _ = daemon_refresh(
+        tmp_path, monkeypatch, daemon, {"old": Liveness(False, process_ids=())}
+    )
+    assert not outcome.failures
+    assert len(
+        [command for command in commands if command[:3] == ["codex", "plugin", "add"]]
+    ) == 2
+    assert daemon.requests == []
+
+
+def test_embedded_session_installs_without_daemon_and_reports_reload_needed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon = FakeDaemon()
+    outcome, commands, _ = daemon_refresh(
+        tmp_path, monkeypatch, daemon, {"embedded": Liveness(True, process_ids=(42,))}
+    )
+    assert len(
+        [command for command in commands if command[:3] == ["codex", "plugin", "add"]]
+    ) == 2
+    assert daemon.requests == []
+    assert any(
+        "embedded" in failure and "restart" in failure for failure in outcome.failures
+    )
+
+
+def test_daemon_and_embedded_sessions_report_embedded_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon = FakeDaemon()
+    outcome, commands, _ = daemon_refresh(
+        tmp_path,
+        monkeypatch,
+        daemon,
+        {
+            "daemon": Liveness(True, activity="idle"),
+            "embedded": Liveness(True, process_ids=(42,)),
+            "dead": Liveness(False, process_ids=()),
+        },
+    )
+    assert not [
+        command for command in commands if command[:3] == ["codex", "plugin", "add"]
+    ]
+    assert [method for method, _ in daemon.requests] == [
+        "plugin/install",
+        "plugin/install",
+        "thread/loaded/list",
+    ]
+    assert any(
+        "embedded" in failure and "restart" in failure for failure in outcome.failures
     )
 
 
@@ -1080,7 +1145,11 @@ def test_current_codex_plugins_repair_pending_hook_trust(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
 ) -> None:
     monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
-    monkeypatch.setattr(codex_launch, "liveness", lambda **_kwargs: {"session": {}})
+    monkeypatch.setattr(
+        codex_launch,
+        "liveness",
+        lambda **_kwargs: {"session": Liveness(True, activity="idle")},
+    )
     with (
         _patched_homes(tmp_path),
         mock.patch.object(plugin_update, "already_current", return_value=True),

@@ -7,6 +7,7 @@ import lifecycle
 import pytest
 import tj_status
 import work_item
+from launch_contract import Liveness
 from launch_errors import LaunchError
 from tj_agent.host import Host
 
@@ -114,3 +115,26 @@ def test_absence_from_daemon_inventory_does_not_authorize_item_reuse(
     monkeypatch.setattr(lifecycle, "tj_item", lambda *args, **kwargs: {})
     with pytest.raises(lifecycle.LifecycleError, match="no native process evidence"):
         lifecycle.open_items(["item"], cwd=tmp_path)
+
+
+@pytest.mark.parametrize("live", [None, Liveness(False), Liveness(True, "busy")])
+def test_ended_codex_history_preserves_available_liveness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live: Liveness | None
+) -> None:
+    monkeypatch.setattr(work_item, "reference", lambda _cwd, ref: ref)
+    monkeypatch.setattr(
+        agent_store, "run",
+        lambda *args: {"item": {"ref": "item"}, "sessions": [
+            {"host": "codex", "native_id": "thread",
+             "session": "codex:thread", "state": "ended"}
+        ]},
+    )
+    monkeypatch.setattr(
+        lifecycle, "liveness",
+        lambda _hosts: {Host.CODEX: {"thread": live} if live else {}},
+    )
+    monkeypatch.setattr(lifecycle, "tj_item", lambda *args, **kwargs: {})
+
+    [item] = lifecycle.open_items(["item"], cwd=tmp_path)
+
+    assert item.agents[0].status == ("busy" if live and live.alive else "ended")

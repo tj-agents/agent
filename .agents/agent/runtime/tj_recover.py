@@ -133,6 +133,8 @@ def open_plan(item: str | None) -> list[Recovery]:
         )
         if host in errors:
             row = replace(row, action=Action.FAILED, error=errors[host])
+        elif host is Host.CODEX and agent.live is None:
+            row = replace(row, action=Action.FAILED, error="no native process evidence")
         elif not Path(row.directory).is_dir():
             row = replace(
                 row,
@@ -170,7 +172,11 @@ def plan(
     dead = [agent for agent in agents if not agent.alive]
     cutoff = (
         None
-        if older or not any(agent.host not in errors for agent in dead)
+        if older or not any(
+            agent.host not in errors
+            and (agent.host is not Host.CODEX or agent.live is not None)
+            for agent in dead
+        )
         else boot_history.previous_boot()
     )
     launches = {
@@ -197,6 +203,8 @@ def plan(
         try:
             if host in errors:
                 raise agent_cli.LaunchError(errors[host])
+            if host is Host.CODEX and agent.live is None:
+                raise agent_cli.LaunchError("no native process evidence")
             if row.launch_id and not (agent.live and agent.live.background):
                 session_resume.check(row.session, row.launch_id)
             if cutoff is not None:

@@ -157,6 +157,37 @@ def test_unknown_native_state_never_prints_dead(
     assert "tj session liveness:" in captured.err
 
 
+@pytest.mark.parametrize("alive", [True, False])
+def test_replacement_receipt_cannot_prove_an_unobserved_predecessor_stopped(
+    backend: Backend, capsys: pytest.CaptureFixture[str], alive: bool,
+) -> None:
+    backend.inventory = {
+        backend.native_id: Liveness(
+            alive, process_ids=(42,) if alive else (), launch_ids=("replacement",)
+        )
+    }
+    if backend.host is Host.CODEX:
+        assert backend.check() != 0
+        captured = capsys.readouterr()
+        assert not captured.out
+        assert "launch has no native process evidence" in captured.err
+    else:
+        assert backend.check() == 0
+
+
+def test_observed_predecessor_retains_competing_replacement_processes(
+    backend: Backend, capsys: pytest.CaptureFixture[str],
+) -> None:
+    backend.inventory = {
+        backend.native_id: Liveness(
+            True, process_ids=(42, 43),
+            launch_ids=(backend.launch_id, "replacement"),
+        )
+    }
+    assert backend.check() == 0
+    assert json.loads(capsys.readouterr().out)["process_ids"] == [42, 43]
+
+
 @pytest.mark.parametrize(
     "inventory", [None, [], {"native-1": None}, {1: Liveness(False)}]
 )

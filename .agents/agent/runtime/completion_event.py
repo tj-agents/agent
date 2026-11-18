@@ -50,4 +50,6 @@ class Event:
 
 
 class Events(Protocol):
+    def rejected_prompt(self, reason: str) -> dict[str, str]: ...
+
     def parse(self, payload: Mapping[str, object]) -> Event | None: ...

@@ -149,6 +149,7 @@ def inventory() -> dict[str, Liveness]:
     if not isinstance(statuses, list) or len(statuses) != len(observations):
         raise ValueError("Native process inspection omitted evidence")
     alive: dict[str, set[int]] = {}
+    launches: dict[str, set[str]] = {}
     for observation, status in zip(observations, statuses, strict=True):
         if (
             Identity.parse(status) != observation.native
@@ -157,9 +158,13 @@ def inventory() -> dict[str, Liveness]:
         ):
             raise ValueError("Native process inspection returned different evidence")
         processes = alive.setdefault(observation.session, set())
+        launches.setdefault(observation.session, set()).add(observation.launch)
         if status["alive"]:
             processes.add(observation.native.pid)
     return {
-        session: Liveness(bool(pids), process_ids=tuple(sorted(pids)))
+        session: Liveness(
+            bool(pids), process_ids=tuple(sorted(pids)),
+            launch_ids=tuple(sorted(launches[session])),
+        )
         for session, pids in alive.items()
     }
