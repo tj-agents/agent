@@ -16,6 +16,8 @@ SCRIPTS = (
 )
 sys.path.insert(0, str(SCRIPTS))
 REPO_CONFIG: Any = importlib.import_module("repo_config")
+ADOPT: Any = importlib.import_module("adopt_plugins")
+TJ_PREPARE: Any = importlib.import_module("tj_prepare")
 
 
 @pytest.fixture
@@ -201,6 +203,84 @@ def permissions(root: Path) -> dict[str, list[str]]:
 def rules(root: Path) -> str | None:
     path = root / ".codex/rules/agent-harness.rules"
     return path.read_text(encoding="utf-8") if path.is_file() else None
+
+
+def test_project_adoption_unwinds_local_ownership_and_preserves_authored_settings(
+    repository: Path, published: list[list[str]]
+) -> None:
+    claude = repository / ".claude/settings.local.json"
+    claude.parent.mkdir()
+    claude.write_text(json.dumps({
+        "custom": "keep", "enabledPlugins": {"other@else": True},
+        "permissions": {"allow": ["Bash(mine)"]},
+    }), encoding="utf-8")
+    codex = repository / ".codex/config.toml"
+    codex.parent.mkdir()
+    codex.write_text(
+        'model = "my-model"\n[plugins."other@else"]\nenabled = true\n', encoding="utf-8"
+    )
+    exclude = repository / ".git/info/exclude"
+    exclude.write_text("# authored\nmy-file\n", encoding="utf-8")
+    roster = ADOPT.load_roster()
+    roster["plugins"]["beta"] = []
+    ADOPT.run(repository, [], ["beta"], "write", scope="local", roster=roster)
+    with pytest.raises(TJ_PREPARE.standards.StandardsError, match="Local-only"):
+        TJ_PREPARE.check_instruction_scope(repository)
+
+    ADOPT.run(repository, [], ["beta"], "write", scope="project", roster=roster)
+
+    TJ_PREPARE.check_instruction_scope(repository)
+    assert not (repository / ".agents/repo-capabilities.local.json").exists()
+    local = json.loads(claude.read_text(encoding="utf-8"))
+    assert local["custom"] == "keep"
+    assert local["enabledPlugins"] == {"other@else": True}
+    assert local["permissions"]["allow"] == ["Bash(mine)"]
+    assert tomllib.loads(codex.read_text(encoding="utf-8"))["model"] == "my-model"
+    assert exclude.read_text(encoding="utf-8") == "# authored\nmy-file\n"
+    assert ADOPT.run(
+        repository, [], ["beta"], "write", scope="project", roster=roster
+    ) == []
+    config = tomllib.loads(codex.read_text(encoding="utf-8"))
+    assert config["plugins"]["other@else"] == {"enabled": True}
+
+
+@pytest.mark.parametrize("changed", ["claude", "codex", "rules", "exclude"])
+def test_project_adoption_refuses_changed_local_owned_content(
+    repository: Path, published: list[list[str]], changed: str
+) -> None:
+    roster = ADOPT.load_roster()
+    roster["plugins"]["alpha"] = []
+    ADOPT.run(repository, [], ["alpha"], "write", scope="local", roster=roster)
+    paths = {
+        "claude": repository / ".claude/settings.local.json",
+        "codex": repository / ".codex/config.toml",
+        "rules": repository / ".codex/rules/agent-harness.rules",
+        "exclude": repository / ".git/info/exclude",
+    }
+    if changed == "claude":
+        settings = json.loads(paths[changed].read_text(encoding="utf-8"))
+        settings["enabledPlugins"]["alpha@tj-agents"] = False
+        paths[changed].write_text(json.dumps(settings), encoding="utf-8")
+    elif changed == "exclude":
+        text = paths[changed].read_text(encoding="utf-8")
+        paths[changed].write_text(
+            text.replace(
+                REPO_CONFIG.EXCLUDE_END, "authored\n" + REPO_CONFIG.EXCLUDE_END
+            ),
+            encoding="utf-8",
+        )
+    else:
+        paths[changed].write_text("changed\n", encoding="utf-8")
+    before = {path: path.read_bytes() for path in paths.values()}
+    marker = repository / REPO_CONFIG.LOCAL_STATE
+    marker_before = marker.read_bytes()
+
+    with pytest.raises(REPO_CONFIG.lock_io.LockError, match=r"changed|owned"):
+        ADOPT.run(repository, [], ["alpha"], "write", scope="project", roster=roster)
+
+    assert {path: path.read_bytes() for path in paths.values()} == before
+    assert marker.read_bytes() == marker_before
+    assert not (repository / ".claude/settings.json").exists()
 
 
 @pytest.mark.parametrize("existing_settings", [False, True])

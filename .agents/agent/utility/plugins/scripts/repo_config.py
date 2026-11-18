@@ -172,6 +172,19 @@ def unmanaged_codex(text: str) -> str:
 
 def codex_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool]) -> str:
     existing = config_conflicts.read_text(path, unmanaged=unmanaged_codex) if path.is_file() else ""
+    if (
+        existing == text_at(path)
+        and existing.count(MANAGED_START) == 1
+        and existing.count(MANAGED_END) == 1
+        and existing.index(MANAGED_START) < existing.index(MANAGED_END)
+    ):
+        block = (
+            existing[
+                existing.index(MANAGED_START):
+                existing.index(MANAGED_END) + len(MANAGED_END)
+            ] + "\n"
+        )
+        return local_codex(path, sources, identities, block)[0]
     return codex_document(existing, sources, identities)
 
 
@@ -387,7 +400,10 @@ def local_codex(path: Path, sources: dict, identities: dict, previous: str | Non
     return expected, block
 
 
-def exclusion_text(path: Path, root: Path, targets: list[Path], *, existing: str | None = None) -> str:
+def exclusion_text(
+    path: Path, root: Path, targets: list[Path], *,
+    existing: str | None = None, remove: bool = False,
+) -> str:
     existing = (text_at(path) or "") if existing is None else existing
     owner = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()
     relatives = {relative for target in targets for relative in (target.relative_to(root).as_posix(), target.resolve().relative_to(root).as_posix())}
@@ -404,7 +420,7 @@ def exclusion_text(path: Path, root: Path, targets: list[Path], *, existing: str
                 raise lock_io.LockError(f"{path}: malformed managed exclusions")
             active = suffix
             owners.add(suffix)
-            if suffix == " " + owner:
+            if suffix == " " + owner and not remove:
                 kept.append(block)
         elif stripped.startswith(EXCLUDE_END):
             if active is None or stripped != EXCLUDE_END + active:
@@ -413,12 +429,14 @@ def exclusion_text(path: Path, root: Path, targets: list[Path], *, existing: str
                 kept.append(line)
             active = None
             continue
+        elif remove and active == " " + owner and stripped not in patterns:
+            raise lock_io.LockError(f"{path}: owned exclusions were changed")
         if active != " " + owner:
             kept.append(line)
     if active is not None:
         raise lock_io.LockError(f"{path}: malformed managed exclusions")
     existing = "".join(kept)
-    if " " + owner in owners:
+    if " " + owner in owners or remove:
         return existing
     return existing + ("\n" if existing and not existing.endswith("\n") else "") + block
 
@@ -464,9 +482,55 @@ def plan(
             if exclusions is not None:
                 exclusions[exclude] = targets[exclude]
     else:
+        if state_path.exists():
+            local_claude_path = root / ".claude/settings.local.json"
+            exclude = preflight_paths(
+                root, [local_claude_path, state_path], scope="local",
+                read_paths=inputs, run=execute,
+            )
+            validate_aliases(
+                [*paths, local_claude_path, state_path,
+                 *([exclude] if exclude is not None else [])], inputs,
+            )
+            state = local_state(state_path)
+            local_text, _ = local_claude(
+                local_claude_path, {}, {}, harness_permissions.Permissions(),
+                state[Host.CLAUDE.value],
+            )
+            current_codex = text_at(codex) or ""
+            prior_codex = state[Host.CODEX.value]
+            if prior_codex is not None and prior_codex not in current_codex:
+                raise lock_io.LockError(
+                    f"{codex}: owned managed section was changed or removed"
+                )
+            project_codex, _ = local_codex(codex, sources, identities, prior_codex)
+            if actual_rules is not None and actual_rules != state["rules"]:
+                raise lock_io.LockError(
+                    f"{rules_path}: harness rules are not owned or were changed"
+                )
         committed = committed_permissions(root) if permissions is not None else {}
         targets = {claude: claude_settings(claude, sources, identities, permissions, committed),
                    codex: codex_settings(codex, sources, identities), rules_path: expected_rules}
+        if state_path.exists():
+            targets[codex] = project_codex
+            targets[local_claude_path] = local_text
+            targets[state_path] = None
+            if exclude is not None:
+                local_paths = [
+                    local_claude_path, codex, rules_path, state_path,
+                    *prospective_paths,
+                ]
+                if lock_path.resolve().is_relative_to(root):
+                    local_paths.append(lock_path)
+                targets[exclude] = exclusion_text(
+                    exclude, root, [contained(root, path) for path in local_paths],
+                    existing=(
+                        exclusions.get(exclude) if exclusions is not None else None
+                    ),
+                    remove=True,
+                )
+                if exclusions is not None:
+                    exclusions[exclude] = targets[exclude]
     try:
         mode = host_permissions.permissions(root)
         targets[claude] = host_permissions.claude_settings(targets[claude], mode, project=True)
@@ -487,7 +551,11 @@ def plan(
 
 
 def reject_machine_paths(root: Path, targets: dict[Path, str | None]) -> None:
-    committed = {**{root / relative: text_at(root / relative) for relative in machine_paths.COMMITTED_SETTINGS}, **targets}
+    committed = {
+        **{root / relative: text_at(root / relative)
+           for relative in machine_paths.COMMITTED_SETTINGS},
+        **{path: text for path, text in targets.items() if path.is_relative_to(root)},
+    }
     problems = [
         problem
         for path, text in committed.items()
