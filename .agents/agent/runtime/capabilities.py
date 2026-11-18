@@ -94,6 +94,17 @@ REVISIONS = {
 
 CAPABILITIES = (
     Capability(
+        "managed-native-arguments",
+        Support(
+            "agent:.claude/runtime/launch.py::managed_arguments",
+            "agent:tests/test_host_command.py::test_managed_command_preserves_native_arguments_and_exit_code",
+        ),
+        Support(
+            "agent:.codex/runtime/launch.py::managed_arguments",
+            "agent:tests/test_host_command.py::test_managed_codex_keeps_explicit_flags_and_literal_prompts",
+        ),
+    ),
+    Capability(
         "session-command-environment",
         Support(
             "agent:.claude/runtime/launch.py::record_session_environment",

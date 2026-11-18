@@ -53,7 +53,9 @@ def test_item_lookup_requires_verified_liveness_only_for_its_linked_hosts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, invalid: bool
 ) -> None:
     session = {
-        "host": "claude", "native_id": "thread", "state": "active",
+        "host": "claude",
+        "native_id": "thread",
+        "state": "active",
         "session": "claude:thread",
     }
     sessions = [session]
@@ -61,7 +63,8 @@ def test_item_lookup_requires_verified_liveness_only_for_its_linked_hosts(
         sessions.append({**session, "host": "codex", "session": "codex:thread"})
     monkeypatch.setattr(work_item, "reference", lambda _cwd, ref: ref)
     monkeypatch.setattr(
-        agent_store, "run",
+        agent_store,
+        "run",
         lambda *args: {"item": {"ref": "item"}, "sessions": sessions},
     )
     monkeypatch.setattr(lifecycle, "tj_item", lambda *args, **kwargs: {})
@@ -102,14 +105,19 @@ def test_status_passes_canonical_filter_to_managed_session_snapshot(
 
 
 def test_absence_from_daemon_inventory_does_not_authorize_item_reuse(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(work_item, "reference", lambda _cwd, ref: ref)
     monkeypatch.setattr(
-        agent_store, "run",
-        lambda *args: {"item": {"ref": "item"}, "sessions": [
-            {"host": "codex", "native_id": "thread", "session": "codex:thread"}
-        ]},
+        agent_store,
+        "run",
+        lambda *args: {
+            "item": {"ref": "item"},
+            "sessions": [
+                {"host": "codex", "native_id": "thread", "session": "codex:thread"}
+            ],
+        },
     )
     monkeypatch.setattr(lifecycle, "liveness", lambda _hosts: {Host.CODEX: {}})
     monkeypatch.setattr(lifecycle, "tj_item", lambda *args, **kwargs: {})
@@ -123,14 +131,23 @@ def test_ended_codex_history_preserves_available_liveness(
 ) -> None:
     monkeypatch.setattr(work_item, "reference", lambda _cwd, ref: ref)
     monkeypatch.setattr(
-        agent_store, "run",
-        lambda *args: {"item": {"ref": "item"}, "sessions": [
-            {"host": "codex", "native_id": "thread",
-             "session": "codex:thread", "state": "ended"}
-        ]},
+        agent_store,
+        "run",
+        lambda *args: {
+            "item": {"ref": "item"},
+            "sessions": [
+                {
+                    "host": "codex",
+                    "native_id": "thread",
+                    "session": "codex:thread",
+                    "state": "ended",
+                }
+            ],
+        },
     )
     monkeypatch.setattr(
-        lifecycle, "liveness",
+        lifecycle,
+        "liveness",
         lambda _hosts: {Host.CODEX: {"thread": live} if live else {}},
     )
     monkeypatch.setattr(lifecycle, "tj_item", lambda *args, **kwargs: {})

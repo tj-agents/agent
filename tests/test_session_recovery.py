@@ -174,6 +174,7 @@ def test_claude_invalid_pid_invalidates_entire_inventory(
     monkeypatch.setattr(claude_launch, "executable", lambda: "fake-agent")
     rows = [{"sessionId": "valid", "pid": 12}, {"sessionId": "bad", "pid": pid}]
     result = SimpleNamespace(returncode=0, stdout=json.dumps(rows))
+
     def run(*args: Any, **kwargs: Any) -> SimpleNamespace:
         return result
 

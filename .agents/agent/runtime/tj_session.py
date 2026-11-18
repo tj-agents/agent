@@ -82,7 +82,8 @@ def session_liveness(session: str, launch_id: str) -> dict[str, object]:
             "its liveness is unverified"
         )
     if (
-        host is Host.CODEX and observed is not None
+        host is Host.CODEX
+        and observed is not None
         and observed.process_ids is not None
         and launch_id not in (observed.launch_ids or ())
     ):

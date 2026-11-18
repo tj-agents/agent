@@ -159,7 +159,9 @@ def test_unknown_native_state_never_prints_dead(
 
 @pytest.mark.parametrize("alive", [True, False])
 def test_replacement_receipt_cannot_prove_an_unobserved_predecessor_stopped(
-    backend: Backend, capsys: pytest.CaptureFixture[str], alive: bool,
+    backend: Backend,
+    capsys: pytest.CaptureFixture[str],
+    alive: bool,
 ) -> None:
     backend.inventory = {
         backend.native_id: Liveness(
@@ -176,11 +178,13 @@ def test_replacement_receipt_cannot_prove_an_unobserved_predecessor_stopped(
 
 
 def test_observed_predecessor_retains_competing_replacement_processes(
-    backend: Backend, capsys: pytest.CaptureFixture[str],
+    backend: Backend,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     backend.inventory = {
         backend.native_id: Liveness(
-            True, process_ids=(42, 43),
+            True,
+            process_ids=(42, 43),
             launch_ids=(backend.launch_id, "replacement"),
         )
     }
@@ -368,7 +372,8 @@ def test_codex_strict_inventory_checks_every_page_for_a_loaded_conversation(
     monkeypatch.setattr(adapter, "executable", lambda: "fixture-codex")
     monkeypatch.setattr(adapter, "daemon", lambda: server)
     monkeypatch.setattr(
-        adapter.processes, "inventory",
+        adapter.processes,
+        "inventory",
         lambda: {backend.native_id: Liveness(False)} if recorded else {},
     )
     # The adapter's sole process query and all daemon requests are fixture replies.

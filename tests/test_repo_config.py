@@ -210,10 +210,16 @@ def test_project_adoption_unwinds_local_ownership_and_preserves_authored_setting
 ) -> None:
     claude = repository / ".claude/settings.local.json"
     claude.parent.mkdir()
-    claude.write_text(json.dumps({
-        "custom": "keep", "enabledPlugins": {"other@else": True},
-        "permissions": {"allow": ["Bash(mine)"]},
-    }), encoding="utf-8")
+    claude.write_text(
+        json.dumps(
+            {
+                "custom": "keep",
+                "enabledPlugins": {"other@else": True},
+                "permissions": {"allow": ["Bash(mine)"]},
+            }
+        ),
+        encoding="utf-8",
+    )
     codex = repository / ".codex/config.toml"
     codex.parent.mkdir()
     codex.write_text(
@@ -237,9 +243,10 @@ def test_project_adoption_unwinds_local_ownership_and_preserves_authored_setting
     assert local["permissions"]["allow"] == ["Bash(mine)"]
     assert tomllib.loads(codex.read_text(encoding="utf-8"))["model"] == "my-model"
     assert exclude.read_text(encoding="utf-8") == "# authored\nmy-file\n"
-    assert ADOPT.run(
-        repository, [], ["beta"], "write", scope="project", roster=roster
-    ) == []
+    assert (
+        ADOPT.run(repository, [], ["beta"], "write", scope="project", roster=roster)
+        == []
+    )
     config = tomllib.loads(codex.read_text(encoding="utf-8"))
     assert config["plugins"]["other@else"] == {"enabled": True}
 

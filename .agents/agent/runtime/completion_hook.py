@@ -57,9 +57,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise completion_event.EventError(
                 "Native completion event must be an object"
             )
-        if (
-            (data.get("hook_event_name") == "UserPromptSubmit")
-            != (args.hook_mode == "prompt")
+        if (data.get("hook_event_name") == "UserPromptSubmit") != (
+            args.hook_mode == "prompt"
         ):
             raise completion_event.EventError(
                 "Native hook event does not match its mode"

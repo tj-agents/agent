@@ -219,17 +219,13 @@ def test_public_resume_binds_before_claiming_and_never_reregisters(
     )
     if admitted:
         assert (
-            session_hook.start(
-                host, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"}
-            )
+            session_hook.start(host, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"})
             == current
         )
         expected = ["admission", "environment", "claim"]
     else:
         with pytest.raises(LaunchError, match="predecessor is live"):
-            session_hook.start(
-                host, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"}
-            )
+            session_hook.start(host, THREAD, "/repo", {"TJ_RUN_LAUNCH_ID": "new"})
         expected = ["admission"]
     assert events == ([(THREAD, "new")] if host is Host.CODEX else []) + expected
 

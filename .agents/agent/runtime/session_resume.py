@@ -75,9 +75,7 @@ def bind_started(session: str, launch_id: str) -> dict[str, object] | None:
             check=False,
         )
         if result.returncode:
-            raise LaunchError(
-                result.stderr.strip() or "Native resume admission failed"
-            )
+            raise LaunchError(result.stderr.strip() or "Native resume admission failed")
         document = json.loads(result.stdout)
         record = document.get("session") if isinstance(document, dict) else None
         if (
