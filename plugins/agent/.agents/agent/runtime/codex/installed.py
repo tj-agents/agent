@@ -77,7 +77,8 @@ def update_project_standards(directory: Path) -> None:
     builds = catalog.recorded(jobs.state_directory())
     digests = Digests(jobs.state_directory())
     roots = {}
-    for identity in selected:
+
+    def locate(identity: str) -> Path:
         plugin, _, marketplace = identity.rpartition("@")
         build = builds.get(identity)
         root = catalog.root(marketplace, plugin, build.version) if build else None
@@ -86,6 +87,9 @@ def update_project_standards(directory: Path) -> None:
                 f"Cannot verify updated standards for {identity} in {project}"
             )
         roots[identity] = root
+        return root
+
+    required_plugins.closure(selected, locate)
     digests.save()
     standards.update(project, roots)
 
