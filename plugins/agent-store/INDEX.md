@@ -1,3 +1,3 @@
 # agent-store package capabilities
 
-- `inspect` — utility — core
+- `inspect` — operation — core

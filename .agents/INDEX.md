@@ -1,27 +1,27 @@
 # agent capabilities
 
-Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; a skill's name is its folder path below the kind folder joined by hyphens.
+Generated from `.agents/<plugin>/skills/<family>/<member>/SKILL.md`; a skill's name is its folder path below skills/ joined by hyphens.
 
 ## agent
 
-- `lanes` — policy — core — `.agents/agent/policy/lanes/SKILL.md`
-- `close` — utility — core — `.agents/agent/utility/close/SKILL.md`
-- `handoff` — utility — core — `.agents/agent/utility/handoff/SKILL.md`
-- `listen` — utility — core — `.agents/agent/utility/listen/SKILL.md`
-- `message` — utility — core — `.agents/agent/utility/message/SKILL.md`
-- `open` — utility — core — `.agents/agent/utility/open/SKILL.md`
-- `peer` — utility — core — `.agents/agent/utility/peer/SKILL.md`
-- `plugins` — utility — core — `.agents/agent/utility/plugins/SKILL.md`
-- `recent` — utility — core — `.agents/agent/utility/recent/SKILL.md`
-- `recover` — utility — core — `.agents/agent/utility/recover/SKILL.md`
-- `refresh-plugins` — utility — core — `.agents/agent/utility/refresh-plugins/SKILL.md`
-- `search` — utility — core — `.agents/agent/utility/search/SKILL.md`
+- `handoff` — operation — core — `.agents/agent/skills/handoff/SKILL.md`
+- `listen` — operation — core — `.agents/agent/skills/listen/SKILL.md`
+- `message` — operation — core — `.agents/agent/skills/message/SKILL.md`
+- `open` — operation — core — `.agents/agent/skills/open/SKILL.md`
+- `peer` — operation — core — `.agents/agent/skills/peer/SKILL.md`
+- `plugins` — operation — core — `.agents/agent/skills/plugins/SKILL.md`
+- `recent` — operation — core — `.agents/agent/skills/recent/SKILL.md`
+- `recover` — operation — core — `.agents/agent/skills/recover/SKILL.md`
+- `refresh-plugins` — operation — core — `.agents/agent/skills/refresh-plugins/SKILL.md`
+- `search` — operation — core — `.agents/agent/skills/search/SKILL.md`
+- `close` — policy — core — `.agents/agent/skills/close/SKILL.md`
+- `lanes` — policy — core — `.agents/agent/skills/lanes/SKILL.md`
 
 ## agent-store
 
-- `inspect` — utility — core — `.agents/agent-store/utility/inspect/SKILL.md`
+- `inspect` — operation — core — `.agents/agent-store/skills/inspect/SKILL.md`
 
 ## codex
 
-- `hooks` — utility — core — `.agents/codex/utility/hooks/SKILL.md`
-- `memory` — utility — core — `.agents/codex/utility/memory/SKILL.md`
+- `hooks` — operation — core — `.agents/codex/skills/hooks/SKILL.md`
+- `memory` — operation — core — `.agents/codex/skills/memory/SKILL.md`

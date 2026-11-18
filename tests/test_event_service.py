@@ -1,8 +1,6 @@
 import base64
-import importlib.util
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -11,9 +9,7 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("event_service", ROOT / ".agents/agent/runtime/event_service.py")
-SERVICE = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(SERVICE)
+import tj_agent.installation.event_service as SERVICE
 
 
 class Supervisor:
@@ -38,8 +34,15 @@ class Supervisor:
             script = base64.b64decode(argv[-1]).decode("utf-16-le")
             if "ConvertTo-Json" in script:
                 import json
-                stdout = json.dumps({"sid": self.sid, "xml": self.xml,
-                                     "state": "Running" if self.running else "Ready"}, ensure_ascii=False)
+
+                stdout = json.dumps(
+                    {
+                        "sid": self.sid,
+                        "xml": self.xml,
+                        "state": "Running" if self.running else "Ready",
+                    },
+                    ensure_ascii=False,
+                )
             else:
                 self.xml = SERVICE.task_xml(self.context, self.sid)
                 self.running = True
@@ -49,10 +52,12 @@ class Supervisor:
         if operation == "show":
             path = SERVICE.unit_path(self.context)
             fragment = self.fragment or (str(path) if path.exists() else "")
-            stdout = (f"LoadState={'loaded' if self.loaded else 'not-found'}\n"
-                      f"ActiveState={'active' if self.running else 'inactive'}\n"
-                      f"UnitFileState={'enabled' if self.enabled else 'disabled'}\n"
-                      f"FragmentPath={fragment}\nDropInPaths={self.overrides}\nNeedDaemonReload=no\n")
+            stdout = (
+                f"LoadState={'loaded' if self.loaded else 'not-found'}\n"
+                f"ActiveState={'active' if self.running else 'inactive'}\n"
+                f"UnitFileState={'enabled' if self.enabled else 'disabled'}\n"
+                f"FragmentPath={fragment}\nDropInPaths={self.overrides}\nNeedDaemonReload=no\n"
+            )
         else:
             stdout = ""
             if operation == "daemon-reload":
@@ -74,9 +79,15 @@ class ServiceTests(unittest.TestCase):
         self.home = Path(temporary.name)
 
     def context(self, windows=False):
-        context = SimpleNamespace(home=self.home, environ={}, windows=windows, state_directory=self.home / "state % $ ü",
-                                  claude_home=self.home / "Claude's home", codex_home=self.home / "codex home",
-                                  which=lambda name: "/fake/bin/" + name)
+        context = SimpleNamespace(
+            home=self.home,
+            environ={},
+            windows=windows,
+            state_directory=self.home / "state % $ ü",
+            claude_home=self.home / "Claude's home",
+            codex_home=self.home / "codex home",
+            which=lambda name: "/fake/bin/" + name,
+        )
         script = Path(SERVICE.arguments(context)[0])
         script.parent.mkdir(parents=True, exist_ok=True)
         script.write_text("pass\n", encoding="utf-8")
@@ -92,8 +103,12 @@ class ServiceTests(unittest.TestCase):
         values, counts = SERVICE.xml_values(context.run.xml)
         self.assertEqual((1, 1, 1), counts)
         self.assertEqual("PT0S", values["/Task/Settings/ExecutionTimeLimit"])
-        self.assertEqual("LeastPrivilege", values["/Task/Principals/Principal/RunLevel"])
-        self.assertEqual("InteractiveToken", values["/Task/Principals/Principal/LogonType"])
+        self.assertEqual(
+            "LeastPrivilege", values["/Task/Principals/Principal/RunLevel"]
+        )
+        self.assertEqual(
+            "InteractiveToken", values["/Task/Principals/Principal/LogonType"]
+        )
         self.assertEqual("IgnoreNew", values["/Task/Settings/MultipleInstancesPolicy"])
         self.assertEqual("true", values["/Task/Settings/Hidden"])
         self.assertEqual("999", values["/Task/Settings/RestartOnFailure/Count"])
@@ -117,18 +132,26 @@ class ServiceTests(unittest.TestCase):
 
     def test_windows_preserves_task_owned_by_someone_else(self):
         context = self.context(windows=True)
-        context.run.xml = SERVICE.task_xml(context, context.run.sid).replace(SERVICE.marker(context), "Someone else's task")
+        context.run.xml = SERVICE.task_xml(context, context.run.sid).replace(
+            SERVICE.marker(context), "Someone else's task"
+        )
         before = context.run.xml
         for operation in (SERVICE.check, SERVICE.apply):
             with self.assertRaisesRegex(SERVICE.ServiceError, "unowned scheduled task"):
                 operation(context)
         self.assertEqual(before, context.run.xml)
-        self.assertTrue(all("ConvertTo-Json" in base64.b64decode(argv[-1]).decode("utf-16-le")
-                            for argv, _ in context.run.calls))
+        self.assertTrue(
+            all(
+                "ConvertTo-Json" in base64.b64decode(argv[-1]).decode("utf-16-le")
+                for argv, _ in context.run.calls
+            )
+        )
 
     def test_windows_fallback_launches_console_python_through_hidden_powershell(self):
         context = self.context(windows=True)
-        context.which = lambda name: None if name == "pythonw.exe" else "/fake/powershell.exe"
+        context.which = lambda name: (
+            None if name == "pythonw.exe" else "/fake/powershell.exe"
+        )
         with mock.patch.object(Path, "is_file", return_value=False):
             executable, argv = SERVICE.windows_action(context)
         self.assertEqual("/fake/powershell.exe", executable)
@@ -164,7 +187,9 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(1, operations.count("daemon-reload"))
         self.assertEqual(1, operations.count("enable"))
         self.assertEqual(1, operations.count("restart"))
-        path.write_text(body.replace("Restart=on-failure", "Restart=no"), encoding="utf-8")
+        path.write_text(
+            body.replace("Restart=on-failure", "Restart=no"), encoding="utf-8"
+        )
         self.assertTrue(SERVICE.apply(context))
         self.assertEqual(body, path.read_text(encoding="utf-8"))
 
@@ -175,7 +200,9 @@ class ServiceTests(unittest.TestCase):
         path.write_text("[Service]\nExecStart=/someone/else\n", encoding="utf-8")
         with self.assertRaisesRegex(SERVICE.ServiceError, "unowned service unit"):
             SERVICE.apply(context)
-        self.assertEqual("[Service]\nExecStart=/someone/else\n", path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            "[Service]\nExecStart=/someone/else\n", path.read_text(encoding="utf-8")
+        )
         self.assertEqual(["show"], [argv[2] for argv, _ in context.run.calls])
 
     def test_linux_rejects_unmanaged_dropins_and_foreign_fragment(self):
@@ -213,8 +240,12 @@ class ServiceTests(unittest.TestCase):
                 snapshot["state"] = "Ready"
             return snapshot
 
-        with mock.patch.object(SERVICE, "windows_snapshot", side_effect=delayed_snapshot), \
-                mock.patch.object(SERVICE.time, "sleep") as sleep:
+        with (
+            mock.patch.object(
+                SERVICE, "windows_snapshot", side_effect=delayed_snapshot
+            ),
+            mock.patch.object(SERVICE.time, "sleep") as sleep,
+        ):
             self.assertTrue(SERVICE.apply(context))
         sleep.assert_called_once_with(0.2)
 
@@ -231,7 +262,9 @@ class ServiceTests(unittest.TestCase):
             return original(value)
 
         with mock.patch.object(SERVICE, "unit_contents", side_effect=contents):
-            with self.assertRaisesRegex(SERVICE.ServiceError, "changed during registration"):
+            with self.assertRaisesRegex(
+                SERVICE.ServiceError, "changed during registration"
+            ):
                 SERVICE.apply(context)
         self.assertEqual("foreign registration", path.read_text(encoding="utf-8"))
         self.assertFalse(path.with_suffix(".service.next").exists())
@@ -250,12 +283,21 @@ class ServiceTests(unittest.TestCase):
 
     def test_shell_tool_search_path_survives_service_delivery(self):
         context = self.context()
-        context.environ["PATH"] = "/home/user/.nvm/v22/bin:/home/user/tools % $ ü:/usr/bin"
+        context.environ["PATH"] = (
+            "/home/user/.nvm/v22/bin:/home/user/tools % $ ü:/usr/bin"
+        )
         expected = "--search-path=" + context.environ["PATH"]
         self.assertIn(expected, SERVICE.arguments(context))
         self.assertIn(SERVICE.systemd_escape(expected), SERVICE.unit_contents(context))
-        self.assertEqual(context.environ["PATH"], SERVICE.receipt(context.state_directory, context.claude_home,
-                         context.codex_home, context.environ["PATH"])["search_path"])
+        self.assertEqual(
+            context.environ["PATH"],
+            SERVICE.receipt(
+                context.state_directory,
+                context.claude_home,
+                context.codex_home,
+                context.environ["PATH"],
+            )["search_path"],
+        )
 
     def test_missing_runtime_does_not_register_anything(self):
         context = self.context()

@@ -1,3 +1,4 @@
+import importlib
 import importlib.util
 import io
 import json
@@ -13,24 +14,18 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "plugins/agent/.agents/agent/utility/peer/scripts/register_session.py"
 
 
-def load_module():
-    spec = importlib.util.spec_from_file_location("register_session", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-register_session = load_module()
+register_session = importlib.import_module("tj_agent.sessions.register_session")
 ProcessInfo = register_session.ProcessInfo
 
 
 def _git_environment():
     environment = os.environ.copy()
     for name in tuple(environment):
-        if name == "GIT_CONFIG_COUNT" or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+        if name == "GIT_CONFIG_COUNT" or name.startswith(
+            ("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")
+        ):
             environment.pop(name)
     return environment
 
@@ -44,7 +39,9 @@ class ResolveRecordedPidTests(unittest.TestCase):
             104: ProcessInfo(pid=104, ppid=None, name="explorer", started_at=4000.0),
         }
         pid, host, started = register_session.resolve_recorded_pid(
-            101, lookup=table.get, host_names={"codex"},
+            101,
+            lookup=table.get,
+            host_names={"codex"},
         )
         self.assertEqual(pid, 102)
         self.assertEqual(host, "codex")
@@ -56,7 +53,9 @@ class ResolveRecordedPidTests(unittest.TestCase):
             202: ProcessInfo(pid=202, ppid=203, name="bash", started_at=20.0),
         }
         pid, host, started = register_session.resolve_recorded_pid(
-            201, lookup=table.get, host_names={"claude", "codex"},
+            201,
+            lookup=table.get,
+            host_names={"claude", "codex"},
         )
         self.assertEqual(pid, 201)
         self.assertIsNone(host)
@@ -68,7 +67,9 @@ class ResolveRecordedPidTests(unittest.TestCase):
             302: ProcessInfo(pid=302, ppid=301, name="bash", started_at=6.0),
         }
         pid, host, started = register_session.resolve_recorded_pid(
-            301, lookup=table.get, host_names={"codex"},
+            301,
+            lookup=table.get,
+            host_names={"codex"},
         )
         self.assertEqual(pid, 301)
         self.assertIsNone(host)
@@ -79,7 +80,9 @@ class ResolveRecordedPidTests(unittest.TestCase):
             raise ValueError("garbage table")
 
         pid, host, started = register_session.resolve_recorded_pid(
-            401, lookup=garbage_lookup, host_names={"codex"},
+            401,
+            lookup=garbage_lookup,
+            host_names={"codex"},
         )
         self.assertEqual(pid, 401)
         self.assertIsNone(host)
@@ -88,9 +91,14 @@ class ResolveRecordedPidTests(unittest.TestCase):
     def test_depth_cap_without_match_falls_back(self):
         table = {}
         for pid in range(501, 516):
-            table[pid] = ProcessInfo(pid=pid, ppid=pid + 1, name="bash", started_at=float(pid))
+            table[pid] = ProcessInfo(
+                pid=pid, ppid=pid + 1, name="bash", started_at=float(pid)
+            )
         pid, host, started = register_session.resolve_recorded_pid(
-            501, lookup=table.get, host_names={"codex"}, depth_cap=10,
+            501,
+            lookup=table.get,
+            host_names={"codex"},
+            depth_cap=10,
         )
         self.assertEqual(pid, 501)
         self.assertIsNone(host)
@@ -133,7 +141,9 @@ class RecordTests(unittest.TestCase):
             self.assertEqual(entry["pid_started_at"], 99.75)
 
             written = json.loads(
-                (Path(tmp) / "cli-sessions" / "test-session.json").read_text(encoding="utf-8")
+                (Path(tmp) / "cli-sessions" / "test-session.json").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(written["pid"], 11)
             self.assertEqual(written["host"], "codex")
@@ -145,25 +155,32 @@ class RecordTests(unittest.TestCase):
 
 class TerminalIdentityTests(unittest.TestCase):
     def test_tmux_wins_over_outer_kitty_and_captures_original_server_socket(self):
-        identity = register_session.terminal_identity({
-            "TMUX": "/tmp/tmux-100/default,99,0",
-            "TMUX_PANE": "%7",
-            "KITTY_WINDOW_ID": "4",
-            "KITTY_LISTEN_ON": "unix:/kitty",
-        })
-        self.assertEqual(identity, {
-            "kind": "tmux",
-            "pane_id": "%7",
-            "socket": "/tmp/tmux-100/default",
-            "session_index": "0",
-        })
+        identity = register_session.terminal_identity(
+            {
+                "TMUX": "/tmp/tmux-100/default,99,0",
+                "TMUX_PANE": "%7",
+                "KITTY_WINDOW_ID": "4",
+                "KITTY_LISTEN_ON": "unix:/kitty",
+            }
+        )
+        self.assertEqual(
+            identity,
+            {
+                "kind": "tmux",
+                "pane_id": "%7",
+                "socket": "/tmp/tmux-100/default",
+                "session_index": "0",
+            },
+        )
 
     def test_konsole_preserves_service_and_full_session_path(self):
-        identity = register_session.terminal_identity({
-            "KONSOLE_DBUS_SERVICE": "org.kde.konsole-123",
-            "KONSOLE_DBUS_SESSION": "/Sessions/7",
-            "KONSOLE_DBUS_WINDOW": "/Windows/1",
-        })
+        identity = register_session.terminal_identity(
+            {
+                "KONSOLE_DBUS_SERVICE": "org.kde.konsole-123",
+                "KONSOLE_DBUS_SESSION": "/Sessions/7",
+                "KONSOLE_DBUS_WINDOW": "/Windows/1",
+            }
+        )
         self.assertEqual(identity["service"], "org.kde.konsole-123")
         self.assertEqual(identity["session"], "/Sessions/7")
 
@@ -171,7 +188,9 @@ class TerminalIdentityTests(unittest.TestCase):
         original = register_session.os.name
         try:
             register_session.os.name = "posix"
-            self.assertIsNone(register_session.terminal_identity({"WT_SESSION": "from-wsl"}))
+            self.assertIsNone(
+                register_session.terminal_identity({"WT_SESSION": "from-wsl"})
+            )
         finally:
             register_session.os.name = original
 
@@ -195,91 +214,20 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self._run_main_with_stdin("[1, 2, 3]"), 0)
 
 
-class LoadSessionStoreTests(unittest.TestCase):
-
-    def _write_store_stub(self, path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("MARKER = 'session-store-stub'\n", encoding="utf-8")
-
-    def _load_from(self, script_path):
-        spec = importlib.util.spec_from_file_location("register_session_under_test", script_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
-    @staticmethod
-    def _staged_receipt(root):
-        path = root / ".agents/dependencies/agent/source.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({
-            "repository": "tj-agents/agent", "revision": "fixture",
-            "sha256": "0" * 64, "exports": [".agents/agent/utility/peer/scripts"],
-        }), encoding="utf-8")
-
-    @staticmethod
-    def _package_marker(root):
-        marker = root / ".codex-plugin/plugin.json"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("{}\n", encoding="utf-8")
-
-    def test_finds_the_store_in_the_source_tree_layout(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            script = root / ".agents/dependencies/agent/.agents/agent/utility/peer/scripts/register_session.py"
-            script.parent.mkdir(parents=True, exist_ok=True)
-            script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-            self._write_store_stub(root / ".agents/dependencies/agent/.agents/agent-store/runtime/session_store.py")
-            self._staged_receipt(root)
-            module = self._load_from(script)
-            store = module._load_session_store()
-            self.assertIsNotNone(store)
-            self.assertEqual("session-store-stub", store.MARKER)
-
-    def test_shallow_staging_path_without_a_store_does_not_index_package_ancestors(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(register_session, "HERE", Path(tmp) / "staging"):
-            self.assertIsNone(register_session.session_store_path())
-
-    def test_finds_the_store_in_the_agent_utility_packaged_layout(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            plugin_root = Path(tmp)
-            script = plugin_root / ".agents/agent/utility/peer/scripts/register_session.py"
-            script.parent.mkdir(parents=True, exist_ok=True)
-            script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-            self._write_store_stub(plugin_root / ".agents/agent-store/runtime/session_store.py")
-            self._package_marker(plugin_root)
-            module = self._load_from(script)
-            store = module._load_session_store()
-            self.assertIsNotNone(store)
-            self.assertEqual("session-store-stub", store.MARKER)
-
-    def test_finds_the_store_in_the_skills_packaged_layout(self):
-        for layout in ("skills", "codex-skills"):
-            with self.subTest(layout=layout):
-                with tempfile.TemporaryDirectory() as tmp:
-                    plugin_root = Path(tmp)
-                    script = plugin_root / layout / "peer/scripts/register_session.py"
-                    script.parent.mkdir(parents=True, exist_ok=True)
-                    script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
-                    self._write_store_stub(plugin_root / ".agents/agent-store/runtime/session_store.py")
-                    self._package_marker(plugin_root)
-                    module = self._load_from(script)
-                    store = module._load_session_store()
-                    self.assertIsNotNone(store)
-                    self.assertEqual("session-store-stub", store.MARKER)
-
-
-@unittest.skipUnless(shutil.which("git"), "git is required for SessionStart persistence regression")
+@unittest.skipUnless(
+    shutil.which("git"), "git is required for SessionStart persistence regression"
+)
 class SessionStartStoreIntegrationTests(unittest.TestCase):
-    def _load_from(self, script_path):
-        spec = importlib.util.spec_from_file_location("register_session_under_test", script_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
     def _run_git(self, cwd, *args):
         result = subprocess.run(
-            ["git", "-C", str(cwd), *args], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=15, check=True, env=_git_environment(),
+            ["git", "-C", str(cwd), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=True,
+            env=_git_environment(),
         )
         return result.stdout.strip()
 
@@ -293,47 +241,23 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
         self._run_git(repo, "add", "README.md")
         self._run_git(repo, "commit", "-m", "initial session")
         self._run_git(repo, "branch", "-M", "session-registration")
-        self._run_git(repo, "remote", "add", "origin", "https://GitHub.com/Tj-Agents/Session-Store-Regression.git")
+        self._run_git(
+            repo,
+            "remote",
+            "add",
+            "origin",
+            "https://GitHub.com/Tj-Agents/Session-Store-Regression.git",
+        )
         return repo, self._run_git(repo, "rev-parse", "HEAD")
 
-    def _copy_layout(self, root, layout):
-        if layout == "source":
-            script = root / ".agents/dependencies/agent/.agents/agent/utility/peer/scripts/register_session.py"
-            store = root / ".agents/dependencies/agent/.agents/agent-store/runtime/session_store.py"
-        elif layout == "agents-utility":
-            script = root / ".agents/agent/utility/peer/scripts/register_session.py"
-            store = root / ".agents/agent-store/runtime/session_store.py"
-        else:
-            script = root / layout / "peer/scripts/register_session.py"
-            store = root / ".agents/agent-store/runtime/session_store.py"
-        script.parent.mkdir(parents=True)
-        store.parent.mkdir(parents=True)
-        shutil.copy2(SCRIPT, script)
-        runtime = store.parents[2] / "agent" / "runtime"
-        runtime.mkdir(parents=True)
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent/runtime/host.py", runtime / "host.py")
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/session_store.py", store)
-        shutil.copy2(ROOT / "plugins/agent/.agents/agent-store/runtime/repository_identity.py", store.with_name("repository_identity.py"))
-        if layout == "source":
-            LoadSessionStoreTests._staged_receipt(root)
-        else:
-            LoadSessionStoreTests._package_marker(root)
-        return script
-
     def test_session_start_records_real_store_from_source_and_packaged_layouts(self):
-        cases = (
-            ("source", "codex"),
-            ("source", "claude"),
-            ("agents-utility", "codex"),
-            ("skills", "codex"),
-            ("codex-skills", "codex"),
-        )
+        cases = (("installed", "codex"), ("installed", "claude"))
         with tempfile.TemporaryDirectory(prefix="session start é ") as tmp:
             root = Path(tmp)
             repo, head = self._create_repo(root)
             for layout, host in cases:
                 with self.subTest(layout=layout, host=host):
-                    module = self._load_from(self._copy_layout(root / f"{layout} {host}", layout))
+                    module = register_session
                     state = root / f"state {layout} {host} é"
                     profile = root / f"profile {layout} {host} é"
                     session_id = f"{host}-{layout}"
@@ -342,28 +266,45 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
                     host_pid = pid + 1
                     pid_started_at = 1700000000.25
                     process_table = {
-                        hook_pid: module.ProcessInfo(pid=hook_pid, ppid=pid, name="hook-shell", started_at=1.0),
-                        pid: module.ProcessInfo(pid=pid, ppid=host_pid, name="python", started_at=2.0),
-                        host_pid: module.ProcessInfo(pid=host_pid, ppid=None, name=f"{host}.exe", started_at=pid_started_at),
+                        hook_pid: module.ProcessInfo(
+                            pid=hook_pid, ppid=pid, name="hook-shell", started_at=1.0
+                        ),
+                        pid: module.ProcessInfo(
+                            pid=pid, ppid=host_pid, name="python", started_at=2.0
+                        ),
+                        host_pid: module.ProcessInfo(
+                            pid=host_pid,
+                            ppid=None,
+                            name=f"{host}.exe",
+                            started_at=pid_started_at,
+                        ),
                     }
                     payload = json.dumps({"session_id": session_id, "cwd": str(repo)})
                     environment = _git_environment()
-                    environment.update({
-                        module.STATE_DIRECTORY_ENV: str(state),
-                        module.TITLE_ENV: f"{host} session é",
-                        module.HOST_NAMES_ENV: host,
-                        "CODEX_HOME": str(profile / "codex"),
-                        "CLAUDE_CONFIG_DIR": str(profile / "claude"),
-                    })
+                    environment.update(
+                        {
+                            module.STATE_DIRECTORY_ENV: str(state),
+                            module.TITLE_ENV: f"{host} session é",
+                            module.HOST_NAMES_ENV: host,
+                            "CODEX_HOME": str(profile / "codex"),
+                            "CLAUDE_CONFIG_DIR": str(profile / "claude"),
+                        }
+                    )
                     with (
                         mock.patch.dict(os.environ, environment, clear=True),
-                        mock.patch.object(module, "build_process_lookup", return_value=process_table.get),
+                        mock.patch.object(
+                            module,
+                            "build_process_lookup",
+                            return_value=process_table.get,
+                        ),
                         mock.patch.object(sys, "stdin", io.StringIO(payload)),
                     ):
                         self.assertEqual(0, module.main())
 
                     native = json.loads(
-                        (state / "cli-sessions" / f"{session_id}.json").read_text(encoding="utf-8")
+                        (state / "cli-sessions" / f"{session_id}.json").read_text(
+                            encoding="utf-8"
+                        )
                     )
                     self.assertEqual(session_id, native["session_id"])
                     self.assertEqual(host, native["host"])
@@ -385,9 +326,16 @@ class SessionStartStoreIntegrationTests(unittest.TestCase):
                         connection.close()
                     self.assertEqual(
                         (
-                            f"{host}:{session_id}", host, session_id, f"{host} session é", str(repo),
-                            "github.com/tj-agents/session-store-regression", "session-registration", head,
-                            host_pid, pid_started_at,
+                            f"{host}:{session_id}",
+                            host,
+                            session_id,
+                            f"{host} session é",
+                            str(repo),
+                            "github.com/tj-agents/session-store-regression",
+                            "session-registration",
+                            head,
+                            host_pid,
+                            pid_started_at,
                         ),
                         row,
                     )

@@ -1,51 +1,26 @@
-#!/usr/bin/env python3
-"""Read or toggle Codex auto-memory without discarding unrelated JSON settings."""
-
-from __future__ import annotations
-
-import argparse
-import json
-from pathlib import Path
+import runpy
 import sys
+from pathlib import Path
 
 
-def settings(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError(f"{path} must contain a JSON object")
-    return value
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("status", "toggle"))
-    parser.add_argument("--project", type=Path, default=Path.cwd())
-    args = parser.parse_args(argv)
-    path = args.project.resolve() / ".codex" / "settings.local.json"
-    try:
-        value = settings(path)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
-        print(f"auto-memory unavailable: {error}", file=sys.stderr)
-        return 1
-    enabled = value.get("autoMemoryEnabled", True)
-    if not isinstance(enabled, bool):
-        print("auto-memory unavailable: autoMemoryEnabled must be a boolean", file=sys.stderr)
-        return 1
-    if args.command == "status":
-        print(json.dumps({"auto_memory": "on" if enabled else "off", "settings": str(path)}))
-        return 0
-    value["autoMemoryEnabled"] = not enabled
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    except OSError as error:
-        print(f"auto-memory unavailable: {error}", file=sys.stderr)
-        return 1
-    print(json.dumps({"auto_memory": "on" if not enabled else "off", "settings": str(path)}))
-    return 0
-
+here = Path(__file__).resolve()
+if sys.path and Path(sys.path[0]).resolve() == here.parent:
+    sys.path.pop(0)
+for declared in here.parents:
+    if any(
+        (declared / marker).is_file()
+        for marker in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json")
+    ):
+        boundary = declared / "python"
+        for package in ("tj_agent", "tj_agent_store", "tj_cli"):
+            if not (boundary / package / "__init__.py").is_file():
+                raise RuntimeError(f"declared {package} import boundary is unavailable")
+        sys.path.insert(0, str(boundary))
+        break
+    if (declared / "pyproject.toml").is_file():
+        break
+else:
+    raise RuntimeError("declared package boundary is unavailable")
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    runpy.run_module("tj_agent.hosts.codex.memory", run_name="__main__")

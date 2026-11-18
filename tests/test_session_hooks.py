@@ -10,7 +10,9 @@ EVENTS = {"SessionStart", "UserPromptSubmit", "Stop"}
 
 
 def hooks(host):
-    return json.loads((PACKAGE / "hooks" / f"{host}.json").read_text(encoding="utf-8"))["hooks"]
+    return json.loads((PACKAGE / "hooks" / f"{host}.json").read_text(encoding="utf-8"))[
+        "hooks"
+    ]
 
 
 def packaged_paths(text, root):
@@ -38,7 +40,9 @@ class SessionHookTests(unittest.TestCase):
                 for hook in group["hooks"]:
                     with self.subTest(command=hook["command"][:60]):
                         self.assertTrue(hook["command"].startswith("python3 -I -B -c "))
-                        self.assertTrue(hook["commandWindows"].startswith("python -I -B -c "))
+                        self.assertTrue(
+                            hook["commandWindows"].startswith("python -I -B -c ")
+                        )
 
 
 if __name__ == "__main__":

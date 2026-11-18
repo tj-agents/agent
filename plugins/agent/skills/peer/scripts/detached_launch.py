@@ -1,37 +1,26 @@
-"""Run one packaged detached callback with its exact Agent state context."""
-
-import argparse
-import os
-from pathlib import Path
 import runpy
 import sys
+from pathlib import Path
 
 
-def arguments(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--state-directory", required=True, type=Path)
-    parser.add_argument("--codex-home", type=Path)
-    parser.add_argument("--claude-config-dir", type=Path)
-    parser.add_argument("script", type=Path)
-    parser.add_argument("script_arguments", nargs=argparse.REMAINDER)
-    return parser.parse_args(argv)
-
-
-def main(argv=None):
-    values = arguments(argv)
-    state = values.state_directory.resolve()
-    if not state.is_absolute() or not values.script.is_file():
-        raise ValueError("detached callback context is unavailable")
-    os.environ["AGENT_STATE_DIRECTORY"] = str(state)
-    for key, value in (("CODEX_HOME", values.codex_home), ("CLAUDE_CONFIG_DIR", values.claude_config_dir)):
-        if value is not None:
-            os.environ[key] = str(value.resolve())
-    script = values.script.resolve()
-    sys.path.insert(0, str(script.parent))
-    sys.argv = [str(script), *values.script_arguments]
-    runpy.run_path(str(script), run_name="__main__")
-    return 0
-
+here = Path(__file__).resolve()
+if sys.path and Path(sys.path[0]).resolve() == here.parent:
+    sys.path.pop(0)
+for declared in here.parents:
+    if any(
+        (declared / marker).is_file()
+        for marker in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json")
+    ):
+        boundary = declared / "python"
+        for package in ("tj_agent", "tj_agent_store", "tj_cli"):
+            if not (boundary / package / "__init__.py").is_file():
+                raise RuntimeError(f"declared {package} import boundary is unavailable")
+        sys.path.insert(0, str(boundary))
+        break
+    if (declared / "pyproject.toml").is_file():
+        break
+else:
+    raise RuntimeError("declared package boundary is unavailable")
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    runpy.run_module("tj_agent.sessions.detached_launch", run_name="__main__")

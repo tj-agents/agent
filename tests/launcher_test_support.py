@@ -7,16 +7,21 @@ standards-sync-before-launch ordering are exercised as written, never re-impleme
 
 Deliberately not named test_*.py, so neither unittest discovery nor pytest collects it as a test module.
 """
+
+import importlib
 import importlib.util
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-AGENT_CLI = ROOT / 'plugins/agent/.agents/agent/runtime/agent_cli.py'
+AGENT_CLI = ROOT / "packages/tj-agent/src/tj_agent/sessions/launch.py"
 
 # A plausible resolve_codex_executable() result: a (path, version) pair shaped like the real function's
 # return value, for a launch_codex.py test that never runs a real codex binary.
-CODEX_EXECUTABLE = ('/bin/codex', {'core': (0, 160, 0), 'prerelease': '', 'text': '0.160.0'})
+CODEX_EXECUTABLE = (
+    "/bin/codex",
+    {"core": (0, 160, 0), "prerelease": "", "text": "0.160.0"},
+)
 
 
 def _load_agent_cli_module(name):
@@ -26,7 +31,7 @@ def _load_agent_cli_module(name):
     return module
 
 
-def real_agent_cli(name, claude='/bin/claude'):
+def real_agent_cli(name, claude="/bin/claude"):
     """The real shared library with resolve_claude_executable, sync_claude_standards and launch_tab
     replaced -- the three functions that would otherwise touch a real executable or terminal. `name` is
     the module registry name, distinct per caller so two tests loading this in the same process never
@@ -40,7 +45,7 @@ def real_agent_cli(name, claude='/bin/claude'):
     return module
 
 
-def real_agent_cli_for_e2e(name, run, claude='/bin/claude'):
+def real_agent_cli_for_e2e(name, run, claude="/bin/claude"):
     """Load the real agent_cli.py fresh with its `launch_tab` default `run=subprocess.run` parameter bound
     to `run`.
 
@@ -50,7 +55,7 @@ def real_agent_cli_for_e2e(name, run, claude='/bin/claude'):
     `sync_claude_standards` are replaced after loading instead, because open_claude_tab resolves both by a
     plain name lookup in this module's globals at call time, not through a default parameter.
     """
-    with mock.patch('subprocess.run', side_effect=run):
+    with mock.patch("subprocess.run", side_effect=run):
         module = _load_agent_cli_module(name)
     module.resolve_claude_executable = mock.Mock(return_value=claude)
     module.sync_claude_standards = mock.Mock()
@@ -73,7 +78,7 @@ def real_agent_cli_for_codex(name, codex=CODEX_EXECUTABLE):
 def real_agent_cli_for_codex_e2e(name, run, codex=CODEX_EXECUTABLE):
     """Load the real agent_cli.py fresh with its `launch_tab` default `run=subprocess.run` parameter bound
     to `run`, same reasoning as real_agent_cli_for_e2e above."""
-    with mock.patch('subprocess.run', side_effect=run):
+    with mock.patch("subprocess.run", side_effect=run):
         module = _load_agent_cli_module(name)
     module.resolve_codex_executable = mock.Mock(return_value=codex)
     module.await_handoff_startup = mock.Mock()

@@ -12,12 +12,11 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime"
-sys.path.insert(0, str(RUNTIME))
 
 
-HOST_PERMISSIONS = importlib.import_module("host_permissions")
-INSTALL = importlib.import_module("install")
-AUTOUPDATE = importlib.import_module("plugin_autoupdate")
+HOST_PERMISSIONS = importlib.import_module("tj_agent.hosts.permissions")
+INSTALL = importlib.import_module("tj_agent.installation.install")
+AUTOUPDATE = importlib.import_module("tj_agent.plugins.plugin_autoupdate")
 CONFIG = """model = "gpt-6.1-sol"
 approval_policy = "on-request"
 model_reasoning_effort = "high"
@@ -78,26 +77,37 @@ class CodexConfigWriterTests(unittest.TestCase):
             INSTALL.write_profile(self.path, updated, "utf-8", False)
 
     def remove_retired(self):
-        AUTOUPDATE.remove_user_plugins(self.path, {"kit@tj-agents", "machine@tj-agents"})
+        AUTOUPDATE.remove_user_plugins(
+            self.path, {"kit@tj-agents", "machine@tj-agents"}
+        )
 
     def assert_converges(self, writer):
         writer()
         first = self.path.read_bytes()
         writer()
         self.assertEqual(first, self.path.read_bytes())
-        self.assertEqual(1, first.decode("utf-8").count("[marketplaces.openai-bundled]"))
+        self.assertEqual(
+            1, first.decode("utf-8").count("[marketplaces.openai-bundled]")
+        )
         return tomllib.loads(first.decode("utf-8"))
 
     def test_native_permission_defaults_converge_without_duplicating_tables(self):
         config = self.assert_converges(self.native_permissions)
-        self.assertEqual(("never", ":danger-full-access"), (config["approval_policy"], config["default_permissions"]))
+        self.assertEqual(
+            ("never", ":danger-full-access"),
+            (config["approval_policy"], config["default_permissions"]),
+        )
         self.assertNotIn("sandbox_mode", config)
 
     def test_retired_plugin_removal_converges_and_preserves_unrelated_tables(self):
         config = self.assert_converges(self.remove_retired)
-        self.assertEqual({"browser@openai-bundled", "engineering@tj-agents", "template@tj-agents"},
-                         set(config["plugins"]))
-        self.assertIn("machine@tj-agents:hooks/codex.json:stop:0:0", config["hooks"]["state"])
+        self.assertEqual(
+            {"browser@openai-bundled", "engineering@tj-agents", "template@tj-agents"},
+            set(config["plugins"]),
+        )
+        self.assertIn(
+            "machine@tj-agents:hooks/codex.json:stop:0:0", config["hooks"]["state"]
+        )
 
     def test_every_install_writer_in_sequence_converges(self):
         def install_pass():

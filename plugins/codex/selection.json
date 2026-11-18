@@ -14,7 +14,7 @@
   "skills": [
     {
       "name": "hooks",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "codex sessions"
@@ -29,7 +29,7 @@
     },
     {
       "name": "memory",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "codex sessions"

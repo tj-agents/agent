@@ -9,25 +9,32 @@ if sys.version_info < (3, 11):
     raise unittest.SkipTest("native permission defaults require Python 3.11 or newer")
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
-HOST_PERMISSIONS = importlib.import_module("host_permissions")
+HOST_PERMISSIONS = importlib.import_module("tj_agent.hosts.permissions")
 
 
 class CredentialDenyRuleTests(unittest.TestCase):
     def test_user_settings_deny_credential_widening_once_and_keep_existing_rules(self):
-        existing = json.dumps({"permissions": {"deny": ["Read(.env)"], "allow": ["Bash(git status)"]}})
+        existing = json.dumps(
+            {"permissions": {"deny": ["Read(.env)"], "allow": ["Bash(git status)"]}}
+        )
         first = HOST_PERMISSIONS.claude_settings(existing, "bypass")
         second = HOST_PERMISSIONS.claude_settings(first, "bypass")
         self.assertEqual(first, second)
         deny = json.loads(first)["permissions"]["deny"]
         self.assertEqual("Read(.env)", deny[0])
-        for rule in ("Bash(gh auth refresh *)", "Bash(gh auth login *)",
-                     "PowerShell(gh.exe auth refresh *)", "PowerShell(gh auth login *)"):
+        for rule in (
+            "Bash(gh auth refresh *)",
+            "Bash(gh auth login *)",
+            "PowerShell(gh.exe auth refresh *)",
+            "PowerShell(gh auth login *)",
+        ):
             self.assertIn(rule, deny)
         self.assertNotIn("Bash(gh auth status *)", deny)
 
     def test_project_settings_never_carry_the_user_deny_rules(self):
-        settings = json.loads(HOST_PERMISSIONS.claude_settings("{}", "standard", project=True))
+        settings = json.loads(
+            HOST_PERMISSIONS.claude_settings("{}", "standard", project=True)
+        )
         self.assertNotIn("deny", settings["permissions"])
 
     def test_codex_forbidden_rule_file_is_planned_once(self):

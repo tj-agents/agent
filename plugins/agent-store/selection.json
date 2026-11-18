@@ -12,7 +12,7 @@
   "skills": [
     {
       "name": "inspect",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"

@@ -14,7 +14,7 @@
               "--deadline",
               "8",
               "--hook",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py"
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/skills/peer/scripts/register_session.py"
             ]
           }
         ]
@@ -34,13 +34,13 @@
               "--deadline",
               "12",
               "--hook",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/session_store.py",
               "hook",
               "prompt",
               "--host",
               "claude",
               "--hook",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/close_lifecycle.py",
               "prompt",
               "--host",
               "claude"
@@ -63,13 +63,13 @@
               "--deadline",
               "55",
               "--hook",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/session_store.py",
               "hook",
               "stop",
               "--host",
               "claude",
               "--hook",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/close_lifecycle.py",
               "stop",
               "--host",
               "claude"
@@ -88,7 +88,7 @@
             "command": "python",
             "args": [
               "-B",
-              "${CLAUDE_PLUGIN_ROOT}/.agents/agent-store/runtime/session_store.py",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/session_store.py",
               "hook",
               "session-end",
               "--host",

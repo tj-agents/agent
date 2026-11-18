@@ -25,7 +25,7 @@
   "skills": [
     {
       "name": "close",
-      "kind": "utility",
+      "kind": "policy",
       "profile": "core",
       "applicability": [
         "agent sessions"
@@ -39,7 +39,7 @@
     },
     {
       "name": "handoff",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"
@@ -68,7 +68,7 @@
     },
     {
       "name": "listen",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"
@@ -82,7 +82,7 @@
     },
     {
       "name": "message",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"
@@ -97,7 +97,7 @@
     },
     {
       "name": "open",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"
@@ -112,7 +112,7 @@
     },
     {
       "name": "peer",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"
@@ -127,7 +127,7 @@
     },
     {
       "name": "plugins",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "repositories adopting plugins"
@@ -142,7 +142,7 @@
     },
     {
       "name": "recent",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"
@@ -156,7 +156,7 @@
     },
     {
       "name": "recover",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"
@@ -171,7 +171,7 @@
     },
     {
       "name": "refresh-plugins",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "native host sessions"
@@ -186,7 +186,7 @@
     },
     {
       "name": "search",
-      "kind": "utility",
+      "kind": "operation",
       "profile": "core",
       "applicability": [
         "agent sessions"

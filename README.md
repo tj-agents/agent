@@ -13,11 +13,15 @@ Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
 - `agent`: host-neutral coordination, recovery, history, lanes and refresh.
 - `codex`: Codex-specific hooks and memory.
 
-The generated packages have no dependency on a Core checkout. Shared runtime is authored beneath
-`.agents/agent/runtime` and `.agents/agent-store/runtime`; generated payloads embed the canonical paths
-they consume. Claude-only and Codex-only runtime is authored in `.claude/runtime` and `.codex/runtime`
-and ships as the `claude` and `codex` packages inside `.agents/agent/runtime`, so runtime and tests run
-from the generated `plugins/agent` tree.
+Canonical skills live under `.agents/<namespace>/skills/<subject>/SKILL.md`. Public skill names stay
+`<namespace>:<subject>`; the `kind` metadata describes their responsibility. `agent:lanes` and
+`agent:close` are policies; the other skills return bounded operation results.
+
+Shared Python code uses two source distributions: `packages/tj-agent/src/tj_agent` owns coordination
+and host integrations, and `packages/tj-agent-store/src/tj_agent_store` owns the independent Store.
+Agent consumes CLI process and terminal mechanics through the pinned `tj-cli` distribution.
+Generated plugin packages carry their declared dependencies under `python/`; skill and hook scripts
+resolve that package boundary before importing their implementation.
 
 Shared content hashing and publisher source loading live under the owner-qualified `tj_agent` package:
 
@@ -31,13 +35,13 @@ plugin adapter, avoiding a second module that imports the adapter back. Generate
 artifacts; edit the authored source and regenerate them.
 
 Maintainers refresh the offline Marketplace selection snapshot only with
-`.agents/agent/utility/plugins/scripts/update_marketplace_plugins.py --source <marketplace-checkout>`;
-the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.
+`.agents/agent/skills/plugins/scripts/update_marketplace_plugins.py --source <marketplace-checkout>`;
+`packages/tj-agent/src/tj_agent/plugins/marketplace_plugins.lock.json` is the canonical producer snapshot.
 
 ## Install
 
 `./install.ps1` on Windows or `./install.sh` on Linux converges this machine: native permission defaults,
-the machine event channel, a supervised background subscriber, the launch runtime in `~/.agents-state/bin`, packaged shell profiles, Codex
+the machine event channel, a supervised background subscriber, the Python bundle in `~/.agents-state/agent/python`, command shims in `~/.agents-state/bin`, packaged shell profiles, Codex
 profile agents, plugin catch-up, harness permissions and plugin setup. It is idempotent; `--check` reports
 drift without writing and `--step <name>` runs one step with its prerequisites.
 
@@ -54,9 +58,8 @@ updates retry without acknowledging the event. After a long disconnection, an au
 restores convergence. Managed launches install the subscriber on existing machines after the runtime
 updates; unavailable supervision leaves foreground update checks working and retries setup later.
 
-Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`.
-Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
-managed directory rather than modifying the repository or an installed plugin cache.
+Shell profiles load package resources from the managed Python bundle in `~/.agents-state/agent/python`.
+Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built under `~/.agents-state/bin` rather than modifying the repository or an installed plugin cache.
 
 ## Skills
 
@@ -70,13 +73,14 @@ managed directory rather than modifying the repository or an installed plugin ca
 ```powershell
 pwsh .agents/sync-generated.ps1
 pwsh .agents/sync-generated.ps1 -Check
-python -B -m unittest discover -s .agents/tests -p "test_*.py"
+uv run --locked python -B -m unittest discover -s .agents/tests -p "test_*.py"
 ```
 
-The runtime uses the standard library and retains Core's portable utility conventions. Use `python`
-on Windows and `python3` on Linux. The shared plugin CI discovers the migrated runtime suite through
-`.agents/tests`; generation is tooling, and these utilities do not introduce an application package or
-third-party runtime dependencies.
+The current implementation uses the standard library and retains Core's portable source conventions.
+Use `python` on Windows and `python3` on Linux, preserving each entry point's interpreter requirement.
+The shared plugin CI discovers the runtime suite through `.agents/tests`. Python implementation layout
+and package boundaries follow `python:structure` and `python:modules`.
 
-The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).
+`template:structure` owns the plugin source layout. The vendored generator, checks and CI come from
+[Template](https://github.com/tj-agents/template); Core's `SKILL_KINDS.md` owns kind meanings.
 

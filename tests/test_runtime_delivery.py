@@ -1,19 +1,14 @@
 import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
-import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 from tj_agent import content
-SPEC = importlib.util.spec_from_file_location("runtime_delivery_tests", ROOT / "plugins/agent/.agents/agent/runtime/runtime_delivery.py")
-DELIVERY = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(DELIVERY)
+import tj_agent.installation.delivery as DELIVERY
 
 
 class RuntimeDeliveryTests(unittest.TestCase):
@@ -29,41 +24,54 @@ class RuntimeDeliveryTests(unittest.TestCase):
             path = self.source / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(body)
-        exports = [".agents/agent/runtime"]
+        exports = ["python"]
         contents = DELIVERY.closure(self.source, exports)
-        return {"repository": DELIVERY.REPOSITORY, "revision": revision, "exports": exports,
-                "sha256": content.digest(contents),
-                "files": {name: hashlib.sha256(body).hexdigest() for name, body in contents.items()}}
+        return {
+            "repository": DELIVERY.REPOSITORY,
+            "revision": revision,
+            "exports": exports,
+            "sha256": content.digest(contents),
+            "files": {
+                name: hashlib.sha256(body).hexdigest()
+                for name, body in contents.items()
+            },
+        }
 
     def test_retired_owned_file_is_removed_but_unknown_extra_survives(self):
-        first = self.desired({".agents/agent/runtime/live.py": b"live", ".agents/agent/runtime/retired.py": b"old"}, "v1")
+        first = self.desired(
+            {
+                "python/tj_agent/live.py": b"live",
+                "python/tj_agent/retired.py": b"old",
+            },
+            "v1",
+        )
         self.assertEqual([], DELIVERY.apply(self.target, self.source, first))
-        (self.source / ".agents/agent/runtime/retired.py").unlink()
-        second = self.desired({".agents/agent/runtime/live.py": b"live"}, "v2")
-        extra = self.target / ".agents/agent/runtime/extra.py"
+        (self.source / "python/tj_agent/retired.py").unlink()
+        second = self.desired({"python/tj_agent/live.py": b"live"}, "v2")
+        extra = self.target / "python/tj_agent/extra.py"
         extra.write_bytes(b"mine")
         self.assertEqual([], DELIVERY.apply(self.target, self.source, second))
-        self.assertFalse((self.target / ".agents/agent/runtime/retired.py").exists())
+        self.assertFalse((self.target / "python/tj_agent/retired.py").exists())
         self.assertEqual(b"mine", extra.read_bytes())
         self.assertEqual([], DELIVERY.check(self.target, self.source, second))
 
     def test_dirty_owned_is_repaired_but_dirty_retired_blocks_convergence(self):
-        first = self.desired({".agents/agent/runtime/retired.py": b"old"}, "v1")
+        first = self.desired({"python/tj_agent/retired.py": b"old"}, "v1")
         DELIVERY.apply(self.target, self.source, first)
-        owned = self.target / ".agents/agent/runtime/retired.py"
+        owned = self.target / "python/tj_agent/retired.py"
         owned.write_bytes(b"changed")
-        (self.source / ".agents/agent/runtime/retired.py").unlink()
-        second = self.desired({".agents/agent/runtime/live.py": b"new"}, "v2")
+        (self.source / "python/tj_agent/retired.py").unlink()
+        second = self.desired({"python/tj_agent/live.py": b"new"}, "v2")
         errors = DELIVERY.apply(self.target, self.source, second)
         self.assertTrue(any("retired" in error for error in errors))
         self.assertEqual(b"changed", owned.read_bytes())
 
     def test_unowned_incoming_collision_is_preserved_and_pending(self):
         self.target.mkdir()
-        collision = self.target / ".agents/agent/runtime/live.py"
+        collision = self.target / "python/tj_agent/live.py"
         collision.parent.mkdir(parents=True)
         collision.write_bytes(b"local")
-        desired = self.desired({".agents/agent/runtime/live.py": b"published"})
+        desired = self.desired({"python/tj_agent/live.py": b"published"})
         errors = DELIVERY.apply(self.target, self.source, desired)
         self.assertTrue(any("unowned" in error for error in errors))
         self.assertEqual(b"local", collision.read_bytes())
@@ -72,7 +80,9 @@ class RuntimeDeliveryTests(unittest.TestCase):
         self.assertTrue(any("unowned" in error for error in retry))
         self.assertEqual(b"local", collision.read_bytes())
 
-    def test_state_root_with_a_linked_ancestor_is_refused_without_touching_outside(self):
+    def test_state_root_with_a_linked_ancestor_is_refused_without_touching_outside(
+        self,
+    ):
         outside = self.root / "outside"
         outside.mkdir()
         (outside / "sentinel").write_bytes(b"keep")
@@ -81,20 +91,22 @@ class RuntimeDeliveryTests(unittest.TestCase):
             os.symlink(outside, linked, target_is_directory=True)
         except (NotImplementedError, OSError) as error:
             self.skipTest(f"links unavailable: {error}")
-        desired = self.desired({".agents/agent/runtime/live.py": b"published"})
+        desired = self.desired({"python/tj_agent/live.py": b"published"})
         with self.assertRaisesRegex(DELIVERY.DeliveryError, "traverses a link"):
             DELIVERY.apply(linked / "bin", self.source, desired)
         self.assertEqual(b"keep", (outside / "sentinel").read_bytes())
         self.assertFalse((outside / "bin").exists())
 
     def test_linked_source_root_and_malformed_exports_are_refused(self):
-        desired = self.desired({".agents/agent/runtime/live.py": b"published"})
+        desired = self.desired({"python/tj_agent/live.py": b"published"})
         source_link = self.root / "source-link"
         try:
             os.symlink(self.source, source_link, target_is_directory=True)
         except (NotImplementedError, OSError) as error:
             self.skipTest(f"links unavailable: {error}")
-        with self.assertRaisesRegex(DELIVERY.DeliveryError, "source root traverses a link"):
+        with self.assertRaisesRegex(
+            DELIVERY.DeliveryError, "source root traverses a link"
+        ):
             DELIVERY.closure(source_link, desired["exports"])
         malformed = dict(desired)
         malformed["exports"] = [{}]
@@ -102,22 +114,33 @@ class RuntimeDeliveryTests(unittest.TestCase):
             DELIVERY.validate_receipt(malformed, self.source)
 
     def test_unchanged_apply_is_idempotent(self):
-        desired = self.desired({".agents/agent/runtime/live.py": b"published"})
+        desired = self.desired({"python/tj_agent/live.py": b"published"})
         self.assertEqual([], DELIVERY.apply(self.target, self.source, desired))
-        payload = self.target / ".agents/agent/runtime/live.py"
-        before = (payload.stat().st_mtime_ns, (self.target / "source.json").stat().st_mtime_ns)
+        payload = self.target / "python/tj_agent/live.py"
+        before = (
+            payload.stat().st_mtime_ns,
+            (self.target / "source.json").stat().st_mtime_ns,
+        )
         self.assertEqual([], DELIVERY.apply(self.target, self.source, desired))
-        self.assertEqual(before, (payload.stat().st_mtime_ns, (self.target / "source.json").stat().st_mtime_ns))
+        self.assertEqual(
+            before,
+            (
+                payload.stat().st_mtime_ns,
+                (self.target / "source.json").stat().st_mtime_ns,
+            ),
+        )
 
     def test_interrupted_owned_delivery_resumes_from_the_pending_receipt(self):
-        first = self.desired({".agents/agent/runtime/retired.py": b"old"}, "v1")
+        first = self.desired({"python/tj_agent/retired.py": b"old"}, "v1")
         self.assertEqual([], DELIVERY.apply(self.target, self.source, first))
-        (self.source / ".agents/agent/runtime/retired.py").unlink()
-        second = self.desired({".agents/agent/runtime/live.py": b"new"}, "v2")
-        (self.target / "source.json").write_text(json.dumps(DELIVERY._pending(first, second)), encoding="utf-8")
+        (self.source / "python/tj_agent/retired.py").unlink()
+        second = self.desired({"python/tj_agent/live.py": b"new"}, "v2")
+        (self.target / "source.json").write_text(
+            json.dumps(DELIVERY._pending(first, second)), encoding="utf-8"
+        )
         self.assertEqual([], DELIVERY.apply(self.target, self.source, second))
-        self.assertFalse((self.target / ".agents/agent/runtime/retired.py").exists())
-        self.assertEqual(b"new", (self.target / ".agents/agent/runtime/live.py").read_bytes())
+        self.assertFalse((self.target / "python/tj_agent/retired.py").exists())
+        self.assertEqual(b"new", (self.target / "python/tj_agent/live.py").read_bytes())
         self.assertEqual([], DELIVERY.check(self.target, self.source, second))
 
 

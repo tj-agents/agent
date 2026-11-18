@@ -1,122 +1,236 @@
-import importlib.util
+import tj_agent.sessions.peer_cli as peer_cli
 import io
 import json
 from pathlib import Path
 import subprocess
-import sys
 import unittest
 from unittest import mock
 
-PATH = Path(__file__).resolve().parents[1] / "plugins/agent/.agents/agent/utility/peer/scripts/peer_cli.py"
-sys.path.insert(0, str(PATH.parent))
-spec = importlib.util.spec_from_file_location("peer_cli", PATH); peer_cli = importlib.util.module_from_spec(spec); spec.loader.exec_module(peer_cli)
+PATH = (
+    Path(__file__).resolve().parents[1]
+    / "packages/tj-agent/src/tj_agent/sessions/peer_cli.py"
+)
+
 
 class PeerCliTests(unittest.TestCase):
     def test_windows_inventory_uses_runtime_ids_when_automation_ids_are_empty(self):
-        inventory = json.dumps([
-            {'title': 'same launch title', 'runtimeId': '42:11'},
-            {'title': 'same launch title', 'runtimeId': '42:12'},
-        ])
-        completed = subprocess.CompletedProcess([], 0, stdout=inventory, stderr='')
-        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed):
+        inventory = json.dumps(
+            [
+                {"title": "same launch title", "runtimeId": "42:11"},
+                {"title": "same launch title", "runtimeId": "42:12"},
+            ]
+        )
+        completed = subprocess.CompletedProcess([], 0, stdout=inventory, stderr="")
+        with (
+            mock.patch.object(peer_cli.close_tab, "is_windows", return_value=True),
+            mock.patch.object(peer_cli.close_tab, "run", return_value=completed),
+        ):
             targets = peer_cli.close_tab.windows_inventory()
 
-        self.assertEqual(['42:11', '42:12'], [target['identity']['runtime_id'] for target in targets])
-        self.assertFalse(peer_cli.close_tab.same_target(targets[0]['identity'], targets[1]['identity']))
-        self.assertTrue(all('automation_id' not in target['identity'] for target in targets))
-        adapter = (PATH.parent / 'windows_terminal_uia.ps1').read_text(encoding='utf-8')
-        self.assertIn('$tab.GetRuntimeId()', adapter)
-        self.assertNotIn('$tab.Current.AutomationId', adapter)
+        self.assertEqual(
+            ["42:11", "42:12"], [target["identity"]["runtime_id"] for target in targets]
+        )
+        self.assertFalse(
+            peer_cli.close_tab.same_target(
+                targets[0]["identity"], targets[1]["identity"]
+            )
+        )
+        self.assertTrue(
+            all("automation_id" not in target["identity"] for target in targets)
+        )
+        adapter = peer_cli.close_tab.terminal.windows_adapter_path().read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("$tab.GetRuntimeId()", adapter)
+        self.assertNotIn("$tab.Current.AutomationId", adapter)
 
     def test_windows_close_selects_the_exact_runtime_id(self):
-        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         calls = []
 
         def run(arguments):
             calls.append(arguments)
             return completed
 
-        target = {'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
-        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(peer_cli.close_tab, 'target_liveness', return_value=False), \
-                mock.patch.object(peer_cli.close_tab, 'require_closed'), \
-                mock.patch.object(peer_cli.close_tab, 'run', side_effect=run):
+        target = {"identity": {"kind": "windows-terminal", "runtime_id": "42:11"}}
+        with (
+            mock.patch.object(peer_cli.close_tab, "is_windows", return_value=True),
+            mock.patch.object(
+                peer_cli.close_tab, "target_liveness", return_value=False
+            ),
+            mock.patch.object(peer_cli.close_tab, "require_closed"),
+            mock.patch.object(peer_cli.close_tab, "run", side_effect=run),
+        ):
             peer_cli.close_tab.close_actual(target, force=True)
 
-        self.assertIn('-TabId', calls[0])
-        self.assertEqual('42:11', calls[0][calls[0].index('-TabId') + 1])
+        self.assertIn("-TabId", calls[0])
+        self.assertEqual("42:11", calls[0][calls[0].index("-TabId") + 1])
 
     def test_windows_focus_uses_captured_runtime_id_after_title_changes(self):
-        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         entry = {
-            'title': 'native cli changed the tab title',
-            'terminal': {
-                'kind': 'windows-terminal',
-                'tab_binding': {'runtime_id': '42:11', 'observed_title': 'launch nonce'},
+            "title": "native cli changed the tab title",
+            "terminal": {
+                "kind": "windows-terminal",
+                "tab_binding": {
+                    "runtime_id": "42:11",
+                    "observed_title": "launch nonce",
+                },
             },
         }
-        target = {'title': entry['title'], 'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
-        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(peer_cli.close_tab.session_close, 'liveness', return_value=True), \
-                mock.patch.object(peer_cli.close_tab, 'windows_inventory', return_value=[target]), \
-                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed) as run:
+        target = {
+            "title": entry["title"],
+            "identity": {"kind": "windows-terminal", "runtime_id": "42:11"},
+        }
+        with (
+            mock.patch.object(peer_cli.close_tab, "is_windows", return_value=True),
+            mock.patch.object(
+                peer_cli.close_tab.session_close, "liveness", return_value=True
+            ),
+            mock.patch.object(
+                peer_cli.close_tab, "windows_inventory", return_value=[target]
+            ),
+            mock.patch.object(peer_cli.close_tab, "run", return_value=completed) as run,
+        ):
             peer_cli.close_tab.focus_entry(entry)
         command = run.call_args.args[0]
-        self.assertEqual('42:11', command[command.index('-TabId') + 1])
-        self.assertNotIn('-Title', command)
+        self.assertEqual("42:11", command[command.index("-TabId") + 1])
+        self.assertNotIn("-Title", command)
 
     def test_windows_peer_close_uses_captured_runtime_id_after_title_changes(self):
-        completed = subprocess.CompletedProcess([], 0, stdout='', stderr='')
+        completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
         entry = {
-            'title': 'native cli changed the tab title',
-            'terminal': {
-                'kind': 'windows-terminal',
-                'tab_binding': {'runtime_id': '42:11', 'observed_title': 'launch nonce'},
+            "title": "native cli changed the tab title",
+            "terminal": {
+                "kind": "windows-terminal",
+                "tab_binding": {
+                    "runtime_id": "42:11",
+                    "observed_title": "launch nonce",
+                },
             },
         }
-        target = {'title': entry['title'], 'identity': {'kind': 'windows-terminal', 'runtime_id': '42:11'}}
-        with mock.patch.object(peer_cli.close_tab, 'is_windows', return_value=True), \
-                mock.patch.object(peer_cli.close_tab.session_close, 'liveness', return_value=True), \
-                mock.patch.object(peer_cli.close_tab, 'windows_inventory', return_value=[target]), \
-                mock.patch.object(peer_cli.close_tab, 'target_liveness', return_value=False), \
-                mock.patch.object(peer_cli.close_tab, 'require_closed'), \
-                mock.patch.object(peer_cli.close_tab, 'run', return_value=completed) as run:
+        target = {
+            "title": entry["title"],
+            "identity": {"kind": "windows-terminal", "runtime_id": "42:11"},
+        }
+        with (
+            mock.patch.object(peer_cli.close_tab, "is_windows", return_value=True),
+            mock.patch.object(
+                peer_cli.close_tab.session_close, "liveness", return_value=True
+            ),
+            mock.patch.object(
+                peer_cli.close_tab, "windows_inventory", return_value=[target]
+            ),
+            mock.patch.object(
+                peer_cli.close_tab, "target_liveness", return_value=False
+            ),
+            mock.patch.object(peer_cli.close_tab, "require_closed"),
+            mock.patch.object(peer_cli.close_tab, "run", return_value=completed) as run,
+        ):
             peer_cli.close_tab.close_entry(entry)
         command = run.call_args.args[0]
-        self.assertEqual('42:11', command[command.index('-TabId') + 1])
-        self.assertNotIn('-Title', command)
+        self.assertEqual("42:11", command[command.index("-TabId") + 1])
+        self.assertNotIn("-Title", command)
 
     def test_codex_native_session_id_prevents_peer_attachment_selection(self):
-        host = peer_cli.register_session.ProcessInfo(10, 1, 'codex.exe', 20.0)
-        own = {'host': 'codex', 'session_id': 'own', 'cwd': str(PATH.parents[4]),
-               'pid': 10, 'pid_started_at': 20.0, 'started_at': 100.0}
-        peer = {**own, 'session_id': 'peer', 'started_at': 300.0}
-        with mock.patch.object(peer_cli.session_close.os, 'getppid', return_value=10), \
-                mock.patch.object(peer_cli.session_close, 'process_info', return_value=host), \
-                mock.patch.object(peer_cli.session_close.register_session, 'read_host_names', return_value={'codex'}), \
-                mock.patch.object(peer_cli.session_close.host_sessions('codex'), 'current_client', side_effect=[
-                    (host, {'client_identity': 'managed-input'}), (host, {'client_identity': 'managed-input'}),
-                ]), \
-                mock.patch.object(peer_cli.session_close.register_session, 'record', side_effect=[own, peer]), \
-                mock.patch.dict(peer_cli.session_close.os.environ, {'CODEX_THREAD_ID': 'own'}, clear=False):
-            self.assertEqual('own', peer_cli.session_close.own_host_and_entry(PATH.parents[4])['session_id'])
-            self.assertEqual('peer', peer_cli.session_close.own_host_and_entry(PATH.parents[4], session_id='peer')['session_id'])
+        host = peer_cli.register_session.ProcessInfo(10, 1, "codex.exe", 20.0)
+        own = {
+            "host": "codex",
+            "session_id": "own",
+            "cwd": str(PATH.parents[4]),
+            "pid": 10,
+            "pid_started_at": 20.0,
+            "started_at": 100.0,
+        }
+        peer = {**own, "session_id": "peer", "started_at": 300.0}
+        with (
+            mock.patch.object(peer_cli.session_close.os, "getppid", return_value=10),
+            mock.patch.object(
+                peer_cli.session_close, "process_info", return_value=host
+            ),
+            mock.patch.object(
+                peer_cli.session_close.register_session,
+                "read_host_names",
+                return_value={"codex"},
+            ),
+            mock.patch.object(
+                peer_cli.session_close.host_sessions("codex"),
+                "current_client",
+                side_effect=[
+                    (host, {"client_identity": "managed-input"}),
+                    (host, {"client_identity": "managed-input"}),
+                ],
+            ),
+            mock.patch.object(
+                peer_cli.session_close.register_session,
+                "record",
+                side_effect=[own, peer],
+            ),
+            mock.patch.dict(
+                peer_cli.session_close.os.environ,
+                {"CODEX_THREAD_ID": "own"},
+                clear=False,
+            ),
+        ):
+            self.assertEqual(
+                "own",
+                peer_cli.session_close.own_host_and_entry(PATH.parents[4])[
+                    "session_id"
+                ],
+            )
+            self.assertEqual(
+                "peer",
+                peer_cli.session_close.own_host_and_entry(
+                    PATH.parents[4], session_id="peer"
+                )["session_id"],
+            )
 
-        with mock.patch.object(peer_cli.session_close.os, 'getppid', return_value=10), \
-                mock.patch.object(peer_cli.session_close, 'process_info', return_value=host), \
-                mock.patch.object(peer_cli.session_close.register_session, 'read_host_names', return_value={'codex'}), \
-                mock.patch.object(peer_cli.session_close.host_sessions('codex'), 'current_client', side_effect=RuntimeError('unattributed')), \
-                mock.patch.dict(peer_cli.session_close.os.environ, {'CODEX_THREAD_ID': 'missing'}, clear=False):
-            with self.assertRaisesRegex(peer_cli.session_close.Refusal, 'unattributed'):
+        with (
+            mock.patch.object(peer_cli.session_close.os, "getppid", return_value=10),
+            mock.patch.object(
+                peer_cli.session_close, "process_info", return_value=host
+            ),
+            mock.patch.object(
+                peer_cli.session_close.register_session,
+                "read_host_names",
+                return_value={"codex"},
+            ),
+            mock.patch.object(
+                peer_cli.session_close.host_sessions("codex"),
+                "current_client",
+                side_effect=RuntimeError("unattributed"),
+            ),
+            mock.patch.dict(
+                peer_cli.session_close.os.environ,
+                {"CODEX_THREAD_ID": "missing"},
+                clear=False,
+            ),
+        ):
+            with self.assertRaisesRegex(peer_cli.session_close.Refusal, "unattributed"):
                 peer_cli.session_close.own_host_and_entry(PATH.parents[4])
 
-        with mock.patch.object(peer_cli.session_close.os, 'getppid', return_value=10), \
-                mock.patch.object(peer_cli.session_close, 'process_info', return_value=host), \
-                mock.patch.object(peer_cli.session_close.register_session, 'read_host_names', return_value={'codex'}), \
-                mock.patch.object(peer_cli.session_close, 'verified_live', return_value=True), \
-                mock.patch.dict(peer_cli.session_close.os.environ, {'CODEX_THREAD_ID': '', 'CODEX_SESSION_ID': ''}, clear=False):
-            with self.assertRaisesRegex(peer_cli.session_close.Refusal, 'thread identity is unavailable'):
+        with (
+            mock.patch.object(peer_cli.session_close.os, "getppid", return_value=10),
+            mock.patch.object(
+                peer_cli.session_close, "process_info", return_value=host
+            ),
+            mock.patch.object(
+                peer_cli.session_close.register_session,
+                "read_host_names",
+                return_value={"codex"},
+            ),
+            mock.patch.object(
+                peer_cli.session_close, "verified_live", return_value=True
+            ),
+            mock.patch.dict(
+                peer_cli.session_close.os.environ,
+                {"CODEX_THREAD_ID": "", "CODEX_SESSION_ID": ""},
+                clear=False,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                peer_cli.session_close.Refusal, "thread identity is unavailable"
+            ):
                 peer_cli.session_close.own_host_and_entry(PATH.parents[4])
 
     def test_ambiguous_prefix_refuses(self):
@@ -136,7 +250,9 @@ class PeerCliTests(unittest.TestCase):
 
     def test_unrecorded_uses_cross_platform_process_table(self):
         process = peer_cli.register_session.ProcessInfo(88, 1, "codex.exe", 2.0)
-        with mock.patch.object(peer_cli.register_session, "process_table", return_value={88: process}):
+        with mock.patch.object(
+            peer_cli.register_session, "process_table", return_value={88: process}
+        ):
             found = peer_cli.unrecorded([])
         self.assertEqual(found[0]["pid"], 88)
         self.assertFalse(found[0]["recorded"])
@@ -149,72 +265,130 @@ class PeerCliTests(unittest.TestCase):
             "terminal": {"kind": "windows-terminal"},
         }
         with mock.patch.object(peer_cli, "records", return_value=[stale]):
-            with mock.patch.object(peer_cli.close_tab, "close_stale_entry") as close_terminal, \
-                    mock.patch.object(peer_cli.os, "kill") as killer:
+            with (
+                mock.patch.object(
+                    peer_cli.close_tab, "close_stale_entry"
+                ) as close_terminal,
+                mock.patch.object(peer_cli.os, "kill") as killer,
+            ):
                 self.assertEqual(peer_cli.main(["close", "stale", "--force"]), 0)
         close_terminal.assert_called_once_with(stale)
         killer.assert_not_called()
 
     def test_windows_uia_unavailable_refuses_an_unverified_host_only_close(self):
         target = {
-            "title": "peer", "session_id": "peer", "pid": 31, "pid_started_at": 4.0,
+            "title": "peer",
+            "session_id": "peer",
+            "pid": 31,
+            "pid_started_at": 4.0,
             "terminal": {"kind": "windows-terminal"},
         }
-        with mock.patch.object(peer_cli.close_tab, "close_entry",
-                               side_effect=peer_cli.close_tab.TerminalUnavailable("no UIA")), \
-                mock.patch.object(peer_cli.session_close, "verified_live", return_value=True), \
-                mock.patch.object(peer_cli.os, "kill") as killer:
-            with self.assertRaisesRegex(peer_cli.session_close.Refusal, "actual-tab closure"):
+        with (
+            mock.patch.object(
+                peer_cli.close_tab,
+                "close_entry",
+                side_effect=peer_cli.close_tab.TerminalUnavailable("no UIA"),
+            ),
+            mock.patch.object(
+                peer_cli.session_close, "verified_live", return_value=True
+            ),
+            mock.patch.object(peer_cli.os, "kill") as killer,
+        ):
+            with self.assertRaisesRegex(
+                peer_cli.session_close.Refusal, "actual-tab closure"
+            ):
                 peer_cli.close_terminal_or_host(target, force=False)
         killer.assert_not_called()
 
     def test_windows_ambiguous_tab_never_uses_host_only_fallback(self):
         target = {
-            "title": "peer", "session_id": "peer", "pid": 31, "pid_started_at": 4.0,
+            "title": "peer",
+            "session_id": "peer",
+            "pid": 31,
+            "pid_started_at": 4.0,
             "terminal": {"kind": "windows-terminal"},
         }
-        with mock.patch.object(peer_cli.close_tab, "close_entry",
-                               side_effect=peer_cli.close_tab.TerminalRefusal("ambiguous")), \
-                mock.patch.object(peer_cli.os, "kill") as killer:
-            with self.assertRaisesRegex(peer_cli.close_tab.TerminalRefusal, "ambiguous"):
+        with (
+            mock.patch.object(
+                peer_cli.close_tab,
+                "close_entry",
+                side_effect=peer_cli.close_tab.TerminalRefusal("ambiguous"),
+            ),
+            mock.patch.object(peer_cli.os, "kill") as killer,
+        ):
+            with self.assertRaisesRegex(
+                peer_cli.close_tab.TerminalRefusal, "ambiguous"
+            ):
                 peer_cli.close_terminal_or_host(target, force=False)
         killer.assert_not_called()
 
     def test_unknown_identity_never_signals_a_process_even_with_force(self):
         target = {
-            "title": "unknown", "session_id": "unknown", "pid": 31,
-            "pid_started_at": 4.0, "alive": None,
+            "title": "unknown",
+            "session_id": "unknown",
+            "pid": 31,
+            "pid_started_at": 4.0,
+            "alive": None,
             "terminal": {"kind": "windows-terminal"},
         }
-        with mock.patch.object(peer_cli, "records", return_value=[target]), \
-                mock.patch.object(peer_cli.os, "kill") as killer:
+        with (
+            mock.patch.object(peer_cli, "records", return_value=[target]),
+            mock.patch.object(peer_cli.os, "kill") as killer,
+        ):
             with self.assertRaisesRegex(peer_cli.session_close.Refusal, "unknown"):
                 peer_cli.main(["close", "unknown", "--force"])
         killer.assert_not_called()
 
     def test_recorded_host_without_terminal_identity_cannot_be_reported_closed(self):
         target = {
-            "title": "missing tab", "session_id": "missing-tab", "pid": 31,
-            "pid_started_at": 4.0, "alive": True,
+            "title": "missing tab",
+            "session_id": "missing-tab",
+            "pid": 31,
+            "pid_started_at": 4.0,
+            "alive": True,
         }
-        with mock.patch.object(peer_cli, "records", return_value=[target]), \
-                mock.patch.object(peer_cli.session_close, "verified_live", return_value=True), \
-                mock.patch.object(peer_cli.os, "kill") as killer:
-            with self.assertRaisesRegex(peer_cli.session_close.Refusal, "terminal identity"):
+        with (
+            mock.patch.object(peer_cli, "records", return_value=[target]),
+            mock.patch.object(
+                peer_cli.session_close, "verified_live", return_value=True
+            ),
+            mock.patch.object(peer_cli.os, "kill") as killer,
+        ):
+            with self.assertRaisesRegex(
+                peer_cli.session_close.Refusal, "terminal identity"
+            ):
                 peer_cli.main(["close", "missing-tab", "--force"])
         killer.assert_not_called()
 
     def test_list_is_json_and_inspection_leaves_activity_unobserved(self):
-        target = {"host": "codex", "session_id": "one", "title": "one", "cwd": "/repo",
-                  "pid": 1, "alive": True, "recorded": True}
-        other = {"host": "claude", "session_id": "two", "title": "two", "cwd": "/repo",
-                 "pid": 2, "alive": True, "recorded": True}
-        with mock.patch.object(peer_cli, "records", return_value=[target, other]), \
-                mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+        target = {
+            "host": "codex",
+            "session_id": "one",
+            "title": "one",
+            "cwd": "/repo",
+            "pid": 1,
+            "alive": True,
+            "recorded": True,
+        }
+        other = {
+            "host": "claude",
+            "session_id": "two",
+            "title": "two",
+            "cwd": "/repo",
+            "pid": 2,
+            "alive": True,
+            "recorded": True,
+        }
+        with (
+            mock.patch.object(peer_cli, "records", return_value=[target, other]),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
             self.assertEqual(0, peer_cli.main(["list", "--all", "--host", "codex"]))
             self.assertEqual([target], json.loads(stdout.getvalue()))
-        with mock.patch.object(peer_cli, "records", return_value=[target]), \
-                mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+        with (
+            mock.patch.object(peer_cli, "records", return_value=[target]),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
             self.assertEqual(0, peer_cli.main(["inspect", "one"]))
             value = json.loads(stdout.getvalue())
         self.assertEqual("unobserved", value["activity"])

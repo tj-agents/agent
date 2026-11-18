@@ -1,4 +1,4 @@
 # codex package capabilities
 
-- `hooks` — utility — core
-- `memory` — utility — core
+- `hooks` — operation — core
+- `memory` — operation — core

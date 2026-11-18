@@ -7,7 +7,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DISPATCH = ROOT / "plugins" / "agent" / "hooks" / "hook_dispatch.py"
+DISPATCH = ROOT / ".agents/hooks/hook_dispatch.py"
 GATES = {
     "crash": "raise RuntimeError('gate crashed')\n",
     "deny": "import sys\nsys.stderr.write('gate refused')\nsys.exit(2)\n",
@@ -26,10 +26,18 @@ class HookDispatchTests(unittest.TestCase):
             (self.gates / f"{name}.py").write_text(body, encoding="utf-8")
 
     def dispatch(self, event, *gates, deadline="5"):
-        arguments = [argument for gate in gates for argument in ("--hook", str(self.gates / f"{gate}.py"))]
-        return subprocess.run([sys.executable, "-B", str(DISPATCH), "--deadline", deadline, *arguments],
-                              input=json.dumps({"hook_event_name": event}), capture_output=True, text=True,
-                              timeout=20)
+        arguments = [
+            argument
+            for gate in gates
+            for argument in ("--hook", str(self.gates / f"{gate}.py"))
+        ]
+        return subprocess.run(
+            [sys.executable, "-B", str(DISPATCH), "--deadline", deadline, *arguments],
+            input=json.dumps({"hook_event_name": event}),
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
 
     def test_failing_session_gates_emit_nothing_and_exit_zero(self):
         for event in ("SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"):
@@ -54,7 +62,10 @@ class HookDispatchTests(unittest.TestCase):
     def test_pre_tool_use_still_denies_on_failure(self):
         result = self.dispatch("PreToolUse", "deny")
         output = json.loads(result.stdout)["hookSpecificOutput"]
-        self.assertEqual(("deny", "gate refused"), (output["permissionDecision"], output["permissionDecisionReason"]))
+        self.assertEqual(
+            ("deny", "gate refused"),
+            (output["permissionDecision"], output["permissionDecisionReason"]),
+        )
 
 
 if __name__ == "__main__":

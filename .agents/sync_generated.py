@@ -18,7 +18,7 @@ from typing import Any, TypedDict
 
 FRONTMATTER = re.compile(r"\A---\n(?P<header>.*?)\n---\n(?P<body>.*)\Z", re.DOTALL)
 NAME = re.compile(r"^[a-z][a-z0-9-]*$")
-KIND = re.compile(r"^[a-z]+$")
+KINDS = ("policy", "standard", "operation", "workflow", "learning", "reference")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/([a-z][a-z0-9-]*)$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 URL_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
@@ -35,7 +35,7 @@ REQUIRED_METADATA = (
     "requires",
     "provenance",
 )
-REPOSITORY_TYPES = ("stack", "tool", "utility", "profile")
+REPOSITORY_TYPES = ("stack", "tool", "plugin", "profile")
 RESERVED_AGENT_DIRS = {"continuation", "plugins", "tiers", "tests", "hooks"}
 IGNORED_PARTS = {"__pycache__"}
 IGNORED_SUFFIXES = {".pyc"}
@@ -78,7 +78,17 @@ PAYLOAD_FIELDS = {
     "resources",
     "host_adapters",
 }
-PLUGIN_RESOURCE_DIRS = {"runtime", "resources"}
+PLUGIN_RESOURCE_DIRS = {"references", "learning", "assets"}
+NATIVE_FIELDS = {"name", "description", "license", "allowed-tools"}
+CLAUDE_FIELDS = {
+    "argument-hint",
+    "disable-model-invocation",
+    "user-invocable",
+    "model",
+    "context",
+    "agent",
+    "hooks",
+}
 TJ_AGENTS_MARKETPLACE = "tj-agents"
 TJ_AGENTS_MARKETPLACE_REPOSITORY = "tj-agents/marketplace"
 DEPENDENCY = re.compile(rf"^{TJ_AGENTS_MARKETPLACE}/[a-z0-9][a-z0-9-]*$")
@@ -173,7 +183,7 @@ def metadata(body: str, source: str) -> dict[str, str]:
         raise ValueError(f"{source}: missing frontmatter")
     values: dict[str, str] = {}
     for line in match.group("header").splitlines():
-        if ":" in line:
+        if line and not line[0].isspace() and ":" in line:
             key, value = line.split(":", 1)
             values[key.strip()] = value.strip()
     for field in REQUIRED_METADATA:
@@ -182,8 +192,8 @@ def metadata(body: str, source: str) -> dict[str, str]:
     for field in ("name", "profile"):
         if not NAME.fullmatch(values[field]):
             raise ValueError(f"{source}: {field} must be a lowercase name")
-    if not KIND.fullmatch(values["kind"]):
-        raise ValueError(f"{source}: kind must be one lowercase word")
+    if values["kind"] not in KINDS:
+        raise ValueError(f"{source}: kind must be one of {', '.join(KINDS)}")
     return values
 
 
@@ -197,7 +207,7 @@ def is_skill_folder(path: Path) -> bool:
 
 
 def load_skill(
-    root: Path, plugin: str, kind: str, directory: Path, name: str, namespace: str
+    root: Path, plugin: str, directory: Path, name: str, namespace: str
 ) -> SkillRecord:
     path = directory / "SKILL.md"
     relative = path.relative_to(root).as_posix()
@@ -208,11 +218,9 @@ def load_skill(
     values = metadata(body, relative)
     if values["name"] != name:
         raise ValueError(
-            f"{relative}: name must be {name}, its folder path below the kind "
-            "folder joined by hyphens"
+            f"{relative}: name must be {name}, its folder path below skills/ "
+            "joined by hyphens"
         )
-    if values["kind"] != kind:
-        raise ValueError(f"{relative}: kind must equal its kind folder")
     if values["domain"] != namespace:
         raise ValueError(f"{relative}: domain must be {namespace}")
     members = {item.name for item in directory.iterdir() if is_skill_folder(item)}
@@ -230,7 +238,7 @@ def load_skill(
     return {
         "plugin": plugin,
         "name": values["name"],
-        "kind": kind,
+        "kind": values["kind"],
         "body": body,
         "metadata": values,
         "directory": directory.relative_to(root).as_posix(),
@@ -241,7 +249,6 @@ def load_skill(
 def collect_skills(
     root: Path,
     plugin: str,
-    kind: str,
     directory: Path,
     family: tuple[str, ...],
     namespace: str,
@@ -252,12 +259,12 @@ def collect_skills(
         raise ValueError(f"{location}: links are not shipped")
     if not directory.is_dir() or not NAME.fullmatch(directory.name):
         raise ValueError(
-            f"{location}: kind and family folders hold only skill folders "
+            f"{location}: skills and family folders hold only skill folders "
             "and family folders"
         )
     parts = (*family, directory.name)
     if (directory / "SKILL.md").is_file():
-        skill = load_skill(root, plugin, kind, directory, "-".join(parts), namespace)
+        skill = load_skill(root, plugin, directory, "-".join(parts), namespace)
         if skill["name"] in skills:
             raise ValueError(f"{plugin}: duplicate skill {skill['name']}")
         skills[skill["name"]] = skill
@@ -269,7 +276,7 @@ def collect_skills(
         if not members:
             raise ValueError(f"{location}: a family folder holds skill folders")
     for member in members:
-        collect_skills(root, plugin, kind, member, parts, namespace, skills)
+        collect_skills(root, plugin, member, parts, namespace, skills)
 
 
 def resource_source_parts(source: str) -> tuple[str | None, str]:
@@ -347,28 +354,32 @@ def discover(
             raise ValueError(
                 f".agents/{plugin}: a plugin folder must be a lowercase name"
             )
+        if is_link_or_junction(plugin_dir):
+            raise ValueError(f".agents/{plugin}: links are not shipped")
         skills: PluginSkills = {}
-        for kind_dir in sorted(
+        for source_dir in sorted(
             path for path in plugin_dir.iterdir() if not ignored(path)
         ):
-            if kind_dir.name in PLUGIN_RESOURCE_DIRS:
-                if (plugin, kind_dir.name) not in mapped_resources:
+            if is_link_or_junction(source_dir):
+                raise ValueError(
+                    f".agents/{plugin}/{source_dir.name}: links are not shipped"
+                )
+            if source_dir.name in PLUGIN_RESOURCE_DIRS:
+                if (plugin, source_dir.name) not in mapped_resources:
                     raise ValueError(
-                        f".agents/{plugin}/{kind_dir.name}: non-skill resource "
+                        f".agents/{plugin}/{source_dir.name}: non-skill resource "
                         "directories must be declared in payloads resources"
                     )
                 continue
-            if not kind_dir.is_dir() or not NAME.fullmatch(kind_dir.name):
+            if not source_dir.is_dir() or source_dir.name != "skills":
                 raise ValueError(
-                    f".agents/{plugin}/{kind_dir.name}: only kind folders "
-                    "belong in a plugin folder"
+                    f".agents/{plugin}/{source_dir.name}: only skills/ and declared "
+                    "references/, learning/ or assets/ belong in a plugin folder"
                 )
             for entry in sorted(
-                path for path in kind_dir.iterdir() if not ignored(path)
+                path for path in source_dir.iterdir() if not ignored(path)
             ):
-                collect_skills(
-                    root, plugin, kind_dir.name, entry, (), namespace, skills
-                )
+                collect_skills(root, plugin, entry, (), namespace, skills)
         if not skills:
             raise ValueError(
                 f".agents/{plugin}: a plugin folder needs at least one skill"
@@ -573,8 +584,9 @@ def validate_skill_asset_source(
     selected = {file.relative_to(root).as_posix() for file in files}
     if not selected.issubset(assets):
         raise ValueError(
-            ".agents/plugins/payloads.json: resource source must be a runtime, "
-            "resources, hooks or discovered skill asset path"
+            ".agents/plugins/payloads.json: resource source must be declared "
+            "supporting material, "
+            "hooks or a discovered skill asset path"
         )
 
 
@@ -622,6 +634,8 @@ print(json.dumps({'name': distribution.metadata['Name'],
                 "run",
                 "--locked",
                 "--no-editable",
+                "--reinstall-package",
+                name,
                 "--project",
                 str(root),
                 "python",
@@ -684,11 +698,13 @@ print(json.dumps({'name': distribution.metadata['Name'],
         ) and relative.name in {
             "INSTALLER",
             "REQUESTED",
+            "WHEEL",
             "RECORD",
             "RECORD.jws",
             "RECORD.p7s",
             "direct_url.json",
             "uv_cache.json",
+            "uv_build.json",
         }:
             continue
         if relative.suffix == ".pth":
@@ -1061,8 +1077,52 @@ def adapter_name(skill: SkillRecord, single_plugin: bool) -> str:
     return skill["name"] if single_plugin else f"{skill['plugin']}-{skill['name']}"
 
 
+def native_header(skill: SkillRecord, host: str) -> str:
+    match = FRONTMATTER.match(skill["body"])
+    assert match is not None
+    blocks: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in match.group("header").splitlines():
+        if line and not line[0].isspace() and ":" in line:
+            key, value = line.split(":", 1)
+            current = key.strip()
+            blocks[current] = [f"{current}:{value}"]
+        elif current is not None:
+            blocks[current].append(line)
+    native = NATIVE_FIELDS | (CLAUDE_FIELDS if host == "claude" else set())
+    lines = [line for key, block in blocks.items() if key in native for line in block]
+    extension = blocks.get("metadata", ["metadata:"])
+    if extension[0].strip() != "metadata:":
+        raise ValueError(
+            f"{skill['directory']}/SKILL.md: metadata must be a block mapping"
+        )
+    if any(re.match(r"\s+tj-agents-", line) for line in extension[1:]):
+        raise ValueError(
+            f"{skill['directory']}/SKILL.md: tj-agents metadata keys are generated"
+        )
+    indentation = next(
+        (
+            line[: len(line) - len(line.lstrip())]
+            for line in extension[1:]
+            if line.strip() and not line.lstrip().startswith("#")
+        ),
+        "  ",
+    )
+    lines.extend(extension)
+    for key, block in blocks.items():
+        if key in native or key == "metadata":
+            continue
+        first, *rest = block
+        lines.append(f"{indentation}tj-agents-{first}")
+        lines.extend(f"{indentation}{line}" for line in rest)
+    return "\n".join(lines)
+
+
 def adapter_body(
-    skill: SkillRecord, adapter_dir: str, canonical_dir: str | None = None
+    skill: SkillRecord,
+    adapter_dir: str,
+    canonical_dir: str | None = None,
+    host: str = "claude",
 ) -> str:
     source = f"{canonical_dir or skill['directory']}/SKILL.md"
     relative = posixpath.relpath(f"/{source}", f"/{adapter_dir}")
@@ -1073,7 +1133,7 @@ def adapter_body(
         f"# {skill['name']}",
     )
     return (
-        f"---\n{match.group('header')}\n---\n\n{title}\n\n"
+        f"---\n{native_header(skill, host)}\n---\n\n{title}\n\n"
         f"Read and follow the [canonical definition]({relative}) in full.\n"
         "This discovery entry is generated; edit the referenced `.agents/` "
         "definition.\n"
@@ -1407,7 +1467,15 @@ def build(root: Path) -> dict[str, bytes]:
     dependencies = payloads.get("dependencies", {})
     validate_publication_dependencies(publications, dependencies)
     single_plugin = len(plugins) == 1
-    plugins_with_host_adapters = {plugin for plugin, _, _ in host_adapters}
+    plugins_with_codex_entries = {plugin for plugin, _, _ in host_adapters}
+    plugins_with_codex_entries.update(
+        plugin
+        for plugin, skills in plugins.items()
+        if any(
+            native_header(skill, "claude") != native_header(skill, "codex")
+            for skill in skills.values()
+        )
+    )
 
     output: dict[str, bytes] = {}
     canonical_locations: dict[tuple[str, str], list[str]] = {}
@@ -1433,8 +1501,8 @@ def build(root: Path) -> dict[str, bytes]:
     repository_index = [
         f"# {namespace} capabilities",
         "",
-        "Generated from `.agents/<plugin>/<kind>/<family>/<member>/SKILL.md`; "
-        "a skill's name is its folder path below the kind folder joined by "
+        "Generated from `.agents/<plugin>/skills/<family>/<member>/SKILL.md`; "
+        "a skill's name is its folder path below skills/ joined by "
         "hyphens.",
         "",
     ]
@@ -1443,7 +1511,7 @@ def build(root: Path) -> dict[str, bytes]:
         for skill in ordered:
             for host, adapter_root in ADAPTER_ROOTS.items():
                 adapter_dir = f"{adapter_root}/{adapter_name(skill, single_plugin)}"
-                host_adapter = adapter_body(skill, adapter_dir)
+                host_adapter = adapter_body(skill, adapter_dir, host=host)
                 extension = host_adapters.get((source, skill["name"], host))
                 if extension is not None:
                     host_adapter += "\n" + extension.rstrip() + "\n"
@@ -1482,9 +1550,11 @@ def build(root: Path) -> dict[str, bytes]:
             adapter_locations.append(
                 (skill, package_adapter, package_adapter_dir, False, True)
             )
-            if source in plugins_with_host_adapters:
+            if source in plugins_with_codex_entries:
                 codex_adapter_dir = f"plugins/{package}/codex-skills/{skill['name']}"
-                codex_adapter = adapter_body(skill, codex_adapter_dir, canonical_dir)
+                codex_adapter = adapter_body(
+                    skill, codex_adapter_dir, canonical_dir, host="codex"
+                )
                 codex_extension = host_adapters.get((source, skill["name"], "codex"))
                 if codex_extension is not None:
                     codex_adapter += "\n" + codex_extension.rstrip() + "\n"
@@ -1509,7 +1579,7 @@ def build(root: Path) -> dict[str, bytes]:
                 if (source_file, target) not in mirrored_resources:
                     emit(target, data)
                     mirrored_resources.add((source_file, target))
-            if source in plugins_with_host_adapters:
+            if source in plugins_with_codex_entries:
                 emit(f"plugins/{package}/codex-skills/{skill_name}/{suffix}", data)
 
         entries = [
@@ -1562,7 +1632,7 @@ def build(root: Path) -> dict[str, bytes]:
             manifest = manifests[host][package]
             if host == "claude" and config["type"] in ("stack", "profile"):
                 manifest = {**manifest, "dependencies": claude_dependencies(effective)}
-            if host == "codex" and source in plugins_with_host_adapters:
+            if host == "codex" and source in plugins_with_codex_entries:
                 manifest = {**manifest, "skills": "./codex-skills/"}
             emit(f"plugins/{package}/.{host}-plugin/plugin.json", dump(manifest))
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 from unittest import mock
 
-from close_fixtures import CLOSE, CloseFixture, session_close
+from close_fixtures import CLOSE, CloseFixture
 
 
 class AgentCloseTests(CloseFixture, unittest.TestCase):
@@ -15,14 +15,18 @@ class AgentCloseTests(CloseFixture, unittest.TestCase):
     def test_preparation_records_current_input_without_starting_a_watcher(self):
         self.assertEqual(0, self.prepare())
         assessment = self.root / "close-lifecycle/assessments/one.json"
-        self.assertEqual({"host": "codex", "session_id": "one", "turn_id": "turn-one"},
-                         json.loads(assessment.read_text(encoding="utf-8")))
+        self.assertEqual(
+            {"host": "codex", "session_id": "one", "turn_id": "turn-one"},
+            json.loads(assessment.read_text(encoding="utf-8")),
+        )
         self.assertFalse((self.root / "close-lifecycle/one.json").exists())
         self.spawn.assert_not_called()
 
     def test_new_codex_registration_is_attributed_before_active_turn_arm(self):
         before = self.row()
-        self.assertNotIn("client_identity", json.loads(self.registry.read_text(encoding="utf-8")))
+        self.assertNotIn(
+            "client_identity", json.loads(self.registry.read_text(encoding="utf-8"))
+        )
         self.arm()
         self.assertEqual("managed-input", self.request["entry"]["client_identity"])
         self.assertEqual(20, self.row()["pid"])
@@ -34,19 +38,20 @@ class AgentCloseTests(CloseFixture, unittest.TestCase):
         self.assertEqual(2, CLOSE.main(self.arm_args()))
         self.spawn.assert_called_once()
 
-    def test_missing_or_unsupported_cli_leaves_no_arm_and_corrected_retry_succeeds(self):
+    def test_missing_or_unsupported_cli_leaves_no_arm_and_corrected_retry_succeeds(
+        self,
+    ):
         self.assertEqual(0, self.prepare())
         original = self.capability
         self.capability = self.root / "missing.py"
         self.assertEqual(2, CLOSE.main(self.arm_args()))
         self.assertFalse((self.root / "close-lifecycle/one.json").exists())
         self.capability = original
-        primitive = original.with_name("process_identity.py")
-        source = primitive.read_text(encoding="utf-8")
-        primitive.write_text("# unsupported capability\n", encoding="utf-8")
+        self.capability = self.root / "unselected.py"
+        self.capability.write_text("", encoding="utf-8")
         self.assertEqual(2, CLOSE.main(self.arm_args()))
         self.assertFalse((self.root / "close-lifecycle/one.json").exists())
-        primitive.write_text(source, encoding="utf-8")
+        self.capability = original
         self.assertEqual(0, CLOSE.main(self.arm_args()))
 
     def test_spawn_failure_cleans_publication_and_preserves_original_explicit_arm(self):
@@ -72,10 +77,12 @@ class AgentCloseTests(CloseFixture, unittest.TestCase):
         self.assertEqual(0, self.prepare())
         canonical = self.root / "close-lifecycle/one.json"
         original_open = Path.open
+
         def fail_state(path, mode="r", *args, **kwargs):
             if path == canonical and mode == "xb":
                 raise OSError("publication failed")
             return original_open(path, mode, *args, **kwargs)
+
         with mock.patch.object(Path, "open", fail_state):
             self.assertEqual(2, CLOSE.main(self.arm_args()))
         self.assertFalse(canonical.exists())
@@ -107,7 +114,9 @@ class ClaudePreparationTests(CloseFixture, unittest.TestCase):
 
     def test_changed_receipt_or_new_user_refuses(self):
         self.assertEqual(0, self.prepare())
-        self.append({"type": "user", "uuid": "later", "message": {"content": "continue"}})
+        self.append(
+            {"type": "user", "uuid": "later", "message": {"content": "continue"}}
+        )
         self.assertEqual(2, CLOSE.main(self.arm_args()))
         entry = json.loads(self.registry.read_text(encoding="utf-8"))
         Path(entry["provenance"]["receipt"]).unlink()

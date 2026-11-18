@@ -1,14 +1,14 @@
 # agent package capabilities
 
+- `handoff` — operation — core
+- `listen` — operation — core
+- `message` — operation — core
+- `open` — operation — core
+- `peer` — operation — core
+- `plugins` — operation — core
+- `recent` — operation — core
+- `recover` — operation — core
+- `refresh-plugins` — operation — core
+- `search` — operation — core
+- `close` — policy — core
 - `lanes` — policy — core
-- `close` — utility — core
-- `handoff` — utility — core
-- `listen` — utility — core
-- `message` — utility — core
-- `open` — utility — core
-- `peer` — utility — core
-- `plugins` — utility — core
-- `recent` — utility — core
-- `recover` — utility — core
-- `refresh-plugins` — utility — core
-- `search` — utility — core

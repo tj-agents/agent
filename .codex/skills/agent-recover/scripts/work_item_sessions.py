@@ -1,33 +1,26 @@
-#!/usr/bin/env python3
-
-import importlib.util
+import runpy
 import sys
 from pathlib import Path
 
 
-HERE = Path(__file__).resolve().parent
-
-
-def _script():
-    for root in HERE.parents:
-        markers = (root / ".git", root / ".codex-plugin" / "plugin.json", root / ".claude-plugin" / "plugin.json")
-        candidate = root / ".agents" / "agent" / "runtime" / "work_item_sessions.py"
-        if candidate.is_file() and any(marker.exists() for marker in markers):
-            return candidate
-    return None
-
-
-def main(argv=None):
-    path = _script()
-    if path is None:
-        raise RuntimeError("The packaged work_item_sessions.py helper was not found relative to Agent Recover.")
-    spec = importlib.util.spec_from_file_location("recover_agents_work_item_sessions", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"The shared work_item_sessions.py helper could not be loaded from {path}.")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.main(argv)
-
+here = Path(__file__).resolve()
+if sys.path and Path(sys.path[0]).resolve() == here.parent:
+    sys.path.pop(0)
+for declared in here.parents:
+    if any(
+        (declared / marker).is_file()
+        for marker in (".codex-plugin/plugin.json", ".claude-plugin/plugin.json")
+    ):
+        boundary = declared / "python"
+        for package in ("tj_agent", "tj_agent_store", "tj_cli"):
+            if not (boundary / package / "__init__.py").is_file():
+                raise RuntimeError(f"declared {package} import boundary is unavailable")
+        sys.path.insert(0, str(boundary))
+        break
+    if (declared / "pyproject.toml").is_file():
+        break
+else:
+    raise RuntimeError("declared package boundary is unavailable")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    runpy.run_module("tj_agent.sessions.work_items", run_name="__main__")

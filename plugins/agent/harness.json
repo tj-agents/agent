@@ -19,21 +19,21 @@
     ],
     "hooks": [
       {
-        "path": ".agents/agent-store/runtime/session_store.py",
+        "path": "hooks/session_store.py",
         "hosts": [
           "claude",
           "codex"
         ]
       },
       {
-        "path": ".agents/agent/runtime/close_lifecycle.py",
+        "path": "hooks/close_lifecycle.py",
         "hosts": [
           "claude",
           "codex"
         ]
       },
       {
-        "path": ".agents/agent/utility/peer/scripts/register_session.py",
+        "path": ".agents/agent/skills/peer/scripts/register_session.py",
         "hosts": [
           "claude",
           "codex"

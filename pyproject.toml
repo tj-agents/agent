@@ -1,0 +1,24 @@
+[project]
+name = "tj-agent-development"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tj-agent", "tj-agent-store", "tj-cli"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/tj-agent", "packages/tj-agent-store"]
+
+[tool.uv.sources]
+tj-agent = { workspace = true }
+tj-agent-store = { workspace = true }
+tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "c469f10180b0e1940fbac6e8bb81151f992ec4a8", subdirectory = "packages/tj-cli" }
+
+[dependency-groups]
+dev = ["mypy>=2.4.0", "pytest>=9.1.1", "ruff>=0.17.1"]
+
+[tool.pytest]
+testpaths = ["tests", ".agents/tests"]
+pythonpath = ["tests"]
+addopts = ["--import-mode=importlib", "-ra"]

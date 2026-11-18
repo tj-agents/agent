@@ -1,0 +1,7 @@
+Metadata-Version: 2.3
+Name: tj-agent
+Version: 0.1.0
+Summary: Agent sessions, hosts, plugin delivery and installation
+Requires-Dist: tj-agent-store
+Requires-Dist: tj-cli
+Requires-Python: >=3.9

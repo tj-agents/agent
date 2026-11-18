@@ -1,3 +1,4 @@
+import importlib
 import importlib.util
 import json
 import os
@@ -15,18 +16,11 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / "plugins" / "agent" / ".agents" / "agent" / "runtime"
-sys.path.insert(0, str(RUNTIME))
 
 
-def load(name):
-    spec = importlib.util.spec_from_file_location(name, RUNTIME / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+AUTOUPDATE = importlib.import_module("tj_agent.plugins.plugin_autoupdate")
+from tj_agent.hosts.claude import plugins as CLAUDE  # noqa: E402
 
-
-AUTOUPDATE = load("plugin_autoupdate")
-from claude import plugins as CLAUDE  # noqa: E402
 MARKETPLACE = "https://github.com/tj-agents/marketplace.git"
 
 
@@ -40,9 +34,14 @@ class RetiredPluginTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        patcher = mock.patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex"),
-                                               "CLAUDE_CONFIG_DIR": str(self.root / "claude"),
-                                               "AGENT_STATE_DIRECTORY": str(self.root / "state")})
+        patcher = mock.patch.dict(
+            os.environ,
+            {
+                "CODEX_HOME": str(self.root / "codex"),
+                "CLAUDE_CONFIG_DIR": str(self.root / "claude"),
+                "AGENT_STATE_DIRECTORY": str(self.root / "state"),
+            },
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -51,27 +50,52 @@ class RetiredPluginTests(unittest.TestCase):
         if not config.exists():
             config.parent.mkdir(parents=True)
             config.write_text(
-                'model = "gpt"\n\n[marketplaces.tj-agents]\nsource_type = "git"\nsource = "' + MARKETPLACE + '"\n\n'
+                'model = "gpt"\n\n[marketplaces.tj-agents]\nsource_type = "git"\nsource = "'
+                + MARKETPLACE
+                + '"\n\n'
                 '[plugins."base@tj-agents"]\nenabled = true\n\n[plugins."kit@tj-agents"]\nenabled = true\n\n'
-                '[projects.\'c:\\users\\fixture\\repo\']\ntrust_level = "trusted"\n', encoding="utf-8")
+                "[projects.'c:\\users\\fixture\\repo']\ntrust_level = \"trusted\"\n",
+                encoding="utf-8",
+            )
         added = [] if added is None else added
 
         def run(command, cwd):
             added.append(command[-1])
             return AUTOUPDATE.RETIRED if command[-1] == "kit@tj-agents" else True
 
-        target = {"tj-agents": {"source": MARKETPLACE, "ref": None, "project": self.root,
-                                "plugins": ["base@tj-agents", "kit@tj-agents"], "missing": ["kit@tj-agents"]}}
+        target = {
+            "tj-agents": {
+                "source": MARKETPLACE,
+                "ref": None,
+                "project": self.root,
+                "plugins": ["base@tj-agents", "kit@tj-agents"],
+                "missing": ["kit@tj-agents"],
+            }
+        }
         sources = {name: (MARKETPLACE, "HEAD", f"plugins/{name}") for name in listed}
         recorded = {} if recorded is None else recorded
-        recorded.update({f"codex-plugin:{name}@tj-agents": "b" * 40 for name in listed
-                         if f"codex-plugin:{name}@tj-agents" not in recorded})
-        outcomes = AUTOUPDATE.refresh_codex("codex", target, recorded, revision=lambda *_: "b" * 40, run=run,
-                                            busy=lambda: False, sources=lambda *_: sources)
+        recorded.update(
+            {
+                f"codex-plugin:{name}@tj-agents": "b" * 40
+                for name in listed
+                if f"codex-plugin:{name}@tj-agents" not in recorded
+            }
+        )
+        outcomes = AUTOUPDATE.refresh_codex(
+            "codex",
+            target,
+            recorded,
+            revision=lambda *_: "b" * 40,
+            run=run,
+            busy=lambda: False,
+            sources=lambda *_: sources,
+        )
         self.assertTrue(outcomes["tj-agents"].startswith("updated"), outcomes)
         return config
 
-    def test_codex_refresh_removes_a_retired_user_selection_instead_of_retrying_it(self):
+    def test_codex_refresh_removes_a_retired_user_selection_instead_of_retrying_it(
+        self,
+    ):
         config = self.refresh_codex(["base"])
         parsed = tomllib.loads(config.read_text(encoding="utf-8"))
         self.assertEqual({"base@tj-agents"}, set(parsed["plugins"]))
@@ -82,7 +106,10 @@ class RetiredPluginTests(unittest.TestCase):
 
     def test_codex_keeps_a_selection_its_refreshed_marketplace_still_lists(self):
         config = self.refresh_codex(["base", "kit"])
-        self.assertIn("kit@tj-agents", tomllib.loads(config.read_text(encoding="utf-8"))["plugins"])
+        self.assertIn(
+            "kit@tj-agents",
+            tomllib.loads(config.read_text(encoding="utf-8"))["plugins"],
+        )
 
     def test_codex_retries_a_still_listed_selection_the_cli_reported_missing(self):
         recorded, added = {}, []
@@ -92,22 +119,53 @@ class RetiredPluginTests(unittest.TestCase):
 
     def test_codex_keeps_selections_when_the_marketplace_listing_is_unreadable(self):
         config = self.refresh_codex([])
-        self.assertIn("kit@tj-agents", tomllib.loads(config.read_text(encoding="utf-8"))["plugins"])
+        self.assertIn(
+            "kit@tj-agents",
+            tomllib.loads(config.read_text(encoding="utf-8"))["plugins"],
+        )
 
     def claude_marketplace(self, *published):
         location = self.root / "market"
-        write(self.root / "claude" / "plugins" / "known_marketplaces.json", {"tj-agents": {
-            "source": {"source": "github", "repo": "tj-agents/marketplace"}, "installLocation": str(location)}})
-        write(location / ".claude-plugin" / "marketplace.json", {"plugins": [{"name": name} for name in published]})
+        write(
+            self.root / "claude" / "plugins" / "known_marketplaces.json",
+            {
+                "tj-agents": {
+                    "source": {"source": "github", "repo": "tj-agents/marketplace"},
+                    "installLocation": str(location),
+                }
+            },
+        )
+        write(
+            location / ".claude-plugin" / "marketplace.json",
+            {"plugins": [{"name": name} for name in published]},
+        )
 
-    def test_claude_user_selections_the_marketplace_no_longer_publishes_are_removed(self):
+    def test_claude_user_selections_the_marketplace_no_longer_publishes_are_removed(
+        self,
+    ):
         self.claude_marketplace("agent", "base", "cli")
         settings = self.root / "claude" / "settings.json"
-        write(settings, {"theme": "dark", "enabledPlugins": {
-            "agent@tj-agents": True, "kit@tj-agents": True, "machine@tj-agents": True, "concertable@agents": True}})
-        self.assertEqual(["kit@tj-agents", "machine@tj-agents"], CLAUDE.retire_unpublished_user_plugins({"tj-agents"}))
+        write(
+            settings,
+            {
+                "theme": "dark",
+                "enabledPlugins": {
+                    "agent@tj-agents": True,
+                    "kit@tj-agents": True,
+                    "machine@tj-agents": True,
+                    "concertable@agents": True,
+                },
+            },
+        )
+        self.assertEqual(
+            ["kit@tj-agents", "machine@tj-agents"],
+            CLAUDE.retire_unpublished_user_plugins({"tj-agents"}),
+        )
         value = json.loads(settings.read_text(encoding="utf-8"))
-        self.assertEqual({"agent@tj-agents": True, "concertable@agents": True}, value["enabledPlugins"])
+        self.assertEqual(
+            {"agent@tj-agents": True, "concertable@agents": True},
+            value["enabledPlugins"],
+        )
         self.assertEqual("dark", value["theme"])
         before = settings.read_bytes()
         self.assertEqual([], CLAUDE.retire_unpublished_user_plugins({"tj-agents"}))
@@ -116,32 +174,54 @@ class RetiredPluginTests(unittest.TestCase):
     def test_claude_selections_survive_until_their_marketplace_is_refreshed(self):
         self.claude_marketplace("agent")
         settings = self.root / "claude" / "settings.json"
-        write(settings, {"enabledPlugins": {"agent@tj-agents": True, "machine@tj-agents": True}})
+        write(
+            settings,
+            {"enabledPlugins": {"agent@tj-agents": True, "machine@tj-agents": True}},
+        )
         before = settings.read_bytes()
         self.assertEqual([], CLAUDE.retire_unpublished_user_plugins(set()))
         self.assertEqual(before, settings.read_bytes())
 
-    def test_claude_selections_survive_when_the_marketplace_manifest_is_unavailable(self):
-        write(self.root / "claude" / "plugins" / "known_marketplaces.json", {"tj-agents": {
-            "source": {"source": "github", "repo": "tj-agents/marketplace"}, "installLocation": str(self.root / "missing")}})
+    def test_claude_selections_survive_when_the_marketplace_manifest_is_unavailable(
+        self,
+    ):
+        write(
+            self.root / "claude" / "plugins" / "known_marketplaces.json",
+            {
+                "tj-agents": {
+                    "source": {"source": "github", "repo": "tj-agents/marketplace"},
+                    "installLocation": str(self.root / "missing"),
+                }
+            },
+        )
         settings = self.root / "claude" / "settings.json"
         write(settings, {"enabledPlugins": {"machine@tj-agents": True}})
         before = settings.read_bytes()
         self.assertEqual([], CLAUDE.retire_unpublished_user_plugins({"tj-agents"}))
         self.assertEqual(before, settings.read_bytes())
 
-
     def test_claude_refresh_does_not_update_uninstalled_project_or_local_plugins(self):
         self.claude_marketplace("agent")
-        for scope, filename in (("project", "settings.json"), ("local", "settings.local.json")):
+        for scope, filename in (
+            ("project", "settings.json"),
+            ("local", "settings.local.json"),
+        ):
             with self.subTest(scope=scope):
                 project = self.root / scope
                 project.mkdir()
                 settings = project / ".claude" / filename
                 installed = self.root / "claude" / "plugins" / "installed_plugins.json"
                 write(settings, {"enabledPlugins": {"machine@tj-agents": True}})
-                write(installed, {"plugins": {"machine@tj-agents": [
-                    {"scope": scope, "projectPath": str(project)}]}})
+                write(
+                    installed,
+                    {
+                        "plugins": {
+                            "machine@tj-agents": [
+                                {"scope": scope, "projectPath": str(project)}
+                            ]
+                        }
+                    },
+                )
                 commands = []
 
                 def run(command, cwd):
@@ -155,26 +235,84 @@ class RetiredPluginTests(unittest.TestCase):
                     self.fail(f"Unexpected native operation after uninstall: {command}")
 
                 with mock.patch.object(CLAUDE.plugin_refresh, "run", side_effect=run):
-                    self.assertEqual([], CLAUDE.refresh_plugins(
-                        "claude", project, {"tj-agents": {}}, ["machine@tj-agents"]))
-                self.assertEqual([(["claude", "plugin", "uninstall", "machine@tj-agents", "--scope", scope],
-                                   project)], commands)
+                    self.assertEqual(
+                        [],
+                        CLAUDE.refresh_plugins(
+                            "claude", project, {"tj-agents": {}}, ["machine@tj-agents"]
+                        ),
+                    )
+                self.assertEqual(
+                    [
+                        (
+                            [
+                                "claude",
+                                "plugin",
+                                "uninstall",
+                                "machine@tj-agents",
+                                "--scope",
+                                scope,
+                            ],
+                            project,
+                        )
+                    ],
+                    commands,
+                )
 
-    def test_claude_installations_the_marketplace_no_longer_publishes_are_uninstalled(self):
+    def test_claude_installations_the_marketplace_no_longer_publishes_are_uninstalled(
+        self,
+    ):
         self.claude_marketplace("agent")
         project = self.root / "repo"
         project.mkdir()
-        write(self.root / "claude" / "plugins" / "installed_plugins.json", {"plugins": {
-            "agent@tj-agents": [{"scope": "user"}],
-            "machine@tj-agents": [{"scope": "user"}, {"scope": "project", "projectPath": str(project)},
-                                  {"scope": "project", "projectPath": str(self.root / "deleted")}],
-            "concertable@agents": [{"scope": "user"}]}})
+        write(
+            self.root / "claude" / "plugins" / "installed_plugins.json",
+            {
+                "plugins": {
+                    "agent@tj-agents": [{"scope": "user"}],
+                    "machine@tj-agents": [
+                        {"scope": "user"},
+                        {"scope": "project", "projectPath": str(project)},
+                        {"scope": "project", "projectPath": str(self.root / "deleted")},
+                    ],
+                    "concertable@agents": [{"scope": "user"}],
+                }
+            },
+        )
         commands = []
-        with mock.patch.object(CLAUDE.plugin_refresh, "run", lambda command, cwd: commands.append((command, cwd))):
+        with mock.patch.object(
+            CLAUDE.plugin_refresh,
+            "run",
+            lambda command, cwd: commands.append((command, cwd)),
+        ):
             CLAUDE.uninstall_unpublished("claude", {"tj-agents"})
-        self.assertEqual([(["claude", "plugin", "uninstall", "machine@tj-agents", "--scope", "user"], Path.home()),
-                          (["claude", "plugin", "uninstall", "machine@tj-agents", "--scope", "project"], project)],
-                         commands)
+        self.assertEqual(
+            [
+                (
+                    [
+                        "claude",
+                        "plugin",
+                        "uninstall",
+                        "machine@tj-agents",
+                        "--scope",
+                        "user",
+                    ],
+                    Path.home(),
+                ),
+                (
+                    [
+                        "claude",
+                        "plugin",
+                        "uninstall",
+                        "machine@tj-agents",
+                        "--scope",
+                        "project",
+                    ],
+                    project,
+                ),
+            ],
+            commands,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

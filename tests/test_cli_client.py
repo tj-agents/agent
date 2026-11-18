@@ -1,11 +1,9 @@
 """Managed Codex frontend attribution and Agent-side attachment tests."""
 
 import errno
-import importlib.util
 import json
 import os
 from pathlib import Path
-import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -13,29 +11,23 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
-from codex import hook_trust
+from tj_agent.hosts.codex import hook_trust
 
 
-def load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
-from codex import client as CLIENT  # noqa: E402
-from codex import sessions as CODEX_SESSIONS  # noqa: E402
-sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/utility/peer/scripts"))
-import session_close  # noqa: E402
-import register_session
+from tj_agent.hosts.codex import client as CLIENT  # noqa: E402
+from tj_agent.hosts.codex import sessions as CODEX_SESSIONS  # noqa: E402
+import tj_agent.sessions.session_close as session_close
+import tj_agent.sessions.register_session as register_session
 
 
 def events(identity):
     return [
         {"dir": "meta", "kind": "session_start"},
-        {"dir": "from_tui", "kind": "op", "payload": {"UserTurn": {"client_user_message_id": identity}}},
+        {
+            "dir": "from_tui",
+            "kind": "op",
+            "payload": {"UserTurn": {"client_user_message_id": identity}},
+        },
     ]
 
 
@@ -50,12 +42,32 @@ class ClientAttributionTests(unittest.TestCase):
         self.contexts = {}
         self.commands = {1: ["codex", "app-server"]}
         self.patchers = [
-            mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": str(self.root), "CODEX_HOME": str(self.profile)}),
-            mock.patch.object(CLIENT.subprocess, "run", return_value=SimpleNamespace(returncode=0, stderr="")),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "AGENT_STATE_DIRECTORY": str(self.root),
+                    "CODEX_HOME": str(self.profile),
+                },
+            ),
+            mock.patch.object(
+                CLIENT.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0, stderr=""),
+            ),
             mock.patch.object(CLIENT, "daemon_identity", return_value=self.backend),
-            mock.patch.object(CLIENT, "process_context", side_effect=lambda pid: self.contexts.get(pid, {})),
-            mock.patch.object(CLIENT, "process_arguments", side_effect=lambda pid: self.commands[pid]),
-            mock.patch.object(CLIENT, "current_input", return_value={"turn_id": "turn", "client_message_id": "own-input"}),
+            mock.patch.object(
+                CLIENT,
+                "process_context",
+                side_effect=lambda pid: self.contexts.get(pid, {}),
+            ),
+            mock.patch.object(
+                CLIENT, "process_arguments", side_effect=lambda pid: self.commands[pid]
+            ),
+            mock.patch.object(
+                CLIENT,
+                "current_input",
+                return_value={"turn_id": "turn", "client_message_id": "own-input"},
+            ),
             mock.patch.object(hook_trust, "AppServer"),
         ]
         for patcher in self.patchers:
@@ -63,21 +75,30 @@ class ClientAttributionTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
     def bind(self, pid=123, identity="own-input"):
-        prepared, environment, ticket = CLIENT.prepare(["resume", "thread"], self.root, os.environ,
-                                                        executable="codex")
+        prepared, environment, ticket = CLIENT.prepare(
+            ["resume", "thread"], self.root, os.environ, executable="codex"
+        )
         CLIENT.attach(ticket, pid)
         Path(ticket["recording_path"]).write_text(
-            "".join(json.dumps(value) + "\n" for value in events(identity)), encoding="utf-8",
+            "".join(json.dumps(value) + "\n" for value in events(identity)),
+            encoding="utf-8",
         )
-        self.infos[pid] = SimpleNamespace(pid=pid, name="codex.exe", started_at=ticket["created_at"])
-        self.contexts[pid] = {"profile": str(self.profile.resolve()), CLIENT.RECORD_ENV: "1",
-                              CLIENT.RECORD_PATH_ENV: ticket["recording_path"]}
+        self.infos[pid] = SimpleNamespace(
+            pid=pid, name="codex.exe", started_at=ticket["created_at"]
+        )
+        self.contexts[pid] = {
+            "profile": str(self.profile.resolve()),
+            CLIENT.RECORD_ENV: "1",
+            CLIENT.RECORD_PATH_ENV: ticket["recording_path"],
+        }
         self.commands[pid] = ["codex", *prepared]
         return ticket, environment
 
     def resolve(self):
         nearest = self.infos[123]
-        return CLIENT.recorded_client("thread", nearest, self.infos.get, self.infos, peer_state=self.peer_state)
+        return CLIENT.recorded_client(
+            "thread", nearest, self.infos.get, self.infos, peer_state=self.peer_state
+        )
 
     def peer_state(self, pid):
         info = self.infos.get(pid)
@@ -99,39 +120,86 @@ class ClientAttributionTests(unittest.TestCase):
         CLIENT.daemon_identity.reset_mock()
         self.assertEqual(123, self.resolve()[0].pid)
         CLIENT.daemon_identity.assert_called_once_with()
-        self.assertEqual(123, CLIENT.recorded_client(
-            "thread", SimpleNamespace(pid=1, name="codex.exe"), self.infos.get, self.infos,
-            peer_state=self.peer_state)[0].pid)
+        self.assertEqual(
+            123,
+            CLIENT.recorded_client(
+                "thread",
+                SimpleNamespace(pid=1, name="codex.exe"),
+                self.infos.get,
+                self.infos,
+                peer_state=self.peer_state,
+            )[0].pid,
+        )
 
     def test_shared_backend_ancestor_selects_only_its_verified_frontend(self):
         self.bind()
         backend = SimpleNamespace(pid=1, name="codex.exe", started_at=9.0)
         self.infos[1] = backend
         self.contexts[1] = {"profile": str(self.profile.resolve())}
-        self.assertEqual(123, CLIENT.recorded_client(
-            "thread", backend, self.infos.get, self.infos, peer_state=self.peer_state)[0].pid)
+        self.assertEqual(
+            123,
+            CLIENT.recorded_client(
+                "thread",
+                backend,
+                self.infos.get,
+                self.infos,
+                peer_state=self.peer_state,
+            )[0].pid,
+        )
 
-        CLIENT.daemon_identity.return_value = {"pid": 1, "process_start_time": "reused-daemon"}
+        CLIENT.daemon_identity.return_value = {
+            "pid": 1,
+            "process_start_time": "reused-daemon",
+        }
         with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
-            CLIENT.recorded_client("thread", backend, self.infos.get, self.infos, peer_state=self.peer_state)
+            CLIENT.recorded_client(
+                "thread",
+                backend,
+                self.infos.get,
+                self.infos,
+                peer_state=self.peer_state,
+            )
 
-        CLIENT.daemon_identity.side_effect = RuntimeError("Native Codex daemon metadata could not be verified")
+        CLIENT.daemon_identity.side_effect = RuntimeError(
+            "Native Codex daemon metadata could not be verified"
+        )
         with self.assertRaisesRegex(RuntimeError, "daemon metadata"):
-            CLIENT.recorded_client("thread", backend, self.infos.get, self.infos, peer_state=self.peer_state)
+            CLIENT.recorded_client(
+                "thread",
+                backend,
+                self.infos.get,
+                self.infos,
+                peer_state=self.peer_state,
+            )
 
         CLIENT.daemon_identity.side_effect = None
         CLIENT.daemon_identity.return_value = self.backend
         self.commands[999] = ["codex", "app-server"]
         with self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
-            CLIENT.recorded_client("thread", SimpleNamespace(pid=999, name="codex.exe", started_at=9.0),
-                                   self.infos.get, self.infos, peer_state=self.peer_state)
+            CLIENT.recorded_client(
+                "thread",
+                SimpleNamespace(pid=999, name="codex.exe", started_at=9.0),
+                self.infos.get,
+                self.infos,
+                peer_state=self.peer_state,
+            )
 
     def test_revalidation_rechecks_the_bound_frontend_not_the_shared_daemon(self):
         frontend = SimpleNamespace(pid=123, name="codex.exe", started_at=10.0)
-        entry = {"host": "codex", "session_id": "thread", "pid": 123, "backend": self.backend,
-                 "client_identity": "managed-input", "cwd": str(self.root)}
-        with mock.patch.object(session_close, "process_info", return_value=frontend), \
-                mock.patch.object(CODEX_SESSIONS, "current_client", return_value=(frontend, {})) as current:
+        entry = {
+            "host": "codex",
+            "session_id": "thread",
+            "pid": 123,
+            "backend": self.backend,
+            "client_identity": "managed-input",
+            "cwd": str(self.root),
+        }
+        with (
+            mock.patch.object(session_close, "process_info", return_value=frontend),
+            mock.patch.object(
+                CODEX_SESSIONS, "current_client", return_value=(frontend, {})
+            ) as current,
+        ):
             with self.assertRaisesRegex(session_close.Refusal, "binding changed"):
                 CODEX_SESSIONS.revalidate_client(entry, session_close.SHARED)
         self.assertEqual(123, current.call_args.args[1].pid)
@@ -165,8 +233,16 @@ class ClientAttributionTests(unittest.TestCase):
                     return self.contexts.get(pid, {})
 
                 with mock.patch.object(CLIENT, "process_context", side_effect=context):
-                    self.assertEqual(123, CLIENT.recorded_client(
-                        "thread", self.infos[123], self.infos.get, table, peer_state=self.peer_state)[0].pid)
+                    self.assertEqual(
+                        123,
+                        CLIENT.recorded_client(
+                            "thread",
+                            self.infos[123],
+                            self.infos.get,
+                            table,
+                            peer_state=self.peer_state,
+                        )[0].pid,
+                    )
                 self.infos[456] = peer
 
     def test_live_uninspectable_peer_refuses_the_frontend(self):
@@ -178,10 +254,17 @@ class ClientAttributionTests(unittest.TestCase):
                 raise PermissionError("permission denied")
             return self.contexts.get(pid, {})
 
-        with mock.patch.object(CLIENT, "process_context", side_effect=context), \
-                self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
-            CLIENT.recorded_client("thread", self.infos[123], self.infos.get, dict(self.infos),
-                                   peer_state=self.peer_state)
+        with (
+            mock.patch.object(CLIENT, "process_context", side_effect=context),
+            self.assertRaisesRegex(RuntimeError, "Cannot attribute"),
+        ):
+            CLIENT.recorded_client(
+                "thread",
+                self.infos[123],
+                self.infos.get,
+                dict(self.infos),
+                peer_state=self.peer_state,
+            )
 
     def test_unknown_peer_state_does_not_mean_the_peer_exited(self):
         self.bind()
@@ -194,11 +277,18 @@ class ClientAttributionTests(unittest.TestCase):
             return self.contexts.get(pid, {})
 
         for state in (("unknown", None), ("present", peer), ("present", None)):
-            with self.subTest(state=state[0], current=state[1] is not None), \
-                    mock.patch.object(CLIENT, "process_context", side_effect=context), \
-                    self.assertRaisesRegex(RuntimeError, "Cannot attribute"):
-                CLIENT.recorded_client("thread", self.infos[123], self.infos.get, dict(self.infos),
-                                       peer_state=lambda _pid, result=state: result)
+            with (
+                self.subTest(state=state[0], current=state[1] is not None),
+                mock.patch.object(CLIENT, "process_context", side_effect=context),
+                self.assertRaisesRegex(RuntimeError, "Cannot attribute"),
+            ):
+                CLIENT.recorded_client(
+                    "thread",
+                    self.infos[123],
+                    self.infos.get,
+                    dict(self.infos),
+                    peer_state=lambda _pid, result=state: result,
+                )
 
     def test_absent_or_reused_peer_state_skips_a_disappeared_peer(self):
         self.bind()
@@ -210,27 +300,53 @@ class ClientAttributionTests(unittest.TestCase):
                 raise FileNotFoundError()
             return self.contexts.get(pid, {})
 
-        for state in (("absent", None), ("present", SimpleNamespace(pid=456, started_at=12.0))):
+        for state in (
+            ("absent", None),
+            ("present", SimpleNamespace(pid=456, started_at=12.0)),
+        ):
             with self.subTest(state=state[0]):
                 with mock.patch.object(CLIENT, "process_context", side_effect=context):
-                    self.assertEqual(123, CLIENT.recorded_client(
-                        "thread", self.infos[123], self.infos.get, dict(self.infos),
-                        peer_state=lambda _pid, result=state: result)[0].pid)
+                    self.assertEqual(
+                        123,
+                        CLIENT.recorded_client(
+                            "thread",
+                            self.infos[123],
+                            self.infos.get,
+                            dict(self.infos),
+                            peer_state=lambda _pid, result=state: result,
+                        )[0].pid,
+                    )
 
     def test_canonical_caller_passes_the_fresh_peer_state(self):
         runtime = mock.Mock()
-        runtime.recorded_client.return_value = (SimpleNamespace(pid=123), {
-            "launch_cwd": str(self.root), "client_message_id": "input", "turn_id": "turn",
-            "native_rollout": str(self.root / "profile/sessions/rollout.jsonl"),
-            "native_cwd": str(self.root),
-            "recording_path": "events.jsonl", "backend": self.backend, "profile": str(self.profile),
-        })
+        runtime.recorded_client.return_value = (
+            SimpleNamespace(pid=123),
+            {
+                "launch_cwd": str(self.root),
+                "client_message_id": "input",
+                "turn_id": "turn",
+                "native_rollout": str(self.root / "profile/sessions/rollout.jsonl"),
+                "native_cwd": str(self.root),
+                "recording_path": "events.jsonl",
+                "backend": self.backend,
+                "profile": str(self.profile),
+            },
+        )
         nearest = SimpleNamespace(pid=123)
         table = {123: nearest}
-        with mock.patch.object(CODEX_SESSIONS, "client", runtime), \
-                mock.patch.object(session_close.register_session, "process_table", return_value=table):
-            _info, record = CODEX_SESSIONS.current_client("thread", nearest, session_close.SHARED)
-        self.assertIs(session_close.process_state, runtime.recorded_client.call_args.kwargs["peer_state"])
+        with (
+            mock.patch.object(CODEX_SESSIONS, "client", runtime),
+            mock.patch.object(
+                session_close.register_session, "process_table", return_value=table
+            ),
+        ):
+            _info, record = CODEX_SESSIONS.current_client(
+                "thread", nearest, session_close.SHARED
+            )
+        self.assertIs(
+            session_close.process_state,
+            runtime.recorded_client.call_args.kwargs["peer_state"],
+        )
         self.assertEqual(str(self.root), record["native_cwd"])
 
     def test_incomplete_or_duplicate_recording_refuses(self):
@@ -239,16 +355,26 @@ class ClientAttributionTests(unittest.TestCase):
         path.write_text(json.dumps(events("own-input")[0]), encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "incomplete or oversized"):
             self.resolve()
-        path.write_text("".join(json.dumps(value) + "\n" for value in [*events("own-input"), *events("other")]),
-                        encoding="utf-8")
+        path.write_text(
+            "".join(
+                json.dumps(value) + "\n"
+                for value in [*events("own-input"), *events("other")]
+            ),
+            encoding="utf-8",
+        )
         with self.assertRaisesRegex(RuntimeError, "no unique startup header"):
             self.resolve()
 
     def test_new_input_in_final_guard_sends_no_signal(self):
         entry = {
-            "host": "codex", "pid": 123, "pid_started_at": 10.0,
-            "client_identity": "managed-input", "recording_path": "events.jsonl",
-            "client_message_id": "old-input", "profile": str(self.profile), "backend": self.backend,
+            "host": "codex",
+            "pid": 123,
+            "pid_started_at": 10.0,
+            "client_identity": "managed-input",
+            "recording_path": "events.jsonl",
+            "client_message_id": "old-input",
+            "profile": str(self.profile),
+            "backend": self.backend,
         }
         stopped = []
 
@@ -258,16 +384,28 @@ class ClientAttributionTests(unittest.TestCase):
                 before_signal()
                 stopped.append(True)
 
-        with mock.patch.object(session_close, "process_info", return_value=SimpleNamespace(name="codex.exe")), \
-                mock.patch.object(session_close, "verified_live", return_value=True), \
-                mock.patch.object(CODEX_SESSIONS, "revalidate_client"), \
-                mock.patch.object(session_close, "process_identity_runtime", return_value=Primitive), \
-                mock.patch.object(CLIENT, "process_arguments", return_value=["codex"]), \
-                mock.patch.object(CLIENT, "process_context", return_value={
-                    "profile": str(self.profile), CLIENT.RECORD_ENV: "1", CLIENT.RECORD_PATH_ENV: "events.jsonl",
-                }), \
-                mock.patch.object(CLIENT, "daemon_identity", return_value=self.backend), \
-                mock.patch.object(CLIENT, "latest_input", return_value="new-input"):
+        with (
+            mock.patch.object(
+                session_close,
+                "process_info",
+                return_value=SimpleNamespace(name="codex.exe"),
+            ),
+            mock.patch.object(session_close, "verified_live", return_value=True),
+            mock.patch.object(CODEX_SESSIONS, "revalidate_client"),
+            mock.patch.object(session_close, "process_identity", Primitive),
+            mock.patch.object(CLIENT, "process_arguments", return_value=["codex"]),
+            mock.patch.object(
+                CLIENT,
+                "process_context",
+                return_value={
+                    "profile": str(self.profile),
+                    CLIENT.RECORD_ENV: "1",
+                    CLIENT.RECORD_PATH_ENV: "events.jsonl",
+                },
+            ),
+            mock.patch.object(CLIENT, "daemon_identity", return_value=self.backend),
+            mock.patch.object(CLIENT, "latest_input", return_value="new-input"),
+        ):
             with self.assertRaisesRegex(session_close.Refusal, "binding changed"):
                 session_close.stop_cli_client(entry)
         self.assertEqual([], stopped)
@@ -275,12 +413,19 @@ class ClientAttributionTests(unittest.TestCase):
 
 class SessionStoreAttachmentTests(unittest.TestCase):
     def test_frontend_attachment_preserves_turn_state_siblings_and_end_state(self):
-        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}):
-            store = register_session._load_session_store()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.dict(os.environ, {"AGENT_STATE_DIRECTORY": directory}),
+        ):
+            store = register_session.store
             connection = store.connect()
             try:
-                own = store.start_session(connection, "codex", "own", directory, pid=10, pid_started_at=1.0)
-                peer = store.start_session(connection, "codex", "peer", directory, pid=10, pid_started_at=1.0)
+                own = store.start_session(
+                    connection, "codex", "own", directory, pid=10, pid_started_at=1.0
+                )
+                peer = store.start_session(
+                    connection, "codex", "peer", directory, pid=10, pid_started_at=1.0
+                )
                 store.record_stop(connection, own, directory)
                 before = store.get_session(connection, own)
                 store.attach_session_client(connection, own, 20, 2.0, directory)

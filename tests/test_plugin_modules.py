@@ -8,7 +8,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME = ROOT / "plugins/agent/.agents/agent/runtime"
+RUNTIME = ROOT / "packages/tj-agent/src"
 
 
 class PluginModuleTests(unittest.TestCase):
@@ -21,14 +21,19 @@ class PluginModuleTests(unittest.TestCase):
             package.mkdir()
             (package / "skill.txt").write_bytes(b"published")
             result = subprocess.run(
-                [sys.executable, "-I", "-B", "-c", """
+                [
+                    sys.executable,
+                    "-I",
+                    "-B",
+                    "-c",
+                    """
 import importlib.abc
 from pathlib import Path
 import sys
 
 class RejectEntryPoints(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname in {"reload_plugins", "host_plugins", "claude.plugins", "codex.plugins"}:
+        if fullname in {"tj_agent.plugins.reload_plugins", "tj_agent.hosts.plugins", "tj_agent.hosts.claude.plugins", "tj_agent.hosts.codex.plugins"}:
             raise ImportError("Library imported an entry point: " + fullname)
 
 sys.meta_path.insert(0, RejectEntryPoints())
@@ -42,7 +47,14 @@ assert files == {"skill.txt": b"published"}
 assert len(content.digest(files)) == 64
 for module in (content, sources):
     assert Path(module.__file__).resolve().is_relative_to(runtime.resolve())
-""", str(runtime), str(root)],
-                cwd=root, env={**os.environ, "PYTHONPATH": ""}, capture_output=True, text=True, timeout=15,
+""",
+                    str(runtime),
+                    str(root),
+                ],
+                cwd=root,
+                env={**os.environ, "PYTHONPATH": ""},
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             self.assertEqual(0, result.returncode, result.stderr)
