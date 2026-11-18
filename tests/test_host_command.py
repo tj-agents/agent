@@ -1,4 +1,5 @@
 import json
+import os
 import runpy
 import shutil
 import subprocess
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from fixtures import foreground_console
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +26,25 @@ def completed(
     command: Sequence[str], code: int = 0
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(list(command), code, "", "")
+
+
+def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> None:
+    receipt = tmp_path / "console.json"
+    fixture = Path(__file__).with_name("fixtures") / "foreground_console.py"
+    before = foreground_console.identity()
+    code = command_main()(
+        Host.CODEX,
+        (str(fixture), str(receipt), "--help"),
+        cwd=tmp_path,
+        environ=os.environ,
+        resolver=lambda: sys.executable,
+    )
+    assert code == 0
+    after = json.loads(receipt.read_text(encoding="utf-8"))
+    if os.name == "nt" and before:
+        assert os.getpid() in after
+    else:
+        assert after == before
 
 
 def test_managed_command_preserves_native_arguments_and_exit_code(

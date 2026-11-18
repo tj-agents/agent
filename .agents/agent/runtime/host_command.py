@@ -11,7 +11,6 @@ import host_plugins
 import required_plugins
 from launch_errors import LaunchError
 from tj_agent.host import Host
-from tj_cli import process
 
 
 def independent_environment(environ: Mapping[str, str]) -> dict[str, str]:
@@ -62,7 +61,7 @@ def main(
     values = tuple(arguments)
     directory = cwd.resolve()
     environment = independent_environment(environ)
-    execute = process.run if run is None else run
+    execute = subprocess.run if run is None else run
     try:
         executable = native_executable(host, resolver)
         effective_directory, _inventory_options = required_plugins.launch_context(
