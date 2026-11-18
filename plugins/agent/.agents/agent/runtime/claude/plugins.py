@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import functools
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -16,16 +15,35 @@ import standards
 from tj_cli import process
 
 HOST = Host.CLAUDE
-VALUE_OPTIONS = frozenset({
-    "--model", "--permission-mode", "--settings", "--setting-sources", "--plugin-dir", "--plugin-url",
-})
-CONFIGURATION_OPTIONS = frozenset({"--settings", "--setting-sources", "--plugin-dir", "--plugin-url"})
+VALUE_OPTIONS = frozenset(
+    {
+        "--model",
+        "--permission-mode",
+        "--settings",
+        "--setting-sources",
+        "--plugin-dir",
+        "--plugin-url",
+    }
+)
+CONFIGURATION_OPTIONS = frozenset(
+    {"--settings", "--setting-sources", "--plugin-dir", "--plugin-url"}
+)
 FLAG_OPTIONS: frozenset[str] = frozenset()
 DIRECTORY_OPTIONS: frozenset[str] = frozenset()
 INFORMATION_OPTIONS = frozenset({"--help", "-h", "--version", "-v"})
-MAINTENANCE_COMMANDS = frozenset({
-    "plugin", "plugins", "auth", "doctor", "install", "setup-token", "update", "upgrade", "mcp",
-})
+MAINTENANCE_COMMANDS = frozenset(
+    {
+        "plugin",
+        "plugins",
+        "auth",
+        "doctor",
+        "install",
+        "setup-token",
+        "update",
+        "upgrade",
+        "mcp",
+    }
+)
 GIT_TIMEOUT_SECONDS = 5
 NODE_SHIM_BYPASSED = False
 
@@ -36,18 +54,27 @@ def resolve_executable() -> str:
 
 @functools.lru_cache(maxsize=None)
 def git_common_directory(project: Path) -> str | None:
-    if not project.is_dir() or not any((directory / ".git").exists() for directory in (project, *project.parents)):
+    if not project.is_dir() or not any(
+        (directory / ".git").exists() for directory in (project, *project.parents)
+    ):
         return None
     try:
-        result = process.run(['git', '-C', str(project), 'rev-parse', '--git-common-dir'],
-                             capture_output=True, text=True, encoding='utf-8', errors='replace',
-                             timeout=GIT_TIMEOUT_SECONDS)
+        result = process.run(
+            ["git", "-C", str(project), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
     except (OSError, subprocess.SubprocessError) as error:
         raise required_plugins.RequiredPluginsError(
-            f'Cannot resolve the native Claude repository for {project}: {error}') from error
+            f"Cannot resolve the native Claude repository for {project}: {error}"
+        ) from error
     if result.returncode or not result.stdout.strip():
         raise required_plugins.RequiredPluginsError(
-            f'Cannot resolve the native Claude repository for {project}: {result.stderr.strip()}')
+            f"Cannot resolve the native Claude repository for {project}: {result.stderr.strip()}"
+        )
     return os.path.normcase(str((project / result.stdout.strip()).resolve()))
 
 
@@ -60,8 +87,8 @@ def installations(project: Path, entries: list) -> list:
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        scope, owner = entry.get('scope'), entry.get('projectPath')
-        if scope in {'project', 'local'}:
+        scope, owner = entry.get("scope"), entry.get("projectPath")
+        if scope in {"project", "local"}:
             if not isinstance(owner, str) or not owner:
                 continue
             owner = Path(owner).resolve()
@@ -74,12 +101,14 @@ def installations(project: Path, entries: list) -> list:
                     continue
             elif not project.is_relative_to(owner):
                 continue
-            key = entry.get('id'), scope
+            key = entry.get("id"), scope
             if key in seen:
                 continue
             seen.add(key)
-        elif owner and scope not in {'user', 'managed'}:
-            if not isinstance(owner, str) or not project.is_relative_to(Path(owner).resolve()):
+        elif owner and scope not in {"user", "managed"}:
+            if not isinstance(owner, str) or not project.is_relative_to(
+                Path(owner).resolve()
+            ):
                 continue
         selected.append(entry)
     return selected
@@ -87,7 +116,11 @@ def installations(project: Path, entries: list) -> list:
 
 def location(entry: dict, project: Path) -> tuple[str, Path] | None:
     identity, path = entry.get("id"), entry.get("installPath")
-    if not isinstance(identity, str) or not required_plugins.IDENTITY.fullmatch(identity) or not isinstance(path, str):
+    if (
+        not isinstance(identity, str)
+        or not required_plugins.IDENTITY.fullmatch(identity)
+        or not isinstance(path, str)
+    ):
         return None
     return identity, Path(path)
 
@@ -104,8 +137,13 @@ def inventory_entries(data: object) -> object:
     return data
 
 
-def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False,
-                 required_roots: Mapping[str, Path] | None = None) -> str | None:
+def ensure_hooks(
+    project: Path,
+    executable: str | None = None,
+    *,
+    running_session: bool = False,
+    required_roots: Mapping[str, Path] | None = None,
+) -> str | None:
     return None
 
 
@@ -129,18 +167,9 @@ def prepare_instructions(project: Path) -> None:
     pointer.write_text("@AGENTS.md\n", encoding="utf-8")
 
 
-def user_enabled() -> Mapping[str, object]:
-    try:
-        settings = json.loads((HOST.configuration_root / "settings.json").read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
-        return {}
-    enabled = settings.get("enabledPlugins") if isinstance(settings, dict) else None
-    return enabled if isinstance(enabled, dict) else {}
-
-
 def plugin_command(project: Path, identity: str, *arguments: str) -> None:
     result = process.run(
-        ["claude", "plugin", *arguments, identity, "--scope", "user", "--json", "-y"],
+        ["claude", "plugin", *arguments, identity, "--scope", "local", "--json", "-y"],
         cwd=project,
         capture_output=True,
         text=True,
@@ -156,8 +185,5 @@ def plugin_command(project: Path, identity: str, *arguments: str) -> None:
 
 
 def install(project: Path, identities: Sequence[str]) -> None:
-    enabled = user_enabled()
     for identity in identities:
         plugin_command(project, identity, "install")
-        if enabled.get(identity) is not True:
-            plugin_command(project, identity, "disable")

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 from collections import Counter
 import importlib.util
@@ -12,14 +11,13 @@ import queue
 import re
 import shutil
 import subprocess
-import sys
 import tarfile
 import tempfile
 import threading
 import time
 
 import required_plugins
-from codex import projects
+from codex import launch
 from tj_agent.host import Host
 from tj_cli import process
 
@@ -32,6 +30,19 @@ GITHUB_SOURCE = re.compile(
 TRUSTED_OWNER = "tj-agents"
 RECEIPT = "codex-hook-trust.json"
 TIMEOUT = 45
+
+
+def marketplace_overrides() -> tuple[str, ...]:
+    return (
+        "-c",
+        f'marketplaces.{required_plugins.MARKETPLACE_NAME}.source_type="git"',
+        "-c",
+        f"marketplaces.{required_plugins.MARKETPLACE_NAME}.source="
+        f'"https://github.com/{required_plugins.MARKETPLACE_REPOSITORY}.git"',
+        "-c",
+        f"marketplaces.{required_plugins.MARKETPLACE_NAME}.sparse_paths="
+        f"{json.dumps(list(required_plugins.MARKETPLACE_SPARSE_PATHS))}",
+    )
 
 
 def github_repository(source):
@@ -52,14 +63,27 @@ def command(executable):
 
 def run(arguments, cwd, timeout=TIMEOUT):
     return process.run(
-        arguments, cwd=cwd, check=True, capture_output=True,
-        text=True, encoding="utf-8", timeout=timeout,
+        arguments,
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=timeout,
     ).stdout.strip()
 
 
 class AppServer:
-    def __init__(self, executable, cwd, launch_args=(), environment=None, timeout=TIMEOUT, existing=False,
-                 socket_path=None):
+    def __init__(
+        self,
+        executable,
+        cwd,
+        launch_args=(),
+        environment=None,
+        timeout=TIMEOUT,
+        existing=False,
+        socket_path=None,
+    ):
         if socket_path is not None and not existing:
             raise ValueError("An owned socket requires an existing native app server")
         if existing:
@@ -67,10 +91,20 @@ class AppServer:
 
         self.timeout = timeout
         self.process = process.start(
-            [*command(executable), *launch_args, "app-server", *(["proxy"] if existing else []),
-             *(["--sock", str(socket_path)] if socket_path is not None else [])], cwd=cwd,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=not existing, encoding=None if existing else "utf-8", bufsize=-1 if existing else 1,
+            [
+                *command(executable),
+                *launch_args,
+                "app-server",
+                *(["proxy"] if existing else []),
+                *(["--sock", str(socket_path)] if socket_path is not None else []),
+            ],
+            cwd=cwd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=not existing,
+            encoding=None if existing else "utf-8",
+            bufsize=-1 if existing else 1,
             env=dict(os.environ, **(environment or {})),
         )
         self.messages = queue.Queue()
@@ -101,9 +135,13 @@ class AppServer:
     def send(self, message):
         if self.websocket:
             if not self.ready.wait(self.timeout):
-                raise RuntimeError("Existing Codex daemon WebSocket initialization timed out")
+                raise RuntimeError(
+                    "Existing Codex daemon WebSocket initialization timed out"
+                )
             if self.connection_error:
-                raise RuntimeError(f"Existing Codex daemon connection failed: {self.connection_error}")
+                raise RuntimeError(
+                    f"Existing Codex daemon connection failed: {self.connection_error}"
+                )
             self.websocket.send(message)
             return
         self.process.stdin.write(json.dumps(message) + "\n")
@@ -129,10 +167,13 @@ class AppServer:
 
     def __enter__(self):
         try:
-            self.request("initialize", {
-                "clientInfo": {"name": "tj_agents_hook_trust", "version": "1.0.0"},
-                "capabilities": {"experimentalApi": True},
-            })
+            self.request(
+                "initialize",
+                {
+                    "clientInfo": {"name": "tj_agents_hook_trust", "version": "1.0.0"},
+                    "capabilities": {"experimentalApi": True},
+                },
+            )
             self.send({"method": "initialized"})
             return self
         except BaseException:
@@ -157,7 +198,11 @@ class AppServer:
 def source_package(plugin, cwd, published=None):
     marketplace = plugin.get("marketplaceSource", {})
     repository = github_repository(marketplace.get("source"))
-    if marketplace.get("sourceType") != "git" or not repository or repository[0] != TRUSTED_OWNER:
+    if (
+        marketplace.get("sourceType") != "git"
+        or not repository
+        or repository[0] != TRUSTED_OWNER
+    ):
         return None
     source = plugin.get("source", {})
     if source.get("source") == "git-subdir":
@@ -165,44 +210,89 @@ def source_package(plugin, cwd, published=None):
         relative = source.get("path")
         ref = source.get("sha") or source.get("ref") or "main"
         if (
-            not publisher or publisher[0] != TRUSTED_OWNER
-            or not isinstance(relative, str) or not relative or "\\" in relative
-            or PurePosixPath(relative).is_absolute() or ".." in PurePosixPath(relative).parts
-            or not isinstance(ref, str) or not ref or ref.startswith("-")
+            not publisher
+            or publisher[0] != TRUSTED_OWNER
+            or not isinstance(relative, str)
+            or not relative
+            or "\\" in relative
+            or PurePosixPath(relative).is_absolute()
+            or ".." in PurePosixPath(relative).parts
+            or not isinstance(ref, str)
+            or not ref
+            or ref.startswith("-")
         ):
             raise RuntimeError(f"Invalid published plugin source: {plugin['pluginId']}")
         key = (publisher, ref, relative)
         published = {} if published is None else published
         if key not in published:
-            with tempfile.TemporaryDirectory(prefix="tj-agents-hook-source-") as directory:
+            with tempfile.TemporaryDirectory(
+                prefix="tj-agents-hook-source-"
+            ) as directory:
                 root = Path(directory)
                 run(["git", "init", "--quiet", str(root)], cwd)
-                run(["git", "-C", str(root), "fetch", "--depth=1",
-                     f"https://github.com/{publisher[0]}/{publisher[1]}.git", ref], cwd)
+                run(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "fetch",
+                        "--depth=1",
+                        f"https://github.com/{publisher[0]}/{publisher[1]}.git",
+                        ref,
+                    ],
+                    cwd,
+                )
                 revision = run(["git", "-C", str(root), "rev-parse", "FETCH_HEAD"], cwd)
                 published[key] = committed_files(root, revision, relative, cwd)
         return published[key]
     if source.get("source") != "local" or not source.get("path"):
         return None
     path = Path(source["path"]).resolve(strict=True)
-    root = Path(run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], cwd)).resolve()
+    root = Path(
+        run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], cwd)
+    ).resolve()
     origin = run(["git", "-C", str(root), "remote", "get-url", "origin"], cwd)
     if github_repository(origin) != repository:
-        raise RuntimeError(f"Plugin source origin differs from its marketplace: {plugin['pluginId']}")
+        raise RuntimeError(
+            f"Plugin source origin differs from its marketplace: {plugin['pluginId']}"
+        )
     published = {} if published is None else published
     if root not in published:
         head = run(["git", "-C", str(root), "rev-parse", "HEAD"], cwd)
-        remote = run([
-            "git", "-C", str(root), "ls-remote", f"https://github.com/{repository[0]}/{repository[1]}.git",
-            "HEAD", "refs/heads/*", "refs/tags/*",
-        ], cwd)
-        if head not in {line.split()[0] for line in remote.splitlines() if line.split()}:
-            raise RuntimeError(f"Plugin source revision is not published by tj-agents: {plugin['pluginId']}")
+        remote = run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-remote",
+                f"https://github.com/{repository[0]}/{repository[1]}.git",
+                "HEAD",
+                "refs/heads/*",
+                "refs/tags/*",
+            ],
+            cwd,
+        )
+        if head not in {
+            line.split()[0] for line in remote.splitlines() if line.split()
+        }:
+            raise RuntimeError(
+                f"Plugin source revision is not published by tj-agents: {plugin['pluginId']}"
+            )
         published[root] = head
     relative = path.relative_to(root).as_posix()
-    changes = run([
-        "git", "-C", str(root), "status", "--porcelain", "--untracked-files=all", "--", relative,
-    ], cwd)
+    changes = run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            relative,
+        ],
+        cwd,
+    )
     if changes:
         raise RuntimeError(f"Plugin source has local changes: {plugin['pluginId']}")
     return committed_files(root, published[root], relative, cwd)
@@ -210,7 +300,12 @@ def source_package(plugin, cwd, published=None):
 
 def normalized_bytes(content):
     try:
-        return content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+        return (
+            content.decode("utf-8")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .encode("utf-8")
+        )
     except UnicodeDecodeError:
         return content
 
@@ -219,15 +314,24 @@ def committed_files(root, revision, relative, cwd):
     tree = revision if relative == "." else f"{revision}:{relative}"
     archive = process.run(
         ["git", "-C", str(root), "archive", "--format=tar", tree],
-        cwd=cwd, check=True, capture_output=True, timeout=TIMEOUT,
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        timeout=TIMEOUT,
     ).stdout
     result = {}
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tree:
         for entry in tree:
             if entry.isdir():
                 continue
-            if not entry.isfile() or Path(entry.name).is_absolute() or ".." in Path(entry.name).parts:
-                raise RuntimeError("Published plugin package contains an unsupported entry")
+            if (
+                not entry.isfile()
+                or Path(entry.name).is_absolute()
+                or ".." in Path(entry.name).parts
+            ):
+                raise RuntimeError(
+                    "Published plugin package contains an unsupported entry"
+                )
             result[entry.name] = normalized_bytes(tree.extractfile(entry).read())
     return result
 
@@ -250,19 +354,23 @@ def package_files(root):
         if path.is_symlink() or path.is_junction():
             raise RuntimeError(f"Plugin package contains a symbolic link: {path}")
         if path.is_file() and not generated_cache(path):
-            result[path.relative_to(root).as_posix()] = normalized_bytes(path.read_bytes())
+            result[path.relative_to(root).as_posix()] = normalized_bytes(
+                path.read_bytes()
+            )
     return result
 
 
 def installed_package(hook):
     path = Path(hook["sourcePath"]).resolve(strict=True)
     for parent in path.parents:
-        if (parent / ".codex-plugin/plugin.json").is_file() or (parent / "plugin.json").is_file():
+        if (parent / ".codex-plugin/plugin.json").is_file() or (
+            parent / "plugin.json"
+        ).is_file():
             return parent
     raise RuntimeError(f"Cannot identify installed plugin package: {hook['pluginId']}")
 
 
-def trust_updates(inventory, entries, cwds, verified_roots=None):
+def updates_for_inventory(inventory, entries, cwds, verified_roots=None):
     verified_roots = {root.identity: root for root in verified_roots or ()}
     candidates = {}
     for plugin in inventory.get("installed", []):
@@ -271,9 +379,16 @@ def trust_updates(inventory, entries, cwds, verified_roots=None):
         if plugin.get("installed") and plugin.get("enabled"):
             marketplace = plugin.get("marketplaceSource", {})
             repository = github_repository(marketplace.get("source"))
-            if marketplace.get("sourceType") == "git" and repository and repository[0] == TRUSTED_OWNER:
+            if (
+                marketplace.get("sourceType") == "git"
+                and repository
+                and repository[0] == TRUSTED_OWNER
+            ):
                 candidates[plugin["pluginId"]] = plugin
-            elif marketplace.get("sourceType") == "local" and plugin.get("pluginId") in verified_roots:
+            elif (
+                marketplace.get("sourceType") == "local"
+                and plugin.get("pluginId") in verified_roots
+            ):
                 candidates[plugin["pluginId"]] = plugin
     updates = {}
     verified = set()
@@ -287,8 +402,10 @@ def trust_updates(inventory, entries, cwds, verified_roots=None):
         for hook in entry.get("hooks", []):
             identity = hook.get("pluginId")
             if (
-                identity not in candidates or hook.get("source") != "plugin"
-                or hook.get("isManaged") or not hook.get("enabled")
+                identity not in candidates
+                or hook.get("source") != "plugin"
+                or hook.get("isManaged")
+                or not hook.get("enabled")
                 or hook.get("trustStatus") not in {"untrusted", "modified"}
             ):
                 continue
@@ -300,7 +417,9 @@ def trust_updates(inventory, entries, cwds, verified_roots=None):
                 else:
                     source = source_package(candidates[identity], cwd, published)
                 if source is None or package_files(package) != source:
-                    raise RuntimeError(f"Installed plugin differs from its Git source: {identity}")
+                    raise RuntimeError(
+                        f"Installed plugin differs from its Git source: {identity}"
+                    )
                 verified.add((identity, package))
             key, current_hash = hook["key"], hook["currentHash"]
             if not key.startswith(identity + ":") or not re.fullmatch(
@@ -312,12 +431,19 @@ def trust_updates(inventory, entries, cwds, verified_roots=None):
 
 
 def signature(hook):
-    return hook.get("eventName"), hook.get("matcher"), hook.get("handlerType"), hook.get("command")
+    return (
+        hook.get("eventName"),
+        hook.get("matcher"),
+        hook.get("handlerType"),
+        hook.get("command"),
+    )
 
 
 def required_definitions(root, identity):
     root = root.resolve()
-    manifest = json.loads((root / ".codex-plugin/plugin.json").read_text(encoding="utf-8-sig"))
+    manifest = json.loads(
+        (root / ".codex-plugin/plugin.json").read_text(encoding="utf-8-sig")
+    )
     sources = manifest.get("hooks")
     if sources is None:
         sources = ["hooks/hooks.json"] if (root / "hooks/hooks.json").is_file() else []
@@ -329,7 +455,9 @@ def required_definitions(root, identity):
         if isinstance(source, str):
             path = (root / source).resolve()
             if not path.is_relative_to(root):
-                raise RuntimeError(f"Required hook declaration escapes its plugin: {identity}")
+                raise RuntimeError(
+                    f"Required hook declaration escapes its plugin: {identity}"
+                )
             source = json.loads(path.read_text(encoding="utf-8-sig"))
         events = source.get("hooks", source)
         for event, groups in events.items():
@@ -338,88 +466,136 @@ def required_definitions(root, identity):
                     kind = handler["type"]
                     parts = kind.split("_")
                     native_kind = parts[0] + "".join(part.title() for part in parts[1:])
-                    cmd = handler.get("commandWindows", handler.get("command")) if os.name == "nt" else handler.get("command")
+                    cmd = (
+                        handler.get("commandWindows", handler.get("command"))
+                        if os.name == "nt"
+                        else handler.get("command")
+                    )
                     if isinstance(cmd, str):
-                        for variable, value in ((Host.CODEX.plugin_root_variable, root),
-                                                (Host.CLAUDE.plugin_root_variable, root),
-                                                ("PLUGIN_DATA", data), ("CLAUDE_PLUGIN_DATA", data)):
+                        for variable, value in (
+                            (Host.CODEX.plugin_root_variable, root),
+                            (Host.CLAUDE.plugin_root_variable, root),
+                            ("PLUGIN_DATA", data),
+                            ("CLAUDE_PLUGIN_DATA", data),
+                        ):
                             cmd = cmd.replace("${" + variable + "}", str(value))
-                    result.append((event[0].lower() + event[1:], group.get("matcher"), native_kind, cmd))
+                    result.append(
+                        (
+                            event[0].lower() + event[1:],
+                            group.get("matcher"),
+                            native_kind,
+                            cmd,
+                        )
+                    )
     return result
 
 
 def require_ready(listing, cwd, required=None, expected=None):
-    entries = [entry for entry in listing.get("data", [])
-               if Path(entry.get("cwd", "")).resolve() == cwd]
+    entries = [
+        entry
+        for entry in listing.get("data", [])
+        if Path(entry.get("cwd", "")).resolve() == cwd
+    ]
     if not entries or any(entry.get("errors") for entry in entries):
-        raise RuntimeError("Required hook inventory is missing or contains loading errors")
+        raise RuntimeError(
+            "Required hook inventory is missing or contains loading errors"
+        )
     hooks = {hook["key"]: hook for entry in entries for hook in entry.get("hooks", [])}
     problems = []
     for identity, definitions in (required or {}).items():
-        present = Counter(signature(hook) for hook in hooks.values() if hook.get("pluginId") == identity)
+        present = Counter(
+            signature(hook)
+            for hook in hooks.values()
+            if hook.get("pluginId") == identity
+        )
         missing = Counter(definitions) - present
         if missing:
-            problems.append(f"{identity}: required hook definitions missing: {list(missing.elements())}")
+            problems.append(
+                f"{identity}: required hook definitions missing: {list(missing.elements())}"
+            )
     for key, hook in hooks.items():
         if required is not None and hook.get("pluginId") not in required:
             continue
         if not hook.get("enabled") and required is not None:
             problems.append(f"{key}: disabled")
-        elif hook.get("enabled") and not hook.get("isManaged") and hook.get("trustStatus") != "trusted":
+        elif (
+            hook.get("enabled")
+            and not hook.get("isManaged")
+            and hook.get("trustStatus") != "trusted"
+        ):
             problems.append(f"{key}: {hook.get('trustStatus', 'unknown trust')}")
     for key, value in (expected or {}).items():
         if key not in hooks or hooks[key].get("currentHash") != value["trusted_hash"]:
             problems.append(f"{key}: contents changed during verification")
     if problems:
-        raise RuntimeError("Required hooks are not ready: " + "; ".join(problems)
-                           + ". Stop ordinary work; repair and verify these hooks in /hooks.")
+        raise RuntimeError(
+            "Required hooks are not ready: "
+            + "; ".join(problems)
+            + ". Stop ordinary work; repair and verify these hooks in /hooks."
+        )
 
 
-def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args=(), environment=None,
-                timeout=None, required=None):
+def ensure_ready(
+    executable, cwd, required, launch_args=(), environment=None, timeout=None
+):
     if required == {}:
-        return {}
+        return
     limit = TIMEOUT if timeout is None else timeout
     if limit <= 0:
         raise RuntimeError("Codex hook trust deadline expired")
     with AppServer(executable, cwd, launch_args, environment, timeout=limit) as server:
-        config = server.request("config/read", {"cwd": str(cwd), "includeLayers": False})["config"]
+        config = server.request(
+            "config/read", {"cwd": str(cwd), "includeLayers": False}
+        )["config"]
         features = config.get("features") or {}
         if features.get("hooks", features.get("codex_hooks", True)) is False:
-            raise RuntimeError("Required hooks are disabled in the effective Codex configuration")
-        if config.get("allow_managed_hooks_only") is True:
-            raise RuntimeError("Required plugin hooks are excluded by allow_managed_hooks_only")
-        listing = server.request("hooks/list", {"cwds": [str(cwd)]})
-        if required is not None:
-            listing = {"data": [dict(entry, hooks=[hook for hook in entry.get("hooks", [])
-                                                   if hook.get("pluginId") in required])
-                                for entry in listing.get("data", [])]}
-        if not any(
-            hook.get("source") == "plugin" and hook.get("enabled")
-            and hook.get("trustStatus") in {"untrusted", "modified"}
-            for entry in listing["data"] for hook in entry.get("hooks", [])
-        ):
-            require_ready(listing, cwd, required)
-            return {}
-        if not launch_args and not environment:
-            inventory = json.loads(run([*command(executable), "plugin", "list", "--json"], cwd, limit))
-        else:
-            completed = process.run(
-                [*command(executable), *launch_args, "plugin", "list", "--json"], cwd=cwd,
-                env=dict(os.environ, **(environment or {})), check=True, capture_output=True,
-                text=True, encoding="utf-8", timeout=limit,
+            raise RuntimeError(
+                "Required hooks are disabled in the effective Codex configuration"
             )
-            inventory = json.loads(completed.stdout)
-        updates = trust_updates(inventory, listing["data"], {cwd}, verified_roots)
-        if updates and not preview:
-            server.request("config/batchWrite", {
-                "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
-                "reloadUserConfig": True,
-            })
-            listing = server.request("hooks/list", {"cwds": [str(cwd)]})
-        if not preview:
-            require_ready(listing, cwd, required, expected=updates)
-        return updates
+        if config.get("allow_managed_hooks_only") is True:
+            raise RuntimeError(
+                "Required plugin hooks are excluded by allow_managed_hooks_only"
+            )
+        listing = server.request("hooks/list", {"cwds": [str(cwd)]})
+    require_ready(listing, cwd, required)
+
+
+def trust_updates(projects):
+    cwds = tuple(
+        sorted({Path(project).resolve(strict=True) for project in projects}, key=str)
+    )
+    if not cwds:
+        return {}
+    executable = launch.executable()
+    overrides = marketplace_overrides()
+    with AppServer(executable, cwds[0], overrides) as server:
+        listing = server.request("hooks/list", {"cwds": [str(cwd) for cwd in cwds]})
+    rows = {}
+    for cwd, hook in untrusted(listing):
+        if cwd not in cwds or hook["pluginId"] in rows:
+            continue
+        inventory = json.loads(
+            run(
+                [
+                    *command(executable),
+                    *overrides,
+                    "plugin",
+                    "list",
+                    "--json",
+                ],
+                cwd,
+            )
+        ).get("installed", [])
+        rows.update(
+            {
+                row["pluginId"]: row
+                for row in inventory
+                if isinstance(row, dict) and row.get("pluginId") not in rows
+            }
+        )
+    return updates_for_inventory(
+        {"installed": list(rows.values())}, listing["data"], set(cwds)
+    )
 
 
 def package_stamp(root: Path) -> str:
@@ -427,7 +603,10 @@ def package_stamp(root: Path) -> str:
     for path in root.rglob("*"):
         if path.is_file() and not generated_cache(path):
             status = path.stat()
-            files[path.relative_to(root).as_posix()] = (status.st_size, status.st_mtime_ns)
+            files[path.relative_to(root).as_posix()] = (
+                status.st_size,
+                status.st_mtime_ns,
+            )
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
@@ -436,7 +615,11 @@ def published_hooks():
     cache = Host.CODEX.configuration_root / "plugins" / "cache" / marketplace
     hooks = {}
     for plugin in sorted(cache.iterdir()) if cache.is_dir() else ():
-        builds = [entry for entry in plugin.iterdir() if entry.is_dir()] if plugin.is_dir() else []
+        builds = (
+            [entry for entry in plugin.iterdir() if entry.is_dir()]
+            if plugin.is_dir()
+            else []
+        )
         if len(builds) != 1:
             continue
         identity = f"{plugin.name}@{marketplace}"
@@ -445,11 +628,17 @@ def published_hooks():
             continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
-            definitions = required_definitions(builds[0], identity) if manifest.get("name") == plugin.name else []
+            definitions = (
+                required_definitions(builds[0], identity)
+                if manifest.get("name") == plugin.name
+                else []
+            )
         except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
             definitions = [("unreadable", str(builds[0]))]
         if definitions:
-            hooks[identity] = hashlib.sha256(json.dumps((definitions, package_stamp(builds[0]))).encode()).hexdigest()
+            hooks[identity] = hashlib.sha256(
+                json.dumps((definitions, package_stamp(builds[0]))).encode()
+            ).hexdigest()
     return hooks
 
 
@@ -463,48 +652,25 @@ def recorded_hooks(state):
 
 def pending(state):
     recorded = recorded_hooks(state)
-    return [f"trust {identity} hooks" for identity, digest in published_hooks().items()
-            if recorded.get(identity) != digest]
+    return [
+        f"trust {identity} hooks"
+        for identity, digest in published_hooks().items()
+        if recorded.get(identity) != digest
+    ]
 
 
 def untrusted(listing):
     suffix = "@" + required_plugins.MARKETPLACE_NAME
-    return [(Path(entry["cwd"]).resolve(), hook) for entry in listing.get("data", [])
-            for hook in entry.get("hooks", [])
-            if hook.get("source") == "plugin" and hook.get("enabled") and not hook.get("isManaged")
-            and hook.get("trustStatus") in {"untrusted", "modified"}
-            and str(hook.get("pluginId", "")).endswith(suffix)]
-
-
-def trust_installed(executable, state, launch_args=(), timeout=TIMEOUT):
-    """Trust the hooks of every installed tj-agents plugin, in every project Codex trusts."""
-    hooks = published_hooks()
-    cwds = [Path.home().resolve(), *projects.trusted(projects.user_config())]
-    request = {"cwds": [str(cwd) for cwd in cwds]}
-    updates = {}
-    with AppServer(executable, cwds[0], launch_args, timeout=timeout) as server:
-        listing = server.request("hooks/list", request)
-        rows = {}
-        for cwd, hook in untrusted(listing):
-            if hook["pluginId"] not in rows:
-                found = json.loads(run([*command(executable), *launch_args, "plugin", "list", "--json"],
-                                       cwd, timeout)).get("installed", [])
-                rows.update({row["pluginId"]: row for row in found
-                             if isinstance(row, dict) and row.get("pluginId") not in rows})
-        if rows:
-            updates = trust_updates({"installed": list(rows.values())}, listing["data"], set(cwds))
-        if updates:
-            server.request("config/batchWrite", {
-                "edits": [{"keyPath": "hooks.state", "value": updates, "mergeStrategy": "upsert"}],
-                "reloadUserConfig": True,
-            })
-            listing = server.request("hooks/list", request)
-        remaining = sorted({hook["key"] for _, hook in untrusted(listing)})
-        if remaining:
-            raise RuntimeError("tj-agents hooks are still not trusted: " + ", ".join(remaining))
-    state.mkdir(parents=True, exist_ok=True)
-    (state / RECEIPT).write_text(json.dumps(hooks), encoding="utf-8")
-    return updates
+    return [
+        (Path(entry["cwd"]).resolve(), hook)
+        for entry in listing.get("data", [])
+        for hook in entry.get("hooks", [])
+        if hook.get("source") == "plugin"
+        and hook.get("enabled")
+        and not hook.get("isManaged")
+        and hook.get("trustStatus") in {"untrusted", "modified"}
+        and str(hook.get("pluginId", "")).endswith(suffix)
+    ]
 
 
 def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
@@ -514,11 +680,17 @@ def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
     deadline = time.monotonic() + timeout
     with AppServer(executable, cwd, timeout=timeout, existing=True) as server:
         if identity not in server.request("thread/loaded/list", {}).get("data", []):
-            raise RuntimeError("Current Codex conversation is not loaded in the existing daemon; "
-                               "resume this same conversation in a fresh native process")
-        thread = server.request("thread/read", {"threadId": identity, "includeTurns": False})["thread"]
+            raise RuntimeError(
+                "Current Codex conversation is not loaded in the existing daemon; "
+                "resume this same conversation in a fresh native process"
+            )
+        thread = server.request(
+            "thread/read", {"threadId": identity, "includeTurns": False}
+        )["thread"]
         if thread.get("id") != identity or Path(thread.get("cwd", "")).resolve() != cwd:
-            raise RuntimeError("Existing Codex conversation does not match the refresh checkout")
+            raise RuntimeError(
+                "Existing Codex conversation does not match the refresh checkout"
+            )
         server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
         while True:
             listing = server.request("hooks/list", {"cwds": [str(cwd)]})
@@ -529,24 +701,3 @@ def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(0.1)
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--codex", required=True)
-    parser.add_argument("--project", type=Path, default=Path.cwd())
-    parser.add_argument("--preview", action="store_true")
-    arguments = parser.parse_args(argv)
-    try:
-        updates = apply_trust(arguments.codex, arguments.project.resolve(strict=True), arguments.preview)
-        if updates:
-            action = "Would trust" if arguments.preview else "Trusted"
-            print(f"standards: {action} {len(updates)} tj-agents hook definitions")
-        return 0
-    except (OSError, ValueError, RuntimeError, tarfile.TarError, subprocess.SubprocessError) as error:
-        print(f"standards: tj-agents hook trust failed: {error}", file=sys.stderr)
-        return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

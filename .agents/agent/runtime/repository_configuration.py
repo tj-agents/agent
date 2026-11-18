@@ -8,6 +8,7 @@ from pathlib import Path
 SETTINGS_PATH = Path(".agents") / "settings.json"
 NAMESPACE_NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 CORE_KEYS = frozenset({"auto_merge", "auto_approve", "permissions"})
+PERSONAL_KEYS = frozenset({"bot_identity"})
 AUTO_APPROVE_KEYS = frozenset({"all", "design"})
 PERMISSION_MODES = frozenset({"bypass", "standard"})
 
@@ -113,6 +114,19 @@ def core(root):
     return value
 
 
+def personal(root):
+    configuration = load(root)
+    if configuration is None:
+        return None
+    value = configuration.get("personal", {})
+    unknown = set(value) - PERSONAL_KEYS
+    if unknown:
+        raise ConfigurationViolation(f"personal settings have unknown keys {sorted(unknown)!r}")
+    if "bot_identity" in value and type(value["bot_identity"]) is not bool:
+        raise ConfigurationViolation("personal bot_identity must be a boolean")
+    return value
+
+
 def auto_merge(root):
     settings = core(root)
     if settings is None:
@@ -123,6 +137,11 @@ def auto_merge(root):
 def permissions(root):
     settings = core(root)
     return "bypass" if settings is None else settings.get("permissions", "bypass")
+
+
+def personal_bot_identity(root):
+    settings = personal(root)
+    return False if settings is None else settings.get("bot_identity", False)
 
 
 def auto_approve_design(root):

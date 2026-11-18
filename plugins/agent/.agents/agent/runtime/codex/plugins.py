@@ -6,11 +6,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import agent_cli
-from codex import catalog, hook_trust, user_plugins
-from tj_agent.host import Host
-from tj_cli import process
+import installer_boundary
 import required_plugins
 import standards
+from codex import catalog, hook_trust
+from tj_agent.host import Host
 
 HOST = Host.CODEX
 VALUE_OPTIONS = frozenset(
@@ -160,7 +160,7 @@ def ensure_hooks(
         definitions = hook_trust.required_definitions(root, identity)
         if definitions:
             expected[identity] = definitions
-    hook_trust.apply_trust(binary, project.resolve(), required=expected)
+    hook_trust.ensure_ready(binary, project.resolve(), expected)
     if running_session:
         try:
             hook_trust.reload_running(binary, project.resolve(), required=expected)
@@ -178,26 +178,23 @@ def prepare_instructions(project: Path) -> None:
 
 
 def install(project: Path, identities: Sequence[str]) -> None:
+    project = required_plugins.project_root(project)
+    requested = tuple(sorted(set(identities)))
     try:
-        for identity in identities:
-            result = process.run(
-                ["codex", "plugin", "add", identity, "--json"],
-                cwd=project,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=120,
-                check=False,
-            )
-            if result.returncode:
-                detail = result.stderr.strip() or result.stdout.strip()
-                raise required_plugins.RequiredPluginsError(
-                    f"Cannot install {identity} for {project}: {detail}"
-                )
-    finally:
-        path = user_plugins.path()
-        if path.is_file():
-            original = path.read_text(encoding="utf-8")
-            updated = user_plugins.without(original, identities)
-            if updated != original:
-                path.write_text(updated, encoding="utf-8")
+        rows = installer_boundary.acquire_codex_cache(project, requested)
+    except installer_boundary.InstallerBoundaryError as error:
+        detail = ", ".join(requested)
+        raise installer_boundary.InstallerBoundaryError(
+            f"Codex cache acquisition for {project} ({detail}) failed: {error}"
+        ) from error
+    acquired = {
+        row.get("pluginId")
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("pluginId"), str)
+    }
+    missing = sorted(set(requested) - acquired)
+    if missing:
+        raise installer_boundary.InstallerBoundaryError(
+            f"Codex cache acquisition for {project} did not return: {', '.join(missing)}"
+        )
+    catalog.remember(rows, verified_install=True)

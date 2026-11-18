@@ -156,6 +156,16 @@ class ProfileTests(Machine):
         install.apply_profile(self.context())
         self.assertEqual("first\n" + self.block("\n") + "\nlast\n", path.read_text(encoding="utf-8"))
 
+    def test_existing_profile_is_backed_up_before_replacement(self):
+        path = self.profiles()[0]
+        path.parent.mkdir(parents=True)
+        original = b"Write-Output 'keep-me'\r\n"
+        path.write_bytes(original)
+
+        install.apply_profile(self.context())
+
+        self.assertEqual(original, path.with_suffix(path.suffix + install.PROFILE_BACKUP).read_bytes())
+
     def test_duplicate_managed_blocks_collapse_to_one(self):
         path = self.profiles()[1]
         path.parent.mkdir(parents=True)
@@ -254,6 +264,9 @@ class HiddenBashTests(Machine):
         self.environment = FakeUserEnvironment({"TJ_AGENTS_REAL_GIT_BASH": str(self.real)})
         self.target = "x86_64-w64-mingw32\n"
 
+    def apply_user_environment(self, variables):
+        self.environment.values.update(variables)
+
     def test_gui_flags_follow_the_compiler_target(self):
         for target, flags in (("x86_64-w64-mingw32\n", ["-municode", "-mwindows"]),
                               ("x86_64-pc-windows-msvc\n", ["-Wl,/subsystem:windows"])):
@@ -276,12 +289,18 @@ class HiddenBashTests(Machine):
     def test_the_proxy_is_built_once_and_the_user_environment_is_set(self):
         context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
                                user_environment=self.environment)
-        self.converge(step("hidden Git Bash for Claude"), context)
+        with mock.patch.object(
+            install.installer_boundary,
+            "apply_user_environment",
+            side_effect=self.apply_user_environment,
+        ) as apply:
+            self.converge(step("hidden Git Bash for Claude"), context)
         proxy = self.home / ".agents-state/bin/hidden-bash.exe"
         self.assertEqual(b"proxy", proxy.read_bytes())
         self.assertFalse((self.home / ".agents-state/bin/hidden-bash.build.exe").exists())
-        self.assertEqual(str(proxy), self.environment.values["CLAUDE_CODE_GIT_BASH_PATH"])
-        self.assertEqual(1, self.environment.broadcasts)
+        apply.assert_called_once_with({
+            "CLAUDE_CODE_GIT_BASH_PATH": str(proxy),
+        })
         self.assertEqual(2, len(self.calls))
 
     def test_only_a_changed_source_rebuilds_the_proxy(self):
@@ -292,7 +311,12 @@ class HiddenBashTests(Machine):
         context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
                                user_environment=self.environment)
         context.root = plugin
-        self.converge(step("hidden Git Bash for Claude"), context)
+        with mock.patch.object(
+            install.installer_boundary,
+            "apply_user_environment",
+            side_effect=self.apply_user_environment,
+        ):
+            self.converge(step("hidden Git Bash for Claude"), context)
         source.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         os.utime(source, (2_000_000_000, 2_000_000_000))
         self.assertNotIn("build shell/hidden-bash.exe", install.check_hidden_bash(context))
@@ -468,6 +492,8 @@ class RuntimeTests(Machine):
         install.apply_runtime(context)
         runtime = context.state_directory / 'bin' / '.agents' / 'agent' / 'runtime'
         for script in install.LIFECYCLE_COMMANDS.values():
+            if not script.endswith(".py"):
+                continue
             result = subprocess.run([sys.executable, '-E', '-s', '-B', str(runtime / script), '--help'],
                                     cwd=self.root, capture_output=True, text=True, timeout=15)
             self.assertEqual(0, result.returncode, result.stderr)
@@ -581,7 +607,6 @@ class AutoUpdateTests(Machine):
         (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"base@tj-agents": True}}), encoding="utf-8")
         (claude / "plugins" / "known_marketplaces.json").write_text(json.dumps({"tj-agents": {"autoUpdate": False}}),
                                                                        encoding="utf-8")
-        self.converge(step("Claude marketplace auto-update"), self.context(windows=False))
 
 
 
@@ -666,7 +691,7 @@ class RunStepsTests(Machine):
     def test_the_steps_run_in_the_documented_order(self):
         self.assertEqual([
             "retired state", "Git long paths", "native CLI",
-            "Claude marketplace auto-update", "agent-store CLI",
+            "agent-store CLI",
             "tj item CLI", "worktrunk", "Handy",
             "launch-check runtime", "tj lifecycle commands",
             "shell profiles", "hidden Git Bash for Claude",
@@ -693,6 +718,14 @@ class RepairTests(Machine):
         applied.assert_called_once_with(context)
         unrelated.assert_not_called()
         self.assertEqual(project, install.plugin_setup_project(context))
+
+    def test_repair_refuses_git_longpaths_outside_a_selected_repository(self):
+        git_longpaths = step("Git long paths")
+        context = self.context(windows=True)
+        with mock.patch.object(install, "STEPS", (git_longpaths,)), \
+                mock.patch.object(install, "machine_context", return_value=context), \
+                self.assertRaisesRegex(install.InstallError, "Git long paths refused"):
+            install.repair("Git long paths", self.checkout)
 
     def test_repair_stops_when_a_required_precondition_fails(self):
         applied = mock.Mock()

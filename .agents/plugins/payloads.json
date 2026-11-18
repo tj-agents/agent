@@ -14,6 +14,7 @@
     {"plugin": "agent", "source": ".claude/runtime", "destination": ".agents/agent/runtime/claude"},
     {"plugin": "agent", "source": ".codex/runtime", "destination": ".agents/agent/runtime/codex"},
     {"plugin": "agent", "source": ".agents/agent/resources", "destination": ".agents/agent/resources"},
+    {"plugin": "agent", "source": "install.ps1", "destination": ".agents/agent/resources/installer/install.ps1"},
     {"plugin": "agent", "source": ".claude/hooks/agent.json", "destination": "hooks/claude.json"},
     {"plugin": "agent", "source": ".codex/hooks/agent.json", "destination": "hooks/codex.json"}
   ],

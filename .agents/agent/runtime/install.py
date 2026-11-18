@@ -34,8 +34,7 @@ sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
 from codex import hook_trust as codex_hook_trust
-from codex import installed as codex_installed
-from codex import launch as codex_launch
+import installer_boundary
 import jobs
 import machine_state
 import plugin_copies
@@ -59,7 +58,7 @@ RUNTIME_EXPORTS = (
 )
 LIFECYCLE_COMMANDS = {
     "start": "tj_start.py", "status": "tj_status.py", "recover": "tj_recover.py",
-    "plugins": "tj_plugins.py", "install": "install.py",
+    "plugins": "tj_plugins.py", "install": "../resources/installer/install.ps1",
     "prepare": "tj_prepare.py", "session": "tj_session.py",
 }
 PROFILE_START = "# >>> tj-agents >>>"
@@ -193,23 +192,6 @@ class WindowsUserEnvironment:
             return None
         return value if isinstance(value, str) else None
 
-    def set(self, name: str, value: str) -> None:
-        import winreg
-        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, "Environment", 0,
-                                winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE) as key:
-            try:
-                _, kind = winreg.QueryValueEx(key, name)
-            except FileNotFoundError:
-                kind = winreg.REG_SZ
-            winreg.SetValueEx(key, name, 0, kind if kind in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) else winreg.REG_SZ, value)
-
-    def broadcast(self) -> None:
-        import ctypes
-        from ctypes import wintypes
-        send = ctypes.windll.user32.SendMessageTimeoutW
-        send.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPCWSTR, wintypes.UINT,
-                         wintypes.UINT, ctypes.POINTER(ctypes.c_size_t)]
-        send(wintypes.HWND(0xFFFF), 0x001A, 0, "Environment", 0x0002, 5000, ctypes.byref(ctypes.c_size_t()))
 
 
 PROFILE_BOMS = (
@@ -229,16 +211,6 @@ def read_profile(path: Path) -> tuple[str, str, bool] | None:
         if raw.startswith(bom):
             return raw[len(bom):].decode(encoding), encoding, True
     return raw.decode("utf-8"), "utf-8", False
-
-
-def write_profile(path: Path, text: str, encoding: str, bom: bool) -> None:
-    if path.exists():
-        shutil.copyfile(path, path.with_name(path.name + PROFILE_BACKUP))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".next")
-    prefix = PROFILE_BOM_BYTES[encoding] if bom else b""
-    temporary.write_bytes(prefix + text.encode(encoding))
-    os.replace(temporary, path)
 
 
 def without_trailing_newline_span(text: str, finish: int) -> int:
@@ -362,11 +334,11 @@ def apply_profile(context: Context) -> list[str]:
     updates, warnings = profile_updates(context)
     for warning in warnings:
         print(f"warning shell profiles: {warning}", file=sys.stderr)
-    changes = []
-    for path, text, encoding, bom in updates:
-        write_profile(path, text, encoding, bom)
-        changes.append(f"wired {path}")
-    return changes
+    try:
+        installer_boundary.apply_profile_plan(context.home, context.documents, updates)
+    except installer_boundary.InstallerBoundaryError as error:
+        raise InstallError(str(error)) from error
+    return [f"wired {path}" for path, _, _, _ in updates]
 
 
 def same_path(left: str | Path, right: str | Path) -> bool:
@@ -439,6 +411,9 @@ def check_git_longpaths(context: Context) -> list[str]:
 
 
 def apply_git_longpaths(context: Context) -> list[str]:
+    skipped = skip_git_longpaths(context)
+    if skipped:
+        raise InstallError(f"Git long paths refused: {skipped}")
     if git_longpaths(context):
         return []
     context.run(["git", "-C", str(plugin_setup_project(context)), "config", "--local", "core.longpaths", "true"],
@@ -514,11 +489,11 @@ def apply_hidden_bash(context: Context) -> list[str]:
     if stale:
         build_hidden_bash(context, real_git_bash(context, hidden_bash_paths(context)[1]))
         changes.append("built shell/hidden-bash.exe")
-    for name, value in variables.items():
-        context.user_environment.set(name, value)
-        changes.append(f"set user {name}={value}")
-    if variables:
-        context.user_environment.broadcast()
+    try:
+        installer_boundary.apply_user_environment(variables)
+    except installer_boundary.InstallerBoundaryError as error:
+        raise InstallError(str(error)) from error
+    changes += [f"set user {name}={value}" for name, value in variables.items()]
     return changes
 
 
@@ -535,32 +510,6 @@ def run_installer(context: Context, command: list[str]) -> subprocess.CompletedP
 
 def output_lines(result: subprocess.CompletedProcess) -> list[str]:
     return [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
-
-
-def enable_claude_autoupdate(config: Path, apply: bool = True) -> list[str]:
-    settings = read_json(config / "settings.json")
-    enabled = settings.get("enabledPlugins")
-    if not isinstance(enabled, dict):
-        return []
-    wanted = {identity.rsplit("@", 1)[1] for identity, on in enabled.items() if on is True and "@" in identity}
-    path = config / "plugins" / "known_marketplaces.json"
-    known = read_json(path)
-    changed = sorted(name for name in wanted
-                     if isinstance(known.get(name), dict) and known[name].get("autoUpdate") is not True)
-    if changed and apply:
-        for name in changed:
-            known[name]["autoUpdate"] = True
-        write_json(path, known)
-    return changed
-
-
-def check_autoupdate(context: Context) -> list[str]:
-    return [f"enable auto-update for Claude marketplace {name}"
-            for name in enable_claude_autoupdate(context.claude_home, apply=False)]
-
-
-def apply_autoupdate(context: Context) -> list[str]:
-    return [f"Claude marketplace now auto-updates: {name}" for name in enable_claude_autoupdate(context.claude_home)]
 
 
 def runtime_receipt(root: Path) -> dict:
@@ -783,6 +732,12 @@ def command_shim_text(python: str, script: Path, windows: bool) -> str:
     return f'#!/bin/sh\nexec {shlex.quote(python)} -B {shlex.quote(str(script))} "$@"\n'
 
 
+def powershell_shim_text(script: Path, windows: bool) -> str:
+    if windows:
+        return f'@pwsh -NoProfile -File "{script}" %*\r\n'
+    return f'#!/bin/sh\nexec pwsh -NoProfile -File {shlex.quote(str(script))} "$@"\n'
+
+
 def windows_shim_binding(text: str) -> tuple[str, str] | None:
     suffix = '" %*\r\n'
     if not (text.startswith('@"') and text.endswith(suffix)):
@@ -843,9 +798,12 @@ def lifecycle_binding(context: Context, path: Path, script: Path) -> str | None:
 
 def lifecycle_paths(context: Context) -> dict[Path, Path]:
     directory = agent_store.executable().parent
-    scripts = runtime_bin(context) / ".agents" / "agent" / "runtime"
+    runtime = runtime_bin(context) / ".agents" / "agent" / "runtime"
+    installer = runtime.parent / "resources" / "installer" / "install.ps1"
     return {
-        directory / command_shim_name(command, context.windows): scripts / script
+        directory / command_shim_name(command, context.windows): (
+            installer if command == "install" else runtime / script
+        )
         for command, script in LIFECYCLE_COMMANDS.items()
     }
 
@@ -854,6 +812,9 @@ def lifecycle_shims(context: Context) -> dict[Path, str]:
     fallback: str | None = None
     shims: dict[Path, str] = {}
     for path, script in lifecycle_paths(context).items():
+        if script.suffix == ".ps1":
+            shims[path] = powershell_shim_text(script, context.windows)
+            continue
         interpreter = lifecycle_binding(context, path, script)
         if interpreter is None:
             if fallback is None:
@@ -888,23 +849,28 @@ def windows_only(context: Context) -> str | None:
 
 
 def skip_codex_hook_trust(context: Context) -> str | None:
-    return None if context.codex_home.is_dir() else f"Codex is not set up ({context.codex_home} is missing)"
+    project = required_plugins.project_root(plugin_setup_project(context))
+    return None if required_plugins.selected(project) else "the target has no explicit plugin selection"
 
 
-def watch_codex_hook_trust(context: Context) -> list[Path]:
-    cache = context.codex_home / "plugins" / "cache" / required_plugins.MARKETPLACE_NAME
-    plugins = sorted(cache.iterdir()) if cache.is_dir() else []
-    return [context.state_directory / codex_hook_trust.RECEIPT, cache, *plugins]
+def codex_hook_trust_updates(context: Context) -> dict[str, dict[str, str]]:
+    project = required_plugins.project_root(plugin_setup_project(context))
+    return codex_hook_trust.trust_updates((project,))
 
 
 def check_codex_hook_trust(context: Context) -> list[str]:
-    return codex_hook_trust.pending(context.state_directory)
+    updates = codex_hook_trust_updates(context)
+    context.cache["codex_hook_trust"] = updates
+    return [f"trust {key}" for key in sorted(updates)]
 
 
 def apply_codex_hook_trust(context: Context) -> list[str]:
-    trusted = codex_hook_trust.trust_installed(
-        codex_launch.executable(), context.state_directory, codex_installed.MARKETPLACE_OVERRIDES)
-    return [f"trusted {len(trusted)} tj-agents Codex hook(s)"]
+    project = required_plugins.project_root(plugin_setup_project(context))
+    updates = context.cache.pop("codex_hook_trust", None)
+    if updates is None:
+        updates = codex_hook_trust_updates(context)
+    installer_boundary.apply_codex_hook_trust((project,), updates)
+    return [f"trusted {len(updates)} selected Codex hook(s)"] if updates else []
 
 
 def plugin_setup_project(context: Context) -> Path:
@@ -1012,7 +978,6 @@ STEPS = (
     Step("retired state", check_retired_state, apply_retired_state),
     Step("Git long paths", check_git_longpaths, apply_git_longpaths, skip_git_longpaths),
     Step("native CLI", check_native_cli, apply_native_cli, required=True),
-    Step("Claude marketplace auto-update", check_autoupdate, apply_autoupdate),
     Step("agent-store CLI", check_agent_store, apply_agent_store, watch=watch_agent_store),
     Step("tj item CLI", check_tj_item, apply_tj_item, watch=watch_tj_item),
     cli_tool_step("worktrunk", worktrunk_install),
@@ -1023,8 +988,7 @@ STEPS = (
     Step("shell profiles", check_profile, apply_profile, watch=profile_paths),
     Step("hidden Git Bash for Claude", check_hidden_bash, apply_hidden_bash, windows_only),
     Step("plugin setup", check_plugin_setup, apply_plugin_setup),
-    Step("Codex hook trust", check_codex_hook_trust, apply_codex_hook_trust, skip_codex_hook_trust,
-         watch=watch_codex_hook_trust),
+    Step("Codex hook trust", check_codex_hook_trust, apply_codex_hook_trust, skip_codex_hook_trust),
     Step("plugin copies", check_plugin_copies, apply_plugin_copies, watch=watch_plugin_copies),
 )
 

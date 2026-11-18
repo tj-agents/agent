@@ -2,7 +2,8 @@
   "schema_version": 1,
   "plugin": "tj-agents/agent",
   "source_roots": [
-    ".agents/agent"
+    ".agents/agent",
+    "install.ps1"
   ],
   "requires": {
     "marketplaces": [

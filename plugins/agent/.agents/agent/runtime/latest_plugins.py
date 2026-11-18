@@ -73,7 +73,9 @@ def update_command(host: Host) -> list[str]:
 
 def install_command(steps: Iterable[str]) -> list[str]:
     selected = [argument for step in steps for argument in ("--step", step)]
-    return [sys.executable, "-B", str(machine_state.packaged("install.py")), *selected]
+    runtime = machine_state.packaged("install.py")
+    installer = runtime.parents[1] / "resources" / "installer" / "install.ps1"
+    return ["pwsh", "-NoProfile", "-File", str(installer), *selected]
 
 
 def fixing(

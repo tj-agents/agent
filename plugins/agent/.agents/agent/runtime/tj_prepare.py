@@ -2,6 +2,7 @@ import argparse
 import json
 import subprocess
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import host_plugins
@@ -9,6 +10,41 @@ import required_plugins
 import standards
 from tj_agent.host import Host
 from tj_cli import process
+
+
+def project_permissions(
+    project: Path, selected: Sequence[str], roots: Mapping[str, Path]
+) -> None:
+    permissions_script = (
+        Path(__file__).parent.parent
+        / "utility/plugins/scripts/repository_permissions.py"
+    )
+    permissions = process.run(
+        [
+            sys.executable,
+            "-B",
+            str(permissions_script),
+            "--root",
+            str(project),
+            "--roots-stdin",
+        ],
+        cwd=project,
+        input=json.dumps(
+            {
+                "selected": list(selected),
+                "roots": {identity: str(root) for identity, root in roots.items()},
+            }
+        ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    if permissions.returncode:
+        raise standards.StandardsError(
+            permissions.stderr.strip() or permissions.stdout.strip()
+        )
 
 
 def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> bool:
@@ -21,6 +57,8 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
     project = required_plugins.project_root(directory)
     selected = required_plugins.selected(project)
     if not selected:
+        if (project / ".agents/repository-permissions.local.json").exists():
+            project_permissions(project, (), {})
         return False
     script = Path(__file__).parent.parent / "utility/plugins/scripts/repo_config.py"
     configured = process.run(
@@ -45,6 +83,7 @@ def prepare(directory: Path, host: Host, arguments: tuple[str, ...] = ()) -> boo
         roots = required_plugins.check(
             directory, host, inventory_options=inventory_options
         )
+    project_permissions(project, selected, roots or {})
     if (project / ".agents/repo-capabilities.local.json").is_file():
         raise standards.StandardsError(
             "Local-only adoption preserves this repository's instruction files; "

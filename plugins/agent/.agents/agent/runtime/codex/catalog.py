@@ -28,29 +28,6 @@ def source_identity(source: Mapping[str, object]) -> str:
     return json.dumps(normalized, sort_keys=True)
 
 
-def sources(marketplace: str) -> dict[str, str]:
-    path = (
-        Host.CODEX.configuration_root
-        / ".tmp/marketplaces"
-        / marketplace
-        / ".agents/plugins/marketplace.json"
-    )
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict) or not isinstance(data.get("plugins"), list):
-        return {}
-    found = {}
-    for entry in data["plugins"]:
-        if not isinstance(entry, dict):
-            continue
-        name, source = entry.get("name"), entry.get("source")
-        if isinstance(name, str) and isinstance(source, dict):
-            found[name] = source_identity(source)
-    return found
-
-
 def recorded(state: Path) -> dict[str, Build]:
     try:
         data = json.loads((state / RECEIPT).read_text(encoding="utf-8"))
@@ -125,18 +102,17 @@ def remember(entries: Iterable[object], *, verified_install: bool = False) -> No
             or not isinstance(source, dict)
         ):
             continue
+        if not verified_install:
+            continue
         plugin, _, marketplace = identity.rpartition("@")
-        expected = source_identity(source)
+        try:
+            expected = source_identity(source)
+        except (TypeError, ValueError):
+            continue
         installed = root(marketplace, plugin, version)
-        if (
-            sources(marketplace).get(plugin) != expected
-            or installed is None
-            or label(installed) != version
-        ):
+        if installed is None or label(installed) != version:
             continue
         immutable = bool(re.fullmatch(r"[0-9a-f]{12}", version))
-        if not immutable and not verified_install:
-            continue
         digest = None if immutable else digests.tree(installed)
         builds[identity] = Build(expected, version, digest)
     digests.save()
@@ -150,17 +126,10 @@ def remember(entries: Iterable[object], *, verified_install: bool = False) -> No
 
 def current(marketplace: str, plugin: str, digests: Digests) -> bool:
     build = recorded(digests.path.parent).get(f"{plugin}@{marketplace}")
-    if build is None or sources(marketplace).get(plugin) != build.source:
+    if build is None:
         return False
     installed = root(marketplace, plugin, build.version)
     if installed is None or label(installed) != build.version:
-        return False
-    try:
-        if [path.name for path in installed.parent.iterdir() if path.is_dir()] != [
-            build.version
-        ]:
-            return False
-    except OSError:
         return False
     if re.fullmatch(r"[0-9a-f]{12}", build.version):
         return True

@@ -46,14 +46,18 @@ UPDATING_CODEX = (
     "restart this session when it finishes."
 )
 REFRESH = [sys.executable, "-B", str(RUNTIME / "plugins" / "refresh.py")]
-INSTALL = [sys.executable, "-B", str(RUNTIME / "install.py")]
+INSTALL = [
+    "pwsh",
+    "-NoProfile",
+    "-File",
+    str(RUNTIME.parent / "resources/installer/install.ps1"),
+]
 DRIFT_STEPS = [
     "agent-store CLI",
     "tj item CLI",
     "launch-check runtime",
     "tj lifecycle commands",
     "shell profiles",
-    "Codex hook trust",
     "plugin copies",
 ]
 
@@ -163,8 +167,7 @@ def machine(
 
 
 def install_step(name: str) -> list[str]:
-    script = machine_state.packaged("install.py")
-    return [sys.executable, "-B", str(script), "--step", name]
+    return latest_plugins.install_command([name])
 
 
 def no_files(_context: object) -> list[Path]:

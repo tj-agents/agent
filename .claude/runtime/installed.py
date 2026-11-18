@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
+import required_plugins
 from claude import project_plugins
 from tj_agent.host import Host
 from tree_digest import Digests
@@ -93,10 +94,12 @@ def identities() -> set[str]:
 
 
 def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
-    found = set()
-    for marketplace in marketplaces:
-        found.update(f"{plugin}@{marketplace}" for plugin in installs(marketplace))
-    return found
+    project = required_plugins.project_root(Path.cwd())
+    return {
+        identity
+        for identity in required_plugins.selected(project)
+        if identity.rpartition("@")[2] in marketplaces
+    }
 
 
 def pinned(marketplace: str, plugin: str, scope: str | None = None) -> bool:
@@ -118,19 +121,23 @@ def current(marketplace: str, plugin: str, digests: Digests) -> bool:
 
 
 def behind(marketplaces: tuple[str, ...]) -> list[str]:
+    required = refresh_identities(marketplaces)
     found = []
-    for marketplace in marketplaces:
+    for marketplace in sorted({identity.rpartition("@")[2] for identity in required}):
         expected = pins(marketplace)
         for (plugin, _scope), (revision, root) in sorted(
             scoped_installs(marketplace).items()
         ):
+            identity = f"{plugin}@{marketplace}"
+            if identity not in required:
+                continue
             pin = expected.get(plugin)
             if pin and revision != pin:
                 found.append(
-                    f"{plugin}@{marketplace}: installed {revision[:12]}, marketplace {pin[:12]}"
+                    f"{identity}: installed {revision[:12]}, marketplace {pin[:12]}"
                 )
             elif pin and not root.is_dir():
-                found.append(f"{plugin}@{marketplace}: installed {pin[:12]} is missing")
+                found.append(f"{identity}: installed {pin[:12]} is missing")
     return found
 
 
@@ -153,7 +160,16 @@ def loaded_build_behind(root: Path, pin: str, install: Path) -> str | None:
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
-    for marketplace in marketplaces:
+    project = required_plugins.project_root(Path.cwd())
+    required = set(required_plugins.selected(project))
+    selected_marketplaces = tuple(
+        sorted(
+            {identity.rpartition("@")[2] for identity in required} & set(marketplaces)
+        )
+    )
+    if not selected_marketplaces:
+        return
+    for marketplace in selected_marketplaces:
         report.step(
             HOST,
             f"marketplace {marketplace}",
@@ -166,7 +182,7 @@ def refresh(
         {
             (row["id"], row["scope"])
             for row in json.loads(listing.stdout)
-            if row["id"].rpartition("@")[2] in marketplaces
+            if row["id"] in required
             and project_plugins.applies(
                 Path.cwd(), row["scope"], row.get("projectPath")
             )

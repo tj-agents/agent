@@ -126,7 +126,7 @@ def render_claude_allow(templates: list[str], plugin_root: Path | str, project_r
     project_forward, project_backslash = path_spellings(project_root or "")
     rendered: list[str] = []
     for template in templates:
-        if PLUGIN_ROOT_TOKEN in template:
+        if PLUGIN_ROOT_TOKEN in template or PROJECT_ROOT_TOKEN in template:
             rendered.append(_forward_spelling(template, root_forward, project_forward))
             rendered.append(_backslash_spelling(template, root_backslash, project_backslash))
         else:

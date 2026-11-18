@@ -16,7 +16,6 @@ sys.path.insert(0, str(RUNTIME))
 
 
 HOST_PERMISSIONS = importlib.import_module("host_permissions")
-INSTALL = importlib.import_module("install")
 CONFIG = """model = "gpt-6.1-sol"
 approval_policy = "on-request"
 model_reasoning_effort = "high"
@@ -74,19 +73,24 @@ class CodexConfigWriterTests(unittest.TestCase):
         text = self.path.read_text(encoding="utf-8-sig")
         updated = HOST_PERMISSIONS.codex_settings(text, "bypass")
         if updated != text:
-            INSTALL.write_profile(self.path, updated, "utf-8", False)
+            self.path.write_text(updated, encoding="utf-8")
 
     def assert_converges(self, writer):
         writer()
         first = self.path.read_bytes()
         writer()
         self.assertEqual(first, self.path.read_bytes())
-        self.assertEqual(1, first.decode("utf-8").count("[marketplaces.openai-bundled]"))
+        self.assertEqual(
+            1, first.decode("utf-8").count("[marketplaces.openai-bundled]")
+        )
         return tomllib.loads(first.decode("utf-8"))
 
     def test_native_permission_defaults_converge_without_duplicating_tables(self):
         config = self.assert_converges(self.native_permissions)
-        self.assertEqual(("never", ":danger-full-access"), (config["approval_policy"], config["default_permissions"]))
+        self.assertEqual(
+            ("never", ":danger-full-access"),
+            (config["approval_policy"], config["default_permissions"]),
+        )
         self.assertNotIn("sandbox_mode", config)
 
 

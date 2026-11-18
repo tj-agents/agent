@@ -3,31 +3,26 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+import installer_boundary
 import jobs
 import plugin_activation
 import required_plugins
 import standards
-from codex import catalog, hook_trust, launch, user_plugins
+from codex import catalog, hook_trust, launch
 from launch_errors import LaunchError
 from tj_agent.host import Host
+from tj_cli import process
 from tree_digest import Digests
 
 HOST = Host.CODEX
 RELOAD = "restart this session"
 INSTALL_TIMEOUT_SECONDS = 600
-MARKETPLACE_OVERRIDES = (
-    "-c",
-    f'marketplaces.{required_plugins.MARKETPLACE_NAME}.source_type="git"',
-    "-c",
-    f"marketplaces.{required_plugins.MARKETPLACE_NAME}.source="
-    f'"https://github.com/{required_plugins.MARKETPLACE_REPOSITORY}.git"',
-    "-c",
-    f"marketplaces.{required_plugins.MARKETPLACE_NAME}.sparse_paths="
-    f"{json.dumps(list(required_plugins.MARKETPLACE_SPARSE_PATHS))}",
-)
 
 
 class Server(Protocol):
@@ -85,36 +80,28 @@ def update_project_standards(directory: Path) -> None:
     standards.update(project, roots)
 
 
-def codex_command(*arguments: str) -> list[str]:
-    return ["codex", *arguments, *MARKETPLACE_OVERRIDES]
-
-
 def identities() -> set[str]:
-    cache = HOST.configuration_root / "plugins" / "cache"
-    try:
-        return {
-            f"{plugin.name}@{marketplace.name}"
-            for marketplace in cache.iterdir()
-            if marketplace.is_dir()
-            for plugin in marketplace.iterdir()
-            if plugin.is_dir() and any(build.is_dir() for build in plugin.iterdir())
-        }
-    except OSError:
-        return set()
+    project = required_plugins.project_root(Path.cwd())
+    return set(required_plugins.selected(project))
+
+
+def selected_identities(marketplaces: tuple[str, ...]) -> tuple[str, ...]:
+    project = required_plugins.project_root(Path.cwd())
+    return tuple(
+        identity
+        for identity in required_plugins.selected(project)
+        if identity.rpartition("@")[2] in marketplaces
+    )
 
 
 def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
-    return {
-        identity
-        for identity in identities()
-        if identity.rpartition("@")[2] in marketplaces
-    }
+    return set(selected_identities(marketplaces))
 
 
 def behind(marketplaces: tuple[str, ...]) -> list[str]:
     digests = Digests(jobs.state_directory())
     found = []
-    for identity in sorted(refresh_identities(marketplaces)):
+    for identity in selected_identities(marketplaces):
         plugin, _, marketplace = identity.rpartition("@")
         if not catalog.current(marketplace, plugin, digests):
             found.append(
@@ -136,215 +123,269 @@ def running_behind(root: Path) -> str | None:
     return None
 
 
+def selection_sources(project: Path, identities: tuple[str, ...]) -> dict[str, str]:
+    document = json.loads(
+        (project / ".agents" / "plugins.json").read_text(encoding="utf-8")
+    )
+    marketplaces = document.get("marketplaces") if isinstance(document, dict) else None
+    if not isinstance(marketplaces, dict):
+        raise ValueError(f"{project}: selected plugins have no marketplace sources")
+    required = required_plugins.selected(project)
+    if tuple(sorted(set(identities))) != identities or not set(identities).issubset(
+        required
+    ):
+        raise ValueError(
+            f"{project}: requested plugins do not match its declared selection"
+        )
+    sources = {}
+    for identity in identities:
+        marketplace = identity.rpartition("@")[2]
+        source = marketplaces.get(marketplace)
+        repository = source.get("repository") if isinstance(source, dict) else None
+        if not isinstance(repository, str) or not repository:
+            raise ValueError(f"{project}: {marketplace} has no repository source")
+        sources[marketplace] = repository
+    return sources
+
+
+def reject_reparse_or_hardlink(
+    path: Path, label: str, *, directory: bool = False
+) -> None:
+    if required_plugins.is_reparse(path):
+        raise ValueError(f"{label} is a symbolic link or junction: {path}")
+    if not directory and path.is_file() and path.stat().st_nlink != 1:
+        raise ValueError(f"{label} has multiple hard links: {path}")
+
+
+def exact_project(project: Path) -> Path:
+    candidate = Path(project)
+    reject_reparse_or_hardlink(candidate, "repository root", directory=True)
+    requested = candidate.resolve(strict=True)
+    root = required_plugins.project_root(requested)
+    if root != requested:
+        raise ValueError(
+            f"Codex cache acquisition requires the exact repository root: {root}"
+        )
+    selection = root / ".agents" / "plugins.json"
+    for path, label, directory in (
+        (root, "repository root", True),
+        (root / ".agents", "repository settings directory", True),
+        (selection, "repository plugin selection", False),
+    ):
+        reject_reparse_or_hardlink(path, label, directory=directory)
+    return root
+
+
+def cache_path(root: Path, identity: str, version: str) -> Path:
+    plugin, separator, marketplace = identity.partition("@")
+    if not separator or not all(
+        part and part not in {".", ".."} and "/" not in part and "\\" not in part
+        for part in (marketplace, plugin, version)
+    ):
+        raise ValueError(f"Invalid Codex cache identity: {identity}")
+    return root / "plugins" / "cache" / marketplace / plugin / version
+
+
+def inspect_tree(root: Path, label: str) -> None:
+    reject_reparse_or_hardlink(root, label, directory=True)
+    for path in root.rglob("*"):
+        reject_reparse_or_hardlink(path, label, directory=path.is_dir())
+
+
+def entry_root(
+    temporary_home: Path, entry: object, identity: str, repository: str
+) -> tuple[dict[str, object], Path]:
+    if not isinstance(entry, dict) or entry.get("pluginId") != identity:
+        raise ValueError(f"Native Codex inventory has no valid {identity} entry")
+    name, marketplace, version = (
+        entry.get("name"),
+        entry.get("marketplaceName"),
+        entry.get("version"),
+    )
+    plugin, _, expected_marketplace = identity.partition("@")
+    if (
+        not all(
+            isinstance(value, str) and value for value in (name, marketplace, version)
+        )
+        or name != plugin
+        or marketplace != expected_marketplace
+    ):
+        raise ValueError(f"Native Codex inventory has an incomplete {identity} entry")
+    payload_source = entry.get("source")
+    if not isinstance(payload_source, dict) or not payload_source:
+        raise ValueError(f"Native Codex inventory has no source for {identity}")
+    source = entry.get("marketplaceSource")
+    expected = hook_trust.github_repository(repository)
+    actual = (
+        hook_trust.github_repository(source.get("source"))
+        if isinstance(source, dict)
+        else None
+    )
+    if (
+        not expected
+        or not isinstance(source, dict)
+        or source.get("sourceType") != "git"
+        or actual != expected
+    ):
+        raise ValueError(f"Native Codex inventory publisher differs for {identity}")
+    root = cache_path(temporary_home, identity, version)
+    if not required_plugins.readable_payload(root, HOST, name):
+        raise ValueError(f"Native Codex payload is unreadable for {identity}")
+    manifest = json.loads(
+        (root / HOST.manifest_directory / "plugin.json").read_text(encoding="utf-8-sig")
+    )
+    if not isinstance(manifest, dict) or manifest.get("version") != version:
+        raise ValueError(f"Native Codex payload version differs for {identity}")
+    inspect_tree(root, f"native Codex payload for {identity}")
+    return entry, root
+
+
+def transfer_payload(source: Path, destination: Path) -> None:
+    home = HOST.configuration_root
+    for ancestor in (
+        home,
+        home / "plugins",
+        home / "plugins" / "cache",
+        destination.parents[2],
+        destination.parent,
+    ):
+        if ancestor.exists():
+            reject_reparse_or_hardlink(
+                ancestor, "Codex cache directory", directory=True
+            )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        if destination.is_dir():
+            inspect_tree(destination, "existing Codex payload")
+        else:
+            reject_reparse_or_hardlink(destination, "existing Codex cache entry")
+            raise ValueError(
+                f"Codex cache destination is not a directory: {destination}"
+            )
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent)
+    )
+    try:
+        staging.rmdir()
+        shutil.copytree(source, staging)
+        inspect_tree(staging, "staged Codex payload")
+        if destination.exists():
+            shutil.rmtree(destination)
+        staging.replace(destination)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+
+
+def native_step(command: list[str], project: Path, environment: dict[str, str]) -> str:
+    result = process.run(
+        command,
+        cwd=project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=INSTALL_TIMEOUT_SECONDS,
+        check=False,
+    )
+    if result.returncode:
+        detail = (
+            result.stderr.strip()
+            or result.stdout.strip()
+            or f"exit {result.returncode}"
+        )
+        raise ValueError(f"{' '.join(command[:4])}: {detail}")
+    return result.stdout
+
+
+def acquire_cache(
+    project: Path, identities: tuple[str, ...]
+) -> list[dict[str, object]]:
+    project = exact_project(project)
+    sources = selection_sources(project, identities)
+    if not identities:
+        return []
+    with tempfile.TemporaryDirectory(prefix="tj-agents-codex-cache-") as directory:
+        temporary_home = Path(directory)
+        environment = dict(os.environ, CODEX_HOME=str(temporary_home))
+        for marketplace, repository in sorted(sources.items()):
+            command = [
+                "codex",
+                "plugin",
+                "marketplace",
+                "add",
+                repository,
+                "--ref",
+                "main",
+            ]
+            if marketplace == required_plugins.MARKETPLACE_NAME:
+                for sparse in required_plugins.MARKETPLACE_SPARSE_PATHS:
+                    command.extend(("--sparse", sparse))
+            native_step(command, project, environment)
+        for identity in identities:
+            native_step(
+                ["codex", "plugin", "add", identity, "--json"], project, environment
+            )
+        inventory = json.loads(
+            native_step(["codex", "plugin", "list", "--json"], project, environment)
+        )
+        entries = inventory.get("installed") if isinstance(inventory, dict) else None
+        if not isinstance(entries, list):
+            raise ValueError("Native Codex plugin inventory is invalid")
+        received = []
+        for identity in identities:
+            entry, source = entry_root(
+                temporary_home,
+                next(
+                    (
+                        entry
+                        for entry in entries
+                        if isinstance(entry, dict) and entry.get("pluginId") == identity
+                    ),
+                    None,
+                ),
+                identity,
+                sources[identity.rpartition("@")[2]],
+            )
+            destination = cache_path(
+                HOST.configuration_root,
+                identity,
+                entry["version"],
+            )
+            transfer_payload(source, destination)
+            received.append(entry)
+    return received
+
+
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
-    listing = report.step(HOST, "list", codex_command("plugin", "list", "--json"))
-    if listing is None:
-        return
-    listed = {
-        row["pluginId"]
-        for row in json.loads(listing.stdout)["installed"]
-        if row["marketplaceName"] in marketplaces
-    }
-    candidates = listed | cached(marketplaces)
-    if required_plugins.MARKETPLACE_NAME in marketplaces and not any(
-        identity.endswith("@" + required_plugins.MARKETPLACE_NAME)
-        for identity in candidates
-    ):
-        report.fail(
-            HOST, "list", f"no {required_plugins.MARKETPLACE_NAME} plugins installed"
-        )
-        return
-    for marketplace in sorted({identity.rpartition("@")[2] for identity in candidates}):
-        report.step(
-            HOST,
-            f"marketplace {marketplace}",
-            codex_command("plugin", "marketplace", "upgrade", marketplace),
-        )
-    versions = report.step(HOST, "versions", codex_command("plugin", "list", "--json"))
-    if versions is None:
-        return
-    entries = json.loads(versions.stdout)["installed"]
-    catalog.remember(entries)
-    unlisted = candidates - listed
-    published = published_plugins(report) if unlisted else set()
-    installed = sorted(listed | (unlisted & published))
-    for identity in sorted(unlisted - published):
-        print(
-            f"{HOST}: {identity} is no longer published; left for plugin setup to remove"
-        )
+    project = required_plugins.project_root(Path.cwd())
+    selected = selected_identities(marketplaces)
     stale = [
         identity
-        for identity in installed
+        for identity in selected
         if not current(identity.rpartition("@")[2], identity.rpartition("@")[0])
     ]
-    if len(stale) < len(installed):
-        print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
-    user_enabled = user_plugins.enabled(read_user_config())
-    open_sessions = bool(stale) and bool(launch.liveness())
-    if open_sessions:
-        install_through_daemon(report, stale)
-    else:
-        for identity in stale:
-            report.step(HOST, identity, codex_command("plugin", "add", identity))
-    keep_project_scope(
-        report, [identity for identity in stale if identity not in user_enabled]
-    )
-    trust_hooks(report)
-    if stale and not report.failures:
-        refreshed = report.step(
-            HOST, "installed versions", codex_command("plugin", "list", "--json")
-        )
-        if refreshed is not None:
-            verified = [
-                entry
-                for entry in json.loads(refreshed.stdout)["installed"]
-                if entry.get("pluginId") in stale
-            ]
-            catalog.remember(
-                verified,
-                verified_install=True,
-            )
-            digests = Digests(jobs.state_directory())
-            listed_versions = {entry["pluginId"] for entry in verified}
-            for identity in stale:
-                plugin, _, marketplace = identity.rpartition("@")
-                if identity not in listed_versions or not catalog.current(
-                    marketplace, plugin, digests
-                ):
-                    report.fail(HOST, identity, "native installation did not converge")
-            digests.save()
-    if open_sessions and report.failures:
-        reload_open_sessions(report)
-
-
-def cached(marketplaces: tuple[str, ...]) -> set[str]:
-    cache = HOST.configuration_root / "plugins" / "cache"
-    found = set()
-    for marketplace in marketplaces:
-        directory = cache / marketplace
-        for plugin in directory.iterdir() if directory.is_dir() else ():
-            builds = (
-                [entry for entry in plugin.iterdir() if entry.is_dir()]
-                if plugin.is_dir()
-                else []
-            )
-            if len(builds) == 1 and manifest_name(builds[0]) == plugin.name:
-                found.add(f"{plugin.name}@{marketplace}")
-    return found
-
-
-def published_plugins(report: Any) -> set[str]:
-    roots = marketplace_roots(report) or {}
-    found = set()
-    for marketplace, root in roots.items():
-        try:
-            manifest = json.loads(
-                (root / ".agents" / "plugins" / "marketplace.json").read_text(
-                    encoding="utf-8"
-                )
-            )
-        except (OSError, ValueError):
-            continue
-        found.update(
-            f"{entry['name']}@{marketplace}"
-            for entry in manifest.get("plugins", [])
-            if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-        )
-    return found
-
-
-def manifest_name(root: Path) -> str | None:
-    try:
-        name = json.loads(
-            (root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
-        ).get("name")
-    except (OSError, ValueError, AttributeError):
-        return None
-    return name if isinstance(name, str) else None
-
-
-def read_user_config() -> str:
-    path = user_plugins.path()
-    return path.read_text(encoding="utf-8-sig") if path.is_file() else ""
-
-
-def keep_project_scope(report: Any, identities: list[str]) -> None:
-    """Undo the user-level enablement `codex plugin add` gives a plugin only projects select."""
-    text = read_user_config()
-    try:
-        scoped = user_plugins.without(text, identities)
-    except ValueError as error:
-        report.fail(HOST, "plugin scope", str(error))
-        return
-    if scoped != text:
-        user_plugins.path().write_text(scoped, encoding="utf-8")
-
-
-def trust_hooks(report: Any) -> bool:
-    """Trust installed tj-agents hooks so no Codex launch asks to trust them."""
-    state = jobs.state_directory()
-    if not hook_trust.pending(state):
-        return False
-    try:
-        trusted = hook_trust.trust_installed(
-            launch.executable(), state, MARKETPLACE_OVERRIDES
-        )
-    except (OSError, RuntimeError, ValueError) as error:
-        report.fail(HOST, "hook trust", str(error))
-        return False
-    print(f"{HOST}: hook trust ok ({len(trusted)} hook(s) newly trusted)")
-    return True
-
-
-def marketplace_roots(report: Any) -> dict[str, Path] | None:
-    listing = report.step(
-        HOST,
-        "marketplace roots",
-        codex_command("plugin", "marketplace", "list", "--json"),
-    )
-    if listing is None:
-        return None
-    try:
-        return {
-            entry["name"]: Path(entry["root"])
-            for entry in json.loads(listing.stdout)["marketplaces"]
-        }
-    except (ValueError, KeyError, TypeError) as error:
-        report.fail(HOST, "marketplace roots", f"unreadable listing: {error}")
-        return None
-
-
-def install_through_daemon(report: Any, identities: list[str]) -> None:
-    """Install through the shared daemon, which reloads every loaded thread's plugins, hooks and skills."""
-    roots = marketplace_roots(report)
-    if roots is None:
+    if not stale:
+        if selected:
+            print(f"{HOST}: {len(selected)} plugin(s) already at their build")
         return
     try:
-        with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
-            for directory in loaded_directories(server):
-                plugin_activation.begin(
-                    jobs.state_directory(),
-                    HOST,
-                    required_plugins.project_root(directory),
-                )
-            for identity in identities:
-                plugin, _, marketplace = identity.rpartition("@")
-                manifest = (
-                    roots[marketplace] / ".agents" / "plugins" / "marketplace.json"
-                )
-                try:
-                    server.request(
-                        "plugin/install",
-                        {"marketplacePath": str(manifest), "pluginName": plugin},
-                    )
-                except RuntimeError as error:
-                    report.fail(HOST, identity, str(error))
-                    continue
-                print(f"{HOST}: {identity} ok")
-    except (OSError, RuntimeError, KeyError) as error:
-        report.fail(HOST, "open sessions", str(error))
+        rows = installer_boundary.acquire_codex_cache(project, tuple(stale))
+    except installer_boundary.InstallerBoundaryError as error:
+        report.fail(HOST, "cache acquisition", str(error))
+        return
+    catalog.remember(rows, verified_install=True)
+    received = {
+        row.get("pluginId")
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("pluginId"), str)
+    }
+    for identity in stale:
+        if identity not in received:
+            report.fail(HOST, identity, "native cache acquisition did not converge")
 
 
 def reload_open_sessions(report: Any) -> None:
@@ -374,13 +415,6 @@ def reload_open_sessions(report: Any) -> None:
                 plugin_activation.complete(state, HOST, project)
     except (OSError, RuntimeError) as error:
         report.fail(HOST, "open sessions", str(error))
-
-
-def repair_hooks(report: Any) -> None:
-    state = jobs.state_directory()
-    if hook_trust.pending(state):
-        plugin_activation.begin(state, HOST, required_plugins.project_root(Path.cwd()))
-    trust_hooks(report)
 
 
 def restart(report: Any, managed: bool) -> None:

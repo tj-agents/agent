@@ -368,6 +368,8 @@ reason = "Existing test flattens nested fixture data for assertions."
 ".agents/agent/runtime/tj_start.py" = ["E501", "I001", "TID251"]
 ".agents/agent/runtime/tj_status.py" = ["E501", "I001", "TID251"]
 ".agents/agent/utility/handoff/scripts/handoff.py" = ["E501", "I001", "TID251"]
+# Shipped standalone scripts must explain an unsupported interpreter before importing runtime code.
+".agents/agent/utility/plugins/scripts/repository_permissions.py" = ["UP036"]
 ".agents/codex/utility/hooks/scripts/hook_control.py" = ["ANN401", "B904", "E501", "E712", "I001", "PTH105", "PTH123", "RUF059", "TRY300", "UP037"]
 ".agents/codex/utility/memory/scripts/memory.py" = ["E501", "I001"]
 ".claude/runtime/installed.py" = ["ANN401", "E501", "I001", "UP035"]

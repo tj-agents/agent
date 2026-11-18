@@ -1,3 +1,4 @@
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -60,11 +61,43 @@ def read(root: Path, identity: str) -> list[Standard]:
     return found
 
 
+def session_context(root: Path, identity: str) -> str:
+    path = root / "tier.json"
+    if path.is_symlink() or path.is_junction():
+        raise StandardsError(f"Refusing redirected tier declaration: {path}")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return ""
+    except (OSError, ValueError) as error:
+        raise StandardsError(f"Cannot read tier declaration {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise StandardsError(f"Invalid tier declaration: {path}")
+    if value.get("schema_version") != 3 or value.get("applies") != "always":
+        return ""
+    if "session_context" not in value:
+        return ""
+    context = value["session_context"]
+    if (
+        not isinstance(context, str)
+        or not context.strip()
+        or any(character in context for character in "\r\n\u0085\u2028\u2029")
+    ):
+        raise StandardsError(f"Invalid session context: {path}")
+    if value.get("tier") != identity.partition("@")[0]:
+        raise StandardsError(f"Tier identity does not match {identity}: {path}")
+    return context
+
+
 def render(roots: Mapping[str, Path]) -> str:
     groups: dict[tuple[str, ...], list[str]] = {}
+    contexts: list[str] = []
     for identity, root in sorted(roots.items()):
         for standard in read(root, identity):
             groups.setdefault(standard.applicability, []).append(standard.identity)
+        context = session_context(root, identity)
+        if context and context not in contexts:
+            contexts.append(context)
     lines = [
         START,
         "## Repository standards",
@@ -79,6 +112,8 @@ def render(roots: Mapping[str, Path]) -> str:
         "Selected plugins: " + ", ".join(f"`{name}`" for name in sorted(roots)) + ".",
         "",
     ]
+    for context in contexts:
+        lines.extend([context, ""])
     for applicability, names in sorted(groups.items()):
         label = "; ".join(" ".join(item.split()) for item in applicability)
         lines.append(

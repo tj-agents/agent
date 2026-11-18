@@ -80,7 +80,6 @@ def test_plugin_updates_rebuild_standards_before_activation(
         assert plugin_activation.pending(tmp_path / "state", host, tmp_path)
         failed = False
         monkeypatch.setattr(tj_plugins, "already_current", lambda *args: True)
-        monkeypatch.setattr(codex_installed, "repair_hooks", lambda _report: None)
         assert tj_plugins.main(["update", "--host", host.value]) == 0
         assert events == ["download", "inventory", "inventory", "activate"]
     assert not plugin_activation.pending(tmp_path / "state", host, tmp_path)
@@ -142,7 +141,6 @@ def test_unreadable_codex_daemon_retains_pending_activation(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(jobs, "state_directory", lambda: state)
     monkeypatch.setattr(tj_plugins, "already_current", lambda *args: True)
-    monkeypatch.setattr(codex_installed, "repair_hooks", lambda _report: None)
     monkeypatch.setattr(required_plugins, "check", lambda *args: None)
     failed = True
 
@@ -176,7 +174,6 @@ def test_pending_activation_survives_other_updates_and_failure_cooldown(
     monkeypatch.setattr(time, "time", lambda: 10**12)
     monkeypatch.setattr(jobs, "state_directory", lambda: state)
     monkeypatch.setattr(tj_plugins, "already_current", lambda *args: True)
-    monkeypatch.setattr(codex_installed, "repair_hooks", lambda _report: None)
     monkeypatch.setattr(latest_plugins, "running_behind", lambda _host: None)
     monkeypatch.chdir(other)
     for other_host in Host:

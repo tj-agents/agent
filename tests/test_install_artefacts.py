@@ -52,8 +52,11 @@ def written_artefacts(context: install.Context) -> list[Path]:
 
 
 def script_references(text: str) -> Iterator[str]:
-    for match in SCRIPT_REFERENCE.finditer(text):
-        yield next(group for group in match.groups() if group)
+    for line in text.splitlines():
+        if "Join-Path" in line:
+            continue
+        for match in SCRIPT_REFERENCE.finditer(line):
+            yield next(group for group in match.groups() if group)
 
 
 def missing_scripts(artefacts: Iterable[Path]) -> tuple[list[str], set[Path]]:
@@ -119,13 +122,17 @@ def test_installed_commands_survive_removing_the_author_checkout(
     monkeypatch.delenv("PYTHONPATH", raising=False)
     monkeypatch.delenv("PYTHONHOME", raising=False)
     monkeypatch.setenv("PYTHONNOUSERSITE", "1")
+    pwsh = shutil.which("pwsh")
+    assert pwsh is not None
     monkeypatch.setenv(
-        "PATH", str(Path(sys._base_executable).resolve().parent), prepend=os.pathsep
+        "PATH",
+        os.pathsep.join(
+            (str(Path(sys._base_executable).resolve().parent), str(Path(pwsh).parent))
+        ),
+        prepend=os.pathsep,
     )
     if os.name == "nt":
-        shell = shutil.which("pwsh")
-        assert shell is not None
-        bootstrap = [shell, "-NoProfile", "-File", str(source / "install.ps1")]
+        bootstrap = [pwsh, "-NoProfile", "-File", str(source / "install.ps1")]
     else:
         bootstrap = ["bash", str(source / "install.sh")]
     result = subprocess.run(
@@ -174,6 +181,10 @@ def test_all_installed_bindings_use_the_base_interpreter(
     context = installed_machine(tmp_path / "home", monkeypatch, windows)
     for shim in install.lifecycle_shims(context):
         text = shim.read_text(encoding="utf-8")
+        if shim.stem.removeprefix("tj-") == "install":
+            assert "pwsh -NoProfile -File" in text
+            assert str(author_python) not in text
+            continue
         assert str(Path(sys._base_executable).resolve()) in text
         assert str(author_python) not in text
     if not windows:
@@ -272,7 +283,10 @@ def test_check_reports_no_drift_for_a_launcher_bound_to_another_valid_base_pytho
 
     after = {path: path.read_bytes() for path in install.lifecycle_paths(context)}
     assert before == after
-    for text in after.values():
+    for path, text in after.items():
+        if path.stem.removeprefix("tj-") == "install":
+            assert b"pwsh -NoProfile -File" in text
+            continue
         assert str(python_a).encode("utf-8") in text
         assert str(python_b).encode("utf-8") not in text
 
@@ -297,7 +311,11 @@ def test_check_reports_drift_for_a_launcher_bound_to_a_deleted_interpreter(
         assert install.check_lifecycle_commands(context) != []
         install.apply_lifecycle_commands(context)
 
-    for text in (path.read_bytes() for path in install.lifecycle_paths(context)):
+    for path in install.lifecycle_paths(context):
+        text = path.read_bytes()
+        if path.stem.removeprefix("tj-") == "install":
+            assert b"pwsh -NoProfile -File" in text
+            continue
         assert str(python_b).encode("utf-8") in text
 
 
@@ -325,6 +343,10 @@ def test_check_reports_drift_for_a_launcher_bound_to_a_venv_interpreter(
         assert install.check_lifecycle_commands(context) != []
         install.apply_lifecycle_commands(context)
 
-    for text in (path.read_bytes() for path in install.lifecycle_paths(context)):
+    for path in install.lifecycle_paths(context):
+        text = path.read_bytes()
+        if path.stem.removeprefix("tj-") == "install":
+            assert b"pwsh -NoProfile -File" in text
+            continue
         assert str(python_b).encode("utf-8") in text
         assert str(venv_python).encode("utf-8") not in text
