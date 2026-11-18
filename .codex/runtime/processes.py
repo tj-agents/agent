@@ -103,7 +103,26 @@ def query(arguments: list[str], value: object = None) -> object:
 def record(session: str, launch: str) -> None:
     """Retain the OS-verified calling native identity before ownership admission."""
     native = Identity.parse(query(["owner", "--launch-id", launch]))
-    observation = Observation(session, launch, native)
+    save(Observation(session, launch, native))
+
+
+def record_prepared(session: str, launch: str) -> None:
+    """Observe an exact prebound native child before its first interactive turn."""
+    receipt = query(["spawned", "--launch-id", launch, "--session", f"codex:{session}"])
+    if receipt is None:
+        return
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("launch_id") != launch
+        or receipt.get("session") != f"codex:{session}"
+    ):
+        raise ValueError(
+            "Native spawn receipt belongs to a different launch or session"
+        )
+    save(Observation(session, launch, Identity.parse(receipt.get("native"))))
+
+
+def save(observation: Observation) -> None:
     directory = state_directory()
     directory.mkdir(parents=True, exist_ok=True)
     target = observation.path(directory)
@@ -127,7 +146,7 @@ def record(session: str, launch: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def inventory() -> dict[str, Liveness]:
+def inventory(*, launch_id: str | None = None) -> dict[str, Liveness]:
     """Retain explicit death evidence; an unknown inspection never becomes death."""
     directory = state_directory()
     try:
@@ -141,7 +160,8 @@ def inventory() -> dict[str, Liveness]:
         observation = Observation.parse(json.loads(path.read_text(encoding="utf-8")))
         if observation.path(directory) != path:
             raise ValueError("Native process evidence does not match its identity")
-        observations.append(observation)
+        if launch_id is None or observation.launch == launch_id:
+            observations.append(observation)
     if not observations:
         return {}
     identities = [observation.native.document() for observation in observations]
@@ -163,7 +183,8 @@ def inventory() -> dict[str, Liveness]:
             processes.add(observation.native.pid)
     return {
         session: Liveness(
-            bool(pids), process_ids=tuple(sorted(pids)),
+            bool(pids),
+            process_ids=tuple(sorted(pids)),
             launch_ids=tuple(sorted(launches[session])),
         )
         for session, pids in alive.items()

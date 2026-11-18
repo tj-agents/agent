@@ -36,7 +36,6 @@ sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
 from claude import plugins as claude_plugins
-from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
 from codex import lane_agents as codex_lane_agents
@@ -1245,31 +1244,6 @@ def codex_config_path(context: Context) -> Path:
     return context.codex_home / "config.toml"
 
 
-def codex_daemon_text(context: Context) -> tuple[str, str]:
-    path = codex_config_path(context)
-    text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
-    return text, codex_daemon.enabled_text(text)
-
-
-def check_codex_daemon(context: Context) -> list[str]:
-    text, enabled = codex_daemon_text(context)
-    return (
-        []
-        if enabled == text
-        else [
-            f"let Codex launches start its shared daemon in {codex_config_path(context)}"
-        ]
-    )
-
-
-def apply_codex_daemon(context: Context) -> list[str]:
-    text, enabled = codex_daemon_text(context)
-    if enabled == text:
-        return []
-    write_profile(codex_config_path(context), enabled, "utf-8", False)
-    return [f"removed {codex_daemon.FEATURE} = false from {codex_config_path(context)}"]
-
-
 def skip_codex_hook_trust(context: Context) -> str | None:
     return (
         None
@@ -1504,7 +1478,6 @@ STEPS = (
     Step(
         "native permission defaults", check_native_permissions, apply_native_permissions
     ),
-    Step("Codex shared daemon", check_codex_daemon, apply_codex_daemon),
     Step("agent-store CLI", check_agent_store, apply_agent_store),
     Step("tj item CLI", check_tj_item, apply_tj_item),
     cli_tool_step("worktrunk", worktrunk_install),

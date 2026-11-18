@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+import agent_cli
 import host_plugins
 import required_plugins
 from launch_errors import LaunchError
@@ -67,6 +68,8 @@ def main(
         effective_directory, _inventory_options = required_plugins.launch_context(
             directory, host, values
         )
+        if effective_directory is not None:
+            values = agent_cli.host_launch(host).managed_arguments(values)
     except (LaunchError, OSError, required_plugins.RequiredPluginsError) as error:
         print(f"tj {host}: {error}", file=sys.stderr)
         return 1

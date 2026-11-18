@@ -40,7 +40,7 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--prompt-path', required=True)
     parser.add_argument('--title', required=True)
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'), required=True)
-    parser.add_argument('--minimum-version', default='0.154.0')
+    parser.add_argument('--minimum-version', default='0.169.0')
     agent_cli.add_item_arguments(parser)
     agent_cli.add_parent_arguments(parser)
     args = parser.parse_args(argv)

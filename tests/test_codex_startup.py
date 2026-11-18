@@ -16,7 +16,7 @@ import agent_cli
 import agent_store
 import pytest
 from codex import launch, permissions, startup
-from launch_contract import PreparedLaunch
+from launch_contract import Liveness, PreparedLaunch
 from launch_errors import LaunchError, LaunchTimeout
 from tj_agent.host import Host
 from tj_cli import process
@@ -35,13 +35,17 @@ class Native:
     effort: str = "high"
     status: str = "idle"
     loaded: list[str] = field(default_factory=list)
+    features: dict[str, object] = field(default_factory=dict)
 
     def request(self, method: str, params: dict[str, object]) -> dict[str, object]:
         self.events.append((method, params))
         if method == self.failure:
             raise RuntimeError(f"failed {method}")
         if method == "config/read":
-            return {"config": {"projects": self.projects}, "layers": []}
+            return {
+                "config": {"projects": self.projects, "features": self.features},
+                "layers": [],
+            }
         if method == "thread/start":
             return {
                 "thread": {"id": self.result_id},
@@ -87,6 +91,9 @@ def no_live_boundaries(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(startup, "admit", forbidden)
     monkeypatch.setattr(launch, "daemon", forbidden)
     monkeypatch.setattr(launch, "resolve_executable", forbidden)
+    monkeypatch.setattr(startup.processes, "inventory", forbidden)
+    monkeypatch.setattr(startup.processes, "record_prepared", forbidden)
+    monkeypatch.setattr(launch, "liveness", forbidden)
 
 
 @pytest.fixture
@@ -112,13 +119,24 @@ def native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Native:
             return subprocess.CompletedProcess(
                 command, 0, "  --session <SESSION>\n", ""
             )
-        assert command == ["fixture-codex", "app-server", "daemon", "start"]
-        return subprocess.CompletedProcess(command, 0, "", "")
+        pytest.fail(f"Unexpected native process: {command}")
+
+    def inventory(*, launch_id: str) -> dict[str, Liveness]:
+        if fake.failure == "process/inspect":
+            raise RuntimeError("Native process inspection failed")
+        return {
+            THREAD: Liveness(fake.status in {"idle", "active"}, launch_ids=(launch_id,))
+        }
 
     monkeypatch.setattr(process, "run", run)
     monkeypatch.setattr(startup, "connection", fake.connect)
     monkeypatch.setattr(startup, "admit", lambda *args: fake.events.append("admit"))
-    monkeypatch.setattr(startup.projects, "user_config", dict)
+    monkeypatch.setattr(startup.processes, "inventory", inventory)
+    monkeypatch.setattr(
+        launch,
+        "liveness",
+        lambda **_options: {value: Liveness(True) for value in fake.loaded},
+    )
     monkeypatch.setattr(
         launch, "resolve_executable", lambda **options: ("fixture-codex", {})
     )
@@ -156,8 +174,7 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
             "fixture-model",
             "-c",
             "model_reasoning_effort=high",
-            "--remote",
-            "unix://",
+            "--no-daemon",
             "--",
             'Read "file"; $value λ',
         ),
@@ -167,7 +184,6 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
     assert native.events == [
         ["tj", "_session", "--help"],
         "admit",
-        ["fixture-codex", "app-server", "daemon", "start"],
         "connect",
         ("config/read", {"cwd": str(native.directory), "includeLayers": True}),
         (
@@ -290,16 +306,22 @@ def test_confirm_rejects_first_turn_settings_even_after_correct_thread_creation(
         startup.confirm(prepared, arguments, "launch")
 
 
-def test_confirm_rejects_a_correct_turn_running_outside_the_shared_daemon(
+def test_confirm_rejects_a_correct_turn_without_its_owned_native_process(
     native: Native,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepared = prepare(native)
     native.status = "notLoaded"
     arguments = launch.start_arguments(
         native.directory, "Title", "Prompt", "fixture-model", "high"
     )
-    with pytest.raises(LaunchError, match="not attached to the shared daemon"):
-        startup.confirm(prepared, arguments, "launch")
+    monkeypatch.setattr(
+        agent_store,
+        "run",
+        lambda *args: {"launch": {"launch_id": "launch", "state": "active"}},
+    )
+    with pytest.raises(LaunchTimeout, match="owned native process"):
+        startup.confirm(prepared, arguments, "launch", timeout=0, clock=lambda: 0)
 
 
 def test_confirm_waits_for_first_turn_and_ignores_partial_record(
@@ -473,17 +495,14 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
         str(native.directory),
         "resume",
         THREAD,
-        "--remote",
-        "unix://",
+        "--no-daemon",
     )
     assert prepared.session == f"codex:{THREAD}" and not prepared.created
     assert "admit" in native.events
-    assert ["fixture-codex", "app-server", "daemon", "start"] in native.events
     assert (
         "config/read",
         {"cwd": str(native.directory), "includeLayers": True},
     ) in native.events
-    assert ("thread/read", {"threadId": THREAD, "includeTurns": False}) in native.events
     assert not any(
         isinstance(event, tuple)
         and event[0] in {"thread/start", "thread/name/set", "thread/archive"}
@@ -491,40 +510,35 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
     )
 
 
-def test_resume_refuses_disabled_daemon_before_dispatch(
-    native: Native, monkeypatch: pytest.MonkeyPatch
+def test_resume_preserves_disabled_daemon_without_starting_it(
+    native: Native,
 ) -> None:
-    monkeypatch.setattr(
-        startup.projects,
-        "user_config",
-        lambda: {"features": {"daemon_auto_start": False}},
+    native.features = {"daemon_auto_start": False}
+    prepared = startup.prepare(
+        native.directory,
+        "Existing",
+        launch.resume_arguments(native.directory, "Existing", THREAD),
+        "tj",
+        "fixture-codex",
+        {},
     )
-    with pytest.raises(LaunchError, match="disabled"):
-        startup.prepare(
-            native.directory,
-            "Existing",
-            launch.resume_arguments(native.directory, "Existing", THREAD),
-            "tj",
-            "fixture-codex",
-            {},
-        )
-    assert "connect" not in native.events
+    assert "--no-daemon" in prepared.command
+    assert native.features == {"daemon_auto_start": False}
 
 
 def test_resume_refuses_a_thread_already_loaded_before_dispatch(native: Native) -> None:
     native.loaded = [THREAD]
-    with pytest.raises(LaunchError, match="already loaded"):
-        startup.prepare(
+    with pytest.raises(LaunchError, match="already running"):
+        launch.prepare(
             native.directory,
             "Existing",
             launch.resume_arguments(native.directory, "Existing", THREAD),
             "tj",
-            "fixture-codex",
             {},
         )
 
 
-def test_resume_confirmation_reports_daemon_errors_as_launch_failures(
+def test_resume_confirmation_reports_process_errors_as_launch_failures(
     native: Native,
 ) -> None:
     prepared = startup.prepare(
@@ -535,8 +549,8 @@ def test_resume_confirmation_reports_daemon_errors_as_launch_failures(
         "fixture-codex",
         {},
     )
-    native.failure = "thread/read"
-    with pytest.raises(LaunchError, match="Cannot verify Codex daemon attachment"):
+    native.failure = "process/inspect"
+    with pytest.raises(LaunchError, match="Cannot verify Codex native process"):
         startup.confirm(prepared, [], "launch")
 
 
@@ -586,7 +600,7 @@ def test_resume_confirmation_waits_for_attachment_without_a_new_turn(
     assert waits == [0.5]
 
 
-def test_resume_confirmation_rejects_a_session_outside_the_daemon(
+def test_resume_confirmation_rejects_a_session_without_process_evidence(
     native: Native, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepared = startup.prepare(
@@ -603,8 +617,50 @@ def test_resume_confirmation_rejects_a_session_outside_the_daemon(
         "run",
         lambda *args: {"launch": {"launch_id": "launch", "state": "active"}},
     )
-    with pytest.raises(LaunchTimeout, match="daemon"):
+    with pytest.raises(LaunchTimeout, match="owned native process"):
         startup.confirm(prepared, [], "launch", timeout=0, clock=lambda: 0)
+
+
+@pytest.mark.parametrize("spawned", [True, False])
+def test_resume_confirmation_waits_for_the_spawned_child_without_submitting_a_turn(
+    native: Native,
+    monkeypatch: pytest.MonkeyPatch,
+    spawned: bool,
+) -> None:
+    prepared = startup.prepare(
+        native.directory,
+        "Existing",
+        launch.resume_arguments(native.directory, "Existing", THREAD),
+        "tj",
+        "fixture-codex",
+        {},
+    )
+    rollout = native.directory / "rollout.jsonl"
+    rollout.unlink()
+    observed: dict[str, Liveness] = {}
+    calls: list[tuple[str, str]] = []
+
+    def record_prepared(session: str, launch_id: str) -> None:
+        calls.append((session, launch_id))
+        if spawned:
+            observed[session] = Liveness(
+                True, process_ids=(22,), launch_ids=(launch_id,)
+            )
+
+    monkeypatch.setattr(startup.processes, "inventory", lambda **_options: observed)
+    monkeypatch.setattr(startup.processes, "record_prepared", record_prepared)
+    monkeypatch.setattr(
+        agent_store,
+        "run",
+        lambda *_args: {"launch": {"launch_id": "replacement", "state": "active"}},
+    )
+    if spawned:
+        startup.confirm(prepared, [], "replacement", timeout=0, clock=lambda: 0)
+    else:
+        with pytest.raises(LaunchTimeout, match="owned native process"):
+            startup.confirm(prepared, [], "replacement", timeout=0, clock=lambda: 0)
+    assert calls == [(THREAD, "replacement")]
+    assert not rollout.exists()
 
 
 @pytest.mark.parametrize(
@@ -639,7 +695,7 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
     call_launch(Host.CODEX, native.directory, "Actual title", arguments, run=run)
     command = commands[0]
     assert command[command.index("--session") + 1] == f"codex:{THREAD}"
-    assert command[-13:] == [
+    assert command[-12:] == [
         "fixture-codex",
         "--cd",
         str(native.directory),
@@ -649,8 +705,7 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
         "fixture-model",
         "-c",
         "model_reasoning_effort=high",
-        "--remote",
-        "unix://",
+        "--no-daemon",
         "--",
         prompt,
     ]
@@ -739,8 +794,8 @@ def test_prepare_requires_proven_native_version_before_any_creation(
     native: Native, monkeypatch: pytest.MonkeyPatch, resuming: bool
 ) -> None:
     def resolve(*, minimum: str) -> None:
-        assert minimum == "0.167.1"
-        raise LaunchError("below the required 0.167.1")
+        assert minimum == "0.169.0"
+        raise LaunchError("below the required 0.169.0")
 
     monkeypatch.setattr(launch, "resolve_executable", resolve)
     arguments = (
@@ -748,7 +803,7 @@ def test_prepare_requires_proven_native_version_before_any_creation(
         if resuming
         else launch.start_arguments(native.directory, "Title", "Prompt", None, None)
     )
-    with pytest.raises(LaunchError, match=r"required 0\.167\.1"):
+    with pytest.raises(LaunchError, match=r"required 0\.169\.0"):
         launch.prepare(native.directory, "Title", arguments, "tj", {})
     assert native.events == []
 
@@ -997,114 +1052,3 @@ def test_launch_keeps_primary_failure_and_timeout_exit_after_cleanup_failure(
     ) in output.getvalue()
     if phase == "timeout":
         assert "check the terminal before launching another" in output.getvalue()
-
-
-REFUSED = "Error: this Windows launcher prevents background processes from outliving it"
-
-
-@pytest.mark.parametrize("fallback", [False, True])
-def test_daemon_start_strips_inherited_session_and_tab_identity(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fallback: bool
-) -> None:
-    identities = (
-        "TJ_RUN_LAUNCH_ID",
-        "TJ_RUN_PID",
-        "AGENT_CLI_TAB_TITLE",
-        "CLAUDECODE",
-        "CLAUDE_CODE_SESSION_ID",
-        "CLAUDE_CODE_MESSAGING_SOCKET",
-        "CLAUDE_PID",
-        "CODEX_THREAD_ID",
-        "CODEX_SESSION_ID",
-        "CODEX_TOOL_CALL_ID",
-        "WT_SESSION",
-        "TMUX_PANE",
-    )
-    environ = dict.fromkeys(identities, "stale")
-    environ["AGENT_FIXTURE_KEEP"] = "keep"
-    calls: list[tuple[list[str], dict[str, object]]] = []
-
-    def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
-        calls.append((command, options))
-        refused = fallback and command == ["codex", "app-server", "daemon", "start"]
-        return subprocess.CompletedProcess(
-            command, int(refused), "", REFUSED if refused else ""
-        )
-
-    monkeypatch.setattr(process, "run", run)
-    monkeypatch.setattr(shutil, "which", lambda _: "wt.exe")
-    monkeypatch.setattr(startup, "IS_WINDOWS", True)
-    startup.start_daemon("codex", tmp_path, environ)
-    for _, options in calls:
-        env = cast(dict[str, str], options["env"])
-        assert all(name not in env for name in identities)
-        assert env["AGENT_FIXTURE_KEEP"] == "keep"
-    assert len(calls) == (3 if fallback else 1)
-
-
-def daemon_runs(
-    monkeypatch: pytest.MonkeyPatch,
-    start: subprocess.CompletedProcess[str],
-    up_after: int,
-) -> list[list[str]]:
-    calls: list[list[str]] = []
-    versions = iter([1] * up_after + [0])
-
-    def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
-        calls.append(command)
-        if command[-1] == "start" and command[0] == "fixture-codex":
-            return start
-        if command[-1] == "version":
-            return subprocess.CompletedProcess(command, next(versions), "", "")
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr(process, "run", run)
-    monkeypatch.setattr(shutil, "which", lambda name: f"C:/bin/{name}")
-    monkeypatch.setattr(startup, "IS_WINDOWS", True)
-    return calls
-
-
-def test_start_daemon_opens_a_terminal_tab_when_the_callers_job_refuses_it(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    refused = subprocess.CompletedProcess(["start"], 1, "", REFUSED)
-    calls = daemon_runs(monkeypatch, refused, up_after=2)
-    waits: list[float] = []
-    startup.start_daemon(
-        "fixture-codex", tmp_path, {}, clock=lambda: 0.0, wait=waits.append
-    )
-    tab = ["C:/bin/wt.exe", "-w", "0", "nt", "--title", "Codex daemon"]
-    detached = ["cmd.exe", "/d", "/c", "fixture-codex", "app-server", "daemon", "start"]
-    assert calls[1] == [*tab, *detached, ">", "NUL", "2>&1"]
-    assert [call[-1] for call in calls[2:]] == ["version", "version", "version"]
-    assert waits == [1, 1]
-
-
-def test_start_daemon_reports_a_tab_that_never_brings_it_up(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    refused = subprocess.CompletedProcess(["start"], 1, "", REFUSED)
-    daemon_runs(monkeypatch, refused, up_after=100)
-    ticks = iter(range(0, 1000, 10))
-    with pytest.raises(LaunchError, match="did not start from a Windows Terminal tab"):
-        startup.start_daemon(
-            "fixture-codex",
-            tmp_path,
-            {},
-            clock=lambda: float(next(ticks)),
-            wait=lambda _: None,
-        )
-
-
-@pytest.mark.parametrize("windows", [True, False])
-def test_start_daemon_reports_other_failures_without_a_tab(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, windows: bool
-) -> None:
-    error = REFUSED if not windows else "Error: config is invalid"
-    calls = daemon_runs(
-        monkeypatch, subprocess.CompletedProcess(["start"], 1, "", error), 0
-    )
-    monkeypatch.setattr(startup, "IS_WINDOWS", windows)
-    with pytest.raises(LaunchError, match="Cannot start the configured Codex daemon"):
-        startup.start_daemon("fixture-codex", tmp_path, {})
-    assert len(calls) == 1

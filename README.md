@@ -81,8 +81,6 @@ Generated Claude and Codex hooks run through `tj_hook`; Template's generator own
 
 The installer converges this machine: the plugins of installed hosts, retired state, explicitly selected
 native permission defaults,
-Codex's shared daemon auto-start (a `daemon_auto_start = false` override is removed so refresh can reload open
-Codex sessions in place),
 the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
 profile agents, Codex lane agents, provisioning a verified PowerShell runtime when no usable PowerShell is available, plugin
 setup, plugin scope, Codex trust for tj-agents plugin hooks (verified against their
@@ -110,6 +108,8 @@ automatic checks and session reloads.
 Install and a Codex session selecting Agent ensure one observer follows the existing Codex daemon while it has
 loaded threads. It checks for published updates and reloads the daemon without restarting those conversations;
 it exits when the daemon disconnects or has no loaded threads.
+Managed Codex conversations use an owned native process instead of that daemon. Updates report when these
+conversations need a restart to load changed plugins; they do not claim that a daemon reload updated them.
 Updates check the calling repository's standards index before activation and report the explicit
 repository command when it drifts. Codex also checks the adopted repositories of loaded threads from
 verified installed builds before publishing.
@@ -311,18 +311,22 @@ from the enabled Base plugin. `tj start` no longer reads or seeds worktrunk conf
 creator stops the launch before tracker progress changes.
 Managed launch paths share [TJ CLI](https://github.com/tj-agents/cli)'s wrapper, which records the launch
 in agent-store. The SessionStart hook binds the native session to that launch, including its title and any
-explicit work item or parent; a Codex thread is named after its title. Liveness comes from the hosts:
-`claude agents --json`, and for Codex the threads loaded in the shared app-server daemon. Handoff and
-work-item Codex launches
-attach explicitly to that daemon with `--remote unix://` and carry the lane's model and reasoning effort
-on the native resume command. This keeps effort overrides from selecting an embedded server.
-Launch confirmation checks daemon attachment and the first recorded turn against both requested settings; a mismatch or missing
-first turn fails visibly and preserves the tab for inspection. The store holds links only. Its release is pinned in
+explicit work item or parent; a Codex thread is named after its title. Liveness comes from
+`claude agents --json`, verified Codex process identities and any threads still loaded in Codex's shared daemon.
+Managed Codex requires version 0.169.0 or newer. Public launches, handoffs and recovery run the native
+interface with `--no-daemon`, so session hooks belong to the actual terminal wrapper. Named launches prepare
+the exact thread through Codex's native API, then carry the lane's model and reasoning effort on its native
+resume command. Confirmation checks that launch's native process and the first recorded turn against both
+requested settings; a mismatch or missing first turn fails visibly and preserves the tab for inspection.
+`tj codex` refuses `--remote` because TJ cannot establish local process ownership for that connection;
+the native `codex` command remains available for remote conversations.
+The store holds links only. Its release is pinned in
 `.agents/agent/runtime/agent-store.json`, which Renovate bumps.
 
-Managed Codex reopen and recovery use the same daemon admission and native version requirement as new
-handoffs. They preserve the existing thread, respect project trust and disabled-daemon settings, and
-confirm attachment without starting a new turn. A missing attachment is a visible recovery failure.
+Managed Codex reopen and recovery use the same ownership admission and native version requirement as new
+handoffs. They preserve the existing thread and project trust, retain the user's daemon settings, and
+confirm the replacement's exact native process without starting a new turn. Missing process evidence is a
+visible recovery failure.
 
 `tj status` lists registered sessions and their linked open work by default, including sessions without a
 work item. Use `tj item mine` to list all open work assigned to you. Status shows native liveness separately

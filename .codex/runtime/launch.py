@@ -1,4 +1,4 @@
-"""Codex executable selection, daemon-attached launch arguments and thread liveness."""
+"""Codex executable selection, owned native launches and thread liveness."""
 
 import glob
 import json
@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from tj_cli import process
 from codex import processes, startup
@@ -179,7 +179,7 @@ def candidate_paths(
     return list(dict.fromkeys(candidates))
 
 
-def resolve_executable(minimum="0.154.0", candidates=None):
+def resolve_executable(minimum=startup.MINIMUM_VERSION, candidates=None):
     """The newest native Codex executable that answers --version, as (path, version)."""
     paths = candidate_paths() if candidates is None else candidates
     found = []
@@ -224,8 +224,31 @@ def executable() -> str:
     return resolve_executable()[0]
 
 
+def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
+    options = tuple(arguments)
+    before_prompt = options[: options.index("--")] if "--" in options else options
+    if any(
+        value.partition("=")[0] in {"--remote", "--remote-auth-token-env"}
+        for value in before_prompt
+    ):
+        raise LaunchError(
+            "Managed Codex requires a locally owned native process; "
+            "tj codex cannot manage a remote connection"
+        )
+    if "--no-daemon" in before_prompt:
+        return options
+    return ("--no-daemon", *options)
+
+
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
     native = str(resolve_executable(minimum=startup.MINIMUM_VERSION)[0])
+    if arguments[:3] == ["--cd", str(directory), "resume"] and len(arguments) == 4:
+        thread_id = startup.native_id(arguments[3])
+        observed = liveness(strict=True).get(thread_id)
+        if observed is not None and observed.alive:
+            raise LaunchError(
+                f"Codex {thread_id} is already running; use its existing conversation"
+            )
     return startup.prepare(directory, title, arguments, cli, native, environ)
 
 
@@ -306,5 +329,5 @@ def respawn(background):
 
 
 def name_session(session_id, title):
-    with daemon() as server:
+    with startup.connection(executable(), Path.cwd()) as server:
         server.request("thread/name/set", {"threadId": session_id, "name": title})

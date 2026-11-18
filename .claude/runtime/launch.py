@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import shlex
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from uuid import UUID
 
 from launch_contract import Liveness, PreparedLaunch
@@ -60,6 +60,10 @@ def resolve_executable(home=None, which: Callable[[str], str | None] = shutil.wh
 
 def executable() -> str:
     return resolve_executable()
+
+
+def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
+    return tuple(arguments)
 
 
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:

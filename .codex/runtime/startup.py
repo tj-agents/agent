@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -15,39 +14,13 @@ from uuid import UUID
 
 import agent_store
 import transcripts
-from codex import daemon, hook_trust, permissions, projects
+from codex import hook_trust, permissions, processes
 from launch_contract import PreparedLaunch
 from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 from tj_cli import process
 
-MINIMUM_VERSION = "0.167.1"
-IS_WINDOWS = os.name == "nt"
-# Codex refuses to start its daemon in a job that would end it with the caller,
-# such as an agent's tool shell; a Windows Terminal tab is outside that job.
-JOB_REFUSAL = "prevents background processes from outliving it"
-DAEMON_WAIT_SECONDS = 30
-DAEMON_IDENTITY = frozenset(
-    {
-        "AGENT_CLI_TAB_TITLE",
-        "CLAUDECODE",
-        "CLAUDE_PID",
-        "CODEX_THREAD_ID",
-        "CODEX_SESSION_ID",
-        "CODEX_TOOL_CALL_ID",
-        "WT_SESSION",
-        "TMUX_PANE",
-    }
-)
-
-
-def daemon_environment(environ: Mapping[str, str]) -> dict[str, str]:
-    return {
-        name: value
-        for name, value in environ.items()
-        if name.upper() not in DAEMON_IDENTITY
-        and not name.upper().startswith(("TJ_RUN_", "CLAUDE_CODE_"))
-    }
+MINIMUM_VERSION = "0.169.0"
 
 
 class Server(Protocol):
@@ -103,7 +76,7 @@ def require_binding(cli: str) -> None:
 def connection(native: str, directory: Path) -> AbstractContextManager[Server]:
     return cast(
         AbstractContextManager[Server],
-        hook_trust.AppServer(native, directory, timeout=30, existing=True),
+        hook_trust.AppServer(native, directory, timeout=30),
     )
 
 
@@ -185,78 +158,6 @@ def create(
             )
 
 
-def daemon_command(
-    native: str, action: str, directory: Path, environ: Mapping[str, str]
-) -> subprocess.CompletedProcess[str]:
-    return process.run(
-        [native, "app-server", "daemon", action],
-        cwd=directory,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-        env=daemon_environment(environ),
-    )
-
-
-def start_daemon(
-    native: str,
-    directory: Path,
-    environ: Mapping[str, str],
-    clock: Callable[[], float] = time.monotonic,
-    wait: Callable[[float], None] = time.sleep,
-) -> None:
-    """Start the shared Codex daemon, from a terminal tab if this job forbids it."""
-    started = daemon_command(native, "start", directory, environ)
-    if not started.returncode:
-        return
-    if not IS_WINDOWS or JOB_REFUSAL not in started.stderr:
-        raise LaunchError(
-            f"Cannot start the configured Codex daemon: {started.stderr.strip()}"
-        )
-    terminal = shutil.which("wt.exe")
-    if not terminal:
-        raise LaunchError(
-            "Cannot start the Codex daemon here and wt.exe is not on PATH"
-        )
-    # Run through cmd with output to NUL: as the tab's own process, the daemon
-    # Codex spawns dies when the tab closes.
-    process.run(
-        [
-            terminal,
-            "-w",
-            "0",
-            "nt",
-            "--title",
-            "Codex daemon",
-            "cmd.exe",
-            "/d",
-            "/c",
-            native,
-            "app-server",
-            "daemon",
-            "start",
-            ">",
-            "NUL",
-            "2>&1",
-        ],
-        cwd=directory,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-        env=daemon_environment(environ),
-    )
-    deadline = clock() + DAEMON_WAIT_SECONDS
-    while daemon_command(native, "version", directory, environ).returncode:
-        if clock() >= deadline:
-            raise LaunchError(
-                "The Codex daemon did not start from a Windows Terminal tab "
-                f"within {DAEMON_WAIT_SECONDS} seconds"
-            )
-        wait(1)
-
-
 def prepare(
     directory: Path,
     title: str,
@@ -275,11 +176,6 @@ def prepare(
         thread_id = native_id(arguments[3]) if resuming else None
         options = None if resuming else start_options(directory, arguments)
         admit(directory, arguments)
-        if daemon.disabled(projects.user_config()):
-            raise LaunchError(
-                "Codex shared daemon startup is disabled in the user configuration"
-            )
-        start_daemon(native, directory, environ)
         with connection(native, directory) as server:
             document = server.request(
                 "config/read", {"cwd": str(directory), "includeLayers": True}
@@ -288,9 +184,8 @@ def prepare(
                 document, directory, windows=os.name == "nt", wsl=inside_wsl()
             )
             if options is None:
-                require_unloaded(server, str(thread_id))
                 prepared = PreparedLaunch(
-                    (native, *arguments, "--remote", "unix://"), f"codex:{thread_id}"
+                    (native, *arguments, "--no-daemon"), f"codex:{thread_id}"
                 )
             else:
                 thread_id = create(
@@ -304,8 +199,7 @@ def prepare(
                         "resume",
                         thread_id,
                         *arguments[2:-1],
-                        "--remote",
-                        "unix://",
+                        "--no-daemon",
                         "--",
                         options.prompt,
                     ),
@@ -322,22 +216,6 @@ def prepare(
     finally:
         if prepared is not None and not completed:
             cleanup_failed_launch(sys.exception(), lambda: abandon(prepared, "", False))
-
-
-def require_unloaded(server: Server, thread_id: str) -> None:
-    cursor = None
-    while True:
-        page = server.request("thread/loaded/list", {"cursor": cursor})
-        loaded = page.get("data")
-        if not isinstance(loaded, list):
-            raise LaunchError("Codex returned an invalid loaded thread list")
-        if thread_id in loaded:
-            raise LaunchError(
-                f"Codex {thread_id} is already loaded; use its existing conversation"
-            )
-        cursor = page.get("nextCursor")
-        if not cursor:
-            return
 
 
 def first_turn(path: Path) -> dict[str, object] | None:
@@ -365,12 +243,7 @@ def confirm(
     wait: Callable[[float], None] = time.sleep,
 ) -> None:
     if not prepared.created:
-        try:
-            confirm_resume(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
-        except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as error:
-            raise LaunchError(
-                f"Cannot verify Codex daemon attachment for {prepared.session}: {error}"
-            ) from error
+        confirm_resume(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
         return
     directory = Path(prepared.command[2])
     options = start_options(directory, arguments)
@@ -438,27 +311,7 @@ def confirm(
             f"effort={effort!r}; requested model={options.model!r}, "
             f"effort={options.effort!r}. Check its tab before continuing"
         )
-    try:
-        with connection(prepared.command[0], directory) as server:
-            response = server.request(
-                "thread/read", {"threadId": thread_id, "includeTurns": False}
-            )
-    except (OSError, ValueError, RuntimeError) as error:
-        raise LaunchError(
-            f"Cannot verify Codex daemon attachment for {thread_id}: {error}"
-        ) from error
-    thread = response.get("thread")
-    status = thread.get("status") if isinstance(thread, dict) else None
-    if (
-        not isinstance(thread, dict)
-        or thread.get("id") != thread_id
-        or not isinstance(status, dict)
-        or status.get("type") not in {"idle", "active"}
-    ):
-        raise LaunchError(
-            f"Codex {thread_id} first turn is not attached to the shared daemon; "
-            "check its tab"
-        )
+    confirm_resume(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
 
 
 def confirm_resume(
@@ -471,36 +324,32 @@ def confirm_resume(
 ) -> None:
     thread_id = native_id(str(prepared.session).removeprefix("codex:"))
     deadline = clock() + timeout
-    with connection(prepared.command[0], Path(prepared.command[2])) as server:
-        while True:
-            response = server.request(
-                "thread/read", {"threadId": thread_id, "includeTurns": False}
+    while True:
+        try:
+            observed = processes.inventory(launch_id=launch_id).get(thread_id)
+            if observed is None:
+                processes.record_prepared(thread_id, launch_id)
+                observed = processes.inventory(launch_id=launch_id).get(thread_id)
+        except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as error:
+            raise LaunchError(
+                f"Cannot verify Codex native process for {prepared.session}: {error}"
+            ) from error
+        if observed is not None and observed.alive:
+            return
+        shown = agent_store.run("show", "--launch-id", launch_id)
+        record = shown.get("launch")
+        if not isinstance(record, dict) or record.get("launch_id") != launch_id:
+            raise LaunchError(f"agent-store returned an invalid launch for {launch_id}")
+        if record.get("state") == "ended":
+            raise LaunchError(
+                f"Codex launch {launch_id} exited before native process confirmation"
             )
-            thread = response.get("thread")
-            if not isinstance(thread, dict) or thread.get("id") != thread_id:
-                raise LaunchError(
-                    f"Codex did not return the resumed thread {thread_id}"
-                )
-            status = thread.get("status")
-            if isinstance(status, dict) and status.get("type") in {"idle", "active"}:
-                return
-            shown = agent_store.run("show", "--launch-id", launch_id)
-            record = shown.get("launch")
-            if not isinstance(record, dict) or record.get("launch_id") != launch_id:
-                raise LaunchError(
-                    f"agent-store returned an invalid launch for {launch_id}"
-                )
-            if record.get("state") == "ended":
-                raise LaunchError(
-                    f"Codex launch {launch_id} exited before attaching "
-                    "to the shared daemon"
-                )
-            if clock() >= deadline:
-                raise LaunchTimeout(
-                    f"Codex {thread_id} did not attach to the shared daemon "
-                    f"within {timeout:g} seconds; check its tab"
-                )
-            wait(0.5)
+        if clock() >= deadline:
+            raise LaunchTimeout(
+                f"Codex {thread_id} did not confirm its owned native process "
+                f"within {timeout:g} seconds; check its tab"
+            )
+        wait(0.5)
 
 
 def not_started(

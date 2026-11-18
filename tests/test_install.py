@@ -1115,7 +1115,6 @@ class RunStepsTests(Machine):
                 "Git long paths",
                 "native CLI",
                 "native permission defaults",
-                "Codex shared daemon",
                 "agent-store CLI",
                 "tj item CLI",
                 "worktrunk",

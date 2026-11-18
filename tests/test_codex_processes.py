@@ -69,6 +69,67 @@ def test_unobservable_process_is_not_reported_dead(
         processes.inventory()
 
 
+def test_launch_confirmation_does_not_use_another_wrappers_live_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observe(monkeypatch, 11, "predecessor")
+    observe(monkeypatch, 22, "replacement")
+
+    def inspect(arguments: list[str], value: object = None) -> list[dict[str, object]]:
+        assert arguments == ["inspect"]
+        assert isinstance(value, list)
+        return [dict(identity, alive=identity["pid"] == 11) for identity in value]
+
+    monkeypatch.setattr(processes, "query", inspect)
+    assert processes.inventory()[SESSION].alive
+    assert not processes.inventory(launch_id="replacement")[SESSION].alive
+    assert processes.inventory(launch_id="unobserved") == {}
+
+
+def test_prepared_native_child_is_observed_before_a_session_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def spawned(arguments: list[str], value: object = None) -> dict[str, object]:
+        assert arguments == [
+            "spawned",
+            "--launch-id",
+            "replacement",
+            "--session",
+            f"codex:{SESSION}",
+        ]
+        assert value is None
+        return {
+            "launch_id": "replacement",
+            "session": f"codex:{SESSION}",
+            "native": {"pid": 22, "started_at": STARTED},
+        }
+
+    monkeypatch.setattr(processes, "query", spawned)
+    processes.record_prepared(SESSION, "replacement")
+    paths = list(processes.state_directory().glob("*.json"))
+    assert len(paths) == 1
+    assert processes.Observation.parse(
+        json.loads(paths[0].read_text(encoding="utf-8"))
+    ) == processes.Observation(SESSION, "replacement", processes.Identity(22, STARTED))
+
+
+@pytest.mark.parametrize("mismatch", ["launch_id", "session", "native"])
+def test_prepared_observation_rejects_a_mismatched_spawn_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    mismatch: str,
+) -> None:
+    receipt: dict[str, object] = {
+        "launch_id": "replacement",
+        "session": f"codex:{SESSION}",
+        "native": {"pid": 22, "started_at": STARTED},
+    }
+    receipt[mismatch] = "different"
+    monkeypatch.setattr(processes, "query", lambda *_arguments: receipt)
+    with pytest.raises(ValueError, match=r"different|must be an object"):
+        processes.record_prepared(SESSION, "replacement")
+    assert not processes.state_directory().exists()
+
+
 @pytest.mark.parametrize(
     "response",
     [
@@ -145,7 +206,8 @@ def test_failed_native_process_proof_precedes_registration_and_claims(
 
 @pytest.mark.parametrize("registered", [False, True])
 def test_every_owned_start_records_the_current_process_before_binding(
-    monkeypatch: pytest.MonkeyPatch, registered: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    registered: bool,
 ) -> None:
     events: list[object] = []
     session = {"session": f"codex:{SESSION}", "launch_id": "owned"}
@@ -164,18 +226,24 @@ def test_every_owned_start_records_the_current_process_before_binding(
         return session
 
     monkeypatch.setattr(
-        session_hook.session_resume, "bind_started", bind,
+        session_hook.session_resume,
+        "bind_started",
+        bind,
     )
     monkeypatch.setattr(session_hook, "register", register)
     monkeypatch.setattr(
-        session_hook.agent_cli, "host_launch",
+        session_hook.agent_cli,
+        "host_launch",
         lambda _: SimpleNamespace(
             record_session_environment=lambda *args, **kwargs: None
         ),
     )
-    assert session_hook.start(
-        Host.CODEX, SESSION, "/fixture", {"TJ_RUN_LAUNCH_ID": "owned"}
-    ) == session
+    assert (
+        session_hook.start(
+            Host.CODEX, SESSION, "/fixture", {"TJ_RUN_LAUNCH_ID": "owned"}
+        )
+        == session
+    )
     assert events[:2] == [(SESSION, "owned"), "binding"]
 
 
@@ -187,7 +255,8 @@ def test_startup_claims_precede_optional_native_naming(
     monkeypatch.setattr(session_hook, "worktree", lambda _: "/fixture")
     monkeypatch.setattr(codex_launch, "registered_session", lambda _: session)
     monkeypatch.setattr(
-        session_hook.worktrees, "claim_started_worktree",
+        session_hook.worktrees,
+        "claim_started_worktree",
         lambda *args: events.append("claim"),
     )
 
@@ -196,7 +265,8 @@ def test_startup_claims_precede_optional_native_naming(
         raise LaunchError("Name service unavailable")
 
     monkeypatch.setattr(
-        session_hook.agent_cli, "host_launch",
+        session_hook.agent_cli,
+        "host_launch",
         lambda _: SimpleNamespace(
             record_session_environment=lambda *args, **kwargs: None,
             name_session=name,
@@ -233,7 +303,8 @@ def test_an_absent_daemon_does_not_erase_an_embedded_native_process(
 
 @pytest.mark.parametrize("status", ["idle", "notLoaded"])
 def test_daemon_state_never_erases_an_embedded_owner(
-    monkeypatch: pytest.MonkeyPatch, status: str,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
 ) -> None:
     class Server:
         @staticmethod

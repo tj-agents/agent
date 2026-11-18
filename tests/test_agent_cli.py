@@ -318,16 +318,16 @@ class CodexExecutableTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_picks_the_newest_answering_candidate(self):
-        old = executable(self.base / 'old', '#!/bin/sh\necho "codex-cli 0.155.0"\n')
-        alpha = executable(self.base / 'alpha', '#!/bin/sh\necho "codex-cli 0.160.0-alpha.3"\n')
-        new = executable(self.base / 'new', '#!/bin/sh\necho "codex-cli 0.160.0"\n')
+        old = executable(self.base / 'old', '#!/bin/sh\necho "codex-cli 0.169.0"\n')
+        alpha = executable(self.base / 'alpha', '#!/bin/sh\necho "codex-cli 0.170.0-alpha.3"\n')
+        new = executable(self.base / 'new', '#!/bin/sh\necho "codex-cli 0.170.0"\n')
         silent = executable(self.base / 'silent', '#!/bin/sh\nexit 1\n')
         path, version = CLI.host_launch(Host.CODEX).resolve_executable(candidates=[str(old), str(silent), str(new), str(alpha)])
-        self.assertEqual((path, version['text']), (str(new), '0.160.0'))
+        self.assertEqual((path, version['text']), (str(new), '0.170.0'))
 
     def test_refuses_a_build_below_the_minimum_and_lists_what_was_found(self):
         old = executable(self.base / 'old', '#!/bin/sh\necho "codex-cli 0.150.0"\n')
-        with self.assertRaisesRegex(CLI.LaunchError, r'0\.150\.0.*below the required 0\.154\.0(?s:.*)old'):
+        with self.assertRaisesRegex(CLI.LaunchError, r'0\.150\.0.*below the required 0\.169\.0(?s:.*)old'):
             CLI.host_launch(Host.CODEX).resolve_executable(candidates=[str(old)])
 
     def test_refuses_when_nothing_answers(self):

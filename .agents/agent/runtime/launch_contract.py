@@ -1,6 +1,6 @@
 """The contract each native host's launch adapter implements."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -28,6 +28,8 @@ class Launch(Protocol):
     TAB_FORCED: Mapping[str, str]
 
     def executable(self) -> str: ...
+
+    def managed_arguments(self, arguments: Sequence[str]) -> tuple[str, ...]: ...
 
     def prepare(self, directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch: ...
 

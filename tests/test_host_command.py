@@ -130,6 +130,7 @@ def test_managed_command_uses_the_hosts_effective_directory(tmp_path: Path) -> N
     assert command[command.index("--command-cwd") + 1] == str(tmp_path.resolve())
     assert options["cwd"] == tmp_path.resolve()
     assert command[-3:] == ["-C", "café", "prompt"]
+    assert command[command.index("--") + 2] == "--no-daemon"
 
 
 @pytest.mark.parametrize(
@@ -164,6 +165,52 @@ def test_native_maintenance_commands_bypass_preparation_and_session_wrapper(
             {"cwd": tmp_path, "env": {}, "check": False},
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (("--no-daemon", "prompt"), ("--no-daemon", "prompt")),
+        (("--", "--no-daemon"), ("--no-daemon", "--", "--no-daemon")),
+        (("--", "--remote=literal"), ("--no-daemon", "--", "--remote=literal")),
+    ],
+)
+def test_managed_codex_keeps_explicit_flags_and_literal_prompts(
+    arguments: tuple[str, ...],
+    expected: tuple[str, ...],
+) -> None:
+    from codex import launch
+
+    assert launch.managed_arguments(arguments) == expected
+
+
+@pytest.mark.parametrize(
+    "arguments", [("--remote", "unix://"), ("resume", "--remote=wss://example.invalid")]
+)
+def test_remote_codex_refuses_before_starting_a_managed_wrapper(
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+) -> None:
+    calls: list[Sequence[str]] = []
+
+    def run(
+        values: Sequence[str], **_options: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(values)
+        return completed(values)
+
+    assert (
+        command_main()(
+            Host.CODEX,
+            arguments,
+            cwd=tmp_path,
+            environ={},
+            resolver=lambda: str(tmp_path / "native"),
+            run=run,
+        )
+        == 1
+    )
+    assert not calls
 
 
 @pytest.mark.parametrize("host", ("claude", "codex"))
