@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "merge": {
+    "approval": "none",
+    "merge": "agents",
+    "default_branch_push": "none",
+    "required_checks": [
+      "verify / hosts",
+      "verify / verify (ubuntu-latest)",
+      "verify / verify (windows-latest)",
+      "Check host declarations and behavior (ubuntu-latest)",
+      "Check host declarations and behavior (windows-latest)"
+    ]
+  }
+}
