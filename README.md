@@ -48,10 +48,13 @@ Install [TJ CLI](https://github.com/tj-agents/cli#install) and keep `tj` and `tj
 Named handoff and recovery tabs use Windows Terminal on Windows or tmux on Linux; a public
 `tj claude` or `tj codex` launch stays in the current terminal.
 
-Native Claude-to-Claude messaging requires Claude Code 2.1.287 or newer with Agent's
+Native Claude-to-Claude messaging and live plugin reload require Claude Code 2.1.306 or newer with Agent's
 [Mods adapter](https://code.claude.com/docs/en/plugins/mods#turn-mods-on-or-off) enabled.
 Check `claude --version` and the active mods in `/plugin`; reload plugins after installation.
 If native delivery is unavailable or refused, TJ reports it without silently changing transports.
+Live reload uses Claude's native command API and preserves the composer. TJ records native command
+completion separately from proof that each changed plugin is executing its new build. A missing native
+receipt stays unverified; it never causes a command to be typed into an unsent draft.
 
 Clone Agent into a separate tooling directory. Run the installer from the project you intend to use, so
 its selection and explicit settings supply the project context. Replace the paths below with your own.

@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULE = ".agents/agent/runtime/claude/message_bridge.mjs"
+MODULE = ".agents/agent/runtime/claude/native_bridge.mjs"
 
 
-def test_native_message_module_is_required() -> None:
+def test_native_bridge_module_is_required() -> None:
     harness = json.loads(
         (ROOT / ".agents/plugins/manifests/harness/agent.json").read_text(
             encoding="utf-8"
@@ -22,7 +22,7 @@ def test_native_message_module_is_required() -> None:
     assert "../" + MODULE in hooks["modules"]
 
 
-def test_shipped_native_message_module() -> None:
+def test_shipped_native_bridge_module() -> None:
     """Run after the owning parent refreshes the generated plugin payload."""
     package = ROOT / "plugins/agent"
     harness = json.loads((package / "harness.json").read_text(encoding="utf-8"))
@@ -30,11 +30,11 @@ def test_shipped_native_message_module() -> None:
     assert {"path": MODULE, "hosts": ["claude"]} in harness["requires"]["hooks"]
     assert "../" + MODULE in hooks["modules"]
     assert (package / MODULE).read_bytes() == (
-        ROOT / ".claude/runtime/message_bridge.mjs"
+        ROOT / ".claude/runtime/native_bridge.mjs"
     ).read_bytes()
 
 
-def test_native_message_adapter(tmp_path: Path) -> None:
+def test_native_bridge_adapter(tmp_path: Path) -> None:
     claude = shutil.which("claude")
     if claude is None:
         pytest.skip("Claude's isolated plugin test engine is not installed")
@@ -48,9 +48,9 @@ def test_native_message_adapter(tmp_path: Path) -> None:
     hooks.write_text(json.dumps({"modules": ["../" + MODULE]}), encoding="utf-8")
     module = tmp_path / MODULE
     module.parent.mkdir(parents=True)
-    shutil.copyfile(ROOT / ".claude/runtime/message_bridge.mjs", module)
+    shutil.copyfile(ROOT / ".claude/runtime/native_bridge.mjs", module)
     shutil.copyfile(
-        ROOT / "tests/fixtures/claude_message_bridge.test.ts",
+        ROOT / "tests/fixtures/claude_native_bridge.test.ts",
         tmp_path / "bridge.test.ts",
     )
     result = subprocess.run(

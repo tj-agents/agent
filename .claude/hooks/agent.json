@@ -1,5 +1,5 @@
 {
-  "modules": ["../.agents/agent/runtime/claude/message_bridge.mjs"],
+  "modules": ["../.agents/agent/runtime/claude/native_bridge.mjs"],
   "hooks": {
     "SessionStart": [
       {
