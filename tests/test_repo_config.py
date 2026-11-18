@@ -3,7 +3,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +96,25 @@ DECLARED: dict[str, dict[str, Any]] = {
         "codex_forbidden_prefix_rules": [FORBID_GH_LOGIN],
     },
     "beta@tj-agents": {"claude_allow": ["Bash(uv sync)"], "codex_prefix_rules": []},
+    "gamma@tj-agents": {"claude_allow": ["Bash(gamma)"], "codex_prefix_rules": []},
+    "delta@tj-agents": {"claude_allow": [], "codex_prefix_rules": []},
 }
+DEPENDENCIES: dict[str, list[object]] = {
+    "delta": ["gamma"],
+    "gamma": ["delta@tj-agents"],
+}
+
+
+def catalog(dependencies: Mapping[str, list[object]]) -> dict[str, Any]:
+    return {
+        "plugins": [
+            {
+                "name": identity.partition("@")[0],
+                "dependencies": dependencies.get(identity.partition("@")[0], []),
+            }
+            for identity in DECLARED
+        ]
+    }
 
 
 def select(root: Path, *plugins: str) -> Path:
@@ -145,10 +163,35 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         marketplaces: Mapping[str, Mapping[str, str]], identities: Iterable[str]
     ) -> dict[str, dict[str, Any]]:
         lookups.append(sorted(identities))
-        return {identity: DECLARED[identity] for identity in identities}
+        published = {"tj-agents": catalog(DEPENDENCIES)}
+        closure = REPO_CONFIG.published_harness.closure(identities, published.get)
+        return {identity: DECLARED[identity] for identity in closure}
 
     monkeypatch.setattr(REPO_CONFIG.published_harness, "declarations", declarations)
     return lookups
+
+
+@pytest.fixture
+def fetched(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[Mapping[str, list[object]]], None]:
+    """Write the catalog this machine last fetched, with the given dependencies."""
+    home = tmp_path_factory.mktemp("claude-home")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex"))
+    path = home / "plugins/marketplaces/tj-agents/.claude-plugin/marketplace.json"
+    path.parent.mkdir(parents=True)
+
+    def write(dependencies: Mapping[str, list[object]]) -> None:
+        path.write_text(json.dumps(catalog(dependencies)), encoding="utf-8")
+
+    write({})
+    return write
+
+
+def enabled(root: Path) -> dict[str, bool]:
+    settings = json.loads((root / ".claude/settings.json").read_text(encoding="utf-8"))
+    return dict(settings["enabledPlugins"])
 
 
 def permissions(root: Path) -> dict[str, list[str]]:
@@ -308,8 +351,61 @@ def test_run_rejects_an_overlay_rule_naming_a_machine_path(
     assert not (repository / ".claude").exists()
 
 
-def test_preserved_permissions_need_no_published_lookup(
+def test_run_enables_the_dependency_closure_in_both_hosts_with_its_permissions(
     repository: Path, published: list[list[str]]
+) -> None:
+    selection = select(repository, "delta@tj-agents")
+
+    REPO_CONFIG.run(selection, "write")
+
+    assert enabled(repository) == {"delta@tj-agents": True, "gamma@tj-agents": True}
+    codex = (repository / ".codex/config.toml").read_text(encoding="utf-8")
+    for identity in ("delta@tj-agents", "gamma@tj-agents"):
+        assert f'[plugins."{identity}"]\nenabled = true' in codex
+    assert permissions(repository) == {"allow": ["Bash(gamma)"]}
+    assert json.loads(selection.read_text(encoding="utf-8"))["plugins"] == [
+        "delta@tj-agents"
+    ]
+    assert published == [["delta@tj-agents"]]
+    assert REPO_CONFIG.run(selection, "check") == []
+
+
+def test_preserved_generation_keeps_dependencies_a_stale_fetched_catalog_omits(
+    repository: Path,
+    published: list[list[str]],
+    fetched: Callable[[Mapping[str, list[object]]], None],
+) -> None:
+    selection = select(repository, "delta@tj-agents")
+    REPO_CONFIG.run(selection, "write")
+
+    assert REPO_CONFIG.run(selection, "write", preserve_permissions=True) == []
+    assert enabled(repository) == {"delta@tj-agents": True, "gamma@tj-agents": True}
+
+
+def test_preserved_generation_enables_new_dependencies_from_the_fetched_catalog(
+    repository: Path,
+    published: list[list[str]],
+    fetched: Callable[[Mapping[str, list[object]]], None],
+) -> None:
+    selection = select(repository, "alpha@tj-agents")
+    REPO_CONFIG.run(selection, "write")
+    fetched({"delta": ["gamma"]})
+    select(repository, "alpha@tj-agents", "delta@tj-agents")
+
+    REPO_CONFIG.run(selection, "write", preserve_permissions=True)
+
+    assert enabled(repository) == {
+        "alpha@tj-agents": True,
+        "delta@tj-agents": True,
+        "gamma@tj-agents": True,
+    }
+    assert published == [["alpha@tj-agents"]]
+
+
+def test_preserved_permissions_need_no_published_lookup(
+    repository: Path,
+    published: list[list[str]],
+    fetched: Callable[[Mapping[str, list[object]]], None],
 ) -> None:
     selection = select(repository, "alpha@tj-agents")
     REPO_CONFIG.run(selection, "write")
