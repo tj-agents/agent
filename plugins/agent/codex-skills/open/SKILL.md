@@ -1,6 +1,6 @@
 ---
 name: open
-description: Reopen one Claude or Codex session by its session id in a new tab in its recorded worktree. Use when asked to open, reopen, resume or bring back a specific session or conversation.
+description: Use when reopening one specific Claude or Codex conversation by session id in its recorded checkout.
 kind: utility
 domain: agent
 profile: core
