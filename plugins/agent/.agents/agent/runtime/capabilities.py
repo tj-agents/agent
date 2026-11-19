@@ -86,10 +86,10 @@ class Capability:
 
 
 REVISIONS = {
-    "cli": "9608c76960c1b0aba7d0f1a05ae335679ffbbf47",
-    "personal": "7e0b2a962df9ba1b90284990360cdbd9c49cbe3d",
-    "core": "03f99b363e11943cf8918a99b6a7654f5b770edb",
-    "work-items": "0d107309e04bedd77d2b1b3834ad92db0a777d0c",
+    "cli": "27990ee65900ef3f8a8d33685a3de11ce2742d45",
+    "personal": "591ddef906faf0cabc9459308ec5fc6148a30279",
+    "core": "465b3f9c68325b7643d6b10809dcbb552d6913d2",
+    "work-items": "8aff0c37de48df4ed77fe0f12f4779e4b9ec184c",
 }
 
 CAPABILITIES = (
