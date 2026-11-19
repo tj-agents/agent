@@ -8,36 +8,10 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
-import agent_store
 from launch_errors import LaunchError
 from tj_cli import process
 
 COMMAND_TIMEOUT_SECONDS = 30
-
-
-def parent_item_ref(parent: str) -> str | None:
-    """The parent's unambiguous linked item, preferring its owner links."""
-    try:
-        shown = agent_store.run("show", parent)
-    except agent_store.AgentStoreError as error:
-        if error.code == "not-found":
-            return None
-        raise LaunchError(f"Could not read the parent work item: {error}") from error
-    links = shown["session"]["links"]
-    if not links:
-        return None
-    owners = [link for link in links if link["role"] == "owner"]
-    refs = {link["item"]["ref"] for link in owners or links}
-    if len(refs) != 1:
-        raise LaunchError(
-            "The parent has several work items; pass --item with the intended one."
-        )
-    ref = refs.pop()
-    if not isinstance(ref, str) or not ref.strip():
-        raise LaunchError(
-            "The parent has an invalid link; pass --item with an existing reference."
-        )
-    return ref
 
 
 def reference(

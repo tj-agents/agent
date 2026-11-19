@@ -33,7 +33,7 @@ class Launcher:
     launch: Mock
     item: Mock
     executable: Mock
-    resolve_item: Callable[[str | None, Path, str | None], str]
+    resolve_item: Callable[[str | None, Path], str | None]
 
     def run(self, *arguments: str) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
@@ -163,11 +163,7 @@ def test_parent_and_item_reach_launch(launcher: Launcher) -> None:
         "claude:p",
     )
     assert code == 0, err
-    launcher.item.assert_called_once_with(
-        "98",
-        launcher.directory,
-        "claude:p",
-    )
+    launcher.item.assert_called_once_with("98", launcher.directory)
     assert launcher.launch.call_args.kwargs == {
         "item": "auto-item",
         "parent": "claude:p",
@@ -175,22 +171,25 @@ def test_parent_and_item_reach_launch(launcher: Launcher) -> None:
     assert '"parent tab" (claude:p)' in launcher.launch.call_args.args[3][-1]
 
 
-def test_handoff_without_existing_item_refuses_before_launch(
-    launcher: Launcher, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "parent_links", [[], [{"role": "owner", "item": {"ref": "7"}}]]
+)
+def test_handoff_without_item_launches_unlinked_without_tracker_access(
+    launcher: Launcher,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_links: list[dict[str, object]],
 ) -> None:
     monkeypatch.setattr(launcher.cli, "resolve_item", launcher.resolve_item)
     monkeypatch.setattr(
         launcher.cli.agent_store,
         "run",
-        Mock(return_value={"session": {"title": "parent", "links": []}}),
+        Mock(return_value={"session": {"title": "parent", "links": parent_links}}),
     )
     reference = Mock(side_effect=AssertionError("unexpected tracker call"))
     monkeypatch.setattr(launcher.cli.work_item, "reference", reference)
     code, _, err = launcher.run("--lane", "L4", "--parent", "claude:p")
-    assert code == 1
-    assert "No existing work item" in err
-    assert "--item" in err
-    launcher.launch.assert_not_called()
+    assert code == 0, err
+    assert launcher.launch.call_args.kwargs == {"item": None, "parent": "claude:p"}
     reference.assert_not_called()
 
 
@@ -210,25 +209,6 @@ def test_handoff_links_tracker_urls_without_creating(
     assert launcher.launch.call_args.kwargs["item"] == ref
 
 
-def test_handoff_reuses_the_existing_parent_item(
-    launcher: Launcher, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ref = "azure-devops:dev.azure.com/contoso:42"
-    monkeypatch.setattr(launcher.cli, "resolve_item", launcher.resolve_item)
-    monkeypatch.setattr(
-        launcher.cli.agent_store,
-        "run",
-        Mock(
-            return_value={
-                "session": {"links": [{"role": "owner", "item": {"ref": ref}}]}
-            }
-        ),
-    )
-    code, _, err = launcher.run("--lane", "L4", "--parent", "claude:p")
-    assert code == 0, err
-    assert launcher.launch.call_args.kwargs["item"] == ref
-
-
 def test_handoff_rejects_retired_creation_fields(launcher: Launcher) -> None:
     code, _, err = launcher.run(
         "--lane", "L4", "--item-field", "attribution=TechPlatform"
@@ -242,7 +222,7 @@ def test_without_parent_prompt_has_no_standing_rule(launcher: Launcher) -> None:
     code, _, err = launcher.run("--lane", "L4")
     assert code == 0, err
     assert "Standing rule" not in launcher.launch.call_args.args[3][-1]
-    launcher.item.assert_called_once_with(None, launcher.directory, None)
+    launcher.item.assert_called_once_with(None, launcher.directory)
 
 
 def test_calling_session_becomes_parent(

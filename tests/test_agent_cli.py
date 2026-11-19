@@ -566,6 +566,17 @@ class LaunchTests(unittest.TestCase):
                           'claude', '--name', 'agent#98', 'go'], command)
         await_launch.assert_called_once_with('L1', want_session=False)
 
+    def test_a_launch_without_an_item_gives_tj_run_no_item(self):
+        adapter = mock.Mock(TAB_CLEARED=(), TAB_FORCED={}, SESSION_ENVIRONMENT=(), executable=lambda: 'claude')
+        adapter.prepare.return_value = PreparedLaunch(('claude', 'go'))
+        with mock.patch.object(CLI, 'host_launch', return_value=adapter), \
+                mock.patch.object(CLI.shutil, 'which', return_value='tj'), \
+                mock.patch.object(CLI.uuid, 'uuid4', return_value=mock.Mock(hex='L1')), \
+                mock.patch.object(CLI, 'open_tab') as open_tab, \
+                mock.patch.object(CLI, 'await_launch', return_value={'launch': {}}):
+            CLI.launch(CLI.Host.CLAUDE, Path('/work'), 'agent#98', ['go'], item=None, parent=None)
+        self.assertNotIn('--item', open_tab.call_args.args[2])
+
     def test_tj_missing_is_a_launch_error(self):
         adapter = mock.Mock(TAB_CLEARED=(), TAB_FORCED={})
         with mock.patch.object(CLI, 'host_launch', return_value=adapter), \
@@ -727,36 +738,20 @@ def test_a_given_item_resolves_in_the_target_project() -> None:
     with mock.patch.object(
         CLI.work_item, "reference", return_value="jira:tracker:ABC-12"
     ) as reference:
-        assert (
-            CLI.resolve_item("ABC-12", Path("/work"), "claude:p")
-            == "jira:tracker:ABC-12"
-        )
+        assert CLI.resolve_item("ABC-12", Path("/work")) == "jira:tracker:ABC-12"
     reference.assert_called_once_with(Path("/work"), "ABC-12")
 
 
 def test_a_work_item_url_passes_through_unchanged() -> None:
     url = "https://dev.azure.com/contoso/Product/_workitems/edit/98"
-    assert CLI.resolve_item(url, Path("/work"), "claude:p") == url
+    assert CLI.resolve_item(url, Path("/work")) == url
 
 
-def test_an_absent_item_reuses_the_parents_existing_reference() -> None:
-    ref = "azure-devops:dev.azure.com/contoso:42"
+def test_an_absent_item_means_no_work_item_and_no_tracker_call() -> None:
     with mock.patch.object(
-        CLI.work_item, "parent_item_ref", return_value=ref
-    ) as parent_ref:
-        assert CLI.resolve_item(None, Path("/work"), "claude:p") == ref
-    parent_ref.assert_called_once_with("claude:p")
-
-
-@pytest.mark.parametrize("parent", [None, "claude:p"])
-def test_an_absent_item_refuses_when_no_existing_reference_is_found(
-    parent: str | None,
-) -> None:
-    with (
-        mock.patch.object(CLI.work_item, "parent_item_ref", return_value=None),
-        pytest.raises(CLI.LaunchError, match=r"No existing work item.*--item"),
+        CLI.work_item, "reference", side_effect=AssertionError("tracker call")
     ):
-        CLI.resolve_item(None, Path("/work"), parent)
+        assert CLI.resolve_item(None, Path("/work")) is None
 
 
 if __name__ == "__main__":

@@ -464,17 +464,11 @@ def parent_session(value):
     return identities[0] if identities else None
 
 
-def resolve_item(item: str | None, cwd: Path, parent: str | None) -> str:
-    """Link a handoff to an explicit or unambiguous existing work item."""
-    if item is not None:
-        return work_item.reference(cwd, item)
-    parent_ref = work_item.parent_item_ref(parent) if parent else None
-    if parent_ref:
-        return parent_ref
-    raise LaunchError(
-        "No existing work item was found. Pass --item with its URL or reference. "
-        "If a new item is needed, use the project's work-item workflow and its creation policy first."
-    )
+def resolve_item(item: str | None, cwd: Path) -> str | None:
+    """The handoff's explicit work item, or None: omitting --item launches with no item."""
+    if item is None:
+        return None
+    return work_item.reference(cwd, item)
 
 
 def parent_rule(parent):
