@@ -12,7 +12,7 @@ import pytest
 
 @pytest.mark.parametrize("host", ["claude", "codex"])
 def test_installed_profile_forwards_plain_host_commands(
-    tmp_path: Path, host: str
+    tmp_path: Path, host: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     context = install.Context(
         home=tmp_path / "home with spaces",
@@ -23,7 +23,6 @@ def test_installed_profile_forwards_plain_host_commands(
     runtime = install.runtime_bin(context)
     runtime.mkdir(parents=True)
     arguments = ["--model", "native model", "", "literal & | ' \" $() % café"]
-    environment = dict(os.environ)
     if context.windows:
         loader = install.profile_loader(context)
         assert loader is not None
@@ -31,8 +30,8 @@ def test_installed_profile_forwards_plain_host_commands(
         loader.write_text("# Fixture profile loader.\n", encoding="utf-8")
         shell = shutil.which("pwsh") or shutil.which("powershell.exe")
         assert shell is not None
-        environment["TJ_BINDING_ARGUMENTS"] = json.dumps([host, *arguments])
-        environment["TJ_BINDING_PROFILE"] = str(install.profile_paths(context)[0])
+        monkeypatch.setenv("TJ_BINDING_ARGUMENTS", json.dumps([host, *arguments]))
+        monkeypatch.setenv("TJ_BINDING_PROFILE", str(install.profile_paths(context)[0]))
         script = tmp_path / "invoke.ps1"
         script.write_text(
             "$ErrorActionPreference = 'Stop'\n"
@@ -71,7 +70,6 @@ def test_installed_profile_forwards_plain_host_commands(
     result = subprocess.run(
         command,
         cwd=tmp_path,
-        env=environment,
         capture_output=True,
         text=True,
         encoding="utf-8",
