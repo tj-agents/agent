@@ -22,7 +22,9 @@ def reference(
     """Resolve a bare id through the project's tracker without a network lookup."""
     value = value.strip()
     if not value:
-        raise LaunchError("Pass --item with an existing work-item reference.")
+        raise LaunchError(
+            "--item is empty; pass an existing work-item reference or omit --item."
+        )
     if ":" in value:
         return value
     tj = shutil.which("tj")
