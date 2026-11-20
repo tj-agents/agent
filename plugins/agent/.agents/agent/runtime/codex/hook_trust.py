@@ -391,7 +391,10 @@ def require_ready(listing, cwd, required=None, expected=None):
         elif hook.get("enabled") and not hook.get("isManaged") and hook.get("trustStatus") != "trusted":
             problems.append(f"{key}: {hook.get('trustStatus', 'unknown trust')}")
     for key, value in (expected or {}).items():
-        if key not in hooks or hooks[key].get("currentHash") != value["trusted_hash"]:
+        observed = hooks.get(key, {}).get("currentHash")
+        if observed != value["trusted_hash"] and (
+            "declaration_hash" not in value or observed != value["declaration_hash"]
+        ):
             problems.append(f"{key}: contents changed during verification")
         elif "source_path" in value and hooks[key].get("sourcePath") != value["source_path"]:
             problems.append(f"{key}: loaded hook still uses a different plugin build path")
@@ -591,6 +594,7 @@ def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
 
 
 def verify_loaded_hooks(server, cwd, identity, *, required=None, deadline=None):
+    """Verify live declarations, trust and build paths; native live hashes can omit content."""
     deadline = time.monotonic() + TIMEOUT if deadline is None else deadline
     installed = server.request("hooks/list", {"cwds": [str(cwd)]})
     if required is None:
@@ -602,7 +606,11 @@ def verify_loaded_hooks(server, cwd, identity, *, required=None, deadline=None):
         readiness = required
     require_ready(installed, cwd, readiness)
     expected = {
-        hook["key"]: {"trusted_hash": hook["currentHash"], "source_path": hook.get("sourcePath")}
+        hook["key"]: {
+            "trusted_hash": hook["currentHash"],
+            "declaration_hash": hook["currentHash"].partition("/")[0],
+            "source_path": hook.get("sourcePath"),
+        }
         for entry in installed["data"] for hook in entry.get("hooks", [])
         if Path(entry["cwd"]).resolve() == cwd and hook.get("pluginId")
         and (required is None or hook["pluginId"] in required)

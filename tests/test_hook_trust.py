@@ -556,6 +556,32 @@ def test_verify_loaded_hooks_rejects_plugin_removed_from_project(
     server.request.assert_called_with("hooks/list", {"threadId": "current"})
 
 
+@pytest.mark.parametrize("loaded_hash", ["declaration", "composite", "wrong-content", "wrong-declaration"])
+def test_loaded_native_declaration_hash_is_distinct_from_installed_content_approval(
+    hook_state: HookTrustState, loaded_hash: str
+) -> None:
+    declaration = "sha256:" + "a" * 64
+    content = "sha256:" + "b" * 64
+    fresh = dict(hook_state.hook, currentHash=f"{declaration}/{content}", trustStatus="trusted")
+    hashes = {
+        "declaration": declaration,
+        "composite": f"{declaration}/{content}",
+        "wrong-content": f"{declaration}/sha256:" + "c" * 64,
+        "wrong-declaration": "sha256:" + "d" * 64,
+    }
+    server = mock.Mock()
+    server.request.side_effect = [
+        {"data": [{"cwd": str(hook_state.cwd), "hooks": [fresh], "errors": []}]},
+        {"data": [{"cwd": str(hook_state.cwd), "errors": [],
+                   "hooks": [dict(fresh, currentHash=hashes[loaded_hash])]}]},
+    ]
+    if loaded_hash.startswith("wrong-"):
+        with pytest.raises(RuntimeError, match="contents changed"):
+            TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", deadline=0)
+    else:
+        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", deadline=0)
+
+
 @pytest.mark.parametrize("with_options", [False, True])
 def test_apply_trust_scopes_native_inventory_with_and_without_launch_options(
     hook_state: HookTrustState, monkeypatch: pytest.MonkeyPatch, with_options: bool
