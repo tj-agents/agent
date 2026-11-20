@@ -15,6 +15,7 @@ STALE_SECONDS = 1800
 
 class Job(Enum):
     INSTALL = ("machine-install", "machine install")
+    PLUGINS = ("plugin-update", "plugin update")
 
     def __init__(self, file_name: str, label: str) -> None:
         self.file_name = file_name

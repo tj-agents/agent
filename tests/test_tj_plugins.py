@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import install
+import jobs
 import plugin_update
 import pytest
 import tj_plugins
@@ -13,6 +14,24 @@ from tree_digest import Digests
 
 PACKAGE = Path(__file__).resolve().parents[1] / "plugins/agent"
 RUNTIME = ".agents/agent/runtime/tj_plugins.py"
+
+
+def test_concurrent_update_does_not_mutate_or_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unexpected(*_args: object) -> bool:
+        pytest.fail("A concurrent update must not begin native inventory or mutation")
+
+    monkeypatch.setattr(plugin_update, "marketplace_revision", unexpected)
+    with jobs.held(tmp_path, jobs.Job.PLUGINS) as acquired:
+        assert acquired
+        outcome = plugin_update.update(Host.CLAUDE, Digests(tmp_path), {})
+        assert jobs.running(tmp_path, jobs.Job.PLUGINS)
+    assert outcome.failures == [
+        "Another plugin update is running; retry after it completes"
+    ]
+    assert not outcome.changed and outcome.revision is None
+    assert not jobs.running(tmp_path, jobs.Job.PLUGINS)
 
 
 def cached_update(

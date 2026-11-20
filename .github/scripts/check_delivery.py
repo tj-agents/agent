@@ -1,4 +1,4 @@
-"""Verify the native CLI release and the Agent source pins before delivery."""
+"""Verify CI's native CLI release and Agent source pins before runtime bootstrap."""
 
 import argparse
 import ast

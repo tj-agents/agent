@@ -491,5 +491,7 @@ def parent_rule(parent):
         title = None
     name = f'"{title}" ({parent})' if title else parent
     return (f' Standing rule: the session {name} started you. Report to it with agent:message '
-            'only for your final result, a blocker you cannot resolve or an '
-            "approval Tommy must give; never send it status updates.")
+            'only for a blocker you cannot resolve or an approval Tommy must give; '
+            'never send it status updates. After the whole requested outcome and its validation '
+            'are complete, request tj finish and give the final response. Managed completion '
+            'delivers that response to the recorded parent and preserves its delivery and closeout receipts.')

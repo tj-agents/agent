@@ -31,7 +31,7 @@ jobs:
       - name: Verify the native CLI release and matching library pin
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python .agents/agent/runtime/delivery.py --root .
+        run: python .github/scripts/check_delivery.py --root .
       - run: uv sync --locked
       - name: Install the shared process boundary
         shell: pwsh

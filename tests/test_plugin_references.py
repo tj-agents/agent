@@ -1,42 +1,65 @@
 """Report exact retirement references without changing files or registrations."""
 
+import subprocess
 from pathlib import Path
 
 import plugin_references
 import pytest
 from claude import plugin_references as claude_references
 from codex import plugin_references as codex_references
+from tj_cli import process
 
 
-def test_scan_covers_local_settings_registrations_and_external_worktrees(
+def test_scan_skips_ignored_builds_but_covers_local_settings_and_external_worktrees(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    plugin_source: Path,
 ) -> None:
-    root = tmp_path / "repo"
+    container = tmp_path / "projects"
+    container.mkdir()
+    root = plugin_source.rename(container / "repo")
     linked = tmp_path / "linked"
-    root.mkdir()
-    linked.mkdir()
-    (root / ".git").mkdir()
-    (linked / ".git").write_text("gitdir: unused", encoding="utf-8")
+    (root / ".gitignore").write_text(
+        "build/\n.agents/\n.claude/\n.codex/\nAGENTS.md\nCLAUDE.md\n", encoding="utf-8"
+    )
+    (root / "tracked.md").write_text('Source\n"old@marketplace"\n', encoding="utf-8")
+    for arguments in (
+        ["add", ".gitignore", "tracked.md"],
+        ["commit", "--quiet", "-m", "Fixture"],
+        ["worktree", "add", "--quiet", "--detach", str(linked)],
+    ):
+        process.run(["git", "-C", str(root), *arguments], check=True, timeout=15)
     files = [
         root / ".agents/plugins.json",
+        root / ".claude/settings.json",
         root / ".claude/settings.local.json",
         root / ".codex/config.toml",
         root / ".agents/repo-capabilities.local.json",
+        root / "AGENTS.md",
+        root / "CLAUDE.md",
+        root / "untracked source.json",
         linked / ".agents/plugins.json",
         tmp_path / "installed_plugins.json",
+        container / "notes.md",
     ]
     for path in files:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('"old@marketplace"\n', encoding="utf-8")
-    monkeypatch.setattr(plugin_references, "worktrees", lambda root: {root, linked})
-    before = {path: path.read_bytes() for path in files}
+    ignored = root / "build/deep/artifact.json"
+    ignored.parent.mkdir(parents=True)
+    ignored.write_text('"old@marketplace"\n', encoding="utf-8")
+    cached = container / "node_modules/cache.json"
+    cached.parent.mkdir()
+    cached.write_text('"old@marketplace"\n', encoding="utf-8")
+    tracked = [root / "tracked.md", linked / "tracked.md"]
+    before = {path: path.read_bytes() for path in [*files, *tracked, ignored, cached]}
     findings, problems = plugin_references.scan(
-        ["old@marketplace"], [root], [files[-1]]
+        ["old@marketplace"], [container], [tmp_path / "installed_plugins.json"]
     )
     assert problems == []
-    assert set(findings) == {f"{path}:1: old@marketplace" for path in files}
-    assert before == {path: path.read_bytes() for path in files}
+    expected = {f"{path}:1: old@marketplace" for path in files}
+    expected.update(f"{path}:2: old@marketplace" for path in tracked)
+    assert set(findings) == expected
+    assert before == {path: path.read_bytes() for path in before}
 
 
 def test_missing_roots_and_unreadable_files_are_not_reported_as_clean(
@@ -53,22 +76,72 @@ def test_missing_roots_and_unreadable_files_are_not_reported_as_clean(
 
 def test_a_trusted_container_is_reported_without_recursing_through_it(
     tmp_path: Path,
+    plugin_source: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     parent = tmp_path / "trusted-parent"
     parent.mkdir()
     (parent / "unrelated.json").write_text('"old@marketplace"', encoding="utf-8")
-    repository = parent / "repo"
-    repository.mkdir()
-    (repository / ".git").mkdir()
+    repository = plugin_source.rename(parent / "repo")
     (repository / "selection.json").write_text('"old@marketplace"', encoding="utf-8")
     for provider in (claude_references, codex_references):
         monkeypatch.setattr(provider, "files", lambda: ())
         monkeypatch.setattr(provider, "projects", lambda: {parent, repository})
-    monkeypatch.setattr(plugin_references, "worktrees", lambda root: {root})
     assert plugin_references.audit(["old@marketplace"], []) == 1
     output = capsys.readouterr().out
     assert "unrelated.json" not in output
     assert "selection.json:1" in output
     assert f"requires explicit --root: {parent}" in output
+    assert "Ignored build files are excluded unless tracked" in output
+    assert "not a universal disk scan" in output
+
+
+@pytest.mark.parametrize(
+    ("stdout", "returncode"),
+    [
+        ("tracked.md", 0),
+        ("../outside.md\0", 0),
+        ("/outside.md\0", 0),
+        ("\0", 0),
+        ("tracked.md\0", 1),
+    ],
+)
+def test_invalid_git_inventory_reports_failure_without_scanning_repo_subtrees(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+    returncode: int,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    ignored = tmp_path / "build/artifact.json"
+    ignored.parent.mkdir()
+    ignored.write_text('"old@marketplace"', encoding="utf-8")
+    local = tmp_path / ".agents/plugins.json"
+    local.parent.mkdir()
+    local.write_text('"old@marketplace"', encoding="utf-8")
+    monkeypatch.setattr(plugin_references, "worktrees", lambda root: {root})
+    monkeypatch.setattr(
+        process,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], returncode, stdout, "inventory failed"
+        ),
+    )
+    findings, problems = plugin_references.scan(["old@marketplace"], [tmp_path], [])
+    assert findings == [f"{local}:1: old@marketplace"]
+    assert len(problems) == 1
+    assert f"Unverified Git inventory for {tmp_path}" in problems[0]
+
+
+def test_scan_reports_unreadable_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def denied(*args: object, **kwargs: object) -> None:
+        raise PermissionError("root access denied")
+
+    monkeypatch.setattr(Path, "stat", denied)
+    findings, problems = plugin_references.scan(["old@marketplace"], [tmp_path], [])
+    assert findings == []
+    assert len(problems) == 1
+    assert "root access denied" in problems[0]

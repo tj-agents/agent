@@ -490,6 +490,12 @@ def test_inherited_local_adoption_preserves_linked_worktree_instructions(
 def test_prepare_write_preserves_instructions_when_configuration_creates_local_adoption(
     plugin_source: Path, monkeypatch: pytest.MonkeyPatch, host: Host
 ) -> None:
+    profile = plugin_source.parent / "fixture-claude"
+    catalog = profile / "plugins/marketplaces/tj-agents/.claude-plugin/marketplace.json"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text(json.dumps({"plugins": [{"name": "python"}]}), encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(profile))
+    monkeypatch.setenv("CODEX_HOME", str(plugin_source.parent / "fixture-codex"))
     selection = plugin_source / ".agents/plugins.json"
     selection.parent.mkdir()
     selection.write_text(

@@ -24,4 +24,4 @@ jobs:
       - name: Detect merged CLI changes awaiting release or pin advancement
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .agents/agent/runtime/delivery.py --root . --latest
+        run: python3 .github/scripts/check_delivery.py --root . --latest

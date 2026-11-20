@@ -15,6 +15,7 @@ from typing import Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import jobs
 import marketplace_head
 import required_plugins
 import standards
@@ -213,6 +214,24 @@ def update(
     environ: Mapping[str, str],
     *,
     converge_runtime: Callable[[], str | None] | None = None,
+) -> Outcome:
+    """Serialize machine-wide plugin and runtime mutation across managed sessions."""
+    with jobs.held(digests.path.parent, jobs.Job.PLUGINS) as acquired:
+        if not acquired:
+            return Outcome(
+                ["Another plugin update is running; retry after it completes"],
+                False,
+                None,
+            )
+        return _update(host, digests, environ, converge_runtime=converge_runtime)
+
+
+def _update(
+    host: Host,
+    digests: Digests,
+    environ: Mapping[str, str],
+    *,
+    converge_runtime: Callable[[], str | None] | None,
 ) -> Outcome:
     """Fetch the marketplaces, then bring this host's plugins to their pins."""
     report = Report()

@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-import delivery
+import check_delivery as delivery
 import pytest
 
 PIN = "a" * 40
