@@ -91,7 +91,7 @@ def start(item_reference: str, host: Host, cwd: Path, lane: str, *,
         agent_store.run("release-worktree", *owner.arguments(), "--path", str(directory))
     shown = agent_cli.launch(host, directory, title, arguments, item=card["ref"])
     return {"item": card["ref"], "worktree": worktree, "title": title, "host": str(host),
-            "launch_id": shown["launch"]["launch_id"]}
+            "launch_id": shown["launch"]["launch_id"], "confirmation": shown["confirmation"]}
 
 
 def main(argv=None) -> int:

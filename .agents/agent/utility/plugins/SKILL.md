@@ -22,7 +22,10 @@ tj install --check
 ```
 
 `tj plugins update --host <host>` refreshes that host's plugins to their marketplace pins without running
-plugin setup; `tj run` starts it at launch and periodically when the marketplace moved. `tj install` installs
+plugin setup, then applies and verifies the updated Agent package's native CLI pin, launch runtime,
+command bindings and shell profiles before activating sessions or publishing success. A failed step
+remains failed and is retried even when the plugin cache has not changed. `tj run` checks at launch and
+periodically while the session remains open. `tj install` installs
 the machine: plugins, runtime, CLI, machine tools, Handy, profiles, agent settings and command bindings. It runs
 a selected plugin's setup only when that plugin's setup runtime changed since its last successful setup or its
 `setup --check` fails, and `tj install --check` reports drift without writing. After a successful changed
@@ -41,12 +44,11 @@ Maintainers regenerate the adjacent Marketplace snapshot with
 The commands below show Windows paths and use `python` in Windows PowerShell. On Linux/macOS, use
 `python3` with POSIX paths and the same script arguments.
 
-A repository whose GitHub owner is listed in `repo-owners.json` commits `.agents/plugins.json`,
-`.claude/settings.json` and `.codex/config.toml`, carrying its selection from the declared marketplaces on
-`main`. Any other repository, such as an employer's, gets local scope only. Its files are written per clone
-and git-excluded, and never committed, branched or opened as a PR. The scripts default to local scope there
-and refuse `--scope project`. Complete the native host's project admission and installation before claiming
-those plugins loaded.
+A tracked `.agents/plugins.json` retains project scope. An untracked selection in a Git repository
+defaults to local scope; an unversioned directory defaults to project scope. Use `--scope project` or
+`--scope local` deliberately when adopting or changing that boundary. Local files are per-clone and
+git-excluded. Repository ownership does not select a policy or decide whether files should be committed.
+Complete native project admission and installation before claiming plugins loaded.
 
 Codex ignores project-local configuration until the exact repository is trusted; a trusted parent
 folder does not admit a nested Git repository. Inspect native `config/read` for the actual cwd and its
@@ -68,8 +70,10 @@ settings are current, not that native trust, installation or session loading suc
              "dotnet@tj-agents", "concertable@agents"]}
 ```
 
-The selection lists every required package explicitly as `<plugin>@<marketplace>`. A marketplace key must
-match its published identity, and its repository must belong to `tj-agents` or `Concertable`. The `tj-agents`
+The selection records explicitly adopted packages as `<plugin>@<marketplace>`. Generation enables their
+transitive published dependencies in both hosts and includes those dependencies' harness permissions;
+it does not flatten that dependency graph into the explicit selection. A marketplace key must match its
+published identity, and its repository is a valid `<owner>/<repository>`. The `tj-agents`
 name belongs only to `tj-agents/marketplace`. Each declared marketplace supplies a selected plugin, and
 two marketplace names cannot refer to the same repository. The schema is `plugins/selection.schema.json`.
 TJ Agents producer repositories are package sources, not selectable marketplaces. Follow the
@@ -99,7 +103,7 @@ A repository selects one `kind: profile` plugin; an `organization` brings the pr
 the one an organization extends when that organization's installed employer declaration matches the
 repository's origin or names it as its source repository. See
 [Plugin kinds](https://github.com/tj-agents/docs/blob/main/PLUGINS.md#plugin-kinds).
-Owner-based project/local file placement is independent of this policy boundary.
+Project/local file placement is independent of this policy boundary.
 Selecting a profile does not prove its instructions loaded.
 
 A bare `--plugin <name>` selects from `tj-agents`. Add a foreign plugin with
@@ -143,13 +147,32 @@ anywhere in the committed `.claude/settings.json`, `.codex/config.toml` or `.cod
 reporting `file:line`. Replace such a path with a repository-relative one, or move the setting to an
 uncommitted local file. `machine_paths.py --root <checkout>` runs that scan alone.
 
-Both commands pick the scope from repository ownership, and `--scope local` forces per-clone adoption. Local
+Both commands preserve a tracked selection's project scope, and `--scope local` forces per-clone adoption. Local
 scope writes `.claude/settings.local.json`, `.codex/config.toml`, optional `.codex/rules/agent-harness.rules`
 and `.agents/repo-capabilities.local.json` ownership state. It git-excludes all of them and the selection,
 preserves unrelated selections and approvals, and refuses tracked targets, changed owned settings and links
 that escape the root. Settings generation requires Python 3.12 or newer.
 
 ## Audit a machine
+
+For a rename or removal, sweep the old identity before claiming the cutover is complete:
+
+```text
+tj plugins audit --identity retired-package@tj-agents --root /path/to/repositories
+```
+
+Repeat `--identity` and `--root` as needed. The read-only sweep includes known host projects, Git linked
+worktrees, native settings and installed registrations. It prints file and line references without
+configuration values, and exits nonzero for references or unreadable paths. Add other repository parent
+directories explicitly; it cannot discover arbitrary files outside the supplied roots and host records.
+Update owned source declarations and regenerate them; change user settings and registrations only through
+their owning scripted commands. Report unresolved references with their paths instead of adding aliases.
+
+Managed launches install missing project-enabled plugins and validate the selected dependency closure
+through native inventory, including loader error reasons. SessionStart checks the executing Agent hook
+against the installed build even outside a managed launch. The hook cannot prove the version of every
+cached skill in a running session: retain its explicit unverified warning, and reload or restart as
+directed. A clean settings check or installed inventory alone does not prove session-wide loading.
 
 After every repository carries its own settings, audit the machine before removing old user-profile behavior:
 

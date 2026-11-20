@@ -99,7 +99,7 @@ def scenario(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GitScenario:
     result.git("config", "user.email", "fixture@example.invalid")
     result.git("config", "core.hooksPath", "")
     result.git("remote", "add", "origin", "https://github.com/tj-agents/fixture.git")
-    ADOPT.run(result.root, [], ["base"], "write")
+    ADOPT.run(result.root, [], ["base"], "write", scope="project")
     result.commit("Base selection")
     return result
 
@@ -203,18 +203,14 @@ def test_approval_added_after_conflict_is_not_silently_discarded(
 
 
 def test_batch_worktrees_share_exclusions_without_losing_owners(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plugin_source: Path
 ) -> None:
     monkeypatch.setattr(ADOPT, "current_roster", ADOPT.load_roster)
     monkeypatch.setattr(
         ADOPT.repo_config.published_harness, "declarations", none_declared
     )
-    root, linked = tmp_path / "first", tmp_path / "linked"
-    root.mkdir()
+    root, linked = plugin_source, tmp_path / "linked"
     git = GitScenario(root)
-    git.git("init", "--initial-branch=main")
-    git.git("config", "user.name", "Fixture")
-    git.git("config", "user.email", "fixture@example.invalid")
     git.git("config", "core.hooksPath", "")
     git.git("remote", "add", "origin", "https://github.com/foreign/fixture.git")
     (root / "README.md").write_text("fixture\n", encoding="utf-8")

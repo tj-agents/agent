@@ -1,7 +1,7 @@
 """Shared launch primitives for the native agent CLIs, on Windows and POSIX.
 
-Every agent tab runs under `tj run`, opened in Windows Terminal or tmux; a launch is confirmed when
-`tj run` records it in agent-store.
+Managed agent tabs open in Windows Terminal or tmux. The result distinguishes wrapper
+registration from the provider's observed startup stage.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 import agent_store
 import owned_launch
+import session_resume
 import work_item
 
 LAUNCH_ID_ENVIRONMENT = 'TJ_RUN_LAUNCH_ID'
@@ -316,7 +317,7 @@ def open_tab(
 
 def await_launch(launch_id, want_session=False, timeout=TJ_RUN_TIMEOUT_SECONDS,
                  session_timeout=SESSION_TIMEOUT_SECONDS, clock=time.monotonic, wait=time.sleep):
-    """The `show --launch-id` data once tj run records the launch, and its session when asked for."""
+    """The recorded `show --launch-id` data, with a native session when requested."""
     start = clock()
     while True:
         try:
@@ -325,7 +326,7 @@ def await_launch(launch_id, want_session=False, timeout=TJ_RUN_TIMEOUT_SECONDS,
             if error.code != 'not-found':
                 raise LaunchError(f'agent-store could not read launch {launch_id}: {error}') from error
             if clock() - start >= timeout:
-                raise LaunchTimeout(f'tj run did not record launch {launch_id} within {timeout} seconds; '
+                raise LaunchTimeout(f'the managed wrapper did not record launch {launch_id} within {timeout} seconds; '
                                     'check the new tab before launching again.') from None
         else:
             if not want_session or shown.get('session'):
@@ -349,8 +350,9 @@ def launch(
     environ=os.environ,
     run=subprocess.run,
     tmux_session=None,
+    resume_from=None,
 ):
-    """Open a `tj run` tab for one agent and return its confirmed launch."""
+    """Open a managed tab and return its recorded launch and observed startup stage."""
     adapter = host_launch(host)
     tj = shutil.which("tj")
     if not tj:
@@ -364,6 +366,12 @@ def launch(
     }
     cleared, forced = launch_environment(clear=clear, force=force)
     prepared = adapter.prepare(directory, title, arguments, tj, environ)
+    if resume_from is not None and prepared.session is None:
+        raise LaunchError("Recovery requires the provider's exact native session")
+    if prepared.session is not None and not prepared.created:
+        resume_from = session_resume.predecessor(prepared.session, resume_from)
+        if resume_from is not None:
+            session_resume.check(prepared.session, resume_from)
     dispatched, completed = False, False
 
     def dispatch(command, **options):
@@ -376,9 +384,9 @@ def launch(
     try:
         shown = _launch_prepared(
             host, directory, title, prepared, tj, launch_id, item, parent, want_session,
-            cleared, forced, environ, dispatch, tmux_session,
+            cleared, forced, environ, dispatch, tmux_session, resume_from,
         )
-        adapter.confirm(prepared, arguments, launch_id)
+        shown["confirmation"] = adapter.confirm(prepared, arguments, launch_id)
         completed = True
         return shown
     finally:
@@ -391,10 +399,11 @@ def launch(
 def _launch_prepared(
     host, directory, title, prepared, tj, launch_id, item, parent, want_session,
     cleared, forced, environ, run, tmux_session,
+    resume_from,
 ):
     command = [
         tj,
-        "run",
+        "_session",
         "--host",
         str(host),
         "--title",
@@ -406,6 +415,7 @@ def _launch_prepared(
         launch_id,
         *(["--parent", parent] if parent else []),
         *(["--session", prepared.session] if prepared.session else []),
+        *(["--resume-from", resume_from] if resume_from else []),
         "--",
         *prepared.command,
     ]

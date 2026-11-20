@@ -12,8 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import install
 import jobs
+import plugin_references
 import plugin_update
 from tj_agent.host import Host
 from tj_cli import process
@@ -60,14 +60,37 @@ def publish(host: Host, revision: str) -> str | None:
 
 
 def refresh_runtime(host: Host) -> str | None:
-    """Run the tj lifecycle commands from the Agent package this host now has."""
+    """Converge the native pair and launch bindings using the updated package's pins."""
     state = jobs.state_directory()
     package = plugin_update.agent_package(host, state)
     if package is None:
-        return None
+        return (
+            "the updated Agent package is unavailable; "
+            "runtime convergence is unverified"
+        )
+    command = [sys.executable, "-B", str(package / ".agents/agent/runtime/install.py")]
+    for step in (
+        "native CLI",
+        "agent-store CLI",
+        "tj lifecycle commands",
+        "shell profiles",
+    ):
+        command.extend(("--step", step))
     try:
-        install.install_runtime(state / "bin", package)
-    except install.InstallError as error:
+        for mode in ((), ("--check",)):
+            result = process.run(
+                [*command, *mode],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=300,
+                check=False,
+            )
+            if result.returncode:
+                return (
+                    result.stderr or result.stdout
+                ).strip() or f"installer exit {result.returncode}"
+    except (OSError, subprocess.SubprocessError) as error:
         return str(error)
     return None
 
@@ -75,9 +98,26 @@ def refresh_runtime(host: Host) -> str | None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tj plugins", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    update = commands.add_parser("update", help="Refresh this host's plugins only")
+    update = commands.add_parser(
+        "update", help="Refresh plugins and native launch runtime"
+    )
     update.add_argument("--host", type=host_argument, choices=list(Host))
+    audit = commands.add_parser(
+        "audit",
+        help="Find a retired identity in projects, worktrees and host settings",
+    )
+    audit.add_argument("--identity", action="append", required=True)
+    audit.add_argument(
+        "--root",
+        type=Path,
+        action="append",
+        help="Additional repository or parent directory to scan",
+    )
     arguments = parser.parse_args(argv)
+    if arguments.command == "audit":
+        return plugin_references.audit(
+            arguments.identity, arguments.root or [Path.cwd()]
+        )
     try:
         host = selected_host(arguments.host, os.environ)
     except ValueError as error:
@@ -89,16 +129,17 @@ def main(argv: list[str] | None = None) -> int:
             GIT_COMMAND_ENTRIES
         ):
             del os.environ[name]
-    outcome = plugin_update.update(host, Digests(jobs.state_directory()), os.environ)
+    outcome = plugin_update.update(
+        host,
+        Digests(jobs.state_directory()),
+        os.environ,
+        converge_runtime=lambda: refresh_runtime(host),
+    )
     if outcome.failures:
         for failure in outcome.failures:
             print(f"  {failure}", file=sys.stderr)
         return 1
-    problem = refresh_runtime(host)
-    if problem:
-        print(f"{host}: tj commands runtime failed: {problem}", file=sys.stderr)
-        return 1
-    if outcome.changed and outcome.revision:
+    if outcome.revision:
         problem = publish(host, outcome.revision)
         if problem:
             print(f"{host}: tj update failed: {problem}", file=sys.stderr)

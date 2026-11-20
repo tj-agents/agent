@@ -3,7 +3,8 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping
+import tomllib
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ SCRIPTS = (
 )
 sys.path.insert(0, str(SCRIPTS))
 REPO_CONFIG: Any = importlib.import_module("repo_config")
+ADOPT: Any = importlib.import_module("adopt_plugins")
 
 
 @pytest.fixture
@@ -28,31 +30,72 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def git(root: Path, *arguments: str) -> None:
-    subprocess.run(
-        ["git", *arguments], cwd=root, capture_output=True, timeout=15, check=True
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"git {arguments!r} exited {result.returncode}; "
+        f"stdout={result.stdout!r}; stderr={result.stderr!r}"
     )
 
 
-def test_remote_owners_reads_every_fetch_url_with_its_rewrite(
-    repository: Path,
+@pytest.mark.parametrize("scope", ["project", "local"])
+def test_explicit_scope_does_not_depend_on_repository_owner(
+    repository: Path, scope: str
 ) -> None:
-    git(repository, "remote", "add", "origin", "https://github.com/first/x.git")
     git(
-        repository,
-        "remote",
-        "set-url",
-        "--add",
-        "origin",
-        "https://github.com/second/y.git",
+        repository, "remote", "add", "origin", "https://github.com/example-user/app.git"
     )
-    git(repository, "remote", "set-url", "--push", "origin", "https://github.com/p/q")
-    git(repository, "config", "url.https://github.com/rewritten/.insteadOf", "gh:")
-    git(repository, "remote", "add", "short", "gh:z.git")
-    assert REPO_CONFIG.remote_owners(repository) == {"first", "second", "rewritten"}
+    assert REPO_CONFIG.resolve_scope(repository, scope) == scope
 
 
-def test_remote_owners_is_empty_without_remotes(repository: Path) -> None:
-    assert REPO_CONFIG.remote_owners(repository) == set()
+@pytest.mark.parametrize("owner", [None, "example-user", "tj-agents", "Concertable"])
+def test_untracked_selection_defaults_local_regardless_of_owner(
+    repository: Path, owner: str | None
+) -> None:
+    if owner is not None:
+        git(
+            repository, "remote", "add", "origin", f"https://github.com/{owner}/app.git"
+        )
+    select(repository, "beta@tj-agents")
+    assert REPO_CONFIG.resolve_scope(repository, None) == "local"
+
+
+def test_a_missing_selection_defaults_local(repository: Path) -> None:
+    assert REPO_CONFIG.resolve_scope(repository, None) == "local"
+
+
+def test_tracked_selection_preserves_project_scope(repository: Path) -> None:
+    git(
+        repository, "remote", "add", "origin", "https://github.com/example-user/app.git"
+    )
+    select(repository, "beta@tj-agents")
+    git(repository, "add", ".agents/plugins.json")
+    assert REPO_CONFIG.resolve_scope(repository, None) == "project"
+    assert REPO_CONFIG.resolve_scope(repository, "local") == "local"
+
+
+def test_selection_scope_does_not_guess_after_git_failure(repository: Path) -> None:
+    def failed(
+        arguments: list[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            arguments, 128, stdout="", stderr="index unavailable"
+        )
+
+    with pytest.raises(REPO_CONFIG.lock_io.LockError, match="index unavailable"):
+        REPO_CONFIG.resolve_scope(repository, None, run=failed)
+
+
+def test_unversioned_root_defaults_project(tmp_path: Path) -> None:
+    assert REPO_CONFIG.resolve_scope(tmp_path, None) == "project"
+    assert REPO_CONFIG.resolve_scope(tmp_path, "local") == "local"
 
 
 def test_preflight_rejects_a_root_below_the_checkout(repository: Path) -> None:
@@ -96,7 +139,25 @@ DECLARED: dict[str, dict[str, Any]] = {
         "codex_forbidden_prefix_rules": [FORBID_GH_LOGIN],
     },
     "beta@tj-agents": {"claude_allow": ["Bash(uv sync)"], "codex_prefix_rules": []},
+    "gamma@tj-agents": {"claude_allow": ["Bash(gamma)"], "codex_prefix_rules": []},
+    "delta@tj-agents": {"claude_allow": [], "codex_prefix_rules": []},
 }
+DEPENDENCIES: dict[str, list[object]] = {
+    "delta": ["gamma"],
+    "gamma": ["delta@tj-agents"],
+}
+
+
+def catalog(dependencies: Mapping[str, list[object]]) -> dict[str, Any]:
+    return {
+        "plugins": [
+            {
+                "name": identity.partition("@")[0],
+                "dependencies": dependencies.get(identity.partition("@")[0], []),
+            }
+            for identity in DECLARED
+        ]
+    }
 
 
 def select(root: Path, *plugins: str) -> Path:
@@ -145,10 +206,35 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         marketplaces: Mapping[str, Mapping[str, str]], identities: Iterable[str]
     ) -> dict[str, dict[str, Any]]:
         lookups.append(sorted(identities))
-        return {identity: DECLARED[identity] for identity in identities}
+        published = {"tj-agents": catalog(DEPENDENCIES)}
+        closure = REPO_CONFIG.published_harness.closure(identities, published.get)
+        return {identity: DECLARED[identity] for identity in closure}
 
     monkeypatch.setattr(REPO_CONFIG.published_harness, "declarations", declarations)
     return lookups
+
+
+@pytest.fixture
+def fetched(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[Mapping[str, list[object]]], None]:
+    """Write the catalog this machine last fetched, with the given dependencies."""
+    home = tmp_path_factory.mktemp("claude-home")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex"))
+    path = home / "plugins/marketplaces/tj-agents/.claude-plugin/marketplace.json"
+    path.parent.mkdir(parents=True)
+
+    def write(dependencies: Mapping[str, list[object]]) -> None:
+        path.write_text(json.dumps(catalog(dependencies)), encoding="utf-8")
+
+    write({})
+    return write
+
+
+def enabled(root: Path) -> dict[str, bool]:
+    settings = json.loads((root / ".claude/settings.json").read_text(encoding="utf-8"))
+    return dict(settings["enabledPlugins"])
 
 
 def permissions(root: Path) -> dict[str, list[str]]:
@@ -161,12 +247,130 @@ def rules(root: Path) -> str | None:
     return path.read_text(encoding="utf-8") if path.is_file() else None
 
 
+def test_project_adoption_unwinds_local_ownership_and_preserves_authored_settings(
+    repository: Path, published: list[list[str]]
+) -> None:
+    claude = repository / ".claude/settings.local.json"
+    claude.parent.mkdir()
+    claude.write_text(
+        json.dumps(
+            {
+                "custom": "keep",
+                "enabledPlugins": {"other@else": True},
+                "permissions": {"allow": ["Bash(mine)"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    codex = repository / ".codex/config.toml"
+    codex.parent.mkdir()
+    codex.write_text(
+        'model = "my-model"\n[plugins."other@else"]\nenabled = true\n', encoding="utf-8"
+    )
+    exclude = repository / ".git/info/exclude"
+    exclude.write_text("# authored\nmy-file\n", encoding="utf-8")
+    roster = ADOPT.load_roster()
+    roster["plugins"]["beta"] = []
+    ADOPT.run(repository, [], ["beta"], "write", scope="local", roster=roster)
+    assert (repository / ".agents/repo-capabilities.local.json").is_file()
+
+    ADOPT.run(repository, [], ["beta"], "write", scope="project", roster=roster)
+
+    assert not (repository / ".agents/repo-capabilities.local.json").exists()
+    local = json.loads(claude.read_text(encoding="utf-8"))
+    assert local["custom"] == "keep"
+    assert local["enabledPlugins"] == {"other@else": True}
+    assert local["permissions"]["allow"] == ["Bash(mine)"]
+    assert tomllib.loads(codex.read_text(encoding="utf-8"))["model"] == "my-model"
+    assert exclude.read_text(encoding="utf-8") == "# authored\nmy-file\n"
+    assert (
+        ADOPT.run(repository, [], ["beta"], "write", scope="project", roster=roster)
+        == []
+    )
+    config = tomllib.loads(codex.read_text(encoding="utf-8"))
+    assert config["plugins"]["other@else"] == {"enabled": True}
+
+
+@pytest.mark.parametrize("changed", ["claude", "codex", "rules", "exclude"])
+def test_project_adoption_refuses_changed_local_owned_content(
+    repository: Path, published: list[list[str]], changed: str
+) -> None:
+    roster = ADOPT.load_roster()
+    roster["plugins"]["alpha"] = []
+    ADOPT.run(repository, [], ["alpha"], "write", scope="local", roster=roster)
+    paths = {
+        "claude": repository / ".claude/settings.local.json",
+        "codex": repository / ".codex/config.toml",
+        "rules": repository / ".codex/rules/agent-harness.rules",
+        "exclude": repository / ".git/info/exclude",
+    }
+    if changed == "claude":
+        settings = json.loads(paths[changed].read_text(encoding="utf-8"))
+        settings["enabledPlugins"]["alpha@tj-agents"] = False
+        paths[changed].write_text(json.dumps(settings), encoding="utf-8")
+    elif changed == "exclude":
+        text = paths[changed].read_text(encoding="utf-8")
+        paths[changed].write_text(
+            text.replace(
+                REPO_CONFIG.EXCLUDE_END, "authored\n" + REPO_CONFIG.EXCLUDE_END
+            ),
+            encoding="utf-8",
+        )
+    else:
+        paths[changed].write_text("changed\n", encoding="utf-8")
+    before = {path: path.read_bytes() for path in paths.values()}
+    marker = repository / REPO_CONFIG.LOCAL_STATE
+    marker_before = marker.read_bytes()
+
+    with pytest.raises(REPO_CONFIG.lock_io.LockError, match=r"changed|owned"):
+        ADOPT.run(repository, [], ["alpha"], "write", scope="project", roster=roster)
+
+    assert {path: path.read_bytes() for path in paths.values()} == before
+    assert marker.read_bytes() == marker_before
+    assert not (repository / ".claude/settings.json").exists()
+
+
+@pytest.mark.parametrize("existing_settings", [False, True])
+def test_adoption_without_permission_choice_preserves_native_controls(
+    repository: Path, published: list[list[str]], existing_settings: bool
+) -> None:
+    selection = select(repository, "beta@tj-agents")
+    claude = repository / ".claude/settings.json"
+    codex = repository / ".codex/config.toml"
+    native_claude = {"defaultMode": "plan", "disableBypassPermissionsMode": "disable"}
+    native_codex = {"approval_policy": "untrusted", "sandbox_mode": "read-only"}
+    if existing_settings:
+        claude.parent.mkdir()
+        claude.write_text(json.dumps({"permissions": native_claude}), encoding="utf-8")
+        codex.parent.mkdir()
+        codex.write_text(
+            'approval_policy = "untrusted"\nsandbox_mode = "read-only"\n',
+            encoding="utf-8",
+        )
+
+    REPO_CONFIG.run(selection, "write", scope="project")
+
+    actual_claude = json.loads(claude.read_text(encoding="utf-8"))["permissions"]
+    actual_codex = tomllib.loads(codex.read_text(encoding="utf-8"))
+    assert actual_claude == {
+        "allow": ["Bash(uv sync)"],
+        **(native_claude if existing_settings else {}),
+    }
+    for key, value in native_codex.items():
+        if existing_settings:
+            assert actual_codex[key] == value
+        else:
+            assert key not in actual_codex
+    assert "default_permissions" not in actual_codex
+    assert published == [["beta@tj-agents"]]
+
+
 def test_run_commits_selected_plugins_allow_and_deny_rules(
     repository: Path, published: list[list[str]]
 ) -> None:
     selection = select(repository, "alpha@tj-agents", "beta@tj-agents")
 
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
 
     assert permissions(repository) == {
         "allow": ["Bash(tj item:*)", "Bash(uv sync)"],
@@ -178,46 +382,92 @@ def test_run_commits_selected_plugins_allow_and_deny_rules(
     assert text.count('decision = "forbidden"') == 1
     assert 'pattern = ["gh", "auth", "login"],\n    decision = "forbidden"' in text
     assert published == [["alpha@tj-agents", "beta@tj-agents"]]
-    assert REPO_CONFIG.run(selection, "check") == []
+    assert REPO_CONFIG.run(selection, "check", scope="project") == []
 
 
-def test_main_reads_a_primary_selection_and_overlay_but_writes_to_the_linked_worktree(
-    tmp_path: Path, published: list[list[str]]
-) -> None:
-    primary = tmp_path / "primary"
-    primary.mkdir()
+@pytest.fixture
+def inherited_checkout(tmp_path: Path, plugin_source: Path) -> tuple[Path, Path]:
+    primary = plugin_source
     (primary / "README.md").write_text("primary\n", encoding="utf-8")
-    git(primary, "init", "--quiet")
     git(primary, "add", "README.md")
-    git(
-        primary,
-        "-c",
-        "user.name=t",
-        "-c",
-        "user.email=t@example.test",
-        "commit",
-        "-qm",
-        "initial",
-    )
+    git(primary, "commit", "-qm", "initial")
     linked = tmp_path / "linked"
     git(primary, "worktree", "add", "--quiet", str(linked))
-    selection = select(primary, "alpha@tj-agents")
+    select(primary, "alpha@tj-agents")
     overlay(primary, {"claude_allow": ["Bash(local overlay:*)"]})
+    return primary, linked
 
+
+@pytest.mark.parametrize("scope", [None, "local", "project"])
+@pytest.mark.parametrize("explicit_lock", [False, True])
+def test_main_reads_a_primary_selection_and_overlay_but_writes_to_the_linked_worktree(
+    inherited_checkout: tuple[Path, Path],
+    published: list[list[str]],
+    scope: str | None,
+    explicit_lock: bool,
+) -> None:
+    primary, linked = inherited_checkout
     inherited = REPO_CONFIG.plugin_selection.resolve(linked)
-    assert inherited == selection
-    assert (
-        REPO_CONFIG.main(
-            ["--root", str(linked), "--lock", str(inherited), "--mode", "write"]
-        )
-        == 0
-    )
+    assert inherited == primary / ".agents/plugins.json"
+    before = inherited.read_bytes()
+    arguments = ["--root", str(linked), "--mode", "write"]
+    if scope is not None:
+        arguments.extend(["--scope", scope])
+    if explicit_lock:
+        arguments.extend(["--lock", str(inherited)])
+    assert REPO_CONFIG.main(arguments) == 0
 
-    linked_settings = linked / ".claude/settings.json"
+    filename = "settings.json" if scope == "project" else "settings.local.json"
+    linked_settings = linked / ".claude" / filename
     assert linked_settings.is_file()
     assert "Bash(local overlay:*)" in linked_settings.read_text(encoding="utf-8")
-    assert not (primary / ".claude/settings.json").exists()
+    claude = json.loads(linked_settings.read_text(encoding="utf-8"))
+    codex = tomllib.loads((linked / ".codex/config.toml").read_text(encoding="utf-8"))
+    assert "defaultMode" not in claude["permissions"]
+    assert (
+        not {"approval_policy", "default_permissions", "sandbox_mode", "projects"}
+        & codex.keys()
+    )
+    assert (linked / ".agents/repo-capabilities.local.json").exists() == (
+        scope != "project"
+    )
+    assert inherited.read_bytes() == before
+    assert not (linked / ".agents/plugins.json").exists()
+    assert not (primary / ".claude").exists()
+    assert not (primary / ".codex").exists()
     assert published == [["alpha@tj-agents"]]
+
+
+@pytest.mark.parametrize("mode", ["check", "write"])
+@pytest.mark.parametrize("malformed", ["json", "directory"])
+def test_main_refuses_a_malformed_local_selection_instead_of_inheriting(
+    inherited_checkout: tuple[Path, Path],
+    published: list[list[str]],
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+    malformed: str,
+) -> None:
+    primary, linked = inherited_checkout
+    local = linked / ".agents/plugins.json"
+    local.parent.mkdir()
+    if malformed == "json":
+        local.write_text("{broken", encoding="utf-8")
+    else:
+        local.mkdir()
+    primary_selection = (primary / ".agents/plugins.json").read_bytes()
+
+    assert REPO_CONFIG.main(["--root", str(linked), "--mode", mode]) == 1
+
+    assert "Cannot read JSON" in capsys.readouterr().err
+    assert not published
+    assert not (linked / ".claude").exists()
+    assert not (linked / ".codex").exists()
+    assert not (linked / ".agents/repo-capabilities.local.json").exists()
+    assert (primary / ".agents/plugins.json").read_bytes() == primary_selection
+    if malformed == "json":
+        assert local.read_text(encoding="utf-8") == "{broken"
+    else:
+        assert local.is_dir()
 
 
 def test_run_lets_the_repository_overlay_extend_and_override_plugins(
@@ -235,7 +485,7 @@ def test_run_lets_the_repository_overlay_extend_and_override_plugins(
         },
     )
 
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
 
     assert permissions(repository) == {
         "allow": ["Bash(gh auth login *)", "Edit(/docs/**)"],
@@ -251,7 +501,7 @@ def test_deselecting_a_plugin_reports_drift_then_removes_its_rules(
     repository: Path, published: list[list[str]]
 ) -> None:
     selection = select(repository, "alpha@tj-agents", "beta@tj-agents")
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
     git(repository, "add", "--all")
     git(
         repository,
@@ -266,16 +516,16 @@ def test_deselecting_a_plugin_reports_drift_then_removes_its_rules(
     )
     select(repository, "beta@tj-agents")
 
-    assert REPO_CONFIG.run(selection, "check") == [
+    assert REPO_CONFIG.run(selection, "check", scope="project") == [
         ".claude/settings.json",
         ".codex/config.toml",
         ".codex/rules/agent-harness.rules",
     ]
-    REPO_CONFIG.run(selection, "write")
+    REPO_CONFIG.run(selection, "write", scope="project")
 
     assert permissions(repository) == {"allow": ["Bash(uv sync)"]}
     assert rules(repository) is None
-    assert REPO_CONFIG.run(selection, "check") == []
+    assert REPO_CONFIG.run(selection, "check", scope="project") == []
 
 
 def test_run_rejects_deny_entries_nobody_declares(
@@ -294,7 +544,7 @@ def test_run_rejects_deny_entries_nobody_declares(
     with pytest.raises(
         REPO_CONFIG.lock_io.LockError, match=r"unmanaged permissions\.deny entries"
     ):
-        REPO_CONFIG.run(selection, "write")
+        REPO_CONFIG.run(selection, "write", scope="project")
 
 
 def test_run_rejects_an_overlay_rule_naming_a_machine_path(
@@ -304,20 +554,78 @@ def test_run_rejects_an_overlay_rule_naming_a_machine_path(
     overlay(repository, {"claude_deny": ["Read(C:/Users/name/.ssh/**)"]})
 
     with pytest.raises(REPO_CONFIG.lock_io.LockError, match="machine-specific path"):
-        REPO_CONFIG.run(selection, "write")
+        REPO_CONFIG.run(selection, "write", scope="project")
     assert not (repository / ".claude").exists()
 
 
-def test_preserved_permissions_need_no_published_lookup(
+def test_run_enables_the_dependency_closure_in_both_hosts_with_its_permissions(
     repository: Path, published: list[list[str]]
 ) -> None:
-    selection = select(repository, "alpha@tj-agents")
+    selection = select(repository, "delta@tj-agents")
+    git(repository, "add", ".agents/plugins.json")
+
     REPO_CONFIG.run(selection, "write")
+
+    assert enabled(repository) == {"delta@tj-agents": True, "gamma@tj-agents": True}
+    codex = (repository / ".codex/config.toml").read_text(encoding="utf-8")
+    for identity in ("delta@tj-agents", "gamma@tj-agents"):
+        assert f'[plugins."{identity}"]\nenabled = true' in codex
+    assert permissions(repository) == {"allow": ["Bash(gamma)"]}
+    assert json.loads(selection.read_text(encoding="utf-8"))["plugins"] == [
+        "delta@tj-agents"
+    ]
+    assert published == [["delta@tj-agents"]]
+    assert REPO_CONFIG.run(selection, "check") == []
+
+
+def test_preserved_generation_keeps_dependencies_a_stale_fetched_catalog_omits(
+    repository: Path,
+    published: list[list[str]],
+    fetched: Callable[[Mapping[str, list[object]]], None],
+) -> None:
+    selection = select(repository, "delta@tj-agents")
+    git(repository, "add", ".agents/plugins.json")
+    REPO_CONFIG.run(selection, "write")
+
+    assert REPO_CONFIG.run(selection, "write", preserve_permissions=True) == []
+    assert enabled(repository) == {"delta@tj-agents": True, "gamma@tj-agents": True}
+
+
+def test_preserved_generation_enables_new_dependencies_from_the_fetched_catalog(
+    repository: Path,
+    published: list[list[str]],
+    fetched: Callable[[Mapping[str, list[object]]], None],
+) -> None:
+    selection = select(repository, "alpha@tj-agents")
+    git(repository, "add", ".agents/plugins.json")
+    REPO_CONFIG.run(selection, "write")
+    fetched({"delta": ["gamma"]})
+    select(repository, "alpha@tj-agents", "delta@tj-agents")
+
+    REPO_CONFIG.run(selection, "write", preserve_permissions=True)
+
+    assert enabled(repository) == {
+        "alpha@tj-agents": True,
+        "delta@tj-agents": True,
+        "gamma@tj-agents": True,
+    }
+    assert published == [["alpha@tj-agents"]]
+
+
+def test_preserved_permissions_need_no_published_lookup(
+    repository: Path,
+    published: list[list[str]],
+    fetched: Callable[[Mapping[str, list[object]]], None],
+) -> None:
+    selection = select(repository, "alpha@tj-agents")
+    REPO_CONFIG.run(selection, "write", scope="project")
     committed = permissions(repository)
     committed_rules = rules(repository)
     select(repository, "alpha@tj-agents", "beta@tj-agents")
 
-    assert REPO_CONFIG.run(selection, "write", preserve_permissions=True) == [
+    assert REPO_CONFIG.run(
+        selection, "write", scope="project", preserve_permissions=True
+    ) == [
         ".claude/settings.json",
         ".codex/config.toml",
     ]
@@ -348,7 +656,7 @@ def test_run_writes_nothing_to_user_settings(
     monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(home / ".agents-state"))
     before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
 
-    REPO_CONFIG.run(select(repository, "alpha@tj-agents"), "write")
+    REPO_CONFIG.run(select(repository, "alpha@tj-agents"), "write", scope="project")
 
     assert {
         path: path.read_bytes() for path in home.rglob("*") if path.is_file()

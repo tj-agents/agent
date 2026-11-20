@@ -166,14 +166,14 @@ class ProfileTests(Machine):
             )
             self.assertEqual([], list(path.parent.glob("*.bak")))
 
-    def test_profiles_put_the_runtime_bin_on_path_and_wrap_no_host(self):
+    def test_profiles_put_the_runtime_bin_on_path_and_manage_both_hosts(self):
         posix = install.posix_block(install.runtime_bin(self.context(windows=False)))
         self.assertIn(shlex.quote(str(self.home / ".agents-state" / "bin")), posix)
         for block in (self.block(), posix):
-            self.assertNotIn("claude", block)
-            self.assertNotIn("codex", block)
+            self.assertIn("tj claude", block)
+            self.assertIn("tj codex", block)
 
-    def test_a_stale_block_wrapping_the_hosts_is_rewritten_without_the_wrappers(self):
+    def test_a_stale_launcher_is_replaced_by_the_current_managed_commands(self):
         path = self.profiles()[0]
         path.parent.mkdir(parents=True)
         stale = "\r\n".join(
@@ -751,16 +751,29 @@ class RuntimeTests(Machine):
         context = self.context(windows=os.name == "nt")
         install.apply_runtime(context)
         runtime = context.state_directory / "bin" / ".agents" / "agent" / "runtime"
-        for script in install.LIFECYCLE_COMMANDS.values():
+        native_help = subprocess.run(
+            [str(Path(sys.executable).resolve()), "--help"],
+            capture_output=True, text=True, check=True, timeout=15,
+        ).stdout
+        for command, script in install.LIFECYCLE_COMMANDS.items():
+            arguments = [str(runtime / script), "--help"]
+            if command in {host.value for host in Host}:
+                arguments = [
+                    str(ROOT / "tests/fixtures/installed_command_probe.py"),
+                    str(runtime), command, script,
+                ]
             result = subprocess.run(
-                [sys.executable, "-E", "-s", "-B", str(runtime / script), "--help"],
+                [sys.executable, "-E", "-s", "-B", *arguments],
                 cwd=self.root,
                 capture_output=True,
                 text=True,
                 timeout=15,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            self.assertIn("usage: tj ", result.stdout)
+            if command in {host.value for host in Host}:
+                self.assertEqual(native_help, result.stdout)
+            else:
+                self.assertIn("usage: tj ", result.stdout)
 
     def test_runtime_check_detects_export_drift_without_writing_and_preserves_unrelated_files(
         self,
@@ -1102,7 +1115,6 @@ class RunStepsTests(Machine):
                 "Git long paths",
                 "native CLI",
                 "native permission defaults",
-                "Codex shared daemon",
                 "agent-store CLI",
                 "tj item CLI",
                 "worktrunk",
@@ -1235,6 +1247,12 @@ class NativePermissionsTests(Machine):
 
     def test_open_app_blocks_all_writes_and_closed_app_state_is_read_again(self):
         context = self.context()
+        settings = self.checkout / ".agents/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(
+            json.dumps({"configuration": {"core": {"permissions": "standard"}}}),
+            encoding="utf-8",
+        )
         app = context.codex_home / ".codex-global-state.json"
         app.parent.mkdir(parents=True, exist_ok=True)
         state = {
@@ -1267,6 +1285,75 @@ class NativePermissionsTests(Machine):
 
 def machine_context(home: Path) -> install.Context:
     return install.Context(home=home, environ={}, windows=False)
+
+
+@pytest.mark.parametrize("windows", [False, True])
+@pytest.mark.parametrize("existing_settings", [False, True])
+@pytest.mark.parametrize("project_document", [None, {"configuration": {"core": {}}}])
+def test_install_without_permission_choice_preserves_native_settings_and_credentials(
+    tmp_path: Path,
+    windows: bool,
+    existing_settings: bool,
+    project_document: dict[str, object] | None,
+) -> None:
+    project = tmp_path / "generic project ü"
+    project.mkdir()
+    context = install.Context(
+        home=tmp_path / "generic home", environ={}, windows=windows, project=project
+    )
+    if project_document is not None:
+        settings = project / ".agents/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps(project_document), encoding="utf-8")
+    if existing_settings:
+        files = {
+            context.claude_home / "settings.json":
+                '{"permissions":{"defaultMode":"plan","deny":["Bash(custom)"]},'
+                '"apiKeyHelper":"native-auth-helper"}\n',
+            context.claude_home / ".credentials.json": '{"fixture":true}\n',
+            context.codex_home / "config.toml":
+                'approval_policy = "untrusted"\nsandbox_mode = "read-only"\n'
+                'cli_auth_credentials_store = "keyring"\n',
+            context.codex_home / "auth.json": '{"fixture":true}\n',
+            context.codex_home / ".codex-global-state.json":
+                '{"electron-persisted-atom-state":'
+                '{"agent-mode-by-host-id":{"local":"guardian-approvals"}}}\n',
+        }
+        for path, text in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+    before = snapshot(tmp_path)
+
+    assert install.check_native_permissions(context) == []
+    assert install.apply_native_permissions(context) == []
+    assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("hosts", [(), (Host.CLAUDE,), (Host.CODEX,), tuple(Host)])
+def test_install_plugin_setup_checks_only_installed_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hosts: tuple[Host, ...]
+) -> None:
+    executables = {host: f"native-{host.value}" for host in hosts}
+    context = install.Context(
+        home=tmp_path,
+        environ={},
+        windows=False,
+        project=tmp_path,
+        which=lambda name: next(
+            (path for host, path in executables.items() if host.value == name), None
+        ),
+        onboard=True,
+    )
+    monkeypatch.setattr(install.native_runtime, "pending", lambda: ())
+    with (
+        mock.patch.object(install.required_plugins, "check_setup", return_value=[]) as check,
+        mock.patch.object(install.required_plugins, "converge_setup", return_value=[]) as apply,
+    ):
+        assert install.check_plugin_setup(context) == []
+        assert install.apply_plugin_setup(context) == []
+
+    check.assert_called_once_with(tmp_path, hosts, executables, context.state_directory)
+    apply.assert_called_once_with(tmp_path, hosts, executables, context.state_directory, True)
 
 
 @pytest.mark.parametrize("windows", [False, True])

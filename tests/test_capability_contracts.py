@@ -18,10 +18,10 @@ import host_plugins
 import owned_launch
 import pytest
 import session_hook
-import work_item
 from claude import installed as claude_installed
 from codex import installed as codex_installed
 from codex import launch as codex_launch
+from codex import processes as codex_processes
 from fake_machine import CodexPlugins, write_json
 from launch_contract import PreparedLaunch
 from tj_agent import worktrees
@@ -29,6 +29,22 @@ from tj_agent.host import Host
 from tj_cli import process
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def isolated_native_boundaries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+
+    def unexpected(*_arguments: object, **_options: object) -> None:
+        pytest.fail(
+            "Contract tests must supply a fake native process or Store boundary"
+        )
+
+    monkeypatch.setattr(process, "run", unexpected)
+    monkeypatch.setattr(process, "start", unexpected)
+    monkeypatch.setattr(agent_store, "run", unexpected)
 
 
 @pytest.fixture(params=list(Host), ids=str)
@@ -109,18 +125,21 @@ def test_claude_abandon_preserves_existing_session_without_external_calls(
     assert prepared.session == "claude:existing-session" and not prepared.created
 
 
+@pytest.mark.parametrize("item", [None, "130"])
 def test_handoff_preserves_item_parent_and_standing_rule(
     host: Host,
-    adapter: ModuleType,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    item: str | None,
 ) -> None:
     path = ROOT / f".agents/agent/resources/handoff/launch_{host}.py"
     spec = importlib.util.spec_from_file_location(f"parity_handoff_{host}", path)
     assert spec is not None and spec.loader is not None
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
-    monkeypatch.setattr(launcher, "_load_agent_cli", lambda: agent_cli)
+    cli = launcher._load_agent_cli()
+    monkeypatch.setattr(launcher, "_load_agent_cli", lambda: cli)
+    adapter = cli.host_launch(host)
     monkeypatch.setattr(
         adapter, "resolve_executable", lambda **kwargs: ("fixture-agent", {})
     )
@@ -129,27 +148,32 @@ def test_handoff_preserves_item_parent_and_standing_rule(
         "run",
         lambda *arguments: {"session": {"title": "parent"}},
     )
+
+    def unexpected_creation(*args: object, **kwargs: object) -> None:
+        pytest.fail("An existing or omitted handoff item must not create tracker work")
+
+    monkeypatch.setattr(cli.work_item, "create", unexpected_creation)
     canonical = "azure-devops:dev.azure.com/contoso:130"
 
-    def reference(directory: Path, value: str) -> str:
-        assert directory == tmp_path and value == "130"
+    def existing(directory: Path, value: str) -> str:
+        assert item is not None and directory == tmp_path and value == item
         return canonical
 
-    monkeypatch.setattr(work_item, "reference", reference)
-    calls: list[tuple[Host, list[str], dict[str, str]]] = []
+    monkeypatch.setattr(cli.work_item, "existing", existing)
+    calls: list[tuple[Host, list[str], dict[str, str | None]]] = []
 
     def launch(
         selected: Host,
         directory: Path,
         title: str,
         arguments: list[str],
-        **options: str,
-    ) -> dict[str, dict[str, str]]:
+        **options: str | None,
+    ) -> dict[str, str | dict[str, str]]:
         assert directory == tmp_path and title == "parity"
         calls.append((selected, arguments, options))
-        return {"launch": {"launch_id": "fixture"}}
+        return {"launch": {"launch_id": "fixture"}, "confirmation": "dispatched"}
 
-    monkeypatch.setattr(agent_cli, "launch", launch)
+    monkeypatch.setattr(cli, "launch", launch)
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Work on the fixture.", encoding="utf-8")
     assert (
@@ -163,8 +187,7 @@ def test_handoff_preserves_item_parent_and_standing_rule(
                 "parity",
                 "--lane",
                 "L4",
-                "--item",
-                "130",
+                *(["--item", item] if item is not None else []),
                 "--parent",
                 "claude:parent",
             ]
@@ -173,8 +196,12 @@ def test_handoff_preserves_item_parent_and_standing_rule(
     )
     selected, arguments, options = calls.pop()
     assert selected is host
-    assert options == {"item": canonical, "parent": "claude:parent"}
+    assert options == {
+        "item": canonical if item is not None else None,
+        "parent": "claude:parent",
+    }
     assert str(prompt) in arguments[-1] and "Standing rule:" in arguments[-1]
+    assert "tj finish" in arguments[-1]
 
 
 def test_session_start_binds_the_launch(
@@ -182,6 +209,7 @@ def test_session_start_binds_the_launch(
 ) -> None:
     calls: list[tuple[str, ...]] = []
     claims: list[tuple[Host, str, Path, Mapping[str, str]]] = []
+    native_id = "123e4567-e89b-12d3-a456-426614174000"
 
     def capture(
         selected: Host, native_id: str, root: Path, environ: Mapping[str, str]
@@ -192,6 +220,8 @@ def test_session_start_binds_the_launch(
 
     def store(*arguments: str) -> dict[str, object]:
         calls.append(arguments)
+        if arguments == ("show", f"{host}:{native_id}"):
+            raise agent_store.AgentStoreError("not-found", "New native session")
         if arguments == ("show", "--launch-id", "launch"):
             return {
                 "launch": {
@@ -206,19 +236,27 @@ def test_session_start_binds_the_launch(
     monkeypatch.setattr(agent_store, "run", store)
     monkeypatch.setattr(session_hook, "worktree", lambda cwd: "/fixture")
     monkeypatch.setattr(owned_launch, "current", lambda: "launch")
-    session_hook.start(host, "native", "/fixture/sub", {"TJ_RUN_LAUNCH_ID": "launch"})
+
+    def owner(arguments: list[str], value: object = None) -> dict[str, object]:
+        assert arguments == ["owner", "--launch-id", "launch"]
+        assert value is None
+        return {"pid": 123, "started_at": "2026-11-18T04:00:00.1234567Z"}
+
+    monkeypatch.setattr(codex_processes, "query", owner)
+    session_hook.start(host, native_id, "/fixture/sub", {"TJ_RUN_LAUNCH_ID": "launch"})
     assert claims == [
-        (host, "native", Path("/fixture"), {"TJ_RUN_LAUNCH_ID": "launch"})
+        (host, native_id, Path("/fixture"), {"TJ_RUN_LAUNCH_ID": "launch"})
     ]
     expected: list[tuple[str, ...]] = (
-        [("show", "codex:native")] if host is Host.CODEX else []
+        [("show", f"codex:{native_id}")] if host is Host.CODEX else []
     )
     expected += [
         ("show", "--launch-id", "launch"),
+        ("show", f"{host}:{native_id}"),
         (
             "register",
             "--session",
-            f"{host}:native",
+            f"{host}:{native_id}",
             "--cwd",
             "/fixture/sub",
             "--worktree",
@@ -241,7 +279,8 @@ def test_session_title_reaches_the_native_host(
         assert arguments[arguments.index("--name") + 1] == "parity title"
     else:
         server = Server()
-        monkeypatch.setattr(adapter, "daemon", lambda: server)
+        monkeypatch.setattr(adapter, "executable", lambda: "fixture-codex")
+        monkeypatch.setattr(adapter.startup, "connection", lambda *_args: server)
         adapter.name_session("native", "parity title")
         assert server.calls == [
             ("thread/name/set", {"threadId": "native", "name": "parity title"})
@@ -332,7 +371,7 @@ def test_refresh_updates_selected_plugins(
         monkeypatch.setattr(installed, "read_user_config", lambda: "")
         monkeypatch.setattr(installed, "keep_project_scope", lambda *args: None)
         monkeypatch.setattr(installed, "trust_hooks", lambda report: None)
-        monkeypatch.setattr(codex_launch, "liveness", dict)
+        monkeypatch.setattr(codex_launch, "liveness", lambda **_options: {})
     installed.refresh(report, ("tj-agents",), lambda *args: False)
     assert any("agent@tj-agents" in command for command in report.commands)
     assert all(command[0] == str(host) for command in report.commands)

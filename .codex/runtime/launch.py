@@ -1,4 +1,4 @@
-"""Codex executable selection, daemon-attached launch arguments and thread liveness."""
+"""Codex executable selection, owned native launches and thread liveness."""
 
 import glob
 import json
@@ -7,13 +7,14 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from tj_cli import process
-from codex import startup
+from codex import observer, processes, startup
+from tj_agent.host import Host
 
 import agent_store
-from launch_contract import Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch
 from launch_errors import LaunchError
 from native_executable import is_script
 
@@ -179,7 +180,7 @@ def candidate_paths(
     return list(dict.fromkeys(candidates))
 
 
-def resolve_executable(minimum="0.154.0", candidates=None):
+def resolve_executable(minimum=startup.MINIMUM_VERSION, candidates=None):
     """The newest native Codex executable that answers --version, as (path, version)."""
     paths = candidate_paths() if candidates is None else candidates
     found = []
@@ -224,9 +225,30 @@ def executable() -> str:
     return resolve_executable()[0]
 
 
+def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
+    options = tuple(arguments)
+    before_prompt = options[: options.index("--")] if "--" in options else options
+    if any(
+        value.partition("=")[0] in {"--remote", "--remote-auth-token-env"}
+        for value in before_prompt
+    ):
+        raise LaunchError(
+            "Managed Codex requires a locally owned native process; "
+            "tj codex cannot manage a remote connection"
+        )
+    missing = tuple(option for option in startup.MANAGED_OPTIONS if option not in before_prompt)
+    return (*missing, *options)
+
+
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
-    minimum = "0.154.0" if arguments[2:3] == ["resume"] else startup.MINIMUM_VERSION
-    native = str(resolve_executable(minimum=minimum)[0])
+    native = str(resolve_executable(minimum=startup.MINIMUM_VERSION)[0])
+    if arguments[:3] == ["--cd", str(directory), "resume"] and len(arguments) == 4:
+        thread_id = startup.native_id(arguments[3])
+        observed = liveness(strict=True).get(thread_id)
+        if observed is not None and observed.alive:
+            raise LaunchError(
+                f"Codex {thread_id} is already running; use its existing conversation"
+            )
     return startup.prepare(directory, title, arguments, cli, native, environ)
 
 
@@ -234,8 +256,8 @@ def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
     startup.abandon(prepared, launch_id, dispatched)
 
 
-def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> None:
-    startup.confirm(prepared, arguments, launch_id)
+def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> Confirmation:
+    return startup.confirm(prepared, arguments, launch_id)
 
 
 def start_arguments(directory, title, prompt, model, effort):
@@ -258,8 +280,10 @@ def daemon(timeout=DAEMON_TIMEOUT_SECONDS):
 
 
 def liveness(*, strict: bool = False) -> dict[str, Liveness]:
-    """Threads loaded in the shared app-server daemon, by thread id; an absent daemon has none."""
+    """Combine native process evidence with loaded shared-daemon threads."""
+    observed: dict[str, Liveness] = {}
     try:
+        observed = processes.inventory()
         if strict:
             result = process.run(
                 [executable(), "app-server", "daemon", "version"],
@@ -268,10 +292,13 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
             )
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip()
-                if "failed to connect to" in detail and any(
-                    f"(os error {code})" in detail for code in (2, 111, 10061)
-                ):
-                    return {}
+                if "failed to connect to" in detail:
+                    try:
+                        observer.socket_path(Host.CODEX.configuration_root).stat()
+                    except FileNotFoundError:
+                        return observed
+                    if any(f"(os error {code})" in detail for code in (2, 111, 10061)):
+                        return observed
                 raise LaunchError(f"Cannot determine Codex daemon state: {detail}")
             if not isinstance(json.loads(result.stdout), dict):
                 raise LaunchError("Codex daemon version returned invalid JSON")
@@ -291,8 +318,19 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
     ) as error:
         if strict:
             raise LaunchError(f"Cannot determine Codex liveness: {error}") from error
-        return {}
-    return {thread: Liveness(alive=status != "notLoaded", activity=status) for thread, status in statuses.items()}
+        return observed
+    for thread, status in statuses.items():
+        if status != "notLoaded":
+            # A loaded daemon thread and an embedded frontend can coexist. Keep
+            # both observations: reloading the daemon does not reload that process.
+            previous = observed.get(thread)
+            observed[thread] = Liveness(
+                alive=True,
+                activity=status,
+                process_ids=previous.process_ids if previous else None,
+                launch_ids=previous.launch_ids if previous else None,
+            )
+    return observed
 
 
 def respawn(background):
@@ -300,5 +338,5 @@ def respawn(background):
 
 
 def name_session(session_id, title):
-    with daemon() as server:
+    with startup.connection(executable(), Path.cwd()) as server:
         server.request("thread/name/set", {"threadId": session_id, "name": title})

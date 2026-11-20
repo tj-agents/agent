@@ -1,11 +1,14 @@
 {
+  "modules": [
+    "../.agents/agent/runtime/claude/native_bridge.mjs"
+  ],
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "timeout": 30,
+            "timeout": 300,
             "command": "tj_hook",
             "args": [
               "--",
@@ -15,6 +18,70 @@
               "start",
               "--host",
               "claude"
+            ]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 30,
+            "onFailure": "block",
+            "command": "tj_hook",
+            "args": [
+              "--",
+              "python",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py",
+              "--host",
+              "claude",
+              "--hook-mode",
+              "prompt"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "tj_hook",
+            "args": [
+              "--",
+              "python",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py",
+              "--host",
+              "claude",
+              "--hook-mode",
+              "status"
+            ]
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 5,
+            "command": "tj_hook",
+            "args": [
+              "--",
+              "python",
+              "-B",
+              "${CLAUDE_PLUGIN_ROOT}/.agents/agent/runtime/completion_hook.py",
+              "--host",
+              "claude",
+              "--hook-mode",
+              "status"
             ]
           }
         ]

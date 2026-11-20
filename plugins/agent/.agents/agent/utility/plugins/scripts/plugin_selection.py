@@ -34,7 +34,6 @@ MARKETPLACE_SPARSE_PATHS = IDENTITY_RULES.MARKETPLACE_SPARSE_PATHS
 
 SELECTION_NAME = "plugins.json"
 SCHEMA_VERSION = 1
-ALLOWED_OWNERS = ("tj-agents", "Concertable")
 CORE_PLUGINS = ("agent", "agent-store", "base", "engineering", "workflow")
 NAME = re.compile(r"[a-z][a-z0-9-]*\Z")
 REPOSITORY = re.compile(r"(?P<owner>[A-Za-z0-9-]+)/(?P<name>[A-Za-z0-9_][A-Za-z0-9_.-]*)\Z")
@@ -77,9 +76,9 @@ def validate_marketplace_source(name: str, value: object) -> dict:
         raise lock_io.LockError(f"marketplaces.{name} must contain exactly repository")
     repository = value["repository"]
     match = REPOSITORY.fullmatch(repository) if isinstance(repository, str) else None
-    if match is None or match["owner"] not in ALLOWED_OWNERS or match["name"].lower().endswith(GIT_SUFFIX):
+    if match is None or match["name"].lower().endswith(GIT_SUFFIX):
         raise lock_io.LockError(
-            f"marketplaces.{name}.repository must be <owner>/<repository> without .git, owned by " + " or ".join(ALLOWED_OWNERS)
+            f"marketplaces.{name}.repository must be <owner>/<repository> without .git"
         )
     return value
 

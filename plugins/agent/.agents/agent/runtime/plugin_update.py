@@ -155,8 +155,13 @@ def update_standards(
             if entries is not None
             else required_plugins.check(directory, host)
         )
-        if roots is not None and not required_plugins.committed_worktree(project):
-            standards.update(project, roots)
+        if roots is not None and standards.update(project, roots, check=True):
+            print(
+                f"{host}: left {project} unchanged; from that checkout run "
+                f"tj prepare --host {host.value} --write "
+                "to update repository standards",
+                file=sys.stderr,
+            )
     except (
         OSError,
         ValueError,
@@ -202,7 +207,13 @@ class Outcome:
     revision: str | None
 
 
-def update(host: Host, digests: Digests, environ: Mapping[str, str]) -> Outcome:
+def update(
+    host: Host,
+    digests: Digests,
+    environ: Mapping[str, str],
+    *,
+    converge_runtime: Callable[[], str | None] | None = None,
+) -> Outcome:
     """Fetch the marketplaces, then bring this host's plugins to their pins."""
     report = Report()
     installed = INSTALLED[host]
@@ -234,6 +245,12 @@ def update(host: Host, digests: Digests, environ: Mapping[str, str]) -> Outcome:
     digests.save()
     if not report.failures:
         update_standards(report, host, inventory if reuse_inventory else None)
+    if (
+        not report.failures
+        and converge_runtime is not None
+        and (problem := converge_runtime())
+    ):
+        report.fail(host, "native commands and launch runtime", problem)
     revision = marketplace_revision(host)
     # Activation repeats until it succeeds once for the plugins at this revision.
     activated = digests.path.parent / f"activated-{host}.txt"

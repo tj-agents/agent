@@ -18,9 +18,10 @@ import agent_cli
 import agent_store
 import boot_history
 import lifecycle
+import session_resume
 import work_item
 from host_sessions import SESSIONS
-from launch_contract import Liveness
+from launch_contract import Confirmation, Liveness
 from tj_agent.host import Host
 
 STALE_REASON = "recovery-stale"
@@ -32,7 +33,7 @@ class Action(StrEnum):
     END = "end"
     FAILED = "failed"
     ENDED = "ended"
-    RESUMED = "resumed"
+    STARTED = "started"
     RESPAWNED = "respawned"
     SKIP = "skip"
 
@@ -51,6 +52,7 @@ class Recovery:
     error: str | None = None
     previous_launch_id: str | None = None
     open_launches: tuple[str, ...] = ()
+    confirmation: Confirmation | None = None
 
     @property
     def host(self) -> Host:
@@ -132,6 +134,8 @@ def open_plan(item: str | None) -> list[Recovery]:
         )
         if host in errors:
             row = replace(row, action=Action.FAILED, error=errors[host])
+        elif host is Host.CODEX and agent.live is None:
+            row = replace(row, action=Action.FAILED, error="no native process evidence")
         elif not Path(row.directory).is_dir():
             row = replace(
                 row,
@@ -140,6 +144,11 @@ def open_plan(item: str | None) -> list[Recovery]:
             )
         elif agent.live and agent.live.background:
             row = replace(row, action=Action.RESPAWN, background=agent.live.background)
+        if row.action == Action.RESUME and row.launch_id:
+            try:
+                session_resume.check(row.session, row.launch_id)
+            except agent_cli.LaunchError as error:
+                row = replace(row, action=Action.FAILED, error=str(error))
         results.append(row)
     return results
 
@@ -164,7 +173,12 @@ def plan(
     dead = [agent for agent in agents if not agent.alive]
     cutoff = (
         None
-        if older or not any(agent.host not in errors for agent in dead)
+        if older
+        or not any(
+            agent.host not in errors
+            and (agent.host is not Host.CODEX or agent.live is not None)
+            for agent in dead
+        )
         else boot_history.previous_boot()
     )
     launches = {
@@ -191,6 +205,10 @@ def plan(
         try:
             if host in errors:
                 raise agent_cli.LaunchError(errors[host])
+            if host is Host.CODEX and agent.live is None:
+                raise agent_cli.LaunchError("no native process evidence")
+            if row.launch_id and not (agent.live and agent.live.background):
+                session_resume.check(row.session, row.launch_id)
             if cutoff is not None:
                 row = replace(
                     row,
@@ -257,13 +275,15 @@ def restore(row: Recovery) -> Recovery:
         parent=row.parent,
         want_session=True,
         tmux_session="tj-recover",
+        resume_from=row.launch_id,
     )
     return close_launches(
         replace(
             row,
-            action=Action.RESUMED,
+            action=Action.STARTED,
             launch_id=shown["launch"]["launch_id"],
             previous_launch_id=row.launch_id,
+            confirmation=Confirmation(shown["confirmation"]),
         )
     )
 
@@ -328,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         not args.dry_run
         and sys.platform == "linux"
         and not os.environ.get("TMUX")
-        and any(row.action == Action.RESUMED for row in rows)
+        and any(row.action == Action.STARTED for row in rows)
     ):
         try:
             agent_cli.attach_tmux("tj-recover")

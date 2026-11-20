@@ -3,7 +3,7 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import host_plugins
@@ -32,7 +32,7 @@ def selected_project(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize("host", list(Host))
 @pytest.mark.parametrize("local", [False, True])
-def test_prepare_installs_missing_selection_before_writing_instructions(
+def test_prepare_write_installs_missing_selection_before_writing_instructions(
     selected_project: Path, monkeypatch: pytest.MonkeyPatch, host: Host, local: bool
 ) -> None:
     if host == Host.CLAUDE:
@@ -80,13 +80,12 @@ def test_prepare_installs_missing_selection_before_writing_instructions(
     monkeypatch.setattr(required_plugins, "check", inventory)
     monkeypatch.setattr(host_plugins.PLUGINS[host], "install", install)
     if local:
-        with pytest.raises(standards.StandardsError, match="Local-only adoption"):
-            tj_prepare.prepare(selected_project, host)
+        assert not tj_prepare.prepare(selected_project, host, write=True)
         assert sorted(calls[:2]) == ["configure", "inventory"]
         assert calls[2:] == ["install", "inventory"]
         assert not (selected_project / "AGENTS.md").exists()
         return
-    assert tj_prepare.prepare(selected_project, host)
+    assert tj_prepare.prepare(selected_project, host, write=True)
     assert sorted(calls[:2]) == ["configure", "inventory"]
     assert calls[2:] == ["install", "inventory"]
     assert "python:style" in (selected_project / "AGENTS.md").read_text(
@@ -101,26 +100,72 @@ def git(directory: Path, *arguments: str) -> None:
     subprocess.run(["git", *arguments], cwd=directory, check=True, capture_output=True)
 
 
-def test_only_a_linked_worktree_of_a_committed_selection_is_left_alone(
+def tree_snapshot(directory: Path) -> dict[Path, bytes]:
+    return {
+        path.relative_to(directory): path.read_bytes()
+        for path in directory.rglob("*")
+        if path.is_file() and ".git" not in path.relative_to(directory).parts
+    }
+
+
+@pytest.mark.parametrize("host", list(Host))
+@pytest.mark.parametrize(
+    ("linked", "inherited"), [(False, False), (True, False), (True, True)]
+)
+def test_prepare_never_rewrites_an_authored_checkout(
     tmp_path: Path,
+    plugin_source: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: Host,
+    linked: bool,
+    inherited: bool,
 ) -> None:
-    primary = tmp_path / "primary"
-    selection = primary / ".agents/plugins.json"
-    selection.parent.mkdir(parents=True)
-    selection.write_text('{"schema_version": 1, "plugins": []}', encoding="utf-8")
-    git(primary, "init", "-q")
+    primary = plugin_source
+    (primary / "README.md").write_text("Committed guidance\n", encoding="utf-8")
     git(primary, "add", ".")
-    git(primary, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "s")
-    git(primary, "worktree", "add", "-q", str(tmp_path / "linked"))
-    git(primary, "worktree", "add", "-q", "--orphan", str(tmp_path / "unadopted"))
-    (tmp_path / "unadopted/.agents").mkdir()
-    (tmp_path / "unadopted/.agents/plugins.json").write_text("{}", encoding="utf-8")
-    assert required_plugins.committed_worktree(tmp_path / "linked")
-    assert not required_plugins.committed_worktree(primary)
-    assert not required_plugins.committed_worktree(tmp_path / "unadopted")
+    git(primary, "-c", "user.name=t", "-c", "user.email=t", "commit", "-q", "-m", "s")
+    project = primary
+    if linked:
+        project = tmp_path / "linked"
+        git(primary, "worktree", "add", "-q", str(project))
+    selection_root = primary if inherited else project
+    (selection_root / ".agents").mkdir()
+    (selection_root / ".agents/plugins.json").write_text(
+        '{"schema_version": 1, "plugins": ["python@tj-agents"]}', encoding="utf-8"
+    )
+    (project / "README.md").write_text("Authored dirtiness\n", encoding="utf-8")
+    (project / "AGENTS.md").write_text("Authored Agent guidance\n", encoding="utf-8")
+    (project / "CLAUDE.md").write_text("Authored Claude guidance\n", encoding="utf-8")
+    plugin = project / "installed"
+    skill = plugin / ".agents/python/convention/style"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: style\nkind: convention\nprofile: core\n"
+        "applicability: Python projects\n---\nFull style body\n",
+        encoding="utf-8",
+    )
+    modes: list[str] = []
+
+    def configure(_project: Path, mode: str) -> str:
+        modes.append(mode)
+        return "Drift in: .claude/settings.json"
+
+    monkeypatch.setattr(tj_prepare, "configure", configure)
+    monkeypatch.setattr(
+        required_plugins,
+        "check",
+        lambda *_arguments, **_kwargs: {"python@tj-agents": plugin},
+    )
+    before = tree_snapshot(project)
+    primary_before = tree_snapshot(primary)
+
+    assert tj_prepare.prepare(project, host)
+    assert tree_snapshot(project) == before
+    assert tree_snapshot(primary) == primary_before
+    assert modes == ["check"]
 
 
-def test_a_committed_worktree_is_only_checked_and_its_drift_reported(
+def test_prepare_checks_drift_and_reports_its_explicit_owner(
     selected_project: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -147,14 +192,13 @@ def test_a_committed_worktree_is_only_checked_and_its_drift_reported(
             command, 1, "Drift in: .claude/settings.json\n", ""
         )
 
-    monkeypatch.setattr(required_plugins, "committed_worktree", lambda project: True)
     monkeypatch.setattr(process, "run", configure)
     monkeypatch.setattr(
         required_plugins,
         "check",
         lambda directory, host, *, inventory_options: {"python@tj-agents": plugin},
     )
-    assert not tj_prepare.prepare(selected_project, Host.CLAUDE)
+    assert tj_prepare.prepare(selected_project, Host.CLAUDE)
     assert modes == ["check"]
     assert (selected_project / "AGENTS.md").read_text(encoding="utf-8") == (
         "Committed guidance\n"
@@ -162,7 +206,7 @@ def test_a_committed_worktree_is_only_checked_and_its_drift_reported(
     assert (selected_project / "CLAUDE.md").read_text(encoding="utf-8") == (
         "Committed pointer\n"
     )
-    assert "left " in capsys.readouterr().err
+    assert "tj prepare --host claude" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("mode", ["write", "check"])
@@ -366,7 +410,7 @@ def test_prepare_uses_the_hosts_directory_and_configuration_options(
         )
         == 0
     )
-    assert (target / "AGENTS.md").is_file()
+    assert not (target / "AGENTS.md").exists()
     assert not (tmp_path / "AGENTS.md").exists()
 
 
@@ -385,19 +429,22 @@ def test_local_adoption_preserves_the_repositorys_instructions(
 
     monkeypatch.setattr(process, "run", configure)
     monkeypatch.setattr(required_plugins, "check", lambda *args, **kwargs: {})
-    with pytest.raises(standards.StandardsError, match="Local-only adoption"):
-        tj_prepare.prepare(selected_project, Host.CLAUDE)
+    assert not tj_prepare.prepare(selected_project, Host.CLAUDE)
     assert path.read_text(encoding="utf-8") == original
     assert not (selected_project / "CLAUDE.md").exists()
 
 
+@pytest.mark.parametrize("host", list(Host))
+@pytest.mark.parametrize("write", [False, True])
 def test_inherited_local_adoption_preserves_linked_worktree_instructions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    plugin_source: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: Host,
+    write: bool,
 ) -> None:
-    primary = tmp_path / "primary"
-    primary.mkdir()
+    primary = plugin_source
     (primary / "README.md").write_text("primary\n", encoding="utf-8")
-    git(primary, "init", "-q")
     git(primary, "add", "README.md")
     git(
         primary,
@@ -423,15 +470,49 @@ def test_inherited_local_adoption_preserves_linked_worktree_instructions(
     path = linked / "AGENTS.md"
     path.write_text("Owner's instructions\n", encoding="utf-8")
 
-    monkeypatch.setattr(
-        process,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    checked: list[Path] = []
+
+    def inventory(directory: Path, *args: object, **kwargs: object) -> dict[str, Path]:
+        checked.append(directory)
+        return {}
+
+    monkeypatch.setattr(tj_prepare, "configure", lambda *args: "")
+    monkeypatch.setattr(required_plugins, "check", inventory)
+    before = tree_snapshot(linked)
+    primary_before = tree_snapshot(primary)
+    assert not tj_prepare.prepare(linked, host, write=write)
+    assert checked == [linked]
+    assert tree_snapshot(linked) == before
+    assert tree_snapshot(primary) == primary_before
+
+
+@pytest.mark.parametrize("host", list(Host))
+def test_prepare_write_preserves_instructions_when_configuration_creates_local_adoption(
+    plugin_source: Path, monkeypatch: pytest.MonkeyPatch, host: Host
+) -> None:
+    selection = plugin_source / ".agents/plugins.json"
+    selection.parent.mkdir()
+    selection.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "marketplaces": {"tj-agents": {"repository": "tj-agents/marketplace"}},
+                "plugins": ["python@tj-agents"],
+            }
+        ),
+        encoding="utf-8",
     )
+    original = b"Owner's instructions\r\n"
+    (plugin_source / "AGENTS.md").write_bytes(original)
+    (plugin_source / "CLAUDE.md").write_bytes(original)
     monkeypatch.setattr(required_plugins, "check", lambda *args, **kwargs: {})
-    with pytest.raises(standards.StandardsError, match="Local-only adoption"):
-        tj_prepare.prepare(linked, Host.CLAUDE)
-    assert path.read_text(encoding="utf-8") == "Owner's instructions\n"
+
+    assert tj_prepare.prepare(plugin_source, host, write=True)
+
+    assert (plugin_source / ".agents/repo-capabilities.local.json").is_file()
+    assert (plugin_source / ".claude/settings.local.json").is_file()
+    assert (plugin_source / "AGENTS.md").read_bytes() == original
+    assert (plugin_source / "CLAUDE.md").read_bytes() == original
 
 
 def test_claude_pairing_preserves_distinct_existing_instructions(
@@ -442,7 +523,7 @@ def test_claude_pairing_preserves_distinct_existing_instructions(
     pointer.write_text(
         "@AGENTS.md\n\nExtra rules mention `@AGENTS.md`.\n", encoding="utf-8"
     )
-    claude_projects.prepare_instructions(tmp_path)
+    assert claude_projects.prepare_instructions(tmp_path, write=True)
     assert pointer.read_text(encoding="utf-8") == "@AGENTS.md\n"
     assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == (
         "Shared rules\n\nExtra rules mention `@AGENTS.md`.\n"
@@ -539,13 +620,13 @@ def test_claude_scope_covers_nested_folders_but_not_nested_repositories(
     assert not claude_scope.applies(nested, "project", str(tmp_path))
 
 
-def test_prepare_repeats_the_inventory_after_configuration_changes(
+def test_prepare_does_not_repeat_the_inventory_while_checking_configuration_drift(
     selected_project: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    roots = iter([{}, {"python@tj-agents": selected_project}])
+    roots: Iterator[dict[str, Path]] = iter([{}])
 
     def configure(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess([], 0, "Updated: .claude/settings.json", "")
+        return subprocess.CompletedProcess([], 1, "Drift in: .claude/settings.json", "")
 
     def inventory(
         directory: Path, host: Host, *, inventory_options: tuple[str, ...]
@@ -555,7 +636,7 @@ def test_prepare_repeats_the_inventory_after_configuration_changes(
     observed: list[dict[str, Path]] = []
 
     def update(project: Path, found: dict[str, Path], *, check: bool) -> bool:
-        assert not check
+        assert check
         observed.append(found)
         return True
 
@@ -563,7 +644,7 @@ def test_prepare_repeats_the_inventory_after_configuration_changes(
     monkeypatch.setattr(required_plugins, "check", inventory)
     monkeypatch.setattr(standards, "update", update)
     assert tj_prepare.prepare(selected_project, Host.CLAUDE)
-    assert observed == [{"python@tj-agents": selected_project}]
+    assert observed == [{}]
 
 
 def test_claude_common_directory_reads_git_metadata_without_a_process(

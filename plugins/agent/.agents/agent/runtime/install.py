@@ -36,7 +36,6 @@ sys.path.insert(0, str(RUNTIME))
 
 from tj_agent.host import Host
 from claude import plugins as claude_plugins
-from codex import daemon as codex_daemon
 from codex import hook_trust as codex_hook_trust
 from codex import installed as codex_installed
 from codex import lane_agents as codex_lane_agents
@@ -76,6 +75,8 @@ RUNTIME_EXPORTS = (
     ".agents/agent/utility/plugins/scripts",
 )
 LIFECYCLE_COMMANDS = {
+    "claude": "claude/command.py",
+    "codex": "codex/command.py",
     "start": "tj_start.py",
     "status": "tj_status.py",
     "recover": "tj_recover.py",
@@ -399,6 +400,9 @@ def powershell_block(loader: Path | None, newline: str) -> str:
         return "'" + str(value).replace("'", "''") + "'"
 
     lines = [PROFILE_START]
+    lines.extend(
+        f"function global:{host.value} {{ & tj {host.value} @args }}" for host in Host
+    )
     if loader is not None:
         for name in ("TJ_AGENTS_REAL_GIT_BASH", "CLAUDE_CODE_GIT_BASH_PATH"):
             lines += [
@@ -418,6 +422,7 @@ def posix_block(runtime_bin: Path) -> str:
         [
             PROFILE_START,
             f'export PATH={shlex.quote(str(runtime_bin))}:"$PATH"',
+            *(f'{host.value}() {{ command tj {host.value} "$@"; }}' for host in Host),
             PROFILE_END,
         ]
     )
@@ -1192,10 +1197,19 @@ def lifecycle_binding(context: Context, path: Path, script: Path) -> str | None:
 def lifecycle_paths(context: Context) -> dict[Path, Path]:
     directory = agent_store.executable().parent
     scripts = runtime_bin(context) / ".agents" / "agent" / "runtime"
-    return {
+    paths = {
         directory / command_shim_name(command, context.windows): scripts / script
         for command, script in LIFECYCLE_COMMANDS.items()
     }
+    paths.update(
+        {
+            runtime_bin(context)
+            / (host.value + (".cmd" if context.windows else "")): scripts
+            / LIFECYCLE_COMMANDS[host.value]
+            for host in Host
+        }
+    )
+    return paths
 
 
 def lifecycle_shims(context: Context) -> dict[Path, str]:
@@ -1241,31 +1255,6 @@ def windows_only(context: Context) -> str | None:
 
 def codex_config_path(context: Context) -> Path:
     return context.codex_home / "config.toml"
-
-
-def codex_daemon_text(context: Context) -> tuple[str, str]:
-    path = codex_config_path(context)
-    text = path.read_text(encoding="utf-8-sig") if path.is_file() else ""
-    return text, codex_daemon.enabled_text(text)
-
-
-def check_codex_daemon(context: Context) -> list[str]:
-    text, enabled = codex_daemon_text(context)
-    return (
-        []
-        if enabled == text
-        else [
-            f"let Codex launches start its shared daemon in {codex_config_path(context)}"
-        ]
-    )
-
-
-def apply_codex_daemon(context: Context) -> list[str]:
-    text, enabled = codex_daemon_text(context)
-    if enabled == text:
-        return []
-    write_profile(codex_config_path(context), enabled, "utf-8", False)
-    return [f"removed {codex_daemon.FEATURE} = false from {codex_config_path(context)}"]
 
 
 def skip_codex_hook_trust(context: Context) -> str | None:
@@ -1322,26 +1311,30 @@ def plugin_setup_project(context: Context) -> Path:
     return context.project or Path.cwd().resolve()
 
 
-def plugin_setup_executables(context: Context) -> dict[Host, str | None]:
-    return {host: context.which(host.value) for host in Host}
+def plugin_setup_executables(context: Context) -> dict[Host, str]:
+    return {
+        host: executable for host in Host if (executable := context.which(host.value))
+    }
 
 
 def check_plugin_setup(context: Context) -> list[str]:
     if native_runtime.pending():
         return check_native_cli(context)
+    executables = plugin_setup_executables(context)
     return required_plugins.check_setup(
         plugin_setup_project(context),
-        tuple(Host),
-        plugin_setup_executables(context),
+        tuple(executables),
+        executables,
         context.state_directory,
     )
 
 
 def apply_plugin_setup(context: Context) -> list[str]:
+    executables = plugin_setup_executables(context)
     errors = required_plugins.converge_setup(
         plugin_setup_project(context),
-        tuple(Host),
-        plugin_setup_executables(context),
+        tuple(executables),
+        executables,
         context.state_directory,
         context.onboard,
     )
@@ -1500,7 +1493,6 @@ STEPS = (
     Step(
         "native permission defaults", check_native_permissions, apply_native_permissions
     ),
-    Step("Codex shared daemon", check_codex_daemon, apply_codex_daemon),
     Step("agent-store CLI", check_agent_store, apply_agent_store),
     Step("tj item CLI", check_tj_item, apply_tj_item),
     cli_tool_step("worktrunk", worktrunk_install),
@@ -1663,10 +1655,10 @@ def published_path(context: Context, host: Host) -> Path:
 def publish_update(
     context: Context, outcomes: dict[Host, plugin_update.Outcome]
 ) -> int:
-    """Tell running tj run tabs of a host to reload when its plugins moved or its published revision is stale.
+    """Tell managed sessions to reload changed plugins or a stale published revision.
 
-    `tj run`'s launch check compares the marketplace HEAD with the last published revision, so a host whose
-    published revision is behind is republished even when nothing else changed.
+    The managed wrapper compares marketplace HEAD with the last published revision,
+    so a host whose published revision is behind is republished even without changes.
     """
     code = 0
     for host, outcome in outcomes.items():
@@ -1696,7 +1688,8 @@ def publish_update(
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(outcome.revision, encoding="utf-8")
         print(
-            f"apply  {host} update: published {outcome.revision[:12]} to running tj run tabs"
+            f"apply  {host} update: published {outcome.revision[:12]} "
+            f"to running tj {host.value} sessions"
         )
     return code
 

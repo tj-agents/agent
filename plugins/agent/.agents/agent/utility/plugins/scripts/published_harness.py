@@ -2,8 +2,10 @@
 """Read the harness permissions marketplaces publish for a repository's selected plugins.
 
 Each selected `<plugin>@<marketplace>` is looked up in its marketplace's Claude catalog on the default
-branch. The plugin's `harness.json` is then read at the exact source revision that catalog pins, through a
-blobless, depth-one Git fetch using the caller's normal Git configuration and credentials.
+branch, together with every plugin its catalog entry depends on, transitively. Each plugin's `harness.json`
+is then read at the exact source revision that catalog pins, through a blobless, depth-one Git fetch using
+the caller's normal Git configuration and credentials. Offline, the same dependencies are resolved from the
+marketplace catalogs the native hosts last fetched onto this machine.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -20,12 +22,13 @@ from typing import Any
 import harness_permissions
 import lock_io
 import plugin_selection
-from plugin_runtime import process
+from plugin_runtime import Host, process
 
 CATALOG = ".claude-plugin/marketplace.json"
 HARNESS = "harness.json"
 DEFAULT_BRANCH = "HEAD"
 TIMEOUT_SECONDS = 60
+LOCAL_CATALOGS = ((Host.CLAUDE, "plugins/marketplaces"), (Host.CODEX, ".tmp/marketplaces"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,9 +107,7 @@ def _harness_path(source: object, label: str) -> str:
     return "/".join([*parts, HARNESS])
 
 
-def _location(
-    identity: str, catalog: Mapping[str, Any], marketplace: Publication
-) -> Location:
+def _entry(identity: str, catalog: Mapping[str, Any]) -> Mapping[str, Any]:
     name, _ = plugin_selection.split(identity)
     entries = catalog.get("plugins")
     if not isinstance(entries, list):
@@ -118,7 +119,13 @@ def _location(
     ]
     if len(matches) != 1:
         raise lock_io.LockError(f"{identity} is not published by its marketplace")
-    source = matches[0].get("source")
+    return matches[0]
+
+
+def _location(
+    identity: str, catalog: Mapping[str, Any], marketplace: Publication
+) -> Location:
+    source = _entry(identity, catalog).get("source")
     if isinstance(source, str):
         return Location(marketplace, _harness_path(source, identity))
     if isinstance(source, dict) and source.get("source") == "git-subdir":
@@ -137,6 +144,91 @@ def _location(
     raise lock_io.LockError(f"{identity}: unsupported published source {source!r}")
 
 
+def _dependencies(identity: str, entry: Mapping[str, Any]) -> list[str]:
+    declared = entry.get("dependencies", [])
+    if not isinstance(declared, list):
+        raise lock_io.LockError(f"{identity}: published dependencies must be a list")
+    marketplace = plugin_selection.split(identity)[1]
+    found = []
+    for value in declared:
+        name = value.get("name") if isinstance(value, dict) else value
+        dependency = (
+            name if isinstance(name, str) and "@" in name else f"{name}@{marketplace}"
+        )
+        if not isinstance(name, str) or not plugin_selection.valid_identity(dependency):
+            raise lock_io.LockError(
+                f"{identity}: invalid published dependency {value!r}"
+            )
+        found.append(dependency)
+    return found
+
+
+def closure(
+    identities: Iterable[str], catalog: Callable[[str], Mapping[str, Any] | None]
+) -> list[str]:
+    """Return the identities and every plugin their catalog entries depend on, transitively.
+
+    `catalog` returns a declared marketplace's catalog, or None for a marketplace the selection does not
+    declare, which no dependency may name.
+    """
+    resolved: set[str] = set()
+    pending: list[tuple[str, str | None]] = [
+        (identity, None) for identity in sorted(set(identities), reverse=True)
+    ]
+    while pending:
+        identity, dependent = pending.pop()
+        if identity in resolved:
+            continue
+        marketplace = plugin_selection.split(identity)[1]
+        document = catalog(marketplace)
+        if document is None:
+            raise lock_io.LockError(
+                f"{dependent} depends on {identity}, but the selection does not declare "
+                f"the {marketplace} marketplace"
+            )
+        try:
+            entry = _entry(identity, document)
+        except lock_io.LockError as error:
+            if dependent is None:
+                raise
+            raise lock_io.LockError(f"{dependent} depends on {identity}: {error}") from error
+        resolved.add(identity)
+        pending.extend(
+            (dependency, identity)
+            for dependency in reversed(_dependencies(identity, entry))
+            if dependency not in resolved
+        )
+    return sorted(resolved)
+
+
+def local_catalog(marketplace: str) -> dict[str, Any]:
+    """Return the marketplace catalog Claude, or else Codex, last fetched onto this machine."""
+    for host, directory in LOCAL_CATALOGS:
+        path = host.configuration_root / directory / marketplace / CATALOG
+        if path.is_file():
+            return _document(path.read_bytes(), str(path))
+    raise lock_io.LockError(
+        f"No local {marketplace} marketplace catalog resolves the selected plugins' "
+        "dependencies offline; run tj install"
+    )
+
+
+def local_closure(
+    marketplaces: Mapping[str, Mapping[str, str]], identities: Iterable[str]
+) -> list[str]:
+    """Return `closure` resolved from this machine's fetched catalogs, without a network lookup."""
+    catalogs: dict[str, dict[str, Any]] = {}
+
+    def catalog(name: str) -> dict[str, Any] | None:
+        if name not in marketplaces:
+            return None
+        if name not in catalogs:
+            catalogs[name] = local_catalog(name)
+        return catalogs[name]
+
+    return closure(identities, catalog)
+
+
 def _catalog(repository: str) -> tuple[Publication, dict[str, Any]]:
     commit, files = read(
         Publication(f"https://github.com/{repository}.git", DEFAULT_BRANCH), [CATALOG]
@@ -153,9 +245,11 @@ def _contents(item: tuple[Publication, list[str]]) -> dict[str, bytes]:
 def declarations(
     marketplaces: Mapping[str, Mapping[str, str]], identities: Iterable[str]
 ) -> dict[str, dict[str, Any]]:
-    """Return each selected plugin's validated published permissions by identity."""
-    selected = sorted(set(identities))
-    names = sorted({plugin_selection.split(identity)[1] for identity in selected})
+    """Return the validated published permissions of the selected plugins and their dependencies.
+
+    The result is keyed by every identity in the selection's transitive dependency closure.
+    """
+    names = sorted(marketplaces)
     with ThreadPoolExecutor() as pool:
         catalogs = dict(
             zip(
@@ -164,8 +258,11 @@ def declarations(
                 strict=True,
             )
         )
+    resolved = closure(
+        identities, lambda name: catalogs[name][1] if name in catalogs else None
+    )
     locations: dict[str, Location] = {}
-    for identity in selected:
+    for identity in resolved:
         marketplace, catalog = catalogs[plugin_selection.split(identity)[1]]
         locations[identity] = _location(identity, catalog, marketplace)
     wanted: dict[Publication, list[str]] = {}
