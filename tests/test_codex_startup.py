@@ -5,7 +5,7 @@ import json
 import shutil
 import subprocess
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,7 +70,12 @@ class Native:
 
     @contextmanager
     def connect(
-        self, native: str, directory: Path, *, existing: bool = False
+        self,
+        native: str,
+        directory: Path,
+        *,
+        existing: bool = False,
+        environment: Mapping[str, str] | None = None,
     ) -> Iterator[Native]:
         assert native == "fixture-codex" and directory == self.directory
         self.events.append("connect_shared" if existing else "connect")
@@ -205,6 +210,30 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
         ("thread/name/set", {"threadId": THREAD, "name": "Actual title"}),
         "disconnect",
     ]
+
+
+def test_prepare_blank_foreground_thread_for_exact_resume(native: Native) -> None:
+    prepared = startup.prepare(
+        native.directory,
+        "Actual title",
+        ["--cd", str(native.directory)],
+        "tj",
+        "fixture-codex",
+        {},
+    )
+    assert prepared == PreparedLaunch(
+        (
+            "fixture-codex",
+            "--cd",
+            str(native.directory),
+            "resume",
+            THREAD,
+            "--remote",
+            "unix://",
+        ),
+        f"codex:{THREAD}",
+        created=True,
+    )
 
 
 @pytest.mark.parametrize("trust", [None, {}, {"trust_level": "untrusted"}])
@@ -947,7 +976,12 @@ def test_prepare_archives_exact_created_thread_when_creator_disconnect_fails(
     attempts = 0
 
     @contextmanager
-    def connect(executable: str, directory: Path) -> Iterator[Native]:
+    def connect(
+        executable: str,
+        directory: Path,
+        *,
+        environment: Mapping[str, str] | None = None,
+    ) -> Iterator[Native]:
         nonlocal attempts
         attempts += 1
         with native.connect(executable, directory) as server:
@@ -1067,7 +1101,12 @@ def test_prepare_reports_creator_disconnect_and_secondary_cleanup_failure(
     attempts = 0
 
     @contextmanager
-    def connect(executable: str, directory: Path) -> Iterator[Native]:
+    def connect(
+        executable: str,
+        directory: Path,
+        *,
+        environment: Mapping[str, str] | None = None,
+    ) -> Iterator[Native]:
         nonlocal attempts
         attempts += 1
         if attempts > 1:

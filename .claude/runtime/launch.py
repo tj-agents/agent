@@ -76,6 +76,13 @@ def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
     return tuple(arguments)
 
 
+def prepare_foreground(
+    executable: str, directory: Path, arguments: Sequence[str], cli: str,
+    environ: Mapping[str, str],
+) -> PreparedLaunch:
+    return PreparedLaunch((executable, *managed_arguments(arguments)))
+
+
 def prepare(
     directory: Path,
     title: str,

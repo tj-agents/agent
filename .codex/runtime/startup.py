@@ -32,7 +32,7 @@ class Server(Protocol):
 class StartOptions:
     model: str | None
     effort: str | None
-    prompt: str
+    prompt: str | None
 
 
 def inside_wsl() -> bool:
@@ -75,32 +75,38 @@ def require_binding(cli: str) -> None:
 
 
 def connection(
-    native: str, directory: Path, *, existing: bool = False
+    native: str,
+    directory: Path,
+    *,
+    existing: bool = False,
+    environment: Mapping[str, str] | None = None,
 ) -> AbstractContextManager[Server]:
     return cast(
         AbstractContextManager[Server],
-        hook_trust.AppServer(native, directory, timeout=30, existing=existing),
+        hook_trust.AppServer(
+            native, directory, timeout=30, existing=existing, environment=environment
+        ),
     )
 
 
 def start_options(directory: Path, arguments: list[str]) -> StartOptions:
-    if len(arguments) < 3 or arguments[:2] != ["--cd", str(directory)]:
+    if arguments[:2] != ["--cd", str(directory)]:
         raise LaunchError("Unsupported managed Codex start arguments")
-    options, prompt = arguments[2:-1], arguments[-1]
+    options = arguments[2:]
     model, effort = None, None
     if options[:1] == ["--model"] and len(options) >= 2:
         model, options = options[1], options[2:]
-    if options[:1] == ["-c"] and len(options) == 2:
+    if options[:1] == ["-c"] and len(options) >= 2:
         key, separator, effort = options[1].partition("=")
         if key != "model_reasoning_effort" or not separator or not effort:
             raise LaunchError("Unsupported managed Codex reasoning effort")
-        options = []
-    if options or not prompt:
+        options = options[2:]
+    if len(options) > 1 or options == [""]:
         raise LaunchError("Unsupported managed Codex start arguments")
-    return StartOptions(model, effort, prompt)
+    return StartOptions(model, effort, options[0] if options else None)
 
 
-def admit(directory: Path, arguments: list[str]) -> None:
+def admit(directory: Path, arguments: list[str], environ: Mapping[str, str]) -> None:
     root = find_package_root(Path(__file__).resolve().parent)
     script = root / ".agents" / "agent" / "runtime" / "tj_prepare.py"
     prepared = process.run(
@@ -115,6 +121,7 @@ def admit(directory: Path, arguments: list[str]) -> None:
             "--arguments-stdin",
         ],
         input=json.dumps(arguments),
+        env=environ,
         capture_output=True,
         text=True,
         timeout=180,
@@ -180,8 +187,8 @@ def prepare(
         )
         thread_id = native_id(arguments[3]) if resuming else None
         options = None if resuming else start_options(directory, arguments)
-        admit(directory, arguments)
-        with connection(native, directory) as server:
+        admit(directory, arguments, environ)
+        with connection(native, directory, environment=environ) as server:
             document = server.request(
                 "config/read", {"cwd": str(directory), "includeLayers": True}
             )
@@ -203,6 +210,9 @@ def prepare(
                 thread_id = create(
                     server, directory, title, options.model, options.effort
                 )
+                native_options = (
+                    arguments[2:-1] if options.prompt is not None else arguments[2:]
+                )
                 prepared = PreparedLaunch(
                     (
                         native,
@@ -210,10 +220,9 @@ def prepare(
                         str(directory),
                         "resume",
                         thread_id,
-                        *arguments[2:-1],
+                        *native_options,
                         *MANAGED_OPTIONS,
-                        "--",
-                        options.prompt,
+                        *(("--", options.prompt) if options.prompt is not None else ()),
                     ),
                     f"codex:{thread_id}",
                     created=True,

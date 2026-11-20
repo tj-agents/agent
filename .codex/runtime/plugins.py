@@ -87,8 +87,11 @@ INVENTORY_CONFIG_KEYS = frozenset(
 NODE_SHIM_BYPASSED = True
 
 
-def resolve_executable() -> str:
-    return agent_cli.host_launch(HOST).resolve_executable()[0]
+def resolve_executable(*, maintenance: bool = False) -> str:
+    launcher = agent_cli.host_launch(HOST)
+    if maintenance:
+        return launcher.resolve_executable(minimum=None)[0]
+    return launcher.resolve_executable()[0]
 
 
 def installations(project: Path, entries: list, *, record: bool = True) -> list:
@@ -143,6 +146,16 @@ def inventory_entries(data: object) -> object:
     return data.get("installed") if isinstance(data, dict) else data
 
 
+def required_hook_definitions(
+    roots: Mapping[str, Path] | None,
+) -> dict[str, list[tuple[str, str | None, str, str | None]]]:
+    return {
+        identity: definitions
+        for identity, root in (roots or {}).items()
+        if (definitions := hook_trust.required_definitions(root, identity))
+    }
+
+
 def ensure_hooks(
     project: Path,
     executable: str | None = None,
@@ -154,16 +167,12 @@ def ensure_hooks(
     if not required:
         return None
     binary = executable or resolve_executable()
-    expected = {}
     roots = (
         required_plugins.check(project, HOST, binary)
         if required_roots is None
         else required_roots
     )
-    for identity, root in (roots or {}).items():
-        definitions = hook_trust.required_definitions(root, identity)
-        if definitions:
-            expected[identity] = definitions
+    expected = required_hook_definitions(roots)
     hook_trust.apply_trust(binary, project.resolve(), required=expected)
     if running_session:
         try:

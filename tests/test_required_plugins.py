@@ -341,6 +341,29 @@ def test_check_surfaces_why_a_failing_enabled_plugin_was_excluded(tmp_path: Path
         REQUIRED.check(project, Host.CLAUDE, "native-claude", entries=rows)
 
 
+def test_check_keeps_independent_missing_plugins_in_the_repair_set(
+    tmp_path: Path,
+) -> None:
+    project = claude_project(tmp_path, "company@tj-agents", "agent@tj-agents")
+    error = {
+        "type": "dependency-unsatisfied",
+        "plugin": "company@tj-agents",
+        "dependency": "docs@tj-agents",
+        "reason": "not-found",
+    }
+    rows = [
+        claude_row(
+            tmp_path, "company@tj-agents", ["docs"],
+            errors=["Dependency is unavailable"], errorDetails=[error],
+        )
+    ]
+
+    with pytest.raises(REQUIRED.UnsatisfiedDependencyError, match="docs@tj-agents") as raised:
+        REQUIRED.check(project, Host.CLAUDE, "native-claude", entries=rows)
+
+    assert raised.value.missing == ("agent@tj-agents", "docs@tj-agents")
+
+
 def test_setup_targets_include_the_dependencies_of_the_selection(tmp_path: Path) -> None:
     project = claude_project(tmp_path, "company@tj-agents")
     rows = [claude_row(tmp_path, "company@tj-agents", ["docs"]), claude_row(tmp_path, "docs@tj-agents")]

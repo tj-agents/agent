@@ -63,6 +63,7 @@ from tj_cli import (
     process,
     worktrunk_install,
 )
+from tj_cli.paths import prepend
 from tree_digest import Digests
 
 INSTALLER_TIMEOUT_SECONDS = 600
@@ -1229,12 +1230,24 @@ def shim_current(path: Path, text: str) -> bool:
     return path.is_file() and path.read_bytes() == text.encode("utf-8")
 
 
+def lifecycle_user_path(context: Context) -> str | None:
+    if not context.windows or context.user_environment is None:
+        return None
+    current = context.user_environment.get("Path") or ""
+    entries = current.split(";") if current else []
+    wanted = ";".join(prepend(entries, str(runtime_bin(context))))
+    return wanted if wanted != current else None
+
+
 def check_lifecycle_commands(context: Context) -> list[str]:
-    return [
+    changes = [
         f"write {path}"
         for path, text in lifecycle_shims(context).items()
         if not shim_current(path, text)
     ]
+    if lifecycle_user_path(context) is not None:
+        changes.append("add managed host commands to the Windows user PATH")
+    return changes
 
 
 def apply_lifecycle_commands(context: Context) -> list[str]:
@@ -1246,6 +1259,10 @@ def apply_lifecycle_commands(context: Context) -> list[str]:
         path.write_text(text, encoding="utf-8", newline="")
         path.chmod(0o755)
         changes.append(f"wrote {path}")
+    if (path_value := lifecycle_user_path(context)) is not None:
+        context.user_environment.set("Path", path_value)
+        context.user_environment.broadcast()
+        changes.append("added managed host commands to the Windows user PATH")
     return changes
 
 
@@ -1311,9 +1328,26 @@ def plugin_setup_project(context: Context) -> Path:
     return context.project or Path.cwd().resolve()
 
 
+def provider_executable(context: Context, host: Host) -> str | None:
+    found: str | None = context.which(host.value)
+    if found is None:
+        return None
+    bindings = runtime_bin(context).resolve()
+    if Path(found).resolve().parent != bindings:
+        return found
+    path = os.pathsep.join(
+        entry
+        for entry in context.environ.get("PATH", "").split(os.pathsep)
+        if entry and Path(entry).resolve() != bindings
+    )
+    return shutil.which(host.value, path=path) if path else None
+
+
 def plugin_setup_executables(context: Context) -> dict[Host, str]:
     return {
-        host: executable for host in Host if (executable := context.which(host.value))
+        host: executable
+        for host in Host
+        if (executable := provider_executable(context, host))
     }
 
 
@@ -1606,7 +1640,7 @@ def repair(name: str, project: Path) -> list[str]:
 
 
 def plugin_hosts(context: Context) -> list[Host]:
-    return [host for host in Host if context.which(host.value)]
+    return list(plugin_setup_executables(context))
 
 
 def update_plugins(

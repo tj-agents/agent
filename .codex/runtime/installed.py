@@ -14,7 +14,7 @@ import jobs
 import plugin_payload
 import required_plugins
 import standards
-from codex import catalog, hook_trust, launch, user_plugins
+from codex import catalog, hook_trust, launch, plugins, user_plugins
 from launch_contract import Liveness
 from launch_errors import LaunchError
 from tj_agent.host import Host
@@ -559,13 +559,27 @@ def activate_open_sessions(report: Any) -> None:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
             server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
             threads = loaded_threads(server)
+            directories = set(threads.values())
+            selected = {
+                directory for directory in directories
+                if required_plugins.selected(required_plugins.project_root(directory))
+            }
+            binary = launch.executable() if selected else None
+            expected = {
+                directory: plugins.required_hook_definitions(
+                    required_plugins.check(directory, HOST, binary)
+                )
+                for directory in selected
+            }
             for identity, directory in threads.items():
-                hook_trust.verify_loaded_hooks(server, directory, identity)
+                hook_trust.verify_loaded_hooks(
+                    server, directory, identity, required=expected.get(directory, {})
+                )
             projects = {
                 required_plugins.project_root(directory)
                 for directory in threads.values()
             }
-    except (OSError, RuntimeError) as error:
+    except (LaunchError, OSError, RuntimeError, ValueError) as error:
         report.fail(HOST, "open sessions", str(error))
         return
     for project in sorted(projects):

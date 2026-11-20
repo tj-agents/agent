@@ -22,8 +22,21 @@ def test_scan_skips_ignored_builds_but_covers_local_settings_and_external_worktr
         "build/\n.agents/\n.claude/\n.codex/\nAGENTS.md\nCLAUDE.md\n", encoding="utf-8"
     )
     (root / "tracked.md").write_text('Source\n"old@marketplace"\n', encoding="utf-8")
+    (root / "hook.mjs").write_text(
+        '"my-old@marketplace"\n"old@marketplace-extra"\n"old@marketplace"\n',
+        encoding="utf-8",
+    )
+    (root / "extensionless-hook").write_text('"old@marketplace"\n', encoding="utf-8")
+    (root / "binary.data").write_bytes(b"\0old@marketplace")
     for arguments in (
-        ["add", ".gitignore", "tracked.md"],
+        [
+            "add",
+            ".gitignore",
+            "tracked.md",
+            "hook.mjs",
+            "extensionless-hook",
+            "binary.data",
+        ],
         ["commit", "--quiet", "-m", "Fixture"],
         ["worktree", "add", "--quiet", "--detach", str(linked)],
     ):
@@ -58,6 +71,9 @@ def test_scan_skips_ignored_builds_but_covers_local_settings_and_external_worktr
     assert problems == []
     expected = {f"{path}:1: old@marketplace" for path in files}
     expected.update(f"{path}:2: old@marketplace" for path in tracked)
+    for project in (root, linked):
+        expected.add(f"{project / 'hook.mjs'}:3: old@marketplace")
+        expected.add(f"{project / 'extensionless-hook'}:1: old@marketplace")
     assert set(findings) == expected
     assert before == {path: path.read_bytes() for path in before}
 
@@ -95,6 +111,10 @@ def test_a_trusted_container_is_reported_without_recursing_through_it(
     assert f"requires explicit --root: {parent}" in output
     assert "Ignored build files are excluded unless tracked" in output
     assert "not a universal disk scan" in output
+    assert plugin_references.audit(["old@marketplace"], [parent]) == 1
+    explicit = capsys.readouterr().out
+    assert "unrelated.json:1" in explicit
+    assert "requires explicit --root" not in explicit
 
 
 @pytest.mark.parametrize(

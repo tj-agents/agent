@@ -1380,6 +1380,42 @@ def test_lifecycle_bindings_preserve_line_endings_and_existing_interpreter(
     fallback.assert_not_called()
 
 
+def test_windows_lifecycle_puts_managed_host_first_on_the_user_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_environment = FakeUserEnvironment({"Path": r"C:\tools;%USERPROFILE%\bin"})
+    context = install.Context(home=tmp_path, environ={}, windows=True, user_environment=user_environment)
+    runtime = install.runtime_bin(context)
+    native = tmp_path / "provider"
+    native.mkdir()
+    user_environment.set("Path", f"{native};{user_environment.get('Path')}")
+    script = tmp_path / "fixture.py"
+    script.write_text("import sys\nprint(sys.argv[1])\nraise SystemExit(23)\n", encoding="utf-8")
+    (native / "codex.cmd").write_text("@exit /b 99\n", encoding="utf-8")
+    monkeypatch.setattr(install, "lifecycle_paths", lambda _context: {runtime / "codex.cmd": script})
+
+    assert "add managed host commands to the Windows user PATH" in install.check_lifecycle_commands(context)
+    install.apply_lifecycle_commands(context)
+    assert user_environment.get("Path") == f"{runtime};{native};C:\\tools;%USERPROFILE%\\bin"
+    assert install.check_lifecycle_commands(context) == []
+    assert install.apply_lifecycle_commands(context) == []
+    assert user_environment.broadcasts == 1
+
+    if os.name == "nt":
+        command = os.environ["COMSPEC"]
+        result = subprocess.run(
+            f'"{command}" /d /s /c "codex "two words""',
+            cwd=tmp_path,
+            env=dict(os.environ, PATH=user_environment.get("Path")),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        assert result.returncode == 23, result.stderr
+        assert result.stdout.strip() == "two words"
+
+
 def test_install_records_its_failures(tmp_path: Path) -> None:
     context = machine_context(tmp_path)
     failing = install.Step(

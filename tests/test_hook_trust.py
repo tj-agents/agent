@@ -552,7 +552,7 @@ def test_verify_loaded_hooks_rejects_plugin_removed_from_project(
     server = mock.Mock()
     server.request.side_effect = [fresh, stale]
     with pytest.raises(RuntimeError, match="removed plugin hook"):
-        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", deadline=0)
+        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
     server.request.assert_called_with("hooks/list", {"threadId": "current"})
 
 
@@ -577,9 +577,9 @@ def test_loaded_native_declaration_hash_is_distinct_from_installed_content_appro
     ]
     if loaded_hash.startswith("wrong-"):
         with pytest.raises(RuntimeError, match="contents changed"):
-            TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", deadline=0)
+            TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
     else:
-        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", deadline=0)
+        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
 
 
 @pytest.mark.parametrize("with_options", [False, True])

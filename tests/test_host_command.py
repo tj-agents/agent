@@ -4,12 +4,16 @@ import runpy
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
+import agent_cli
 import pytest
+from codex import launch as codex_launch
+from codex import startup
 from fixtures import foreground_console
+from launch_contract import PreparedLaunch
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +30,35 @@ def completed(
     command: Sequence[str], code: int = 0
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(list(command), code, "", "")
+
+
+def test_native_codex_maintenance_can_upgrade_an_older_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native = str(tmp_path / "codex.exe")
+    monkeypatch.setattr(
+        agent_cli.host_launch(Host.CODEX), "candidate_paths", lambda: [native]
+    )
+    monkeypatch.setattr(
+        codex_launch.process,
+        "run",
+        lambda command, **options: subprocess.CompletedProcess(
+            command, 0, "codex-cli 0.163.0", ""
+        ),
+    )
+    calls: list[Sequence[str]] = []
+
+    def run(
+        command: Sequence[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return completed(command)
+
+    main = command_main()
+    assert main(Host.CODEX, ("update",), cwd=tmp_path, environ={}, run=run) == 0
+    assert calls == [[native, "update"]]
+    assert main(Host.CODEX, (), cwd=tmp_path, environ={}, run=run) == 1
+    assert calls == [[native, "update"]]
 
 
 def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> None:
@@ -102,11 +135,44 @@ def test_managed_command_preserves_native_arguments_and_exit_code(
         assert "CODEX_THREAD_ID" not in child
 
 
-def test_managed_command_uses_the_hosts_effective_directory(tmp_path: Path) -> None:
+@pytest.mark.parametrize("prompt", [(), ("--", "--no-daemon")])
+def test_managed_codex_prebinds_the_exact_thread_in_the_effective_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt: tuple[str, ...],
+) -> None:
     main = command_main()
     target = tmp_path / "café"
     target.mkdir()
     calls: list[tuple[Sequence[str], dict[str, object]]] = []
+    thread = "01234567-89ab-4cde-8123-0123456789ab"
+
+    def prepare(
+        directory: Path,
+        title: str,
+        arguments: list[str],
+        cli: str,
+        native: str,
+        environment: Mapping[str, str],
+    ) -> PreparedLaunch:
+        assert directory == target
+        assert arguments == ["--cd", str(target), *prompt[1:]]
+        return PreparedLaunch(
+            (
+                native,
+                "--cd",
+                str(target),
+                "resume",
+                thread,
+                "--remote",
+                "unix://",
+                *prompt,
+            ),
+            f"codex:{thread}",
+            created=True,
+        )
+
+    monkeypatch.setattr(startup, "prepare", prepare)
 
     def run(
         values: Sequence[str], **options: object
@@ -116,7 +182,7 @@ def test_managed_command_uses_the_hosts_effective_directory(tmp_path: Path) -> N
 
     result = main(
         Host.CODEX,
-        ("-C", "café", "prompt"),
+        ("-C", "café", *prompt),
         cwd=tmp_path,
         environ={},
         resolver=lambda: str(tmp_path / "codex-native"),
@@ -129,10 +195,15 @@ def test_managed_command_uses_the_hosts_effective_directory(tmp_path: Path) -> N
     assert command[command.index("--cwd") + 1] == str(target.resolve())
     assert command[command.index("--command-cwd") + 1] == str(tmp_path.resolve())
     assert options["cwd"] == tmp_path.resolve()
-    assert command[-3:] == ["-C", "café", "prompt"]
-    assert command[command.index("--") + 2 : command.index("--") + 4] == [
+    assert command[command.index("--session") + 1] == f"codex:{thread}"
+    assert command[command.index("--") + 2 :] == [
+        "--cd",
+        str(target),
+        "resume",
+        thread,
         "--remote",
         "unix://",
+        *prompt,
     ]
 
 

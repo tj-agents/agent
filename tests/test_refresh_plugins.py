@@ -953,9 +953,9 @@ def test_open_codex_sessions_install_through_the_daemon(
     ]
 
 
-@pytest.mark.parametrize("stale", [False, True])
+@pytest.mark.parametrize("state", ["matching", "stale", "missing"])
 def test_activation_requires_loaded_thread_hook_hashes_to_match_installed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
 ) -> None:
     report = plugin_update.Report()
     daemon = FakeDaemon()
@@ -963,7 +963,16 @@ def test_activation_requires_loaded_thread_hook_hashes_to_match_installed(
     fresh = {
         "key": "hook", "pluginId": "agent@tj-agents", "currentHash": "new",
         "enabled": True, "isManaged": False, "trustStatus": "trusted",
+        "eventName": "sessionStart", "handlerType": "command", "command": "fixture",
     }
+    disabled = dict(fresh, key="optional", pluginId="optional@tj-agents", enabled=False)
+    root = tmp_path / "agent"
+    manifest = root / ".codex-plugin/plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "fixture"}]}]}}',
+        encoding="utf-8",
+    )
 
     def request(method: str, params: dict[str, object]) -> dict[str, object]:
         if method == "config/batchWrite":
@@ -973,17 +982,23 @@ def test_activation_requires_loaded_thread_hook_hashes_to_match_installed(
         if method == "thread/read":
             return {"thread": {"cwd": str(tmp_path)}}
         assert method == "hooks/list"
-        hook = dict(fresh, currentHash="old") if stale and "threadId" in params else fresh
-        return {"data": [{"cwd": str(tmp_path), "errors": [], "hooks": [hook]}]}
+        if state == "stale" and "threadId" in params:
+            return {"data": [{"cwd": str(tmp_path), "errors": [], "hooks": [dict(fresh, currentHash="old"), disabled]}]}
+        hooks = [disabled] if state == "missing" else [fresh, disabled]
+        return {"data": [{"cwd": str(tmp_path), "errors": [], "hooks": hooks}]}
 
     monkeypatch.setattr(daemon, "request", request)
     monkeypatch.setattr(codex_launch, "daemon", lambda _timeout: daemon)
     monkeypatch.setattr(codex_hook_trust, "TIMEOUT", 0)
     monkeypatch.setattr(required_plugins, "project_root", lambda directory: directory)
+    monkeypatch.setattr(required_plugins, "selected", lambda _directory: ("agent@tj-agents",))
+    monkeypatch.setattr(codex_launch, "executable", lambda: "codex")
+    monkeypatch.setattr(required_plugins, "check", lambda *_args: {"agent@tj-agents": root})
     monkeypatch.setattr(codex_installed, "update_project_standards", checked.append)
     codex_installed.activate_open_sessions(report)
-    if stale:
-        assert any("contents changed" in failure for failure in report.failures)
+    if state != "matching":
+        message = "contents changed" if state == "stale" else "required hook definitions missing"
+        assert any(message in failure for failure in report.failures)
         assert not checked
     else:
         assert not report.failures

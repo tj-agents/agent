@@ -1,5 +1,6 @@
 """Codex executable selection, owned native launches and thread liveness."""
 
+import argparse
 import glob
 import json
 import os
@@ -207,6 +208,8 @@ def resolve_executable(minimum=startup.MINIMUM_VERSION, candidates=None):
         if compare_version(candidate[1], best[1]) > 0:
             best = candidate
 
+    if minimum is None:
+        return best
     floor = parse_version(minimum)
     if floor is None:
         raise LaunchError(f"The minimum Codex version is not a version: {minimum}")
@@ -242,15 +245,59 @@ def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
     return options if attached else (*startup.MANAGED_OPTIONS, *options)
 
 
+def require_stopped_thread(thread_id: str) -> None:
+    observed = liveness(strict=True).get(thread_id)
+    if observed is not None and observed.alive:
+        raise LaunchError(f"Codex {thread_id} is already running; use its existing conversation")
+
+
+def prepare_foreground(
+    executable: str, directory: Path, arguments: Sequence[str], cli: str,
+    environ: Mapping[str, str],
+) -> PreparedLaunch:
+    options = managed_arguments(arguments)
+    delimiter = options.index("--") if "--" in options else len(options)
+    literal = options[delimiter + 1:]
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False, exit_on_error=False)
+    parser.add_argument("-C", "--cd")
+    parser.add_argument("-m", "--model")
+    parser.add_argument("-c", "--config", action="append", default=[])
+    parser.add_argument("--remote")
+    parser.add_argument("values", nargs="*")
+    try:
+        parsed, extra = parser.parse_known_intermixed_args(options[:delimiter])
+    except argparse.ArgumentError as error:
+        raise LaunchError(f"Cannot bind this managed foreground Codex command: {error}") from error
+    if parsed.values and parsed.values[0] in {"exec", "e", "review"}:
+        return PreparedLaunch((executable, *arguments))
+    if extra:
+        raise LaunchError(f"Unsupported managed foreground Codex option: {extra[0]}")
+    command = ["--cd", str(directory)]
+    if parsed.values[:1] == ["resume"]:
+        if len(parsed.values) != 2 or parsed.model or parsed.config or literal:
+            raise LaunchError("Managed foreground resume requires an exact native UUID; use tj recover for session selection")
+        thread_id = startup.native_id(parsed.values[1])
+        require_stopped_thread(thread_id)
+        command.extend(("resume", thread_id))
+    else:
+        if parsed.values[:1] == ["fork"]:
+            raise LaunchError(f"Managed foreground Codex does not support the {parsed.values[0]} subcommand")
+        prompt = [*parsed.values, *literal]
+        if len(prompt) > 1 or len(parsed.config) > 1:
+            raise LaunchError("Managed foreground Codex accepts one prompt and one reasoning override")
+        if parsed.model is not None:
+            command.extend(("--model", parsed.model))
+        if parsed.config:
+            command.extend(("-c", parsed.config[0]))
+        command.extend(prompt)
+    return startup.prepare(directory, directory.name or "Codex", command, cli, executable, environ)
+
+
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
     native = str(resolve_executable(minimum=startup.MINIMUM_VERSION)[0])
     if arguments[:3] == ["--cd", str(directory), "resume"] and len(arguments) == 4:
         thread_id = startup.native_id(arguments[3])
-        observed = liveness(strict=True).get(thread_id)
-        if observed is not None and observed.alive:
-            raise LaunchError(
-                f"Codex {thread_id} is already running; use its existing conversation"
-            )
+        require_stopped_thread(thread_id)
     return startup.prepare(directory, title, arguments, cli, native, environ)
 
 

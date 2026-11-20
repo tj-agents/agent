@@ -71,7 +71,7 @@ class AppServer:
              *(["--sock", str(socket_path)] if socket_path is not None else [])], cwd=cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=not existing, encoding=None if existing else "utf-8", bufsize=-1 if existing else 1,
-            env=dict(os.environ, **(environment or {})),
+            env=environment,
         )
         self.messages = queue.Queue()
         self.sequence = 0
@@ -410,7 +410,8 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
     limit = TIMEOUT if timeout is None else timeout
     if limit <= 0:
         raise RuntimeError("Codex hook trust deadline expired")
-    with AppServer(executable, cwd, launch_args, environment, timeout=limit) as server:
+    child_environment = dict(os.environ, **environment) if environment is not None else None
+    with AppServer(executable, cwd, launch_args, child_environment, timeout=limit) as server:
         config = server.request("config/read", {"cwd": str(cwd), "includeLayers": False})["config"]
         features = config.get("features") or {}
         if features.get("hooks", features.get("codex_hooks", True)) is False:
@@ -593,18 +594,17 @@ def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
         verify_loaded_hooks(server, cwd, identity, required=required, deadline=deadline)
 
 
-def verify_loaded_hooks(server, cwd, identity, *, required=None, deadline=None):
+def verify_loaded_hooks(server, cwd, identity, *, required, deadline=None):
     """Verify live declarations, trust and build paths; native live hashes can omit content."""
     deadline = time.monotonic() + TIMEOUT if deadline is None else deadline
+    marketplace = "@" + required_plugins.MARKETPLACE_NAME
+
+    def relevant(hook):
+        plugin = hook.get("pluginId")
+        return plugin in required or (hook.get("enabled") and str(plugin).endswith(marketplace))
+
     installed = server.request("hooks/list", {"cwds": [str(cwd)]})
-    if required is None:
-        readiness = {
-            hook["pluginId"]: [] for entry in installed.get("data", [])
-            for hook in entry.get("hooks", []) if hook.get("pluginId")
-        }
-    else:
-        readiness = required
-    require_ready(installed, cwd, readiness)
+    require_ready(installed, cwd, required)
     expected = {
         hook["key"]: {
             "trusted_hash": hook["currentHash"],
@@ -612,17 +612,15 @@ def verify_loaded_hooks(server, cwd, identity, *, required=None, deadline=None):
             "source_path": hook.get("sourcePath"),
         }
         for entry in installed["data"] for hook in entry.get("hooks", [])
-        if Path(entry["cwd"]).resolve() == cwd and hook.get("pluginId")
-        and (required is None or hook["pluginId"] in required)
+        if Path(entry["cwd"]).resolve() == cwd and relevant(hook)
     }
     while True:
         listing = server.request("hooks/list", {"threadId": identity})
         try:
-            require_ready(listing, cwd, readiness, expected=expected)
+            require_ready(listing, cwd, required, expected=expected)
             loaded = {
                 hook["key"] for entry in listing["data"] for hook in entry.get("hooks", [])
-                if Path(entry["cwd"]).resolve() == cwd and hook.get("pluginId")
-                and (required is None or hook["pluginId"] in required)
+                if Path(entry["cwd"]).resolve() == cwd and relevant(hook)
             }
             if loaded != expected.keys():
                 raise RuntimeError("Codex conversation still has removed plugin hook definitions")

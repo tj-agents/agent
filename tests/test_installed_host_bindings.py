@@ -8,6 +8,35 @@ from pathlib import Path
 
 import install
 import pytest
+from tj_agent.host import Host
+
+
+def test_installer_ignores_its_own_forwarders_when_only_one_provider_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native = tmp_path / "providers"
+    native.mkdir()
+    windows = os.name == "nt"
+    context = install.Context(home=tmp_path / "home", environ={}, windows=windows)
+    bindings = install.runtime_bin(context)
+    bindings.mkdir(parents=True)
+    shim_suffix = ".cmd" if windows else ""
+    for host in Host:
+        shim = bindings / (host.value + shim_suffix)
+        shim.touch()
+        shim.chmod(0o755)
+    installed = native / ("codex.exe" if windows else "codex")
+    installed.touch()
+    installed.chmod(0o755)
+    path = os.pathsep.join((str(bindings), str(native)))
+    monkeypatch.setenv("PATH", path)
+    context.environ["PATH"] = path
+
+    assert {
+        host: Path(executable)
+        for host, executable in install.plugin_setup_executables(context).items()
+    } == {Host.CODEX: installed}
+    assert install.plugin_hosts(context) == [Host.CODEX]
 
 
 @pytest.mark.parametrize("host", ["claude", "codex"])

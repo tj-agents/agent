@@ -1,6 +1,8 @@
 """Find retired plugin references in projects, worktrees and host registrations."""
 
+import io
 import os
+import re
 import stat
 import subprocess
 from collections.abc import Iterable
@@ -65,8 +67,7 @@ def source_files(root: Path) -> set[Path]:
         relative = Path(name)
         if not name or relative.anchor or ".." in relative.parts or relative == Path():
             raise ValueError(f"Invalid Git inventory for {root}: {name!r}")
-        if relative.suffix in TEXT:
-            files.add(root / relative)
+        files.add(root / relative)
     return files
 
 
@@ -91,7 +92,12 @@ def worktrees(root: Path) -> set[Path]:
 def scan(
     identities: Iterable[str], roots: Iterable[Path], extra_files: Iterable[Path]
 ) -> tuple[list[str], list[str]]:
-    tokens = set(identities)
+    patterns = {
+        identity: re.compile(
+            r"(?<![A-Za-z0-9_-])" + re.escape(identity) + r"(?![A-Za-z0-9_-])"
+        )
+        for identity in sorted(set(identities))
+    }
     pending = list(roots)
     visited: set[Path] = set()
     files = set(extra_files)
@@ -147,12 +153,19 @@ def scan(
     findings = []
     for path in sorted(files):
         try:
+            if path.is_symlink():
+                problems.append(f"Unverified symbolic link {path}")
+                continue
             if path.is_file():
-                with path.open(encoding="utf-8-sig") as stream:
-                    for number, line in enumerate(stream, 1):
-                        for identity in sorted(tokens):
-                            if identity in line:
-                                findings.append(f"{path}:{number}: {identity}")
+                with path.open("rb") as raw:
+                    if b"\0" in raw.read(8192):
+                        continue
+                    raw.seek(0)
+                    with io.TextIOWrapper(raw, encoding="utf-8-sig") as stream:
+                        for number, line in enumerate(stream, 1):
+                            for identity, pattern in patterns.items():
+                                if pattern.search(line):
+                                    findings.append(f"{path}:{number}: {identity}")
         except (OSError, UnicodeError) as error:
             problems.append(f"Unverified file {path}: {error}")
     return findings, problems
@@ -160,6 +173,7 @@ def scan(
 
 def audit(identities: Iterable[str], roots: Iterable[Path]) -> int:
     projects = set(roots)
+    explicit = {root.resolve() for root in projects}
     files = set()
     problems = []
     for provider in (claude_references, codex_references):
@@ -167,7 +181,8 @@ def audit(identities: Iterable[str], roots: Iterable[Path]) -> int:
         try:
             for project in provider.projects():
                 if (
-                    not project.exists()
+                    project.resolve() in explicit
+                    or not project.exists()
                     or (project / ".git").exists()
                     or (project / ".agents/plugins.json").is_file()
                 ):

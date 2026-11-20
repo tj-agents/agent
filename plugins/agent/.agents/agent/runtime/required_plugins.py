@@ -278,12 +278,14 @@ def check(project: Path, host: Host, executable: str | None = None,
         dependency_failures = [(identity, detail) for identity in missing for detail in reasons.get(identity, [])
                                if detail.get("type") in DEPENDENCY_ERRORS]
         if dependency_failures:
-            absent = sorted({detail["dependency"] for _, detail in dependency_failures
-                             if isinstance(detail.get("dependency"), str) and IDENTITY.fullmatch(detail["dependency"])})
+            repairs = {(identity, dependency) for identity, detail in dependency_failures
+                       if isinstance(dependency := detail.get("dependency"), str) and IDENTITY.fullmatch(dependency)}
+            unresolved = set(missing) - {identity for identity, _ in repairs}
+            targets = sorted(unresolved | {dependency for _, dependency in repairs})
             raise UnsatisfiedDependencyError(
                 "; ".join(unsatisfied(host, project, identity, detail) for identity, detail in dependency_failures)
                 + ". Run tj install --step 'plugin setup' in this project; it enables the selection's "
-                "dependencies and installs missing builds.", project, absent or missing,
+                "dependencies and installs missing builds.", project, targets,
             )
         described = [identity + (f" ({'; '.join(detail['message'] for detail in reasons[identity])})"
                                  if identity in reasons else "") for identity in missing]
