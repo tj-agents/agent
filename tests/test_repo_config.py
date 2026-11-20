@@ -639,6 +639,32 @@ def test_preserved_permissions_need_no_published_lookup(
     assert "beta@tj-agents" in settings["enabledPlugins"]
 
 
+def test_scope_promotion_preserves_local_claude_denials_until_regenerated(
+    repository: Path,
+    published: list[list[str]],
+    fetched: Callable[[Mapping[str, list[object]]], None],
+) -> None:
+    fetched({})
+    roster = ADOPT.load_roster()
+    roster["plugins"]["alpha"] = []
+    ADOPT.run(repository, [], ["alpha"], "write", scope="local", roster=roster)
+    local = repository / ".claude/settings.local.json"
+    owner = repository / REPO_CONFIG.LOCAL_STATE
+    before = local.read_bytes(), owner.read_bytes()
+    assert "Bash(gh auth login *)" in local.read_text(encoding="utf-8")
+
+    selection = repository / ".agents/plugins.json"
+    with pytest.raises(
+        REPO_CONFIG.lock_io.LockError, match="reconcile published permissions"
+    ):
+        REPO_CONFIG.run(selection, "write", scope="project", preserve_permissions=True)
+    assert (local.read_bytes(), owner.read_bytes()) == before
+
+    ADOPT.run(repository, [], ["alpha"], "write", scope="project", roster=roster)
+    assert "Bash(gh auth login *)" in permissions(repository)["deny"]
+    assert not owner.exists()
+
+
 def test_run_writes_nothing_to_user_settings(
     repository: Path,
     published: list[list[str]],

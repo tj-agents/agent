@@ -516,9 +516,15 @@ def plan(
                  *([exclude] if exclude is not None else [])], inputs,
             )
             state = local_state(state_path)
+            claude_owned = state[Host.CLAUDE.value]
+            if preserve_permissions and any(claude_owned.get(key) for key in ("allow", "deny")):
+                raise lock_io.LockError(
+                    "Cannot promote local Claude settings while preserving project permissions; "
+                    "reconcile published permissions with agent:plugins in project scope."
+                )
             local_text, _ = local_claude(
                 local_claude_path, {}, {}, harness_permissions.Permissions(),
-                state[Host.CLAUDE.value],
+                claude_owned,
             )
             current_codex = text_at(codex) or ""
             prior_codex = state[Host.CODEX.value]
