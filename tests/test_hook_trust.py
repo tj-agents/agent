@@ -556,6 +556,22 @@ def test_verify_loaded_hooks_rejects_plugin_removed_from_project(
     server.request.assert_called_with("hooks/list", {"threadId": "current"})
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_verify_loaded_hooks_checks_enabled_optional_hook_trust(
+    hook_state: HookTrustState, enabled: bool,
+) -> None:
+    trusted = dict(hook_state.hook, trustStatus="trusted")
+    optional = dict(trusted, key="optional", trustStatus="untrusted", enabled=enabled)
+    listing = {"data": [{"cwd": str(hook_state.cwd), "hooks": [trusted, optional], "errors": []}]}
+    server = mock.Mock()
+    server.request.return_value = listing
+    if enabled:
+        with pytest.raises(RuntimeError, match="optional: untrusted"):
+            TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
+    else:
+        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
+
+
 @pytest.mark.parametrize("loaded_hash", ["declaration", "composite", "wrong-content", "wrong-declaration"])
 def test_loaded_native_declaration_hash_is_distinct_from_installed_content_approval(
     hook_state: HookTrustState, loaded_hash: str

@@ -1,5 +1,6 @@
 """Find retired plugin references in projects, worktrees and host registrations."""
 
+import codecs
 import io
 import os
 import re
@@ -158,10 +159,16 @@ def scan(
                 continue
             if path.is_file():
                 with path.open("rb") as raw:
-                    if b"\0" in raw.read(8192):
+                    header = raw.read(8192)
+                    encoding = "utf-8-sig"
+                    if header.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+                        encoding = "utf-32"
+                    elif header.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+                        encoding = "utf-16"
+                    elif b"\0" in header:
                         continue
                     raw.seek(0)
-                    with io.TextIOWrapper(raw, encoding="utf-8-sig") as stream:
+                    with io.TextIOWrapper(raw, encoding=encoding) as stream:
                         for number, line in enumerate(stream, 1):
                             for identity, pattern in patterns.items():
                                 if pattern.search(line):

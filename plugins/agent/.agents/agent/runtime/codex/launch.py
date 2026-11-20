@@ -269,7 +269,7 @@ def prepare_foreground(
     except argparse.ArgumentError as error:
         raise LaunchError(f"Cannot bind this managed foreground Codex command: {error}") from error
     if parsed.values and parsed.values[0] in {"exec", "e", "review"}:
-        return PreparedLaunch((executable, *arguments))
+        return PreparedLaunch((executable, *options))
     if extra:
         raise LaunchError(f"Unsupported managed foreground Codex option: {extra[0]}")
     command = ["--cd", str(directory)]

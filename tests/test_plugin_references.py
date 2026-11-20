@@ -27,6 +27,7 @@ def test_scan_skips_ignored_builds_but_covers_local_settings_and_external_worktr
         encoding="utf-8",
     )
     (root / "extensionless-hook").write_text('"old@marketplace"\n', encoding="utf-8")
+    (root / "wide.ps1").write_text('"old@marketplace"\n', encoding="utf-16")
     (root / "binary.data").write_bytes(b"\0old@marketplace")
     for arguments in (
         [
@@ -35,6 +36,7 @@ def test_scan_skips_ignored_builds_but_covers_local_settings_and_external_worktr
             "tracked.md",
             "hook.mjs",
             "extensionless-hook",
+            "wide.ps1",
             "binary.data",
         ],
         ["commit", "--quiet", "-m", "Fixture"],
@@ -74,6 +76,7 @@ def test_scan_skips_ignored_builds_but_covers_local_settings_and_external_worktr
     for project in (root, linked):
         expected.add(f"{project / 'hook.mjs'}:3: old@marketplace")
         expected.add(f"{project / 'extensionless-hook'}:1: old@marketplace")
+        expected.add(f"{project / 'wide.ps1'}:1: old@marketplace")
     assert set(findings) == expected
     assert before == {path: path.read_bytes() for path in before}
 

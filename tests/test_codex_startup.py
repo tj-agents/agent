@@ -15,6 +15,7 @@ from typing import cast
 import agent_cli
 import agent_store
 import pytest
+import required_plugins
 from codex import launch, permissions, startup
 from launch_contract import Confirmation, Liveness, PreparedLaunch
 from launch_errors import LaunchError, LaunchTimeout
@@ -234,6 +235,22 @@ def test_prepare_blank_foreground_thread_for_exact_resume(native: Native) -> Non
         f"codex:{THREAD}",
         created=True,
     )
+
+
+@pytest.mark.parametrize("prompt", ["--help", "--model"])
+def test_foreground_admission_ignores_literal_option_like_prompts(
+    native: Native,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt: str,
+) -> None:
+    def admit(cwd: Path, arguments: list[str], _environment: Mapping[str, str]) -> None:
+        assert required_plugins.launch_context(cwd, Host.CODEX, arguments) == (cwd, ())
+
+    monkeypatch.setattr(startup, "admit", admit)
+    prepared = launch.prepare_foreground(
+        "fixture-codex", native.directory, ("--", prompt), "tj", {}
+    )
+    assert prepared.command[-2:] == ("--", prompt)
 
 
 @pytest.mark.parametrize("trust", [None, {}, {"trust_level": "untrusted"}])

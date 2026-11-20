@@ -187,7 +187,10 @@ def prepare(
         )
         thread_id = native_id(arguments[3]) if resuming else None
         options = None if resuming else start_options(directory, arguments)
-        admit(directory, arguments, environ)
+        native_options = (
+            arguments[:-1] if options and options.prompt is not None else arguments
+        )
+        admit(directory, native_options, environ)
         with connection(native, directory, environment=environ) as server:
             document = server.request(
                 "config/read", {"cwd": str(directory), "includeLayers": True}
@@ -210,9 +213,6 @@ def prepare(
                 thread_id = create(
                     server, directory, title, options.model, options.effort
                 )
-                native_options = (
-                    arguments[2:-1] if options.prompt is not None else arguments[2:]
-                )
                 prepared = PreparedLaunch(
                     (
                         native,
@@ -220,7 +220,7 @@ def prepare(
                         str(directory),
                         "resume",
                         thread_id,
-                        *native_options,
+                        *native_options[2:],
                         *MANAGED_OPTIONS,
                         *(("--", options.prompt) if options.prompt is not None else ()),
                     ),

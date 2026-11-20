@@ -62,7 +62,7 @@ class StartTests(unittest.TestCase):
         arguments, adapter = self.start(Host.CODEX, {hook.LAUNCH_ENV: 'L1', 'WT_SESSION': 'w'}, title='agent#98',
                                         launch='L1')
         self.assertEqual(['register', '--session', 'codex:n1', '--cwd', '/repo/sub', '--worktree', '/repo',
-                          '--launch-id', 'L1'], arguments)
+                          '--launch-id', 'L1', '--require-unowned'], arguments)
         adapter.name_session.assert_called_once_with('n1', 'agent#98')
 
     def test_a_session_outside_tj_run_records_its_terminal_and_title(self):

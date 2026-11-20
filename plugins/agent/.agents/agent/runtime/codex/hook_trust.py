@@ -603,8 +603,18 @@ def verify_loaded_hooks(server, cwd, identity, *, required, deadline=None):
         plugin = hook.get("pluginId")
         return plugin in required or (hook.get("enabled") and str(plugin).endswith(marketplace))
 
-    installed = server.request("hooks/list", {"cwds": [str(cwd)]})
-    require_ready(installed, cwd, required)
+    def scoped(listing):
+        return {
+            "data": [dict(entry, hooks=[hook for hook in entry.get("hooks", []) if relevant(hook)])
+                     for entry in listing.get("data", [])]
+        }
+
+    installed = scoped(server.request("hooks/list", {"cwds": [str(cwd)]}))
+    readiness = dict(required)
+    for entry in installed.get("data", []):
+        for hook in entry.get("hooks", []):
+            readiness.setdefault(hook["pluginId"], [])
+    require_ready(installed, cwd, readiness)
     expected = {
         hook["key"]: {
             "trusted_hash": hook["currentHash"],
@@ -612,15 +622,15 @@ def verify_loaded_hooks(server, cwd, identity, *, required, deadline=None):
             "source_path": hook.get("sourcePath"),
         }
         for entry in installed["data"] for hook in entry.get("hooks", [])
-        if Path(entry["cwd"]).resolve() == cwd and relevant(hook)
+        if Path(entry["cwd"]).resolve() == cwd
     }
     while True:
-        listing = server.request("hooks/list", {"threadId": identity})
+        listing = scoped(server.request("hooks/list", {"threadId": identity}))
         try:
-            require_ready(listing, cwd, required, expected=expected)
+            require_ready(listing, cwd, readiness, expected=expected)
             loaded = {
                 hook["key"] for entry in listing["data"] for hook in entry.get("hooks", [])
-                if Path(entry["cwd"]).resolve() == cwd and relevant(hook)
+                if Path(entry["cwd"]).resolve() == cwd
             }
             if loaded != expected.keys():
                 raise RuntimeError("Codex conversation still has removed plugin hook definitions")
