@@ -36,7 +36,7 @@ class SelectionConvergenceTests(unittest.TestCase):
             self.project / "producer", dict.fromkeys(names, published_plugins.EMPTY))
         (source / ".claude-plugin").mkdir()
         (source / ".claude-plugin/marketplace.json").write_text(
-            published_plugins.catalog(names, commit, {plugin["name"]: plugin.get("requires", [])
+            published_plugins.catalog(names, commit, {plugin["name"]: plugin["dependencies"]
                                                       for plugin in snapshot["marketplace"]["plugins"]}),
             encoding="utf-8")
         for arguments in (["init", "--initial-branch=main"], ["add", "plugins.json", ".claude-plugin"],

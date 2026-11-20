@@ -47,7 +47,9 @@ def load_roster(snapshot: dict | None = None) -> dict:
         name = entry["name"]
         if name in plugins:
             raise lock_io.LockError(f"{LOCK}: duplicate plugin: {name}")
-        plugins[name] = lock_io.require_string_list(entry.get("requires", []), f"{name}.requires")
+        plugins[name] = lock_io.require_string_list(
+            entry.get("dependencies"), f"{name}.dependencies"
+        )
         if entry.get("kind") == "profile":
             profiles.add(name)
         elif entry.get("kind") == "organization":

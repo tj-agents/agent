@@ -233,7 +233,7 @@ def profile_roster(installed_employers: list[object]) -> dict[str, object]:
         entry["kind"] = ("profile" if entry["name"] in {"personal", "work"}
                          else "organization" if "extends" in entry else "shared")
     entries.append({"name": "example-employer", "repository": "example-employer", "revision": "a" * 40,
-                    "requires": ["work"], "kind": "organization", "extends": "work"})
+                    "dependencies": ["work"], "kind": "organization", "extends": "work"})
     roster: dict[str, object] = ADOPT.load_roster(snapshot)
     return roster
 
@@ -273,7 +273,8 @@ def test_load_roster_reads_profiles_and_the_profile_each_organization_extends(
 def test_load_roster_refuses_an_organization_without_the_profile_it_extends() -> None:
     snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK)
     snapshot["marketplace"]["plugins"].append(
-        {"name": "example-employer", "repository": "example-employer", "revision": "a" * 40, "kind": "organization"})
+        {"name": "example-employer", "repository": "example-employer", "revision": "a" * 40,
+         "kind": "organization", "dependencies": []})
     with pytest.raises(LockError, match="organization example-employer must extend a profile"):
         ADOPT.load_roster(snapshot)
 
