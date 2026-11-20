@@ -441,8 +441,17 @@ def test_recover_from_plain_linux_terminal_creates_then_attaches_tmux(
 
 
 def open_launch(
-    recovery: Recovery, launch_id: str, session: str | None, opened: bool = True
+    recovery: Recovery,
+    launch_id: str,
+    session: str | None,
+    opened: bool = True,
+    *,
+    bind: bool = True,
+    end_reason: str | None = None,
 ) -> None:
+    if bind and session is not None:
+        row = next(each for each in recovery.records if each["session"] == session)
+        row["launch_id"] = launch_id
     recovery.launches.append(
         {
             "launch_id": launch_id,
@@ -450,6 +459,7 @@ def open_launch(
             "cwd": str(recovery.root),
             "session": session,
             "open": opened,
+            "end_reason": end_reason,
         }
     )
 
@@ -463,6 +473,7 @@ def test_recover_open_reopens_exactly_the_open_tabs_whose_agent_is_dead(
     recovery.hosts[Host.CODEX].live["running"] = Liveness(True, "busy")
     open_launch(recovery, "earlier", "claude:was-open")
     open_launch(recovery, "latest", "claude:was-open")
+    open_launch(recovery, "stale-open", "claude:was-open", bind=False)
     open_launch(recovery, "shut", "claude:closed", opened=False)
     open_launch(recovery, "live", "codex:running")
     code, rows = recovery.run("--open")
@@ -476,6 +487,7 @@ def test_recover_open_reopens_exactly_the_open_tabs_whose_agent_is_dead(
     assert {launch["launch_id"]: launch["open"] for launch in recovery.launches} == {
         "earlier": False,
         "latest": False,
+        "stale-open": False,
         "shut": False,
         "live": True,
     }
@@ -488,6 +500,18 @@ def test_recover_open_reports_a_launch_with_no_session(recovery: Recovery) -> No
     assert rows[0]["action"] == "failed"
     assert "never-registered" in rows[0]["error"]
     assert recovery.launched == []
+
+
+def test_recover_open_retries_a_replacement_that_never_spawned(
+    recovery: Recovery,
+) -> None:
+    recovery.session(Host.CODEX, "unstarted")
+    del recovery.hosts[Host.CODEX].live["unstarted"]
+    open_launch(recovery, "replacement", "codex:unstarted", end_reason="not_started")
+    code, rows = recovery.run("--open")
+    assert code == 0
+    assert rows[0]["action"] == "started"
+    assert recovery.launched[0]["resume_from"] == "replacement"
 
 
 def test_recover_closes_the_launch_it_reopens(recovery: Recovery) -> None:

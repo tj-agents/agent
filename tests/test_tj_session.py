@@ -158,6 +158,21 @@ def test_unknown_native_state_never_prints_dead(
     assert "tj session liveness:" in captured.err
 
 
+@pytest.mark.parametrize("running", [False, True])
+def test_unstarted_recovery_remains_retryable_unless_the_native_session_is_live(
+    backend: Backend,
+    capsys: pytest.CaptureFixture[str],
+    running: bool,
+) -> None:
+    backend.launch["end_reason"] = "not_started"
+    backend.inventory = {backend.native_id: Liveness(True)} if running else {}
+
+    assert backend.check() == 0
+    assert json.loads(capsys.readouterr().out)["state"] == (
+        "live" if running else "dead"
+    )
+
+
 @pytest.mark.parametrize("alive", [True, False])
 def test_replacement_receipt_cannot_prove_an_unobserved_predecessor_stopped(
     backend: Backend,

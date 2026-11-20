@@ -259,6 +259,7 @@ def test_session_start_binds_the_launch(
             "/fixture",
             "--launch-id",
             "launch",
+            "--require-unowned",
         ),
     ]
     assert calls == expected

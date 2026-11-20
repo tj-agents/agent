@@ -107,7 +107,7 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
         if resumed is not None:
             session = resumed
         elif session is None or session.get("launch_id") != launch:
-            session = register(host, session_id, cwd, root, ["--launch-id", launch])
+            session = register(host, session_id, cwd, root, ["--launch-id", launch, "--require-unowned"])
     elif session is None:
         session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
     else:
