@@ -161,7 +161,8 @@ same Claude entry or Codex pattern from any plugin, whichever way the plugin dec
 
 ```text
 tj claude [native arguments]         managed Claude in this terminal
-tj codex [native arguments]          managed Codex in this terminal
+tj codex [prompt]                    new managed Codex in this terminal
+tj codex resume UUID                resume an exact Codex thread in this terminal
 tj start 461 --lane L4 [--codex]     Core worktree creator, card In Progress, agent in a tj run tab
 tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
 tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
@@ -206,6 +207,11 @@ harness lookup; adoption and `tj install` own them. The index requires applicabl
 ordinary skills remain loaded on demand. Claude imports the shared instructions through `CLAUDE.md`.
 Preparation preserves authored guidance and reports a nonempty Codex override that would hide it.
 Use `tj claude` or `tj codex` for foreground sessions in an existing terminal.
+For a new interactive Codex launch, `tj codex` accepts `--cd`, `--model`,
+`-c model_reasoning_effort=VALUE` and one optional prompt. Use `--` before a prompt that starts with
+a flag. The launcher creates the exact native thread and binds it to the wrapper before starting
+the frontend. Set other session defaults in Codex configuration. `tj recover` can select a recorded
+session when you do not have its UUID.
 
 Claude installs a missing plugin once at user scope and disables it there unless the user already
 enabled it; the repository's project or local settings enable it. Project- and local-scope installations
