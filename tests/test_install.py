@@ -1402,11 +1402,12 @@ def test_windows_lifecycle_puts_managed_host_first_on_the_user_path(
     assert user_environment.broadcasts == 1
 
     if os.name == "nt":
-        command = os.environ["COMSPEC"]
+        command = shutil.which("cmd.exe")
+        assert command is not None
+        monkeypatch.setenv("PATH", user_environment.get("Path"))
         result = subprocess.run(
             f'"{command}" /d /s /c "codex "two words""',
             cwd=tmp_path,
-            env=dict(os.environ, PATH=user_environment.get("Path")),
             capture_output=True,
             text=True,
             check=False,
