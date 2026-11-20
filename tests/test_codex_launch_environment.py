@@ -1,13 +1,15 @@
 import shutil
 import subprocess
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import agent_cli
 import pytest
 import session_resume
-from codex import processes
+from codex import processes, startup
 from launch_contract import Confirmation, Liveness, PreparedLaunch
 from tj_agent.host import Host
 
@@ -30,10 +32,26 @@ def test_codex_launch_removes_inherited_monochrome_environment(
         adapter,
         "prepare",
         lambda directory, title, arguments, cli, environ: PreparedLaunch(
-            ("codex", *arguments), session
+            ("codex", "--cd", str(directory), *arguments, "--remote", "unix://"),
+            session,
         ),
     )
     monkeypatch.setattr(session_resume, "predecessor", lambda *args: None)
+
+    def request(method: str, params: dict[str, object]) -> dict[str, object]:
+        assert method == "thread/read"
+        assert params == {"threadId": thread, "includeTurns": False}
+        return {
+            "thread": {"id": thread, "cwd": str(tmp_path), "status": {"type": "idle"}}
+        }
+
+    def connect(
+        native: str, directory: Path, *, existing: bool
+    ) -> nullcontext[SimpleNamespace]:
+        assert native == "codex" and directory == tmp_path and existing
+        return nullcontext(SimpleNamespace(request=request))
+
+    monkeypatch.setattr(startup, "connection", connect)
 
     def record(session_id: str, launch_id: str) -> bool:
         assert session_id == thread
@@ -78,7 +96,15 @@ def test_codex_launch_removes_inherited_monochrome_environment(
 
     assert result["confirmation"] is Confirmation.PROCESS_STARTED
     command, options = calls[0]
-    assert command[-3:] == ["codex", "resume", thread]
+    assert command[-7:] == [
+        "codex",
+        "--cd",
+        str(tmp_path),
+        "resume",
+        thread,
+        "--remote",
+        "unix://",
+    ]
     if windows:
         child_environment = options["env"]
         assert isinstance(child_environment, dict)
