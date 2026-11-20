@@ -277,15 +277,17 @@ tj receipt
 
 After `tj finish`, write the final response normally. The native Stop adapter captures it for that session
 and turn. Intent alone does not complete the session: result, cleanup and tracker receipts are separate.
-New input cancels pending completion; a keep-open hold survives it. Waits and pending background work keep
+Submitted input cancels pending completion; a keep-open hold survives it. Waits and pending background work keep
 the session unfinished, and releasing a hold does not itself request completion. Missing or failed native
 evidence stays visibly unverified. TJ does not generate synthetic user input or infer completion from the
 wording of a response.
 
 Use `tj receipt --launch <launch-id>` to inspect the durable record after the terminal has closed.
-Codex retains its window after delivering a final result because its native interface does not expose
-enough state to verify safe automatic exit. Exit it normally after checking drafts and other native work;
-TJ then rechecks completion and cleanup. The pending exit remains visible in its receipt and status.
+Claude and Codex both remain open after delivering a final result. Idle metadata cannot atomically exclude
+unsent drafts or new input arriving during shutdown, so TJ does not automatically close either native UI.
+Exit normally after checking drafts and pending native work; TJ then verifies native exit, completion and
+cleanup. This retention is a current safety limitation, not completed closeout. The pending exit remains
+visible in its receipt and status.
 Cleanup preserves primary checkouts, authored changes and any worktree whose ownership or integration
 cannot be proved. See [CLI's managed-session contract](https://github.com/tj-agents/cli#managed-sessions)
 for the completion checks, receipt storage and recovery behavior.
