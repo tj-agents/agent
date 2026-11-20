@@ -73,7 +73,8 @@ bumps; the step is a no-op while uv's receipt matches the pins. worktrunk and Ha
 `tj-cli`'s own installers.
 
 See [plugin updates](https://github.com/tj-agents/cli/blob/main/docs/plugin-updates.md) for update commands,
-automatic checks and session reloads.
+automatic checks and session reloads. An open supervisor reports an installed binary update and uses
+the new binary on the next launch; plugin reloads preserve the existing frontend and its unsent draft.
 Install and a Codex session selecting Agent ensure one observer follows the existing Codex daemon while it has
 loaded threads. It checks for published updates and reloads the daemon without restarting those conversations;
 it exits when the daemon disconnects or has no loaded threads.
