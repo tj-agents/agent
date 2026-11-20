@@ -52,9 +52,7 @@ def test_installed_profile_forwards_plain_host_commands(
         command = [shell, "-NoProfile", "-File", str(script)]
     else:
         dummy = runtime / "tj"
-        dummy.write_text(
-            '#!/bin/sh\nprintf "%s\\0" "$@"\nexit 23\n', encoding="utf-8"
-        )
+        dummy.write_text('#!/bin/sh\nprintf "%s\\0" "$@"\nexit 23\n', encoding="utf-8")
         dummy.chmod(0o755)
         shell = shutil.which("bash")
         assert shell is not None
