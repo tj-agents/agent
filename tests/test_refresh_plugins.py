@@ -865,6 +865,18 @@ def test_embedded_session_keeps_its_installed_hooks_unchanged(
     )
 
 
+def test_verified_daemon_frontend_allows_plugin_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon = FakeDaemon()
+    outcome, _, _ = daemon_refresh(
+        tmp_path, monkeypatch, daemon,
+        {"thread": Liveness(True, activity="idle", process_ids=(42,), processes_reloadable=True)},
+    )
+    assert not outcome.failures
+    assert any(method == "plugin/install" for method, _ in daemon.requests)
+
+
 @pytest.mark.parametrize("same_thread", [False, True])
 def test_daemon_cannot_authorize_replacement_of_an_embedded_sessions_hooks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_thread: bool
@@ -941,6 +953,43 @@ def test_open_codex_sessions_install_through_the_daemon(
     ]
 
 
+@pytest.mark.parametrize("stale", [False, True])
+def test_activation_requires_loaded_thread_hook_hashes_to_match_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale: bool
+) -> None:
+    report = plugin_update.Report()
+    daemon = FakeDaemon()
+    checked: list[Path] = []
+    fresh = {
+        "key": "hook", "pluginId": "agent@tj-agents", "currentHash": "new",
+        "enabled": True, "isManaged": False, "trustStatus": "trusted",
+    }
+
+    def request(method: str, params: dict[str, object]) -> dict[str, object]:
+        if method == "config/batchWrite":
+            return {"status": "ok"}
+        if method == "thread/loaded/list":
+            return {"data": ["thread"], "nextCursor": None}
+        if method == "thread/read":
+            return {"thread": {"cwd": str(tmp_path)}}
+        assert method == "hooks/list"
+        hook = dict(fresh, currentHash="old") if stale and "threadId" in params else fresh
+        return {"data": [{"cwd": str(tmp_path), "errors": [], "hooks": [hook]}]}
+
+    monkeypatch.setattr(daemon, "request", request)
+    monkeypatch.setattr(codex_launch, "daemon", lambda _timeout: daemon)
+    monkeypatch.setattr(codex_hook_trust, "TIMEOUT", 0)
+    monkeypatch.setattr(required_plugins, "project_root", lambda directory: directory)
+    monkeypatch.setattr(codex_installed, "update_project_standards", checked.append)
+    codex_installed.activate_open_sessions(report)
+    if stale:
+        assert any("contents changed" in failure for failure in report.failures)
+        assert not checked
+    else:
+        assert not report.failures
+        assert checked == [tmp_path]
+
+
 def test_codex_refresh_reports_standards_drift_without_rewriting_the_repository(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -991,6 +1040,8 @@ def test_codex_refresh_checks_loaded_repository_standards_without_rewriting(
             return {"data": ["other-thread"], "nextCursor": None}
         if method == "thread/read":
             return {"thread": {"cwd": str(other)}}
+        if method == "hooks/list":
+            return {"data": [{"cwd": str(other), "hooks": [], "errors": []}]}
         if method == "plugin/install" and params.get("pluginName") == "agent":
             standard = (
                 tmp_path

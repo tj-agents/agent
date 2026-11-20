@@ -130,7 +130,10 @@ def test_managed_command_uses_the_hosts_effective_directory(tmp_path: Path) -> N
     assert command[command.index("--command-cwd") + 1] == str(tmp_path.resolve())
     assert options["cwd"] == tmp_path.resolve()
     assert command[-3:] == ["-C", "café", "prompt"]
-    assert command[command.index("--") + 2] == "--no-daemon"
+    assert command[command.index("--") + 2 : command.index("--") + 4] == [
+        "--remote",
+        "unix://",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -176,18 +179,18 @@ def test_native_maintenance_commands_bypass_preparation_and_session_wrapper(
     ("arguments", "expected"),
     [
         (
-            ("--no-daemon", "prompt"),
-            ("--dangerously-bypass-hook-trust", "--no-daemon", "prompt"),
+            ("--remote", "unix://", "prompt"),
+            ("--remote", "unix://", "prompt"),
         ),
         (
             ("--", "--no-daemon"),
-            ("--no-daemon", "--dangerously-bypass-hook-trust", "--", "--no-daemon"),
+            ("--remote", "unix://", "--", "--no-daemon"),
         ),
         (
             ("--", "--remote=literal"),
             (
-                "--no-daemon",
-                "--dangerously-bypass-hook-trust",
+                "--remote",
+                "unix://",
                 "--",
                 "--remote=literal",
             ),
@@ -195,15 +198,15 @@ def test_native_maintenance_commands_bypass_preparation_and_session_wrapper(
         (
             ("--", "--dangerously-bypass-hook-trust"),
             (
-                "--no-daemon",
-                "--dangerously-bypass-hook-trust",
+                "--remote",
+                "unix://",
                 "--",
                 "--dangerously-bypass-hook-trust",
             ),
         ),
         (
-            ("--no-daemon", "--dangerously-bypass-hook-trust", "prompt"),
-            ("--no-daemon", "--dangerously-bypass-hook-trust", "prompt"),
+            ("--remote=unix://", "prompt"),
+            ("--remote=unix://", "prompt"),
         ),
     ],
 )
@@ -217,9 +220,17 @@ def test_managed_codex_keeps_explicit_flags_and_literal_prompts(
 
 
 @pytest.mark.parametrize(
-    "arguments", [("--remote", "unix://"), ("resume", "--remote=wss://example.invalid")]
+    "arguments",
+    [
+        ("--remote", "unix:///different.sock"),
+        ("resume", "--remote=wss://example.invalid"),
+        ("--no-daemon",),
+        ("--dangerously-bypass-hook-trust",),
+        ("--remote-auth-token-env", "TOKEN"),
+        ("--remote",),
+    ],
 )
-def test_remote_codex_refuses_before_starting_a_managed_wrapper(
+def test_uncontrollable_codex_refuses_before_starting_a_managed_wrapper(
     tmp_path: Path,
     arguments: tuple[str, ...],
 ) -> None:

@@ -117,6 +117,59 @@ def test_prepared_native_child_is_observed_before_a_session_hook(
     ) == processes.Observation(SESSION, "replacement", processes.Identity(22, STARTED))
 
 
+def test_daemon_transport_proof_keeps_other_embedded_processes_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observe(monkeypatch, 11, "embedded")
+    endpoint = (
+        Host.CODEX.configuration_root / "app-server-control" / "app-server-control.sock"
+    )
+    receipt = {
+        "launch_id": "frontend",
+        "session": f"codex:{SESSION}",
+        "native": {"pid": 22, "started_at": STARTED},
+        "codex_transport": "local-daemon",
+        "endpoint": str(endpoint.resolve()),
+    }
+    monkeypatch.setattr(processes, "query", lambda *_args: receipt)
+    assert processes.record_prepared(SESSION, "frontend")
+    alive = {11, 22}
+
+    def inspect(arguments: list[str], value: object = None) -> list[dict[str, object]]:
+        assert arguments == ["inspect"] and isinstance(value, list)
+        return [dict(identity, alive=identity["pid"] in alive) for identity in value]
+
+    monkeypatch.setattr(processes, "query", inspect)
+    mixed = processes.inventory()[SESSION]
+    assert mixed.process_ids == (11, 22)
+    assert not mixed.processes_reloadable
+    alive.remove(11)
+    frontend = processes.inventory()[SESSION]
+    assert frontend.process_ids == (22,)
+    assert frontend.processes_reloadable
+
+
+@pytest.mark.parametrize("field", ["endpoint", "codex_transport"])
+def test_foreign_transport_proof_is_not_a_reloadable_frontend(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, field: str
+) -> None:
+    endpoint = (
+        Host.CODEX.configuration_root / "app-server-control" / "app-server-control.sock"
+    )
+    receipt = {
+        "launch_id": "frontend",
+        "session": f"codex:{SESSION}",
+        "native": {"pid": 22, "started_at": STARTED},
+        "codex_transport": "local-daemon",
+        "endpoint": str(endpoint.resolve()),
+    }
+    receipt[field] = str(tmp_path / "foreign.sock") if field == "endpoint" else "remote"
+    monkeypatch.setattr(processes, "query", lambda *_args: receipt)
+    with pytest.raises(ValueError, match="different Codex transport"):
+        processes.record_prepared(SESSION, "frontend")
+    assert not processes.state_directory().exists()
+
+
 @pytest.mark.parametrize("mismatch", ["launch_id", "session", "native"])
 def test_prepared_observation_rejects_a_mismatched_spawn_receipt(
     monkeypatch: pytest.MonkeyPatch,
@@ -304,9 +357,11 @@ def test_an_absent_daemon_does_not_erase_an_embedded_native_process(
 
 
 @pytest.mark.parametrize("status", ["idle", "notLoaded"])
-def test_daemon_state_never_erases_an_embedded_owner(
+@pytest.mark.parametrize("reloadable", [False, True])
+def test_daemon_state_preserves_native_process_and_transport_evidence(
     monkeypatch: pytest.MonkeyPatch,
     status: str,
+    reloadable: bool,
 ) -> None:
     def request(method: str, arguments: object = None) -> dict[str, object]:
         if method == "thread/loaded/list":
@@ -315,7 +370,11 @@ def test_daemon_state_never_erases_an_embedded_owner(
         return {"thread": {"status": {"type": status}}}
 
     monkeypatch.setattr(
-        processes, "inventory", lambda: {SESSION: Liveness(True, process_ids=(11,))}
+        processes,
+        "inventory",
+        lambda: {
+            SESSION: Liveness(True, process_ids=(11,), processes_reloadable=reloadable)
+        },
     )
     server = SimpleNamespace(request=request)
     monkeypatch.setattr(codex_launch, "daemon", lambda: nullcontext(server))
@@ -323,6 +382,7 @@ def test_daemon_state_never_erases_an_embedded_owner(
     assert live.alive
     assert live.process_ids == (11,)
     assert live.activity == ("idle" if status == "idle" else None)
+    assert live.processes_reloadable == reloadable
 
 
 def test_status_keeps_verified_processes_when_daemon_inspection_fails(

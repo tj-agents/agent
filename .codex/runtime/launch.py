@@ -228,16 +228,18 @@ def executable() -> str:
 def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
     options = tuple(arguments)
     before_prompt = options[: options.index("--")] if "--" in options else options
-    if any(
-        value.partition("=")[0] in {"--remote", "--remote-auth-token-env"}
-        for value in before_prompt
-    ):
-        raise LaunchError(
-            "Managed Codex requires a locally owned native process; "
-            "tj codex cannot manage a remote connection"
-        )
-    missing = tuple(option for option in startup.MANAGED_OPTIONS if option not in before_prompt)
-    return (*missing, *options)
+    attached = False
+    for index, value in enumerate(before_prompt):
+        key, separator, target = value.partition("=")
+        if key in {"--no-daemon", "--dangerously-bypass-hook-trust", "--remote-auth-token-env"}:
+            raise LaunchError(f"Managed Codex requires its local daemon; {key} is incompatible")
+        if key == "--remote":
+            if not separator:
+                target = before_prompt[index + 1] if index + 1 < len(before_prompt) else ""
+            if target != "unix://":
+                raise LaunchError("Managed Codex requires the native default local daemon (--remote unix://)")
+            attached = True
+    return options if attached else (*startup.MANAGED_OPTIONS, *options)
 
 
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
@@ -329,6 +331,7 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
                 activity=status,
                 process_ids=previous.process_ids if previous else None,
                 launch_ids=previous.launch_ids if previous else None,
+                processes_reloadable=previous.processes_reloadable if previous else False,
             )
     return observed
 

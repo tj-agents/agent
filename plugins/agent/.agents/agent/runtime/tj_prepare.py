@@ -73,6 +73,16 @@ def prepare(
         roots = required_plugins.install_and_recheck(
             directory, host, error, inventory_options=inventory_options
         )
+    try:
+        warning = host_plugins.PLUGINS[host].ensure_hooks(
+            directory, required_roots=roots or {}
+        )
+    except RuntimeError as error:
+        raise required_plugins.RequiredPluginsError(
+            f"Required host hooks are not ready: {error}"
+        ) from error
+    if warning:
+        raise required_plugins.RequiredPluginsError(warning)
     if repository_file(project, ".agents/repo-capabilities.local.json").is_file():
         if configured and not write:
             print(

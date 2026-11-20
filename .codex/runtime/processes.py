@@ -1,4 +1,4 @@
-"""Native process evidence for managed Codex engines outside the shared daemon."""
+"""Native process and transport evidence for managed Codex frontends and engines."""
 
 from __future__ import annotations
 
@@ -46,12 +46,17 @@ class Observation:
     session: str
     launch: str
     native: Identity
+    endpoint: str | None = None
 
     def __post_init__(self) -> None:
         if str(UUID(self.session)) != self.session:
             raise ValueError("Native process evidence requires a canonical Codex UUID")
         if re.fullmatch(r"[A-Za-z0-9_-]+", self.launch) is None:
             raise ValueError("Native process evidence requires an exact launch ID")
+        if self.endpoint is not None and (
+            not isinstance(self.endpoint, str) or not Path(self.endpoint).is_absolute()
+        ):
+            raise ValueError("Native daemon evidence requires an absolute endpoint")
 
     @classmethod
     def parse(cls, value: object) -> Observation:
@@ -64,7 +69,9 @@ class Observation:
         session, launch = value.get("session"), value.get("launch")
         if not isinstance(session, str) or not isinstance(launch, str):
             raise ValueError("Invalid native process evidence ownership")
-        return cls(session, launch, Identity.parse(value.get("native")))
+        return cls(
+            session, launch, Identity.parse(value.get("native")), value.get("endpoint")
+        )
 
     def document(self) -> dict[str, object]:
         return {
@@ -72,6 +79,7 @@ class Observation:
             "session": self.session,
             "launch": self.launch,
             "native": self.native.document(),
+            **({"endpoint": self.endpoint} if self.endpoint is not None else {}),
         }
 
     def path(self, directory: Path) -> Path:
@@ -119,7 +127,23 @@ def record_prepared(session: str, launch: str) -> bool:
         raise ValueError(
             "Native spawn receipt belongs to a different launch or session"
         )
-    save(Observation(session, launch, Identity.parse(receipt.get("native"))))
+    endpoint = receipt.get("endpoint")
+    if receipt.get("codex_transport") is not None or endpoint is not None:
+        expected = (
+            Host.CODEX.configuration_root
+            / "app-server-control"
+            / "app-server-control.sock"
+        )
+        if (
+            receipt.get("codex_transport") != "local-daemon"
+            or not isinstance(endpoint, str)
+            or not Path(endpoint).is_absolute()
+            or Path(endpoint).resolve() != expected.resolve()
+        ):
+            raise ValueError(
+                "Native spawn receipt has different Codex transport evidence"
+            )
+    save(Observation(session, launch, Identity.parse(receipt.get("native")), endpoint))
     return True
 
 
@@ -171,6 +195,7 @@ def inventory(*, launch_id: str | None = None) -> dict[str, Liveness]:
         raise ValueError("Native process inspection omitted evidence")
     alive: dict[str, set[int]] = {}
     launches: dict[str, set[str]] = {}
+    reloadable: dict[str, set[int]] = {}
     for observation, status in zip(observations, statuses, strict=True):
         if (
             Identity.parse(status) != observation.native
@@ -182,11 +207,16 @@ def inventory(*, launch_id: str | None = None) -> dict[str, Liveness]:
         launches.setdefault(observation.session, set()).add(observation.launch)
         if status["alive"]:
             processes.add(observation.native.pid)
+            if observation.endpoint is not None:
+                reloadable.setdefault(observation.session, set()).add(
+                    observation.native.pid
+                )
     return {
         session: Liveness(
             bool(pids),
             process_ids=tuple(sorted(pids)),
             launch_ids=tuple(sorted(launches[session])),
+            processes_reloadable=bool(pids) and pids <= reloadable.get(session, set()),
         )
         for session, pids in alive.items()
     }

@@ -20,6 +20,7 @@ class Liveness:
     background: str | None = None
     process_ids: tuple[int, ...] | None = None
     launch_ids: tuple[str, ...] | None = None
+    processes_reloadable: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -324,6 +324,13 @@ def test_activation_reloads_approved_hooks_in_the_executing_backend(
             if method == "thread/loaded/list":
                 self.events.append("loaded threads")
                 return {"data": ["existing-thread"]}
+            if method == "hooks/list":
+                self.events.append(
+                    "loaded hooks" if "threadId" in params else "installed hooks"
+                )
+                return {
+                    "data": [{"cwd": str(self.directory), "hooks": [], "errors": []}]
+                }
             assert method == "thread/read"
             assert params["threadId"] == "existing-thread"
             return {"thread": {"cwd": str(self.directory)}}
@@ -346,7 +353,13 @@ def test_activation_reloads_approved_hooks_in_the_executing_backend(
     assert events == (
         ["reload approvals"]
         if failed
-        else ["reload approvals", "loaded threads", "standards"]
+        else [
+            "reload approvals",
+            "loaded threads",
+            "installed hooks",
+            "loaded hooks",
+            "standards",
+        ]
     )
     assert report.failures == (
         ["codex: open sessions: owning backend reload failed"] if failed else []
@@ -440,11 +453,11 @@ def test_loaded_thread_pages_preserve_projects_and_reject_cursor_cycles(
 
     if broken:
         with pytest.raises(RuntimeError, match="invalid loaded-thread cursor"):
-            codex_installed.loaded_directories(Server(tmp_path, broken))
+            codex_installed.loaded_threads(Server(tmp_path, broken))
     else:
-        assert codex_installed.loaded_directories(Server(tmp_path, broken)) == {
-            tmp_path / "first",
-            tmp_path / "second",
+        assert codex_installed.loaded_threads(Server(tmp_path, broken)) == {
+            "first": tmp_path / "first",
+            "second": tmp_path / "second",
         }
 
 

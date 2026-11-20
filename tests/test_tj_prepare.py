@@ -19,6 +19,12 @@ from tj_agent.host import Host
 from tj_cli import process
 
 
+@pytest.fixture(autouse=True)
+def native_hook_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    for adapter in host_plugins.PLUGINS.values():
+        monkeypatch.setattr(adapter, "ensure_hooks", lambda *args, **kwargs: None)
+
+
 @pytest.fixture
 def selected_project(tmp_path: Path) -> Path:
     selection = tmp_path / ".agents/plugins.json"
@@ -28,6 +34,26 @@ def selected_project(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return tmp_path
+
+
+def test_prepare_checks_required_hook_trust_before_instruction_work(
+    selected_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roots = {"python@tj-agents": selected_project / "installed"}
+    monkeypatch.setattr(required_plugins, "check", lambda *args, **kwargs: roots)
+    monkeypatch.setattr(tj_prepare, "configure", lambda *_args: "")
+
+    def require_hooks(project: Path, *, required_roots: dict[str, Path]) -> None:
+        assert project == selected_project
+        assert required_roots == roots
+        raise RuntimeError("fixture hook changed without trust")
+
+    monkeypatch.setattr(codex_projects, "ensure_hooks", require_hooks)
+    with pytest.raises(
+        required_plugins.RequiredPluginsError, match="hook changed without trust"
+    ):
+        tj_prepare.prepare(selected_project, Host.CODEX)
+    assert not (selected_project / "AGENTS.md").exists()
 
 
 @pytest.mark.parametrize("host", list(Host))

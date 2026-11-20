@@ -40,8 +40,8 @@ class Server(Protocol):
     def request(self, method: str, params: dict[str, object]) -> dict[str, object]: ...
 
 
-def loaded_directories(server: Server) -> set[Path]:
-    directories = set()
+def loaded_threads(server: Server) -> dict[str, Path]:
+    directories = {}
     seen = set()
     cursor: str | None = None
     while True:
@@ -58,7 +58,7 @@ def loaded_directories(server: Server) -> set[Path]:
                 raise RuntimeError(
                     f"Codex thread {identity} has no absolute working directory"
                 )
-            directories.add(Path(directory))
+            directories[identity] = Path(directory)
         next_cursor = page.get("nextCursor")
         if next_cursor is None:
             return directories
@@ -293,7 +293,11 @@ def refresh_sessions(report: Any) -> dict[str, Liveness] | None:
     embedded = sorted(
         identity
         for identity, session in sessions.items()
-        if session.alive and (session.activity is None or session.process_ids)
+        if session.alive
+        and (
+            session.activity is None
+            or (session.process_ids and not session.processes_reloadable)
+        )
     )
     if embedded:
         report.fail(
@@ -554,9 +558,12 @@ def activate_open_sessions(report: Any) -> None:
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
             server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
+            threads = loaded_threads(server)
+            for identity, directory in threads.items():
+                hook_trust.verify_loaded_hooks(server, directory, identity)
             projects = {
                 required_plugins.project_root(directory)
-                for directory in loaded_directories(server)
+                for directory in threads.values()
             }
     except (OSError, RuntimeError) as error:
         report.fail(HOST, "open sessions", str(error))
@@ -586,7 +593,11 @@ def activate(report: Any) -> None:
     embedded = [
         identity
         for identity, session in sessions.items()
-        if session.alive and (session.activity is None or session.process_ids)
+        if session.alive
+        and (
+            session.activity is None
+            or (session.process_ids and not session.processes_reloadable)
+        )
     ]
     if embedded:
         report.fail(

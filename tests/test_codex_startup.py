@@ -61,6 +61,7 @@ class Native:
             return {
                 "thread": {
                     "id": THREAD,
+                    "cwd": str(self.directory),
                     "path": str(self.directory / "rollout.jsonl"),
                     "status": {"type": self.status},
                 }
@@ -68,9 +69,11 @@ class Native:
         pytest.fail(f"Unexpected native request: {method}")
 
     @contextmanager
-    def connect(self, native: str, directory: Path) -> Iterator[Native]:
+    def connect(
+        self, native: str, directory: Path, *, existing: bool = False
+    ) -> Iterator[Native]:
         assert native == "fixture-codex" and directory == self.directory
-        self.events.append("connect")
+        self.events.append("connect_shared" if existing else "connect")
         try:
             yield self
         finally:
@@ -175,8 +178,8 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
             "fixture-model",
             "-c",
             "model_reasoning_effort=high",
-            "--no-daemon",
-            "--dangerously-bypass-hook-trust",
+            "--remote",
+            "unix://",
             "--",
             'Read "file"; $value λ',
         ),
@@ -196,7 +199,7 @@ def test_prepare_creates_names_and_disconnects_before_native_resume(
                 "threadSource": "user",
                 "ephemeral": False,
                 "model": "fixture-model",
-                "config": {"bypass_hook_trust": True, "model_reasoning_effort": "high"},
+                "config": {"model_reasoning_effort": "high"},
             },
         ),
         ("thread/name/set", {"threadId": THREAD, "name": "Actual title"}),
@@ -324,6 +327,24 @@ def test_confirm_rejects_a_correct_turn_without_its_owned_native_process(
     )
     with pytest.raises(LaunchTimeout, match="owned native process"):
         startup.confirm(prepared, arguments, "launch", timeout=0, clock=lambda: 0)
+
+
+def test_confirm_rejects_owned_frontend_without_loaded_daemon_thread(
+    native: Native, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prepared = prepare(native)
+    native.status = "notLoaded"
+    monkeypatch.setattr(
+        startup.processes,
+        "inventory",
+        lambda **kwargs: {THREAD: Liveness(True, launch_ids=("launch",))},
+    )
+    arguments = launch.start_arguments(
+        native.directory, "Title", "Prompt", "fixture-model", "high"
+    )
+    with pytest.raises(LaunchTimeout, match="attach to the managed local daemon"):
+        startup.confirm(prepared, arguments, "launch", timeout=0, clock=lambda: 0)
+    assert "connect_shared" in native.events
 
 
 def test_confirm_waits_for_first_turn_and_ignores_partial_record(
@@ -497,8 +518,8 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
         str(native.directory),
         "resume",
         THREAD,
-        "--no-daemon",
-        "--dangerously-bypass-hook-trust",
+        "--remote",
+        "unix://",
     )
     assert prepared.session == f"codex:{THREAD}" and not prepared.created
     assert "admit" in native.events
@@ -513,7 +534,7 @@ def test_prepare_existing_resume_does_not_create_or_archive(native: Native) -> N
     )
 
 
-def test_resume_preserves_disabled_daemon_without_starting_it(
+def test_resume_explicitly_attaches_without_changing_daemon_auto_start_preference(
     native: Native,
 ) -> None:
     native.features = {"daemon_auto_start": False}
@@ -525,7 +546,7 @@ def test_resume_preserves_disabled_daemon_without_starting_it(
         "fixture-codex",
         {},
     )
-    assert "--no-daemon" in prepared.command
+    assert prepared.command[-2:] == ("--remote", "unix://")
     assert native.features == {"daemon_auto_start": False}
 
 
@@ -740,8 +761,8 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
         "fixture-model",
         "-c",
         "model_reasoning_effort=high",
-        "--no-daemon",
-        "--dangerously-bypass-hook-trust",
+        "--remote",
+        "unix://",
         "--",
         prompt,
     ]
@@ -749,7 +770,7 @@ def test_launch_uses_exact_session_and_genuine_native_argv(
 
 
 @pytest.mark.parametrize("effort", [None, "high"])
-def test_hook_policy_precedes_thread_start_without_changing_tool_permissions(
+def test_native_hook_trust_and_tool_permissions_are_preserved_on_thread_start(
     native: Native, monkeypatch: pytest.MonkeyPatch, effort: str | None
 ) -> None:
     request = native.request
@@ -759,7 +780,7 @@ def test_hook_policy_precedes_thread_start_without_changing_tool_permissions(
         if method == "thread/start":
             config = params.get("config")
             assert isinstance(config, dict)
-            assert config.get("bypass_hook_trust") is True
+            assert "bypass_hook_trust" not in config
             assert config.get("model_reasoning_effort") == effort
             assert "approvalPolicy" not in params and "sandbox" not in params
             hook_attempts.append(params)
@@ -776,8 +797,8 @@ def test_hook_policy_precedes_thread_start_without_changing_tool_permissions(
     assert len(hook_attempts) == 1
     assert prepared.session == f"codex:{THREAD}"
     options = prepared.command[: prepared.command.index("--")]
-    assert options.count("--dangerously-bypass-hook-trust") == 1
-    assert "--no-daemon" in options
+    assert "--dangerously-bypass-hook-trust" not in options
+    assert options[-2:] == ("--remote", "unix://")
     assert prepared.command[-1] == prompt
 
 

@@ -179,9 +179,13 @@ Handoff tabs are Windows Terminal or tmux tabs whose root process is `tj run`, f
 hook then binds the native session to that launch, so the session inherits its title, work item and parent,
 and a Codex thread is named after its title. Liveness always comes from the hosts:
 `claude agents --json`, and Codex process evidence plus threads loaded in the shared app-server daemon.
-Managed Codex launches require a locally owned native process (`--no-daemon`, Codex 0.169.0 or newer),
-and reject remote connections. Prepared launches retain the lane's model and reasoning effort.
-Launch confirmation checks native process ownership and the first recorded turn against both requested settings; a mismatch or missing
+Managed Codex launches require Codex 0.169.0 or newer and explicitly attach the native frontend to its
+default local daemon. The Rust wrapper ensures that daemon before creating the frontend's process group
+or Windows Job, and uses the same resolved native executable for its control connection. Plugin refresh
+can then reload the running engine while leaving the frontend and its draft in place. Native flags that
+cannot attach to this endpoint fail at launch; `--no-daemon`, hook-trust bypass and other remote endpoints
+are rejected. Prepared launches retain the lane's model and reasoning effort.
+Launch confirmation checks native process ownership, the loaded daemon thread and the first recorded turn against both requested settings; a mismatch or missing
 first turn fails visibly and preserves the tab for inspection. The store holds links only. Its release is pinned in
 `.agents/agent/runtime/agent-store.json`, which Renovate bumps.
 
@@ -194,7 +198,7 @@ Claude's synchronous registration hook exports its native identity through `CLAU
 subsequent tool commands; Codex provides `CODEX_THREAD_ID`.
 
 Before starting or resuming a host, `tj run` calls `tj prepare`. It checks native project settings
-from `.agents/plugins.json`, installs missing selected plugins, and checks a small marked standards
+from `.agents/plugins.json`, installs missing selected plugins, verifies required hook trust, and checks a small marked standards
 index in `AGENTS.md`. It preserves repository files by default and reports drift with the explicit
 `--write` command. It keeps the committed permissions as they are, so a launch needs no published
 harness lookup; adoption and `tj install` own them. The index requires applicable skill bodies to be read before relevant edits;

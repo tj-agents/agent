@@ -21,7 +21,7 @@ from package_root import find_package_root
 from tj_cli import process
 
 MINIMUM_VERSION = "0.169.0"
-MANAGED_OPTIONS = ("--no-daemon", "--dangerously-bypass-hook-trust")
+MANAGED_OPTIONS = ("--remote", "unix://")
 
 
 class Server(Protocol):
@@ -74,10 +74,12 @@ def require_binding(cli: str) -> None:
         )
 
 
-def connection(native: str, directory: Path) -> AbstractContextManager[Server]:
+def connection(
+    native: str, directory: Path, *, existing: bool = False
+) -> AbstractContextManager[Server]:
     return cast(
         AbstractContextManager[Server],
-        hook_trust.AppServer(native, directory, timeout=30),
+        hook_trust.AppServer(native, directory, timeout=30, existing=existing),
     )
 
 
@@ -133,7 +135,7 @@ def create(
         "threadSource": "user",
         "ephemeral": False,
     }
-    config: dict[str, object] = {"bypass_hook_trust": True}
+    config: dict[str, object] = {}
     parameters["config"] = config
     if model is not None:
         parameters["model"] = model
@@ -256,6 +258,7 @@ def confirm(
         await_native_process(
             prepared, launch_id, timeout=timeout, clock=clock, wait=wait
         )
+        await_daemon_thread(prepared, timeout=timeout, clock=clock, wait=wait)
         return Confirmation.PROCESS_STARTED
     directory = Path(prepared.command[2])
     options = start_options(directory, arguments)
@@ -324,7 +327,50 @@ def confirm(
             f"effort={options.effort!r}. Check its tab before continuing"
         )
     await_native_process(prepared, launch_id, timeout=timeout, clock=clock, wait=wait)
+    await_daemon_thread(prepared, timeout=timeout, clock=clock, wait=wait)
     return Confirmation.FIRST_TURN
+
+
+def await_daemon_thread(
+    prepared: PreparedLaunch,
+    *,
+    timeout: float,
+    clock: Callable[[], float],
+    wait: Callable[[float], None],
+) -> None:
+    thread_id = native_id(str(prepared.session).removeprefix("codex:"))
+    directory = Path(prepared.command[2])
+    deadline = clock() + timeout
+    try:
+        with connection(prepared.command[0], directory, existing=True) as server:
+            while True:
+                response = server.request(
+                    "thread/read", {"threadId": thread_id, "includeTurns": False}
+                )
+                thread = response.get("thread")
+                if (
+                    not isinstance(thread, dict)
+                    or thread.get("id") != thread_id
+                    or thread.get("cwd") != str(directory)
+                ):
+                    raise LaunchError(
+                        "Codex daemon returned a different thread or checkout"
+                    )
+                status = thread.get("status")
+                if isinstance(status, dict) and status.get("type") in {
+                    "idle",
+                    "active",
+                }:
+                    return
+                if clock() >= deadline:
+                    raise LaunchTimeout(
+                        f"Codex {thread_id} did not attach to the managed local daemon"
+                    )
+                wait(0.5)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise LaunchError(
+            f"Cannot verify Codex daemon attachment for {thread_id}: {error}"
+        ) from error
 
 
 def await_native_process(
