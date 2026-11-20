@@ -41,7 +41,7 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--title', required=True)
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'), required=True)
     parser.add_argument('--dangerously-skip-permissions', action='store_true')
-    parser.add_argument('--item', help='existing work-item URL or reference; defaults to an unambiguous parent link')
+    parser.add_argument('--item', help='existing work-item URL or reference to link; omit to launch with no work item')
     parser.add_argument('--parent', help='parent session (host:id); defaults to the calling session')
     args = parser.parse_args(argv)
     if not args.title.strip():
@@ -75,7 +75,7 @@ def main(argv=None):
         model, effort, tier = resolve_model(args, agent_cli)
         parent = agent_cli.parent_session(args.parent)
         prompt_sentence += agent_cli.parent_rule(parent)
-        item = agent_cli.resolve_item(args.item, working_directory, parent)
+        item = agent_cli.resolve_item(args.item, working_directory)
         adapter = agent_cli.host_launch(agent_cli.Host.CLAUDE)
         arguments = adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort)
         if args.dangerously_skip_permissions:

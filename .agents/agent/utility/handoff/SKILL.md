@@ -24,8 +24,8 @@ For L1, use `--host codex` because Claude L1 routes there.
 
 - `--title` is required, short and unique: it becomes the tab title and the session's native name, so other sessions address the child by it.
 - `--parent` defaults to the calling session; pass `--parent <host:id>` to override it. The child's prompt gains a standing rule to report to that parent under [agent:message](../message/SKILL.md), which owns transport selection, receipts and any required parent wait. Preserve explicit task standing rules and user transport instructions in the prepared prompt.
-- `--item` links the child to an existing work-item URL or reference, so it appears in `tj status` and `tj recover`. Bare IDs use the target project's tracker profile. When omitted, the launcher reuses the parent's unique owner link, or its unique linked item when it has no owner link. Missing or ambiguous links stop the launch and ask for `--item`.
+- `--item` links the child to an existing work-item URL or reference, so it appears in `tj status` and `tj recover --item`. Bare IDs use the target project's tracker profile. Omit it when the work has no item: the child launches unlinked, the launcher never reads or writes a tracker, and `tj run` closes out without a tracker step.
 
-Find the existing item before launching. When a new item is needed, follow the project's creation workflow and approval policy, then pass the resulting reference. Handoff itself does not create items.
+Handoff never creates items. When the work needs a new item, follow the project's creation workflow and approval policy first, then pass the resulting reference.
 
 Success prints the launch as JSON once `tj run` has recorded it. Exit 3 means the tab may have opened without being confirmed: check the tab before launching again.

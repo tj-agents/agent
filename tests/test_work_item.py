@@ -3,59 +3,9 @@ import subprocess
 from pathlib import Path
 from unittest import mock
 
-import agent_store
 import pytest
 import work_item
 from launch_errors import LaunchError
-
-
-def link(ref: str, role: str) -> dict[str, object]:
-    return {"item": {"ref": ref}, "role": role}
-
-
-def test_parent_item_ref_prefers_the_unique_owner_link() -> None:
-    shown = {"session": {"links": [link("1", "reviewer"), link("2", "owner")]}}
-    with mock.patch.object(agent_store, "run", return_value=shown):
-        assert work_item.parent_item_ref("claude:p") == "2"
-
-
-def test_parent_item_ref_uses_a_unique_non_owner_link() -> None:
-    shown = {"session": {"links": [link("5", "reviewer")]}}
-    with mock.patch.object(agent_store, "run", return_value=shown):
-        assert work_item.parent_item_ref("claude:p") == "5"
-
-
-@pytest.mark.parametrize("role", ["owner", "reviewer"])
-def test_parent_item_ref_refuses_ambiguous_links(role: str) -> None:
-    shown = {"session": {"links": [link("1", role), link("2", role)]}}
-    with (
-        mock.patch.object(agent_store, "run", return_value=shown),
-        pytest.raises(LaunchError, match="several work items; pass --item"),
-    ):
-        work_item.parent_item_ref("claude:p")
-
-
-def test_parent_item_ref_is_none_without_any_links() -> None:
-    shown: dict[str, object] = {"session": {"links": []}}
-    with mock.patch.object(agent_store, "run", return_value=shown):
-        assert work_item.parent_item_ref("claude:p") is None
-
-
-def test_parent_item_ref_is_none_when_the_session_is_unknown() -> None:
-    error = agent_store.AgentStoreError("not-found", "unknown session")
-    with mock.patch.object(agent_store, "run", side_effect=error):
-        assert work_item.parent_item_ref("claude:p") is None
-
-
-@pytest.mark.parametrize("code", ["missing", "unexpected"])
-def test_parent_store_failures_are_reported(code: str) -> None:
-    error = agent_store.AgentStoreError(code, "store unavailable")
-    with (
-        mock.patch.object(agent_store, "run", side_effect=error),
-        pytest.raises(LaunchError, match="parent work item") as raised,
-    ):
-        work_item.parent_item_ref("claude:p")
-    assert raised.value.__cause__ is error
 
 
 @pytest.mark.parametrize(
@@ -122,5 +72,5 @@ def test_reference_command_errors_are_reported(
 
 
 def test_empty_reference_is_refused() -> None:
-    with pytest.raises(LaunchError, match="existing work-item reference"):
+    with pytest.raises(LaunchError, match=r"--item is empty.*omit --item"):
         work_item.reference(Path("/work"), " ")
