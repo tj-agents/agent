@@ -40,6 +40,8 @@ every project.
 
 Maintainers regenerate the adjacent Marketplace snapshot with
 `scripts/update_marketplace_plugins.py --source <marketplace-checkout>`; do not edit the lock by hand.
+The snapshot combines roster metadata with dependencies from the generated Claude catalog at the same
+commit. Producer manifests own those dependency edges.
 
 The commands below show Windows paths and use `python` in Windows PowerShell. On Linux/macOS, use
 `python3` with POSIX paths and the same script arguments.
@@ -88,7 +90,7 @@ python -B '<skill-directory>\scripts\adopt_plugins.py' --root C:\path\to\reposit
 ```
 
 A stack (`dotnet`, `azure`, `react`, `cpp-gcc`, `cpp-msvc`, `win32`, `neovim`, `rust`, `python`, `github-actions`,
-`plugin-repository`) resolves to its plugins through `scripts/plugin_roster.json`, so nobody guesses which
+`plugin-repository`) resolves to its plugins through `scripts/plugin_stacks.json`, so nobody guesses which
 plugins a project type needs. Repeat `--stack`, or add `--plugin <name>`. Required plugins are added and
 existing selections are kept. With no requested stack or plugin, a new selection uses Agent, Agent Store, Base,
 Engineering and Workflow. `preview` lists the changed files, `write` applies them together, and `check`
@@ -99,7 +101,7 @@ README.md and AGENTS.md before selection; a GitHub owner, home directory or publ
 establishes personal scope. When the user explicitly confirms personal scope, include `--plugin personal`;
 otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it.
 A repository selects one `kind: profile` plugin; an `organization` brings the profile it extends through
-`requires`. Selection, adoption and reconciliation refuse a second profile, and refuse any profile other than
+its published dependencies. Selection, adoption and reconciliation refuse a second profile, and refuse any profile other than
 the one an organization extends when that organization's installed employer declaration matches the
 repository's origin or names it as its source repository. See
 [Plugin kinds](https://github.com/tj-agents/docs/blob/main/PLUGINS.md#plugin-kinds).
