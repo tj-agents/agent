@@ -72,5 +72,5 @@ def test_reference_command_errors_are_reported(
 
 
 def test_empty_reference_is_refused() -> None:
-    with pytest.raises(LaunchError, match="--item is empty.*omit --item"):
+    with pytest.raises(LaunchError, match=r"--item is empty.*omit --item"):
         work_item.reference(Path("/work"), " ")
