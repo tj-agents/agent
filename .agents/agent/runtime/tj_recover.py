@@ -121,7 +121,16 @@ def open_plan(item: str | None) -> list[Recovery]:
         agent = lifecycle.Agent(session, live[host].get(session["native_id"]))
         if agent.alive:
             continue
-        launch = opened[-1]
+        launch = next(
+            (
+                entry
+                for entry in opened
+                if entry["launch_id"] == session.get("launch_id")
+            ),
+            None,
+        )
+        if launch is None:
+            continue
         item = launch.get("item")
         row = Recovery(
             session=handle,
@@ -134,7 +143,11 @@ def open_plan(item: str | None) -> list[Recovery]:
         )
         if host in errors:
             row = replace(row, action=Action.FAILED, error=errors[host])
-        elif host is Host.CODEX and agent.live is None:
+        elif (
+            host is Host.CODEX
+            and agent.live is None
+            and launch.get("end_reason") != "not_started"
+        ):
             row = replace(row, action=Action.FAILED, error="no native process evidence")
         elif not Path(row.directory).is_dir():
             row = replace(

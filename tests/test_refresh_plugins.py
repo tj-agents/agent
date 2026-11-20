@@ -1048,6 +1048,8 @@ def test_codex_refresh_checks_loaded_repository_standards_without_rewriting(
         )
     daemon = FakeDaemon()
     native_request = daemon.request
+    agent_root = tmp_path / "codex/plugins/cache/tj-agents/agent/local"
+    monkeypatch.setattr(required_plugins, "check", lambda *_args: {"agent@tj-agents": agent_root})
 
     def request(method: str, params: dict[str, object]) -> dict[str, object]:
         response = native_request(method, params)
@@ -1058,10 +1060,7 @@ def test_codex_refresh_checks_loaded_repository_standards_without_rewriting(
         if method == "hooks/list":
             return {"data": [{"cwd": str(other), "hooks": [], "errors": []}]}
         if method == "plugin/install" and params.get("pluginName") == "agent":
-            standard = (
-                tmp_path
-                / "codex/plugins/cache/tj-agents/agent/local/.agents/agent/convention/lanes/SKILL.md"
-            )
+            standard = agent_root / ".agents/agent/convention/lanes/SKILL.md"
             standard.parent.mkdir(parents=True)
             standard.write_text(
                 "---\nname: lanes\nkind: convention\nprofile: core\n"

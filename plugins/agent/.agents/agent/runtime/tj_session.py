@@ -25,7 +25,7 @@ class LivenessError(RuntimeError):
     pass
 
 
-def require_binding(host: Host, native_id: str, launch_id: str) -> None:
+def require_binding(host: Host, native_id: str, launch_id: str) -> dict[str, object]:
     session = f"{host}:{native_id}"
     current = agent_store.run("show", session)
     bound = agent_store.run("show", "--launch-id", launch_id)
@@ -47,6 +47,7 @@ def require_binding(host: Host, native_id: str, launch_id: str) -> None:
         launch.get(key) != expected[key] for key in ("session", "host", "launch_id")
     ):
         raise LivenessError("The launch does not reciprocally bind the native session")
+    return launch
 
 
 def session_liveness(session: str, launch_id: str) -> dict[str, object]:
@@ -63,7 +64,7 @@ def session_liveness(session: str, launch_id: str) -> dict[str, object]:
     host = {host.value: host for host in Host}.get(host_name)
     if host is None:
         raise LivenessError(f"Unsupported session host: {host_name}")
-    require_binding(host, native_id, launch_id)
+    launch = require_binding(host, native_id, launch_id)
     inventory = agent_cli.host_launch(host).liveness(strict=True)
     if not isinstance(inventory, dict) or any(
         not isinstance(key, str)
@@ -76,7 +77,12 @@ def session_liveness(session: str, launch_id: str) -> dict[str, object]:
     # Codex also runs embedded engines that the daemon cannot inventory. Only a
     # recorded native process or explicit provider state can prove their death.
     observed = inventory.get(native_id)
-    if host is Host.CODEX and observed is None:
+    spawn_failed = (
+        launch.get("state") == "ended"
+        and launch.get("end_reason") == "not_started"
+        and (observed is None or not observed.alive)
+    )
+    if host is Host.CODEX and observed is None and not spawn_failed:
         raise LivenessError(
             "No native process evidence exists for this Codex conversation; "
             "its liveness is unverified"
@@ -86,6 +92,7 @@ def session_liveness(session: str, launch_id: str) -> dict[str, object]:
         and observed is not None
         and observed.process_ids is not None
         and launch_id not in (observed.launch_ids or ())
+        and not spawn_failed
     ):
         raise LivenessError(
             "This Codex launch has no native process evidence; "
