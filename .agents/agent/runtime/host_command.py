@@ -76,6 +76,10 @@ def main(
         )
         if effective_directory is None:
             return run_native([executable, *values], directory, environment, execute)
+        cleared, forced = agent_cli.terminal_environment(host)
+        for name in cleared:
+            environment.pop(name, None)
+        environment.update(forced)
         adapter = agent_cli.host_launch(host)
         prepared = adapter.prepare_foreground(
             executable, effective_directory, values, "tj", environment

@@ -80,6 +80,79 @@ def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> 
         assert after == before
 
 
+@pytest.mark.parametrize(
+    ("host", "windows", "terminal", "force_colour"),
+    [
+        (Host.CODEX, True, None, None),
+        (Host.CODEX, False, "screen-256color", None),
+        (Host.CLAUDE, True, "xterm-256color", "1"),
+        (Host.CLAUDE, False, "screen-256color", "1"),
+    ],
+)
+def test_managed_foreground_uses_the_tab_colour_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    host: Host,
+    windows: bool,
+    terminal: str | None,
+    force_colour: str | None,
+) -> None:
+    parent = {
+        "NO_COLOR": "1",
+        "TERM": "dumb" if windows else "screen-256color",
+        "KEPT": "value",
+    }
+    native = str(tmp_path / "provider")
+    prepared_environments: list[Mapping[str, str]] = []
+    child_environments: list[Mapping[str, str]] = []
+
+    def prepare(
+        executable: str,
+        _directory: Path,
+        arguments: Sequence[str],
+        _cli: str,
+        environment: Mapping[str, str],
+    ) -> PreparedLaunch:
+        prepared_environments.append(dict(environment))
+        return PreparedLaunch((executable, *arguments))
+
+    def run(
+        command: Sequence[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        child_environments.append(cast(Mapping[str, str], options["env"]))
+        return completed(command)
+
+    monkeypatch.setattr(agent_cli, "IS_WINDOWS", windows)
+    monkeypatch.setattr(agent_cli.host_launch(host), "prepare_foreground", prepare)
+    main = command_main()
+    assert (
+        main(host, (), cwd=tmp_path, environ=parent, resolver=lambda: native, run=run)
+        == 0
+    )
+
+    assert prepared_environments == child_environments
+    (child,) = child_environments
+    assert "NO_COLOR" not in child
+    assert child.get("TERM") == terminal
+    assert child.get("FORCE_COLOR") == force_colour
+    assert child["KEPT"] == "value"
+    assert parent["NO_COLOR"] == "1"
+    assert parent["TERM"] == ("dumb" if windows else "screen-256color")
+
+    assert (
+        main(
+            host,
+            ("--version",),
+            cwd=tmp_path,
+            environ=parent,
+            resolver=lambda: native,
+            run=run,
+        )
+        == 0
+    )
+    assert child_environments[-1] == parent
+
+
 def test_managed_command_preserves_native_arguments_and_exit_code(
     tmp_path: Path,
 ) -> None:

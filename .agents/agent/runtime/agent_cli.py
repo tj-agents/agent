@@ -72,6 +72,19 @@ def make_stdio_encoding_lossy():
             stream.reconfigure(errors='replace')
 
 
+def terminal_environment(host: Host) -> tuple[list[str], dict[str, str]]:
+    """Return the host's colour and terminal settings for managed launches."""
+    adapter = host_launch(host)
+    cleared = ["NO_COLOR"]
+    cleared.extend(name for name in adapter.TAB_CLEARED if IS_WINDOWS or name != "TERM")
+    forced = {
+        name: value
+        for name, value in adapter.TAB_FORCED.items()
+        if IS_WINDOWS or name != "TERM"
+    }
+    return cleared, forced
+
+
 def launch_environment(clear=(), force=None):
     """The environment changes a launched CLI needs: names to remove and values to set.
 
@@ -79,7 +92,7 @@ def launch_environment(clear=(), force=None):
     handler starts the command from an already-running terminal process that never sees ours.
     """
     session_state = (name for host in Host for name in host_launch(host).SESSION_ENVIRONMENT)
-    cleared = list(dict.fromkeys((*session_state, 'NO_COLOR', 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
+    cleared = list(dict.fromkeys((*session_state, 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
     forced = dict(force or {})
     return [name for name in cleared if name not in forced], forced
 
@@ -358,12 +371,7 @@ def launch(
     if not tj:
         raise LaunchError("tj is not on PATH; run the Agent install.")
     launch_id = uuid.uuid4().hex
-    clear = [name for name in adapter.TAB_CLEARED if IS_WINDOWS or name != "TERM"]
-    force = {
-        name: value
-        for name, value in adapter.TAB_FORCED.items()
-        if IS_WINDOWS or name != "TERM"
-    }
+    clear, force = terminal_environment(host)
     cleared, forced = launch_environment(clear=clear, force=force)
     prepared = adapter.prepare(directory, title, arguments, tj, environ)
     if resume_from is not None and prepared.session is None:
