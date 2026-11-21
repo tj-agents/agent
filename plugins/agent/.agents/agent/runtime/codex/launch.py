@@ -188,7 +188,8 @@ def _absent_daemon(detail: str, codex_home: Path | None = None) -> bool:
     if any(f"(os error {code})" in detail for code in (2, 111, 10061)):
         return True
     endpoint = observer.socket_path(codex_home or Host.CODEX.configuration_root)
-    if not any(line.endswith(f"failed to connect to {endpoint}") for line in detail.splitlines()):
+    targets = (line.partition("failed to connect to ")[2] for line in detail.splitlines())
+    if not any(target == str(endpoint) or target.startswith(f"{endpoint}: ") for target in targets):
         return False
     try:
         endpoint.stat()

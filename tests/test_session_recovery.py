@@ -112,10 +112,12 @@ def test_codex_absent_daemon_is_dead_without_opening_server(
 
 
 @pytest.mark.parametrize("endpoint_exists", [False, True])
+@pytest.mark.parametrize("separator", [": ", "\nCaused by: "])
 def test_codex_network_failure_requires_proof_that_the_endpoint_is_absent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     endpoint_exists: bool,
+    separator: str,
 ) -> None:
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     endpoint = codex_observer.socket_path(tmp_path)
@@ -131,8 +133,8 @@ def test_codex_network_failure_requires_proof_that_the_endpoint_is_absent(
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
             stdout="",
-            stderr=f"failed to connect to {endpoint}\n"
-            "Caused by: dead network (os error 10050)",
+            stderr=f"failed to connect to {endpoint}{separator}"
+            "dead network (os error 10050)",
         ),
     )
     if endpoint_exists:
