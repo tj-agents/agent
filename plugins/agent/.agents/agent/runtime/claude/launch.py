@@ -9,7 +9,7 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from uuid import UUID
 
-from launch_contract import Confirmation, Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch, TerminalEnvironment
 from launch_errors import LaunchError
 from native_executable import is_script
 from tj_agent.host import Host
@@ -26,8 +26,9 @@ SESSION_ENVIRONMENT: tuple[str, ...] = (
     "CLAUDE_CODE_MESSAGING_TOKEN",
     "CLAUDE_PID",
 )
-TAB_CLEARED: tuple[str, ...] = ()
-TAB_FORCED = {"FORCE_COLOR": "1", "TERM": "xterm-256color"}
+TERMINAL_ENVIRONMENT = TerminalEnvironment(
+    windows_term="xterm-256color", force_colour=True
+)
 
 
 def record_session_environment(

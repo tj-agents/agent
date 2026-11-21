@@ -30,10 +30,28 @@ class PreparedLaunch:
     created: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class TerminalEnvironment:
+    """An unset Windows terminal type lets the provider detect its console."""
+
+    windows_term: str | None
+    force_colour: bool
+
+    def cleared(self, *, windows: bool) -> tuple[str, ...]:
+        if windows and self.windows_term is None:
+            return ("NO_COLOR", "TERM")
+        return ("NO_COLOR",)
+
+    def forced(self, *, windows: bool) -> dict[str, str]:
+        settings = {"FORCE_COLOR": "1"} if self.force_colour else {}
+        if windows and self.windows_term is not None:
+            settings["TERM"] = self.windows_term
+        return settings
+
+
 class Launch(Protocol):
     SESSION_ENVIRONMENT: tuple[str, ...]
-    TAB_CLEARED: tuple[str, ...]
-    TAB_FORCED: Mapping[str, str]
+    TERMINAL_ENVIRONMENT: TerminalEnvironment
 
     def executable(self) -> str: ...
 

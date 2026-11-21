@@ -15,7 +15,7 @@ import agent_store
 import boot_history
 import pytest
 import tj_recover
-from launch_contract import Confirmation, Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch, TerminalEnvironment
 from tj_agent.host import Host
 
 ITEM = "github:github.com/tj-agents/agent:124"
@@ -30,8 +30,11 @@ class FakeHost:
     respawned: list[str] = field(default_factory=list)
     error: str | None = None
     SESSION_ENVIRONMENT: tuple[str, ...] = ()
-    TAB_CLEARED: tuple[str, ...] = ()
-    TAB_FORCED: dict[str, str] = field(default_factory=dict)
+    TERMINAL_ENVIRONMENT: TerminalEnvironment = field(
+        default_factory=lambda: TerminalEnvironment(
+            windows_term=None, force_colour=False
+        )
+    )
 
     def liveness(self, *, strict: bool = False) -> dict[str, Liveness]:
         if self.error:

@@ -17,14 +17,13 @@ from tj_agent.host import Host
 import agent_cli
 import agent_store
 import host_command
-from launch_contract import Confirmation, Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch, TerminalEnvironment
 from launch_errors import LaunchError
 from native_executable import is_script
 
 IS_WINDOWS = os.name == "nt"
 SESSION_ENVIRONMENT: tuple[str, ...] = ("CODEX_SESSION_ID",)
-TAB_CLEARED: tuple[str, ...] = ("TERM",)
-TAB_FORCED: dict[str, str] = {}
+TERMINAL_ENVIRONMENT = TerminalEnvironment(windows_term=None, force_colour=False)
 DAEMON_TIMEOUT_SECONDS = 10
 _CODEX_VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?")
 
