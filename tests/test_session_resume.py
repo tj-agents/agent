@@ -16,7 +16,7 @@ import session_resume
 from claude import launch as claude_launch
 from codex import launch as codex_launch
 from codex import processes as codex_processes
-from launch_contract import Liveness, PreparedLaunch
+from launch_contract import Liveness, PreparedLaunch, TerminalEnvironment
 from launch_errors import LaunchError
 from tj_agent import worktrees
 from tj_agent.host import Host
@@ -121,8 +121,7 @@ def test_resume_admission_precedes_tab_open_and_carries_the_exact_owner(
     handle = f"{host}:{THREAD}"
     adapter = SimpleNamespace(
         SESSION_ENVIRONMENT=(),
-        TAB_CLEARED=(),
-        TAB_FORCED={},
+        TERMINAL_ENVIRONMENT=TerminalEnvironment(windows_term=None, force_colour=False),
         prepare=lambda *args: PreparedLaunch(
             (f"native-{host}", "resume", THREAD), handle
         ),

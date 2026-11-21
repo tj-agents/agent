@@ -76,12 +76,14 @@ def main(
         )
         if effective_directory is None:
             return run_native([executable, *values], directory, environment, execute)
-        if sys.stdin.isatty() and sys.stdout.isatty():
-            cleared, forced = agent_cli.terminal_environment(host)
-            for name in cleared:
-                environment.pop(name, None)
-            environment.update(forced)
         adapter = agent_cli.host_launch(host)
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            terminal = adapter.TERMINAL_ENVIRONMENT
+            environment = agent_cli.environment_for(
+                environment,
+                terminal.cleared(windows=agent_cli.IS_WINDOWS),
+                terminal.forced(windows=agent_cli.IS_WINDOWS),
+            )
         prepared = adapter.prepare_foreground(
             executable, effective_directory, values, "tj", environment
         )

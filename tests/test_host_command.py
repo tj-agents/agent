@@ -83,11 +83,12 @@ def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("host", "windows", "terminal", "force_colour", "redirected"),
     [
-        (Host.CODEX, True, None, None, False),
-        (Host.CODEX, False, "screen-256color", None, False),
-        (Host.CLAUDE, True, "xterm-256color", "1", False),
-        (Host.CLAUDE, False, "screen-256color", "1", False),
-        (Host.CLAUDE, True, "dumb", None, True),
+        (Host.CODEX, True, None, "0", None),
+        (Host.CODEX, False, "screen-256color", "0", None),
+        (Host.CLAUDE, True, "xterm-256color", "1", None),
+        (Host.CLAUDE, False, "screen-256color", "1", None),
+        (Host.CLAUDE, True, "dumb", "0", "stdout"),
+        (Host.CLAUDE, False, "screen-256color", "0", "stdin"),
     ],
 )
 def test_managed_foreground_uses_the_tab_colour_environment(
@@ -96,11 +97,12 @@ def test_managed_foreground_uses_the_tab_colour_environment(
     host: Host,
     windows: bool,
     terminal: str | None,
-    force_colour: str | None,
-    redirected: bool,
+    force_colour: str,
+    redirected: str | None,
 ) -> None:
     parent = {
         "NO_COLOR": "1",
+        "FORCE_COLOR": "0",
         "TERM": "dumb" if windows else "screen-256color",
         "KEPT": "value",
     }
@@ -126,8 +128,8 @@ def test_managed_foreground_uses_the_tab_colour_environment(
 
     monkeypatch.setattr(agent_cli, "IS_WINDOWS", windows)
     monkeypatch.setattr(agent_cli.host_launch(host), "prepare_foreground", prepare)
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr(sys.stdout, "isatty", lambda: not redirected)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: redirected != "stdin")
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: redirected != "stdout")
     main = command_main()
     arguments = ("-p", "prompt") if redirected else ()
     assert (
