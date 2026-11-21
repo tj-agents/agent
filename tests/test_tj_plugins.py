@@ -52,7 +52,7 @@ def test_a_plugin_update_moves_the_tj_commands_to_the_installed_agent_runtime(
     install.install_runtime(state / "bin", previous)
     monkeypatch.setattr(plugin_update, "update", cached_update)
     monkeypatch.setattr(plugin_update, "agent_package", lambda *_: PACKAGE)
-    monkeypatch.setattr(tj_plugins, "publish", lambda *_: None)
+    monkeypatch.setattr(plugin_update.Outcome, "publish", lambda *_: None)
     calls: list[list[str]] = []
 
     def installer(
@@ -84,28 +84,29 @@ def test_runtime_failure_prevents_publication_and_retries_without_plugin_changes
     monkeypatch.setenv("AGENT_STATE_DIRECTORY", str(tmp_path / "state"))
     monkeypatch.setattr(plugin_update, "agent_package", lambda *_: PACKAGE)
     monkeypatch.setattr(plugin_update, "update", cached_update)
-    published: list[str] = []
+    published: list[list[str]] = []
     failing = True
 
     def installer(
         command: list[str], **_kwargs: object
     ) -> subprocess.CompletedProcess[str]:
+        if command[:2] == ["tj", "update"]:
+            published.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
         failed = failing and (("--check" in command) == failed_check)
         return subprocess.CompletedProcess(
             command, int(failed), "", "release unavailable" if failed else ""
         )
 
-    def publish(_host: Host, revision: str) -> None:
-        published.append(revision)
-
     monkeypatch.setattr(process, "run", installer)
-    monkeypatch.setattr(tj_plugins, "publish", publish)
 
     assert tj_plugins.main(["update", "--host", "claude"]) == 1
     assert published == []
     failing = False
     assert tj_plugins.main(["update", "--host", "claude"]) == 0
-    assert published == ["revision"]
+    assert published == [
+        ["tj", "update", "--host", "claude", "--revision", "revision", "--if-stale"]
+    ]
 
 
 def test_missing_updated_package_cannot_report_convergence(
@@ -140,3 +141,74 @@ def test_runtime_converges_before_session_activation(
     )
     assert events == (["runtime"] if failure else ["runtime", "activate"])
     assert bool(result.failures) == bool(failure)
+
+
+REVISION = "a" * 40
+PUBLISH = ["tj", "update", "--host", "claude", "--revision", REVISION]
+
+
+def run_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    changed: bool,
+    failures: list[str] | None = None,
+    publish_code: int = 0,
+) -> tuple[int, list[list[str]]]:
+    """Run the CLI entry point with a supplied update outcome."""
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, publish_code, "", "tj is gone")
+
+    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
+    monkeypatch.setattr(
+        plugin_update,
+        "update",
+        lambda *_args, **_kwargs: plugin_update.Outcome(
+            failures or [], changed, REVISION
+        ),
+    )
+    monkeypatch.setattr(process, "run", run)
+    return tj_plugins.main(["update", "--host", "claude"]), commands
+
+
+def test_an_unchanged_update_asks_tj_to_publish_only_a_stale_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, commands = run_update(tmp_path, monkeypatch, changed=False)
+
+    assert code == 0
+    assert commands == [[*PUBLISH, "--if-stale"]]
+
+
+def test_a_plugin_that_changed_is_always_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, commands = run_update(tmp_path, monkeypatch, changed=True)
+
+    assert code == 0
+    assert commands == [PUBLISH]
+
+
+def test_a_failed_update_publishes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, commands = run_update(
+        tmp_path, monkeypatch, changed=True, failures=["claude: boom"]
+    )
+
+    assert code == 1
+    assert commands == []
+
+
+def test_a_publish_that_tj_rejects_fails_the_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code, _commands = run_update(tmp_path, monkeypatch, changed=False, publish_code=1)
+
+    assert code == 1
+    assert "tj update failed: tj is gone" in capsys.readouterr().err

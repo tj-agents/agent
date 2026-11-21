@@ -1682,10 +1682,6 @@ def converged_installer(context: Context) -> Path | None:
     return None
 
 
-def published_path(context: Context, host: Host) -> Path:
-    return context.state_directory / f"published-{host.value}.txt"
-
-
 def publish_update(
     context: Context, outcomes: dict[Host, plugin_update.Outcome]
 ) -> int:
@@ -1696,35 +1692,14 @@ def publish_update(
     """
     code = 0
     for host, outcome in outcomes.items():
-        if outcome.failures or outcome.revision is None:
-            continue
-        record = published_path(context, host)
-        published = (
-            record.read_text(encoding="utf-8").strip() if record.is_file() else None
-        )
-        if not outcome.changed and published == outcome.revision:
-            continue
-        command = ["tj", "update", "--host", host.value, "--revision", outcome.revision]
-        try:
-            result = context.run(
-                command, capture_output=True, text=True, timeout=30, check=False
-            )
-        except (OSError, subprocess.SubprocessError) as error:
-            context.failures.append(f"{host} update: {error}")
+        if problem := outcome.publish(host, context.run):
+            context.failures.append(f"{host} update: {problem}")
             code = 2
-            continue
-        if result.returncode:
-            context.failures.append(
-                f"{host} update: {result.stderr.strip() or f'exit {result.returncode}'}"
+        elif outcome.changed and not outcome.failures and outcome.revision:
+            print(
+                f"apply  {host} update: published {outcome.revision[:12]} "
+                f"to running tj {host.value} sessions"
             )
-            code = 2
-            continue
-        record.parent.mkdir(parents=True, exist_ok=True)
-        record.write_text(outcome.revision, encoding="utf-8")
-        print(
-            f"apply  {host} update: published {outcome.revision[:12]} "
-            f"to running tj {host.value} sessions"
-        )
     return code
 
 

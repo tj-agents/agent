@@ -41,24 +41,6 @@ def selected_host(explicit: Host | None, environ: Mapping[str, str]) -> Host:
     return hosts[0]
 
 
-def publish(host: Host, revision: str) -> str | None:
-    try:
-        result = process.run(
-            ["tj", "update", "--host", host.value, "--revision", revision],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return str(error)
-    return (
-        (result.stderr.strip() or f"exit {result.returncode}")
-        if result.returncode
-        else None
-    )
-
-
 def refresh_runtime(host: Host) -> str | None:
     """Converge the native pair and launch bindings using the updated package's pins."""
     state = jobs.state_directory()
@@ -139,11 +121,9 @@ def main(argv: list[str] | None = None) -> int:
         for failure in outcome.failures:
             print(f"  {failure}", file=sys.stderr)
         return 1
-    if outcome.revision:
-        problem = publish(host, outcome.revision)
-        if problem:
-            print(f"{host}: tj update failed: {problem}", file=sys.stderr)
-            return 1
+    if problem := outcome.publish(host, process.run):
+        print(f"{host}: tj update failed: {problem}", file=sys.stderr)
+        return 1
     print("tj: plugin update done")
     return 0
 
