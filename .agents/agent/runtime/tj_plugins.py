@@ -79,13 +79,10 @@ def main(argv: list[str] | None = None) -> int:
     if problem:
         print(f"{host}: tj commands runtime failed: {problem}", file=sys.stderr)
         return 1
-    if outcome.revision and plugin_update.publication_due(
-        host, outcome, os.environ, Path.home(), os.name == "nt"
-    ):
-        problem = plugin_update.publish(host, outcome.revision, process.run)
-        if problem:
-            print(f"{host}: tj update failed: {problem}", file=sys.stderr)
-            return 1
+    problem = plugin_update.publish(host, outcome, process.run)
+    if problem:
+        print(f"{host}: tj update failed: {problem}", file=sys.stderr)
+        return 1
     print("tj: plugin update done")
     return 0
 

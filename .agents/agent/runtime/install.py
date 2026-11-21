@@ -1659,21 +1659,17 @@ def converged_installer(context: Context) -> Path | None:
 def publish_update(
     context: Context, outcomes: dict[Host, plugin_update.Outcome]
 ) -> int:
-    """Tell running tj run tabs of a host to reload when its plugins moved or its published record is stale."""
+    """Tell running tj run tabs of a host to reload when its plugins moved or tj's record is stale."""
     code = 0
     for host, outcome in outcomes.items():
-        if outcome.revision is None or not plugin_update.publication_due(
-            host, outcome, context.environ, context.home, context.windows
-        ):
-            continue
-        problem = plugin_update.publish(host, outcome.revision, context.run)
+        problem = plugin_update.publish(host, outcome, context.run)
         if problem:
             context.failures.append(f"{host} update: {problem}")
             code = 2
-            continue
-        print(
-            f"apply  {host} update: published {outcome.revision[:12]} to running tj run tabs"
-        )
+        elif outcome.changed and outcome.revision and not outcome.failures:
+            print(
+                f"apply  {host} update: published {outcome.revision[:12]} to running tj run tabs"
+            )
     return code
 
 

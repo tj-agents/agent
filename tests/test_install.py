@@ -1475,22 +1475,8 @@ def outcome(
     return Outcome(failures or [], changed, revision)
 
 
-def published_context(
-    tmp_path: Path, run: object, record: str | None = None
-) -> install.Context:
-    """A machine whose `tj run` record, when `record` is given, holds tj's own two-line format."""
-    cache = tmp_path / "tj-cache"
-    if record is not None:
-        (cache / "published").mkdir(parents=True)
-        (cache / "published" / "claude").write_text(
-            f"{record}\n1795214751827071300.44136", encoding="utf-8"
-        )
-    return install.Context(
-        home=tmp_path,
-        environ={"TJ_CACHE_DIR": str(cache)},
-        windows=False,
-        run=run,
-    )
+def published_context(tmp_path: Path, run: object) -> install.Context:
+    return install.Context(home=tmp_path, environ={}, windows=False, run=run)
 
 
 @pytest.mark.parametrize("returncode", [0, 1])
@@ -1503,7 +1489,7 @@ def test_install_publishes_the_marketplace_revision_for_a_host_that_moved(
         calls.append(command)
         return subprocess.CompletedProcess(command, returncode, "", "no tj")
 
-    context = published_context(tmp_path, run, record="f" * 40)
+    context = published_context(tmp_path, run)
     with contextlib.redirect_stdout(io.StringIO()):
         code = install.publish_update(context, {Host.CLAUDE: outcome()})
     assert code == 2 * returncode
@@ -1511,20 +1497,8 @@ def test_install_publishes_the_marketplace_revision_for_a_host_that_moved(
     assert context.failures == ([] if not returncode else ["claude update: no tj"])
 
 
-def test_install_leaves_running_tabs_alone_when_nothing_moved(tmp_path: Path) -> None:
-    run = mock.Mock()
-    context = published_context(tmp_path, run, record="f" * 40)
-    outcomes = {
-        Host.CLAUDE: outcome(changed=False),
-        Host.CODEX: outcome(failures=["codex: list: boom"]),
-    }
-    assert install.publish_update(context, outcomes) == 0
-    run.assert_not_called()
-
-
-@pytest.mark.parametrize("record", [None, "e" * 40, "tj install"])
-def test_install_republishes_a_stale_record_even_when_nothing_moved(
-    tmp_path: Path, record: str | None
+def test_install_asks_tj_to_republish_only_a_stale_record_when_nothing_moved(
+    tmp_path: Path,
 ) -> None:
     calls: list[list[str]] = []
 
@@ -1532,12 +1506,18 @@ def test_install_republishes_a_stale_record_even_when_nothing_moved(
         calls.append(command)
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    context = published_context(tmp_path, run, record=record)
-    with contextlib.redirect_stdout(io.StringIO()):
-        assert (
-            install.publish_update(context, {Host.CLAUDE: outcome(changed=False)}) == 0
-        )
-    assert calls == [["tj", "update", "--host", "claude", "--revision", "f" * 40]]
+    context = published_context(tmp_path, run)
+    outcomes = {
+        Host.CLAUDE: outcome(changed=False),
+        Host.CODEX: outcome(failures=["codex: list: boom"]),
+    }
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert install.publish_update(context, outcomes) == 0
+    assert calls == [
+        ["tj", "update", "--host", "claude", "--revision", "f" * 40, "--if-stale"]
+    ]
+    assert output.getvalue() == ""
 
 
 def full_install(

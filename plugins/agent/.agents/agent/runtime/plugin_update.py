@@ -202,60 +202,23 @@ class Outcome:
     revision: str | None
 
 
-def published_record(
-    host: Host, environ: Mapping[str, str], home: Path, windows: bool
-) -> Path:
-    """Where `tj update` records the revision last published for `host`."""
-    name: str = host.value
-    configured = environ.get("TJ_CACHE_DIR")
-    if configured:
-        return Path(configured) / "published" / name
-    if windows:
-        cache = Path(environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
-    else:
-        cache = Path(environ.get("XDG_CACHE_HOME") or home / ".cache")
-    return cache / "tj" / "published" / name
-
-
-def publication_due(
+def publish(
     host: Host,
     outcome: Outcome,
-    environ: Mapping[str, str],
-    home: Path,
-    windows: bool,
-) -> bool:
-    """Whether `host`'s running `tj run` tabs must be told of this outcome.
+    run: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | None:
+    """Tell `host`'s running `tj run` tabs about a converged update; why not, if so.
 
-    They must when its plugins moved or when the record `tj run` compares with the
-    marketplace head is not at the outcome's revision, as after a failed update.
+    Moved plugins always publish. Otherwise `tj` publishes only when its record is
+    behind `outcome.revision`, as after an earlier update failed before publishing.
     """
     if outcome.failures or outcome.revision is None:
-        return False
-    if outcome.changed:
-        return True
+        return None
+    command = ["tj", "update", "--host", host.value, "--revision", outcome.revision]
+    if not outcome.changed:
+        command.append("--if-stale")
     try:
-        lines = (
-            published_record(host, environ, home, windows)
-            .read_text(encoding="utf-8")
-            .splitlines()
-        )
-    except OSError:
-        return True
-    return not lines or lines[0].strip() != outcome.revision
-
-
-def publish(
-    host: Host, revision: str, run: Callable[..., subprocess.CompletedProcess[str]]
-) -> str | None:
-    """Ask `tj update` to publish `revision` for `host`; why it could not, if so."""
-    try:
-        result = run(
-            ["tj", "update", "--host", host.value, "--revision", revision],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+        result = run(command, capture_output=True, text=True, timeout=30, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         return str(error)
     return (
