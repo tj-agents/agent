@@ -181,18 +181,55 @@ def candidate_paths(
     return list(dict.fromkeys(candidates))
 
 
-def resolve_executable(minimum=startup.MINIMUM_VERSION, candidates=None):
+def _running_daemon(executable: str) -> tuple[str, str | None] | None:
+    command = [executable, "app-server", "daemon", "version"]
+    try:
+        result = process.run(command, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise LaunchError(
+            f"Could not check the default Codex daemon: {error}"
+        ) from error
+    if result.returncode:
+        raise LaunchError(
+            f"Could not check the default Codex daemon: {result.stderr.strip() or result.returncode}"
+        )
+    try:
+        detail = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise LaunchError(
+            "The Codex daemon version command returned invalid JSON"
+        ) from error
+    if not isinstance(detail, dict) or not isinstance(detail.get("status"), str):
+        raise LaunchError("The Codex daemon version command returned no status")
+    if detail["status"] != "running":
+        return None
+    version = detail.get("appServerVersion")
+    if not isinstance(version, str) or parse_version(version) is None:
+        raise LaunchError("The running Codex daemon did not report its version")
+    installed = detail.get("managedCodexPath")
+    return version, installed if isinstance(installed, str) and Path(
+        installed
+    ).is_absolute() else None
+
+
+def _executable_version(path: str) -> str | None:
+    try:
+        result = process.run(
+            [path, "--version"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout + result.stderr if result.returncode == 0 else None
+
+
+def resolve_executable(
+    minimum=startup.MINIMUM_VERSION, candidates=None, *, match_daemon: bool = False
+):
     """The newest native Codex executable that answers --version, as (path, version)."""
     paths = candidate_paths() if candidates is None else candidates
     found = []
     for path in paths:
-        try:
-            result = process.run(
-                [path, "--version"], capture_output=True, text=True, timeout=30
-            )
-        except (OSError, subprocess.SubprocessError):
-            continue
-        version = parse_version(result.stdout + result.stderr)
+        version = parse_version(_executable_version(path))
         if version:
             found.append((path, version))
 
@@ -220,6 +257,27 @@ def resolve_executable(minimum=startup.MINIMUM_VERSION, candidates=None):
             "The model roster is gated on the CLI version, so launching this build would silently drop newer models.\n"
             "Update with: npm install -g @openai/codex@latest\n"
             f"Found:\n{inventory}"
+        )
+    if match_daemon and (daemon := _running_daemon(best[0])) is not None:
+        active, installed = daemon
+        for candidate in found:
+            if (
+                candidate[1]["text"] == active
+                and compare_version(candidate[1], floor) >= 0
+            ):
+                return candidate
+        if installed is not None:
+            version = parse_version(_executable_version(installed))
+            if (
+                version
+                and version["text"] == active
+                and compare_version(version, floor) >= 0
+            ):
+                return installed, version
+        raise LaunchError(
+            f"The default Codex daemon is running {active}, but no compatible executable "
+            f"at or above {minimum} is available. Check the managed daemon package with "
+            "codex app-server daemon version."
         )
     return best
 
@@ -294,7 +352,7 @@ def prepare_foreground(
 
 
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
-    native = str(resolve_executable(minimum=startup.MINIMUM_VERSION)[0])
+    native = str(resolve_executable(minimum=startup.MINIMUM_VERSION, match_daemon=True)[0])
     if arguments[:3] == ["--cd", str(directory), "resume"] and len(arguments) == 4:
         thread_id = startup.native_id(arguments[3])
         require_stopped_thread(thread_id)

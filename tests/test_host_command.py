@@ -11,9 +11,11 @@ from typing import cast
 import agent_cli
 import pytest
 from codex import launch as codex_launch
+from codex import plugins as codex_plugins
 from codex import startup
 from fixtures import foreground_console
 from launch_contract import PreparedLaunch
+from launch_errors import LaunchError
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +61,59 @@ def test_native_codex_maintenance_can_upgrade_an_older_provider(
     assert calls == [[native, "update"]]
     assert main(Host.CODEX, (), cwd=tmp_path, environ={}, run=run) == 1
     assert calls == [[native, "update"]]
+
+
+@pytest.mark.parametrize(
+    ("cli_version", "daemon_status", "package_version", "expected"),
+    [
+        ("0.169.0", "running", "0.170.0", "managed"),
+        ("0.171.0", "running", "0.170.0", "managed"),
+        ("0.171.0", "stopped", None, "newest"),
+        ("0.171.0", "running", "0.169.0", None),
+    ],
+)
+def test_managed_codex_matches_the_running_daemon(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cli_version: str,
+    daemon_status: str,
+    package_version: str | None,
+    expected: str | None,
+) -> None:
+    newest = str(tmp_path / "path" / "codex.exe")
+    managed = str(tmp_path / "daemon" / "codex.exe")
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        if command == [newest, "app-server", "daemon", "version"]:
+            content = json.dumps(
+                {
+                    "status": daemon_status,
+                    "appServerVersion": "0.170.0",
+                    "managedCodexPath": managed,
+                }
+            )
+        else:
+            installed = {newest: cli_version, managed: package_version}
+            assert command[1:] == ["--version"]
+            content = f"codex-cli {installed[command[0]]}"
+        return subprocess.CompletedProcess(command, 0, content, "")
+
+    monkeypatch.setattr(codex_launch.process, "run", run)
+    monkeypatch.setattr(
+        agent_cli.host_launch(Host.CODEX), "candidate_paths", lambda: [newest]
+    )
+    assert codex_plugins.resolve_executable(maintenance=True) == newest
+    if expected is None:
+        with pytest.raises(LaunchError, match=r"daemon is running 0\.170\.0"):
+            codex_plugins.resolve_executable()
+    else:
+        assert (
+            codex_plugins.resolve_executable()
+            == {
+                "managed": managed,
+                "newest": newest,
+            }[expected]
+        )
 
 
 def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> None:
