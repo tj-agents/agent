@@ -345,7 +345,12 @@ def test_an_absent_daemon_does_not_erase_an_embedded_native_process(
 ) -> None:
     expected = {SESSION: Liveness(True, process_ids=(11,))}
     monkeypatch.setattr(processes, "inventory", lambda: expected)
-    monkeypatch.setattr(codex_launch, "executable", lambda: "codex")
+
+    def executable(*, match_daemon: bool) -> str:
+        assert match_daemon
+        return "codex"
+
+    monkeypatch.setattr(codex_launch, "executable", executable)
     monkeypatch.setattr(
         codex_launch.process,
         "run",

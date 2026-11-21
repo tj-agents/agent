@@ -44,7 +44,7 @@ def status(
     if native is None:
         from codex import launch
 
-        native = launch.executable()
+        native = launch.executable(match_daemon=True)
     result = run(
         command(codex_home, cwd, "--status", native),
         capture_output=True,
@@ -73,7 +73,7 @@ def ensure(
     if native is None:
         from codex import launch
 
-        native = launch.executable()
+        native = launch.executable(match_daemon=True)
     if status(codex_home, cwd, native=native, run=run):
         return False
     result = run(

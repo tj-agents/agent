@@ -5,7 +5,7 @@ from typing import NoReturn
 
 import install
 import pytest
-from codex import observer
+from codex import launch, observer
 
 
 def test_no_socket_needs_no_observer(tmp_path: Path) -> None:
@@ -32,7 +32,9 @@ def test_hook_entrypoint_works_without_a_running_daemon(
     assert result.stderr == ""
 
 
-def test_start_waits_for_ready_without_restarting_the_daemon(tmp_path: Path) -> None:
+def test_start_waits_for_ready_without_restarting_the_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     socket = observer.socket_path(tmp_path)
     socket.parent.mkdir()
     socket.touch()
@@ -43,7 +45,12 @@ def test_start_waits_for_ready_without_restarting_the_daemon(tmp_path: Path) -> 
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, next(results), "", "")
 
-    assert observer.ensure(tmp_path, tmp_path, native="exact-native", run=run)
+    def executable(*, match_daemon: bool) -> str:
+        assert match_daemon
+        return "exact-native"
+
+    monkeypatch.setattr(launch, "executable", executable)
+    assert observer.ensure(tmp_path, tmp_path, run=run)
     assert [command[-1] for command, _ in calls] == ["--status", "--start", "--status"]
     assert calls[1][1]["preserve_descendants"] is True
     assert all(str(socket) in command for command, _ in calls)
@@ -52,7 +59,9 @@ def test_start_waits_for_ready_without_restarting_the_daemon(tmp_path: Path) -> 
     )
 
 
-def test_idle_daemon_needs_no_observer(tmp_path: Path) -> None:
+def test_idle_daemon_needs_no_observer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     socket = observer.socket_path(tmp_path)
     socket.parent.mkdir()
     socket.touch()
@@ -60,7 +69,12 @@ def test_idle_daemon_needs_no_observer(tmp_path: Path) -> None:
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 3, "", "")
 
-    assert observer.status(tmp_path, tmp_path, native="exact-native", run=run)
+    def executable(*, match_daemon: bool) -> str:
+        assert match_daemon
+        return "exact-native"
+
+    monkeypatch.setattr(launch, "executable", executable)
+    assert observer.status(tmp_path, tmp_path, run=run)
 
 
 def test_last_thread_exits_during_start_without_failing_setup(tmp_path: Path) -> None:
