@@ -11,6 +11,16 @@ from fake_machine import MARKETPLACE_REVISION
 
 
 @pytest.fixture(autouse=True)
+def isolated_tj_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep a real `tj update` off this machine's published records.
+
+    `tj` resolves its cache through the operating system, so a fake LOCALAPPDATA
+    does not isolate it.
+    """
+    monkeypatch.setenv("TJ_CACHE_DIR", str(tmp_path / "tj-cache"))
+
+
+@pytest.fixture(autouse=True)
 def no_owning_launch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(owned_launch, "current", lambda: None)
 
