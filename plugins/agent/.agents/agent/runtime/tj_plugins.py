@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -39,24 +38,6 @@ def selected_host(explicit: Host | None, environ: Mapping[str, str]) -> Host:
             "Pass --host claude or --host codex outside an unambiguous agent session"
         )
     return hosts[0]
-
-
-def publish(host: Host, revision: str) -> str | None:
-    try:
-        result = process.run(
-            ["tj", "update", "--host", host.value, "--revision", revision],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return str(error)
-    return (
-        (result.stderr.strip() or f"exit {result.returncode}")
-        if result.returncode
-        else None
-    )
 
 
 def refresh_runtime(host: Host) -> str | None:
@@ -98,8 +79,10 @@ def main(argv: list[str] | None = None) -> int:
     if problem:
         print(f"{host}: tj commands runtime failed: {problem}", file=sys.stderr)
         return 1
-    if outcome.changed and outcome.revision:
-        problem = publish(host, outcome.revision)
+    if outcome.revision and plugin_update.publication_due(
+        host, outcome, os.environ, Path.home(), os.name == "nt"
+    ):
+        problem = plugin_update.publish(host, outcome.revision, process.run)
         if problem:
             print(f"{host}: tj update failed: {problem}", file=sys.stderr)
             return 1

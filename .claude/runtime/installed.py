@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from claude import plugins, project_plugins, registry
 import plugin_payload
@@ -97,11 +97,41 @@ def identities() -> set[str]:
     }
 
 
+def retired(identities: Iterable[str]) -> set[str]:
+    """The identities whose marketplace no longer lists their plugin.
+
+    A marketplace that cannot be read retires nothing, so a missing clone is not mistaken for a
+    withdrawn plugin.
+    """
+    listed: dict[str, set[str] | None] = {}
+    found = set()
+    for identity in identities:
+        name, _, marketplace = identity.rpartition("@")
+        if marketplace not in listed:
+            catalog = read(
+                marketplace_root(marketplace) / ".claude-plugin" / "marketplace.json"
+            )
+            entries = catalog.get("plugins") if isinstance(catalog, dict) else None
+            listed[marketplace] = (
+                {
+                    entry["name"]
+                    for entry in entries
+                    if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+                }
+                if isinstance(entries, list)
+                else None
+            )
+        names = listed[marketplace]
+        if names is not None and name not in names:
+            found.add(identity)
+    return found
+
+
 def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
     found = set()
     for marketplace in marketplaces:
         found.update(f"{plugin}@{marketplace}" for plugin in installs(marketplace))
-    return found
+    return found - retired(found)
 
 
 def pinned(marketplace: str, plugin: str, scope: str | None = None) -> bool:
@@ -291,6 +321,11 @@ def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
     registrations = registered(marketplaces)
+    for identity in sorted(retired(registrations)):
+        print(
+            f"{HOST}: {identity} is no longer published; leaving it as installed"
+        )
+        del registrations[identity]
     direct_update(stale(registrations))
     behind = stale(registrations)
     if len(behind) < len(registrations):
