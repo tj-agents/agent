@@ -71,16 +71,25 @@ def make_stdio_encoding_lossy():
             stream.reconfigure(errors='replace')
 
 
-def launch_environment(clear=(), force=None):
+def launch_environment(clear=(), force=None, environ=os.environ):
     """The environment changes a launched CLI needs: names to remove and values to set.
 
     Returned rather than applied, because on POSIX they travel inside the launched command line: a tab
     handler starts the command from an already-running terminal process that never sees ours.
     """
     session_state = (name for host in Host for name in host_launch(host).SESSION_ENVIRONMENT)
-    cleared = list(dict.fromkeys((*session_state, 'NO_COLOR', 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
+    run_state = (name for name in environ if name.startswith("TJ_RUN_"))
+    cleared = list(dict.fromkeys((*session_state, *run_state, *(host.session_variable for host in Host),
+                                  'NO_COLOR', 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
     forced = dict(force or {})
     return [name for name in cleared if name not in forced], forced
+
+
+def daemon_environment(environ):
+    cleared, forced = launch_environment(
+        clear=("WT_SESSION", "TMUX", "TMUX_PANE", "AGENT_CLI_TAB_TITLE"), environ=environ
+    )
+    return _environment_for(environ, cleared, forced)
 
 
 def prompt_file_argument(path):
@@ -364,9 +373,7 @@ def launch(
         for name, value in adapter.TAB_FORCED.items()
         if IS_WINDOWS or name != "TERM"
     }
-    clear.extend(host.session_variable for host in Host)
-    clear.extend(name for name in environ if name.startswith("TJ_RUN_"))
-    cleared, forced = launch_environment(clear=clear, force=force)
+    cleared, forced = launch_environment(clear=clear, force=force, environ=environ)
     prepare = adapter.prepare if prepare is None else prepare
     prepared = prepare(directory, title, arguments, tj, _environment_for(environ, cleared, forced))
     if resume_from is not None and prepared.session is None:

@@ -47,9 +47,22 @@ def run_native(
     directory: Path,
     environ: Mapping[str, str],
     run: Callable[..., subprocess.CompletedProcess[object]],
+    *,
+    maintenance_timeout: float | None = None,
 ) -> int:
     try:
-        completed = run(command, cwd=directory, env=environ, check=False)
+        if maintenance_timeout is None:
+            completed = run(command, cwd=directory, env=environ, check=False)
+        else:
+            completed = run(
+                command,
+                cwd=directory,
+                env=environ,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=sys.stderr,
+                timeout=maintenance_timeout,
+            )
     except (OSError, subprocess.SubprocessError) as error:
         print(f"tj: could not start {command[0]}: {error}", file=sys.stderr)
         return 1
@@ -107,6 +120,7 @@ def main(
     environ: Mapping[str, str],
     resolver: Callable[[], str] | None = None,
     run: Callable[..., subprocess.CompletedProcess[object]] | None = None,
+    maintenance_timeout: float | None = None,
 ) -> int:
     """Run a native command directly or through one foreground managed session."""
     values = tuple(arguments)
@@ -125,7 +139,13 @@ def main(
             host, resolver, maintenance=effective_directory is None
         )
         if effective_directory is None:
-            return run_native([executable, *values], directory, environment, execute)
+            return run_native(
+                [executable, *values],
+                directory,
+                environment,
+                execute,
+                maintenance_timeout=maintenance_timeout,
+            )
         adapter = agent_cli.host_launch(host)
         prepared = adapter.prepare_foreground(
             executable, effective_directory, values, "tj", environment

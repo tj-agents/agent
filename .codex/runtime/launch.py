@@ -14,13 +14,15 @@ from tj_cli import process
 from codex import observer, processes, startup
 from tj_agent.host import Host
 
+import agent_cli
 import agent_store
+import host_command
 from launch_contract import Confirmation, Liveness, PreparedLaunch
 from launch_errors import LaunchError
 from native_executable import is_script
 
 IS_WINDOWS = os.name == "nt"
-SESSION_ENVIRONMENT: tuple[str, ...] = ()
+SESSION_ENVIRONMENT: tuple[str, ...] = ("CODEX_SESSION_ID",)
 TAB_CLEARED: tuple[str, ...] = ("TERM",)
 TAB_FORCED: dict[str, str] = {}
 DAEMON_TIMEOUT_SECONDS = 10
@@ -231,28 +233,14 @@ def _running_daemon(
 
 
 def _start_daemon(executable: str) -> tuple[str, str | None]:
-    cleared = {
-        *(host.session_variable for host in Host), *(host.context_variable for host in Host),
-        "CODEX_SESSION_ID", "AGENT_CLI_TAB_TITLE", "WT_SESSION", "TMUX", "TMUX_PANE",
-        "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
-    }
-    environment = {
-        key: value for key, value in os.environ.items()
-        if key not in cleared and not key.startswith("TJ_RUN_")
-    }
-    try:
-        # The native daemon manager owns its long-lived service. A tj_hook Job
-        # prevents it from starting that service even with descendant preservation.
-        result = subprocess.run(
-            [executable, "app-server", "daemon", "start"],
-            capture_output=True, text=True, encoding="utf-8", timeout=120,
-            env=environment, stdin=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise LaunchError(f"Could not start the default Codex daemon: {error}") from error
-    if result.returncode:
-        raise LaunchError(f"Could not start the default Codex daemon: {result.stderr.strip()}")
+    # The native foreground manager takes ownership of its service.
+    status = host_command.main(
+        Host.CODEX, ("app-server", "daemon", "start"), cwd=Path.cwd(),
+        environ=agent_cli.daemon_environment(os.environ), resolver=lambda: executable,
+        maintenance_timeout=120,
+    )
+    if status:
+        raise LaunchError(f"Could not start the default Codex daemon (exit {status})")
     active = _running_daemon(executable)
     if active is None:
         raise LaunchError("Codex did not report a running daemon after startup")
@@ -328,8 +316,8 @@ def resolve_executable(
     return best
 
 
-def executable() -> str:
-    return resolve_executable(match_daemon=True)[0]
+def executable(*, match_daemon: bool = False) -> str:
+    return resolve_executable(match_daemon=match_daemon)[0]
 
 
 def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
@@ -435,7 +423,7 @@ def resume_arguments(directory, title, session_id):
 def daemon(timeout=DAEMON_TIMEOUT_SECONDS, *, native=None):
     from codex import hook_trust
 
-    return hook_trust.AppServer(native or executable(), Path.cwd(), timeout=timeout, existing=True)
+    return hook_trust.AppServer(native or executable(match_daemon=True), Path.cwd(), timeout=timeout, existing=True)
 
 
 def liveness(*, strict: bool = False, native: str | None = None) -> dict[str, Liveness]:
@@ -445,7 +433,7 @@ def liveness(*, strict: bool = False, native: str | None = None) -> dict[str, Li
         observed = processes.inventory()
         if strict:
             result = process.run(
-                [native or executable(), "app-server", "daemon", "version"],
+                [native or executable(match_daemon=True), "app-server", "daemon", "version"],
                 capture_output=True, text=True, encoding="utf-8",
                 timeout=DAEMON_TIMEOUT_SECONDS, check=False,
             )

@@ -94,7 +94,7 @@ def test_claude_failed_probe_is_distinct_from_empty_registry(
 def test_codex_absent_daemon_is_dead_without_opening_server(
     monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
-    monkeypatch.setattr(codex_launch, "executable", lambda: "fake-agent")
+    monkeypatch.setattr(codex_launch, "executable", lambda **_options: "fake-agent")
 
     def run(*arguments: Any, **options: Any) -> SimpleNamespace:
         return SimpleNamespace(
@@ -124,7 +124,7 @@ def test_codex_network_failure_requires_proof_that_the_endpoint_is_absent(
         endpoint.touch()
     expected = {"embedded": Liveness(True, process_ids=(42,), launch_ids=("owned",))}
     monkeypatch.setattr(codex_launch.processes, "inventory", lambda: expected)
-    monkeypatch.setattr(codex_launch, "executable", lambda: "fake-agent")
+    monkeypatch.setattr(codex_launch, "executable", lambda **_options: "fake-agent")
     monkeypatch.setattr(
         codex_launch.process,
         "run",
@@ -145,7 +145,7 @@ def test_codex_inaccessible_endpoint_is_not_absence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(codex_launch.processes, "inventory", dict)
-    monkeypatch.setattr(codex_launch, "executable", lambda: "fake-agent")
+    monkeypatch.setattr(codex_launch, "executable", lambda **_options: "fake-agent")
     monkeypatch.setattr(
         codex_launch.process,
         "run",
@@ -169,7 +169,7 @@ def test_codex_inaccessible_endpoint_is_not_absence(
 def test_codex_failed_daemon_probe_or_thread_read_is_not_absence(
     monkeypatch: pytest.MonkeyPatch, probe_failure: bool
 ) -> None:
-    monkeypatch.setattr(codex_launch, "executable", lambda: "fake-agent")
+    monkeypatch.setattr(codex_launch, "executable", lambda **_options: "fake-agent")
 
     def run(*arguments: Any, **options: Any) -> SimpleNamespace:
         return SimpleNamespace(

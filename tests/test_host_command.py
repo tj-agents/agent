@@ -106,6 +106,8 @@ def test_managed_codex_matches_the_running_daemon(
         agent_cli.host_launch(Host.CODEX), "candidate_paths", lambda: [newest]
     )
     assert codex_plugins.resolve_executable(maintenance=True) == newest
+    if cli_version == "0.171.0":
+        assert agent_cli.host_launch(Host.CODEX).executable() == newest
     if expected is None:
         with pytest.raises(LaunchError, match=r"daemon is running 0\.170\.0"):
             codex_plugins.resolve_executable()
@@ -129,7 +131,18 @@ def test_fresh_managed_launch_starts_and_verifies_the_selected_daemon(
         socket = tmp_path / "app-server-control/app-server-control.sock"
         socket.parent.mkdir()
         socket.touch()
-    inherited = ("TJ_RUN_PID", "CODEX_THREAD_ID", "WT_SESSION", "AGENT_CLI_TAB_TITLE")
+    inherited = (
+        "TJ_RUN_PID",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "WT_SESSION",
+        "AGENT_CLI_TAB_TITLE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_PID",
+        "WORKBOARD_LAUNCH_TOKEN",
+        "WORKBOARD_WORKFLOW_TOKEN",
+    )
     for name in inherited:
         monkeypatch.setenv(name, "caller")
     adapter = agent_cli.host_launch(Host.CODEX)
