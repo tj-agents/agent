@@ -182,33 +182,36 @@ def candidate_paths(
     return list(dict.fromkeys(candidates))
 
 
-def _absent_daemon(detail: str) -> bool:
+def _absent_daemon(detail: str, codex_home: Path) -> bool:
     if "failed to connect to" not in detail:
         return False
     try:
-        observer.socket_path(Host.CODEX.configuration_root).stat()
+        observer.socket_path(codex_home).stat()
     except FileNotFoundError:
         return True
     return any(f"(os error {code})" in detail for code in (2, 111, 10061))
 
 
 def _running_daemon(
-    executable: str, *, start_if_absent: bool = False
+    executable: str, codex_home: Path, *, start_if_absent: bool = False
 ) -> tuple[str, str | None] | None:
     command = [executable, "app-server", "daemon", "version"]
     try:
-        result = process.run(command, capture_output=True, text=True, encoding="utf-8", timeout=10)
+        result = process.run(
+            command, capture_output=True, text=True, encoding="utf-8", timeout=10,
+            env={**os.environ, "CODEX_HOME": str(codex_home)},
+        )
     except (OSError, subprocess.SubprocessError) as error:
         raise LaunchError(
-            f"Could not check the default Codex daemon: {error}"
+            f"Could not check the Codex daemon in {codex_home}: {error}"
         ) from error
     if result.returncode:
-        if _absent_daemon(result.stderr.strip() or result.stdout.strip()):
+        if _absent_daemon(result.stderr.strip() or result.stdout.strip(), codex_home):
             if start_if_absent:
-                return _start_daemon(executable)
+                return _start_daemon(executable, codex_home)
             return None
         raise LaunchError(
-            f"Could not check the default Codex daemon: {result.stderr.strip() or result.returncode}"
+            f"Could not check the Codex daemon in {codex_home}: {result.stderr.strip() or result.returncode}"
         )
     try:
         detail = json.loads(result.stdout)
@@ -219,7 +222,7 @@ def _running_daemon(
     if not isinstance(detail, dict) or not isinstance(detail.get("status"), str):
         raise LaunchError("The Codex daemon version command returned no status")
     if detail["status"] == "stopped":
-        return _start_daemon(executable) if start_if_absent else None
+        return _start_daemon(executable, codex_home) if start_if_absent else None
     if detail["status"] != "running":
         raise LaunchError(f"Unexpected Codex daemon status: {detail['status']!r}")
     version = detail.get("appServerVersion")
@@ -231,16 +234,17 @@ def _running_daemon(
     ).is_absolute() else None
 
 
-def _start_daemon(executable: str) -> tuple[str, str | None]:
+def _start_daemon(executable: str, codex_home: Path) -> tuple[str, str | None]:
     # The native foreground manager takes ownership of its service.
     status = host_command.main(
         Host.CODEX, ("app-server", "daemon", "start"), cwd=Path.cwd(),
-        environ=agent_cli.daemon_environment(os.environ), resolver=lambda: executable,
+        environ=agent_cli.daemon_environment({**os.environ, "CODEX_HOME": str(codex_home)}),
+        resolver=lambda: executable,
         maintenance_timeout=120,
     )
     if status:
-        raise LaunchError(f"Could not start the default Codex daemon (exit {status})")
-    active = _running_daemon(executable)
+        raise LaunchError(f"Could not start the Codex daemon in {codex_home} (exit {status})")
+    active = _running_daemon(executable, codex_home)
     if active is None:
         raise LaunchError("Codex did not report a running daemon after startup")
     return active
@@ -258,7 +262,7 @@ def _executable_version(path: str) -> str | None:
 
 def resolve_executable(
     minimum=startup.MINIMUM_VERSION, candidates=None, *, match_daemon: bool = False,
-    start_if_absent: bool = False,
+    start_if_absent: bool = False, codex_home: Path | None = None,
 ):
     """The newest native Codex executable that answers --version, as (path, version)."""
     paths = candidate_paths() if candidates is None else candidates
@@ -287,7 +291,8 @@ def resolve_executable(
         raise LaunchError(f"The minimum Codex version is not a version: {minimum}")
     meets_floor = compare_version(best[1], floor) >= 0
     daemon = (
-        _running_daemon(best[0], start_if_absent=start_if_absent and meets_floor)
+        _running_daemon(best[0], codex_home or Host.CODEX.configuration_root,
+                        start_if_absent=start_if_absent and meets_floor)
         if match_daemon else None
     )
     if daemon is not None:
@@ -300,7 +305,7 @@ def resolve_executable(
             if version and version["text"] == active and compare_version(version, floor) >= 0:
                 return installed, version
         raise LaunchError(
-            f"The default Codex daemon is running {active}, but no compatible executable "
+            f"The Codex daemon is running {active}, but no compatible executable "
             f"at or above {minimum} is available. Check the managed daemon package with "
             "codex app-server daemon version."
         )
@@ -315,8 +320,8 @@ def resolve_executable(
     return best
 
 
-def executable(*, match_daemon: bool = False) -> str:
-    return resolve_executable(match_daemon=match_daemon)[0]
+def executable(*, match_daemon: bool = False, codex_home: Path | None = None) -> str:
+    return resolve_executable(match_daemon=match_daemon, codex_home=codex_home)[0]
 
 
 def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
@@ -438,7 +443,7 @@ def liveness(*, strict: bool = False, native: str | None = None) -> dict[str, Li
             )
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip()
-                if _absent_daemon(detail):
+                if _absent_daemon(detail, Host.CODEX.configuration_root):
                     return observed
                 raise LaunchError(f"Cannot determine Codex daemon state: {detail}")
             if not isinstance(json.loads(result.stdout), dict):

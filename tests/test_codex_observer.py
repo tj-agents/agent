@@ -1,3 +1,5 @@
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -45,18 +47,38 @@ def test_start_waits_for_ready_without_restarting_the_daemon(
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, next(results), "", "")
 
-    def executable(*, match_daemon: bool) -> str:
-        assert match_daemon
-        return "exact-native"
+    default_home = tmp_path / "other-home"
+    monkeypatch.setenv("CODEX_HOME", str(default_home))
+    managed = str(tmp_path / "managed-codex")
+    newest = str(tmp_path / "newest-codex")
+    monkeypatch.setattr(launch, "candidate_paths", lambda: [newest])
 
-    monkeypatch.setattr(launch, "executable", executable)
+    def version(
+        command: list[str], *, env: dict[str, str] | None = None, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if command[1:] == ["--version"]:
+            output = {newest: "codex-cli 0.171.0", managed: "codex-cli 0.170.0"}[
+                command[0]
+            ]
+        else:
+            assert command == [newest, "app-server", "daemon", "version"]
+            home = (env or os.environ)["CODEX_HOME"]
+            active = {str(default_home): "0.171.0", str(tmp_path): "0.170.0"}[home]
+            output = json.dumps(
+                {
+                    "status": "running",
+                    "appServerVersion": active,
+                    "managedCodexPath": managed,
+                }
+            )
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(launch.process, "run", version)
     assert observer.ensure(tmp_path, tmp_path, run=run)
     assert [command[-1] for command, _ in calls] == ["--status", "--start", "--status"]
     assert calls[1][1]["preserve_descendants"] is True
     assert all(str(socket) in command for command, _ in calls)
-    assert all(
-        command[command.index("--codex") + 1] == "exact-native" for command, _ in calls
-    )
+    assert all(command[command.index("--codex") + 1] == managed for command, _ in calls)
 
 
 def test_idle_daemon_needs_no_observer(
@@ -69,8 +91,8 @@ def test_idle_daemon_needs_no_observer(
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 3, "", "")
 
-    def executable(*, match_daemon: bool) -> str:
-        assert match_daemon
+    def executable(*, match_daemon: bool, codex_home: Path) -> str:
+        assert match_daemon and codex_home == tmp_path
         return "exact-native"
 
     monkeypatch.setattr(launch, "executable", executable)
