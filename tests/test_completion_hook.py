@@ -133,6 +133,41 @@ def test_malformed_input_reports_unverified_state_without_continuation(
     assert "remains unverified" in output["systemMessage"]
 
 
+@pytest.mark.parametrize("managed", [True, False])
+def test_finish_guidance_requires_a_managed_turn_receipt(
+    host: Host,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    managed: bool,
+) -> None:
+    receipt = {"message": None} if managed else {}
+
+    def acknowledge(
+        command: list[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert command == ["tj", "_lifecycle"]
+        assert json.loads(str(options["input"]))["event"] == "start"
+        return subprocess.CompletedProcess(command, 0, json.dumps(receipt), "")
+
+    monkeypatch.setattr(process, "run", acknowledge)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(json.dumps(native_payload(host, "UserPromptSubmit"))),
+    )
+
+    assert completion_hook.main(["--host", host.value, "--hook-mode", "prompt"]) == 0
+    reply = json.loads(capsys.readouterr().out)
+    if managed:
+        context = reply["hookSpecificOutput"]
+        assert context["hookEventName"] == "UserPromptSubmit"
+        assert "tj finish" in context["additionalContext"]
+        assert "whole requested goal" in context["additionalContext"]
+        assert "keep-open request" in context["additionalContext"]
+    else:
+        assert reply == {}
+
+
 @pytest.mark.parametrize("managed", [True, False, None])
 def test_failed_prompt_admission_blocks_only_managed_or_unverified_owners(
     host: Host,

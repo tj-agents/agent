@@ -198,7 +198,7 @@ def test_handoff_preserves_item_parent_and_standing_rule(
         "parent": "claude:parent",
     }
     assert str(prompt) in arguments[-1] and "Standing rule:" in arguments[-1]
-    assert "tj finish" in arguments[-1]
+    assert "the final response to the recorded parent once" in arguments[-1]
 
 
 def test_session_start_binds_the_launch(
