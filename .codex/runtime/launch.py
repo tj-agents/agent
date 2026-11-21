@@ -193,25 +193,26 @@ def _absent_daemon(detail: str, codex_home: Path) -> bool:
 
 
 def _running_daemon(
-    executable: str, codex_home: Path, *, start_if_absent: bool = False
+    executable: str, codex_home: Path | None, *, start_if_absent: bool = False
 ) -> tuple[str, str | None] | None:
     command = [executable, "app-server", "daemon", "version"]
     try:
         result = process.run(
             command, capture_output=True, text=True, encoding="utf-8", timeout=10,
-            env={**os.environ, "CODEX_HOME": str(codex_home)},
+            env=None if codex_home is None else {**os.environ, "CODEX_HOME": str(codex_home)},
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise LaunchError(
-            f"Could not check the Codex daemon in {codex_home}: {error}"
+            f"Could not check the Codex daemon: {error}"
         ) from error
     if result.returncode:
-        if _absent_daemon(result.stderr.strip() or result.stdout.strip(), codex_home):
+        if _absent_daemon(result.stderr.strip() or result.stdout.strip(),
+                          codex_home or Host.CODEX.configuration_root):
             if start_if_absent:
                 return _start_daemon(executable, codex_home)
             return None
         raise LaunchError(
-            f"Could not check the Codex daemon in {codex_home}: {result.stderr.strip() or result.returncode}"
+            f"Could not check the Codex daemon: {result.stderr.strip() or result.returncode}"
         )
     try:
         detail = json.loads(result.stdout)
@@ -234,16 +235,18 @@ def _running_daemon(
     ).is_absolute() else None
 
 
-def _start_daemon(executable: str, codex_home: Path) -> tuple[str, str | None]:
+def _start_daemon(executable: str, codex_home: Path | None) -> tuple[str, str | None]:
     # The native foreground manager takes ownership of its service.
+    environment = agent_cli.daemon_environment(os.environ)
+    if codex_home is not None:
+        environment["CODEX_HOME"] = str(codex_home)
     status = host_command.main(
         Host.CODEX, ("app-server", "daemon", "start"), cwd=Path.cwd(),
-        environ=agent_cli.daemon_environment({**os.environ, "CODEX_HOME": str(codex_home)}),
-        resolver=lambda: executable,
+        environ=environment, resolver=lambda: executable,
         maintenance_timeout=120,
     )
     if status:
-        raise LaunchError(f"Could not start the Codex daemon in {codex_home} (exit {status})")
+        raise LaunchError(f"Could not start the Codex daemon (exit {status})")
     active = _running_daemon(executable, codex_home)
     if active is None:
         raise LaunchError("Codex did not report a running daemon after startup")
@@ -291,8 +294,7 @@ def resolve_executable(
         raise LaunchError(f"The minimum Codex version is not a version: {minimum}")
     meets_floor = compare_version(best[1], floor) >= 0
     daemon = (
-        _running_daemon(best[0], codex_home or Host.CODEX.configuration_root,
-                        start_if_absent=start_if_absent and meets_floor)
+        _running_daemon(best[0], codex_home, start_if_absent=start_if_absent and meets_floor)
         if match_daemon else None
     )
     if daemon is not None:

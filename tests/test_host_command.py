@@ -88,6 +88,7 @@ def test_managed_codex_matches_the_running_daemon(
 
     def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
         if command == [newest, "app-server", "daemon", "version"]:
+            assert _options["env"] is None
             content = json.dumps(
                 {
                     "status": daemon_status,

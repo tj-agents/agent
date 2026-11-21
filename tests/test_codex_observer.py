@@ -1,5 +1,4 @@
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -62,7 +61,7 @@ def test_start_waits_for_ready_without_restarting_the_daemon(
             ]
         else:
             assert command == [newest, "app-server", "daemon", "version"]
-            home = (env or os.environ)["CODEX_HOME"]
+            home = str(default_home) if env is None else env["CODEX_HOME"]
             active = {str(default_home): "0.171.0", str(tmp_path): "0.170.0"}[home]
             output = json.dumps(
                 {
