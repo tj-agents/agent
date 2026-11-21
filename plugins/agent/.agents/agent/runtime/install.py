@@ -1662,7 +1662,7 @@ def publish_update(
     """Tell running tj run tabs of a host to reload when its plugins moved or tj's record is stale."""
     code = 0
     for host, outcome in outcomes.items():
-        problem = plugin_update.publish(host, outcome, context.run)
+        problem = outcome.publish(host, context.run)
         if problem:
             context.failures.append(f"{host} update: {problem}")
             code = 2

@@ -201,31 +201,30 @@ class Outcome:
     changed: bool
     revision: str | None
 
+    def publish(
+        self, host: Host, run: Callable[..., subprocess.CompletedProcess[str]]
+    ) -> str | None:
+        """Tell `host`'s running `tj run` tabs about this update; why not, if so.
 
-def publish(
-    host: Host,
-    outcome: Outcome,
-    run: Callable[..., subprocess.CompletedProcess[str]],
-) -> str | None:
-    """Tell `host`'s running `tj run` tabs about a converged update; why not, if so.
-
-    Moved plugins always publish. Otherwise `tj` publishes only when its record is
-    behind `outcome.revision`, as after an earlier update failed before publishing.
-    """
-    if outcome.failures or outcome.revision is None:
-        return None
-    command = ["tj", "update", "--host", host.value, "--revision", outcome.revision]
-    if not outcome.changed:
-        command.append("--if-stale")
-    try:
-        result = run(command, capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        return str(error)
-    return (
-        (result.stderr.strip() or f"exit {result.returncode}")
-        if result.returncode
-        else None
-    )
+        Moved plugins always publish. Otherwise `tj` publishes only when its record is
+        behind `revision`, as after an earlier update failed before publishing.
+        """
+        if self.failures or self.revision is None:
+            return None
+        command = ["tj", "update", "--host", host.value, "--revision", self.revision]
+        if not self.changed:
+            command.append("--if-stale")
+        try:
+            result = run(
+                command, capture_output=True, text=True, timeout=30, check=False
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            return str(error)
+        return (
+            (result.stderr.strip() or f"exit {result.returncode}")
+            if result.returncode
+            else None
+        )
 
 
 def update(host: Host, digests: Digests, environ: Mapping[str, str]) -> Outcome:
