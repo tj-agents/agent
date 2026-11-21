@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-from launch_contract import PreparedLaunch
+from launch_contract import PreparedLaunch, TerminalEnvironment
 
 import pytest
 
@@ -554,7 +554,11 @@ class AwaitLaunchTests(unittest.TestCase):
 
 class LaunchTests(unittest.TestCase):
     def test_the_tab_root_is_the_managed_wrapper_carrying_the_launch_identity(self):
-        adapter = mock.Mock(TAB_CLEARED=(), TAB_FORCED={}, SESSION_ENVIRONMENT=(), executable=lambda: 'claude')
+        adapter = mock.Mock(
+            TERMINAL_ENVIRONMENT=TerminalEnvironment(windows_term=None, force_colour=False),
+            SESSION_ENVIRONMENT=(),
+            executable=lambda: 'claude',
+        )
         adapter.prepare.return_value = PreparedLaunch(('claude', '--name', 'agent#98', 'go'))
         with mock.patch.object(CLI, 'host_launch', return_value=adapter), \
                 mock.patch.object(CLI.shutil, 'which', return_value='tj'), \
@@ -570,7 +574,11 @@ class LaunchTests(unittest.TestCase):
         await_launch.assert_called_once_with('L1', want_session=False)
 
     def test_a_launch_without_an_item_gives_tj_run_no_item(self):
-        adapter = mock.Mock(TAB_CLEARED=(), TAB_FORCED={}, SESSION_ENVIRONMENT=(), executable=lambda: 'claude')
+        adapter = mock.Mock(
+            TERMINAL_ENVIRONMENT=TerminalEnvironment(windows_term=None, force_colour=False),
+            SESSION_ENVIRONMENT=(),
+            executable=lambda: 'claude',
+        )
         adapter.prepare.return_value = PreparedLaunch(('claude', 'go'))
         with mock.patch.object(CLI, 'host_launch', return_value=adapter), \
                 mock.patch.object(CLI.shutil, 'which', return_value='tj'), \
@@ -581,7 +589,9 @@ class LaunchTests(unittest.TestCase):
         self.assertNotIn('--item', open_tab.call_args.args[2])
 
     def test_tj_missing_is_a_launch_error(self):
-        adapter = mock.Mock(TAB_CLEARED=(), TAB_FORCED={})
+        adapter = mock.Mock(
+            TERMINAL_ENVIRONMENT=TerminalEnvironment(windows_term=None, force_colour=False),
+        )
         with mock.patch.object(CLI, 'host_launch', return_value=adapter), \
                 mock.patch.object(CLI.shutil, 'which', return_value=None), \
                 self.assertRaisesRegex(CLI.LaunchError, 'tj is not on PATH'):

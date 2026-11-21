@@ -6,7 +6,7 @@ registration from the provider's observed startup stage.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 import importlib.util
 import os
 from pathlib import Path
@@ -79,7 +79,7 @@ def launch_environment(clear=(), force=None):
     handler starts the command from an already-running terminal process that never sees ours.
     """
     session_state = (name for host in Host for name in host_launch(host).SESSION_ENVIRONMENT)
-    cleared = list(dict.fromkeys((*session_state, 'NO_COLOR', 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
+    cleared = list(dict.fromkeys((*session_state, 'WORKBOARD_LAUNCH_TOKEN', 'WORKBOARD_WORKFLOW_TOKEN', *clear)))
     forced = dict(force or {})
     return [name for name in cleared if name not in forced], forced
 
@@ -236,7 +236,9 @@ def _client(run: Callable[..., subprocess.CompletedProcess[str]], command: list[
     return result.stdout.strip()
 
 
-def _environment_for(environ, cleared, forced):
+def environment_for(
+    environ: Mapping[str, str], cleared: Sequence[str], forced: Mapping[str, str]
+) -> dict[str, str]:
     env = dict(environ)
     for name in cleared:
         env.pop(name, None)
@@ -285,7 +287,7 @@ def _launch_windows_terminal(directory, title, command, cleared, forced, environ
     arguments = ['--window', '0', 'new-tab', '--startingDirectory', str(directory), '--title', title,
                  '--suppressApplicationTitle', *command]
     _client(run, [terminal, *(terminal_argument(value) for value in arguments)], 'Windows Terminal',
-            env=_environment_for(environ, cleared, forced))
+            env=environment_for(environ, cleared, forced))
 
 
 def open_tab(
@@ -358,13 +360,11 @@ def launch(
     if not tj:
         raise LaunchError("tj is not on PATH; run the Agent install.")
     launch_id = uuid.uuid4().hex
-    clear = [name for name in adapter.TAB_CLEARED if IS_WINDOWS or name != "TERM"]
-    force = {
-        name: value
-        for name, value in adapter.TAB_FORCED.items()
-        if IS_WINDOWS or name != "TERM"
-    }
-    cleared, forced = launch_environment(clear=clear, force=force)
+    terminal = adapter.TERMINAL_ENVIRONMENT
+    cleared, forced = launch_environment(
+        clear=terminal.cleared(windows=IS_WINDOWS),
+        force=terminal.forced(windows=IS_WINDOWS),
+    )
     prepared = adapter.prepare(directory, title, arguments, tj, environ)
     if resume_from is not None and prepared.session is None:
         raise LaunchError("Recovery requires the provider's exact native session")
