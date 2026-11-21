@@ -37,9 +37,8 @@ class ParentedHandoff:
     def prompt(self, prepared: str) -> str:
         return (
             f"{prepared} Standing rule: use tj message to contact {self.parent} only "
-            "for a blocker you cannot resolve or an approval you need. At completion "
-            "request tj finish and give the final response. Managed completion sends "
-            "that response to the recorded parent once."
+            "for a blocker you cannot resolve or an approval you need. Managed "
+            "completion sends the final response to the recorded parent once."
         )
 
     def receipt(self) -> dict[str, str]:

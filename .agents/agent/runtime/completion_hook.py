@@ -18,9 +18,14 @@ EVENTS: Mapping[Host, completion_event.Events] = {
     Host.CLAUDE: claude_completion,
     Host.CODEX: codex_completion,
 }
+FINISH_GUIDANCE = (
+    "When the whole requested goal, validation, and any required handoff are complete, "
+    "run `tj finish` before writing your final response. Continue pending work and "
+    "respect any keep-open request."
+)
 
 
-def record(event: completion_event.Event) -> str | None:
+def record(event: completion_event.Event) -> dict[str, str | None]:
     result = process.run(
         ["tj", "_lifecycle"],
         input=json.dumps(event.document()),
@@ -40,7 +45,7 @@ def record(event: completion_event.Event) -> str | None:
     message = reply.get("message")
     if message is not None and not isinstance(message, str):
         raise completion_event.EventError("Invalid managed completion status message")
-    return message
+    return {"message": message} if "message" in reply else {}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -50,7 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--hook-mode", choices=("prompt", "status"), default="status")
     args = parser.parse_args(argv)
     message = None
-    event = None
+    receipt = {}
     try:
         data = json.load(sys.stdin)
         if not isinstance(data, dict):
@@ -65,7 +70,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         event = EVENTS[hosts[args.host]].parse(cast(Mapping[str, object], data))
         if event is not None:
-            message = record(event)
+            receipt = record(event)
+            message = receipt.get("message")
     except (
         OSError,
         ValueError,
@@ -80,9 +86,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if managed:
                 print(json.dumps(EVENTS[hosts[args.host]].rejected_prompt(message)))
                 return 0
-    # A Stop block or additionalContext can submit another model turn. Only a
-    # user-visible status message is allowed; failure must not synthesize input.
-    print(json.dumps({"systemMessage": message} if message else {}))
+    output: dict[str, object] = {"systemMessage": message} if message else {}
+    if args.hook_mode == "prompt" and receipt:
+        output["hookSpecificOutput"] = {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": FINISH_GUIDANCE,
+        }
+    print(json.dumps(output))
     return 0
 
 
