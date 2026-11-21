@@ -163,8 +163,6 @@ RETIRED_ENTRIES = (
     "plugin-update.lock",
     "plugin-update.log",
     "publish-update-owner-setup-result.json",
-    "published-claude.txt",
-    "published-codex.txt",
     "published-manifest.json",
     "published-repository.git",
     "recovery-launches",

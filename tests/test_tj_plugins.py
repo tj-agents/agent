@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -5,6 +6,7 @@ from pathlib import Path
 
 import install
 import jobs
+import native_runtime
 import plugin_update
 import pytest
 import tj_plugins
@@ -90,7 +92,7 @@ def test_runtime_failure_prevents_publication_and_retries_without_plugin_changes
     def installer(
         command: list[str], **_kwargs: object
     ) -> subprocess.CompletedProcess[str]:
-        if command[:2] == ["tj", "update"]:
+        if command[:2] == [str(native_runtime.executable()), "update"]:
             published.append(command)
             return subprocess.CompletedProcess(command, 0, "", "")
         failed = failing and (("--check" in command) == failed_check)
@@ -104,9 +106,7 @@ def test_runtime_failure_prevents_publication_and_retries_without_plugin_changes
     assert published == []
     failing = False
     assert tj_plugins.main(["update", "--host", "claude"]) == 0
-    assert published == [
-        ["tj", "update", "--host", "claude", "--revision", "revision", "--if-stale"]
-    ]
+    assert published == [[*publish_command("revision"), "--if-stale"]]
 
 
 def test_missing_updated_package_cannot_report_convergence(
@@ -144,7 +144,17 @@ def test_runtime_converges_before_session_activation(
 
 
 REVISION = "a" * 40
-PUBLISH = ["tj", "update", "--host", "claude", "--revision", REVISION]
+
+
+def publish_command(revision: str = REVISION) -> list[str]:
+    return [
+        str(native_runtime.executable()),
+        "update",
+        "--host",
+        "claude",
+        "--revision",
+        revision,
+    ]
 
 
 def run_update(
@@ -163,6 +173,8 @@ def run_update(
         return subprocess.CompletedProcess(command, publish_code, "", "tj is gone")
 
     monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path / "verified-bin"))
+    monkeypatch.setenv("PATH", str(tmp_path / "older-bin"), prepend=os.pathsep)
     monkeypatch.setattr(
         plugin_update,
         "update",
@@ -180,7 +192,8 @@ def test_an_unchanged_update_asks_tj_to_publish_only_a_stale_record(
     code, commands = run_update(tmp_path, monkeypatch, changed=False)
 
     assert code == 0
-    assert commands == [[*PUBLISH, "--if-stale"]]
+    assert commands == [[*publish_command(), "--if-stale"]]
+    assert Path(commands[0][0]).parent == (tmp_path / "verified-bin").resolve()
 
 
 def test_a_plugin_that_changed_is_always_published(
@@ -189,7 +202,7 @@ def test_a_plugin_that_changed_is_always_published(
     code, commands = run_update(tmp_path, monkeypatch, changed=True)
 
     assert code == 0
-    assert commands == [PUBLISH]
+    assert commands == [publish_command()]
 
 
 def test_a_failed_update_publishes_nothing(
@@ -212,3 +225,72 @@ def test_a_publish_that_tj_rejects_fails_the_update(
 
     assert code == 1
     assert "tj update failed: tj is gone" in capsys.readouterr().err
+
+
+def test_failed_publication_retries_repairs_at_the_same_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    receipt = tmp_path / "activated-claude.txt"
+    receipt.write_text(REVISION, encoding="utf-8")
+    current = False
+    calls: list[list[str]] = []
+
+    def repair(*_args: object) -> None:
+        nonlocal current
+        current = True
+
+    def native(
+        command: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(
+            command, int(len(calls) == 1), "", "publish failed"
+        )
+
+    installed = plugin_update.INSTALLED[Host.CLAUDE]
+    monkeypatch.setattr(installed, "update_marketplaces", lambda *_args: None)
+    monkeypatch.setattr(installed, "refresh", repair)
+    monkeypatch.setattr(plugin_update, "already_current", lambda *_args: current)
+    monkeypatch.setattr(plugin_update, "marketplace_revision", lambda *_args: REVISION)
+    monkeypatch.setattr(plugin_update, "behind_remote", lambda *_args: False)
+    monkeypatch.setattr(plugin_update, "prefetch_standards", lambda *_args: None)
+    monkeypatch.setattr(plugin_update, "update_standards", lambda *_args: None)
+
+    first = plugin_update.update(Host.CLAUDE, Digests(tmp_path), {})
+    assert first.changed
+    assert first.publish(Host.CLAUDE, native) == "publish failed"
+    assert receipt.read_text(encoding="utf-8") != REVISION
+
+    retry = plugin_update.update(Host.CLAUDE, Digests(tmp_path), {})
+    assert not retry.changed
+    assert retry.publish(Host.CLAUDE, native) is None
+    assert receipt.read_text(encoding="utf-8") == REVISION
+
+    settled = plugin_update.update(Host.CLAUDE, Digests(tmp_path), {})
+    assert settled.publish(Host.CLAUDE, native) is None
+    assert calls == [
+        publish_command(),
+        publish_command(),
+        [*publish_command(), "--if-stale"],
+    ]
+
+
+def test_superseded_activation_cannot_publish_or_overwrite_the_receipt(
+    tmp_path: Path,
+) -> None:
+    receipt = tmp_path / "activated-claude.txt"
+    receipt.write_text("newer activation", encoding="utf-8")
+
+    def unexpected(
+        *_args: object, **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        pytest.fail("A superseded activation cannot call the native publisher")
+
+    outcome = plugin_update.Outcome(
+        [], True, REVISION, plugin_update.PendingActivation(receipt, "older activation")
+    )
+    assert (
+        outcome.publish(Host.CLAUDE, unexpected)
+        == "plugin publication was superseded; retry the update"
+    )
+    assert receipt.read_text(encoding="utf-8") == "newer activation"

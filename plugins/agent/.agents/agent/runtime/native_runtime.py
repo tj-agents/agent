@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from tj_cli import native_install
 from tj_cli.paths import prepend
 
 NATIVE_REVISION = "7d650f875704613e5296f35af9c7c680752ec85b"
+
+
+def executable() -> Path:
+    return native_install.default_bin_dir().resolve() / (
+        "tj.exe" if os.name == "nt" else "tj"
+    )
 
 
 def pending(*, revision: str | None = None) -> tuple[str, ...]:

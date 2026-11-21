@@ -131,10 +131,7 @@ def retired(identities: Iterable[str]) -> set[str]:
 
 
 def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
-    found = set()
-    for marketplace in marketplaces:
-        found.update(f"{plugin}@{marketplace}" for plugin in installs(marketplace))
-    return found
+    return set(registered(marketplaces))
 
 
 def pinned(marketplace: str, plugin: str, scope: str | None = None) -> bool:
@@ -177,7 +174,11 @@ def torn(marketplace: str, plugin: str, scope: str) -> bool:
 
 
 def current(marketplace: str, plugin: str, digests: Digests) -> bool:
-    return pinned(marketplace, plugin) or bool(retired((f"{plugin}@{marketplace}",)))
+    identity = f"{plugin}@{marketplace}"
+    if retired((identity,)):
+        return True
+    scopes = registered((marketplace,)).get(identity, [])
+    return bool(scopes) and all(pinned(marketplace, plugin, scope) for scope in scopes)
 
 
 def update_marketplaces(report: Any, marketplaces: tuple[str, ...]) -> None:

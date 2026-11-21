@@ -25,6 +25,7 @@ if sys.version_info < (3, 12):
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import install  # noqa: E402
+import native_runtime  # noqa: E402
 from plugin_update import Outcome  # noqa: E402
 from tj_agent.host import Host  # noqa: E402
 import tomllib  # noqa: E402
@@ -1617,7 +1618,16 @@ def test_install_publishes_the_marketplace_revision_for_a_host_that_moved(
     with contextlib.redirect_stdout(io.StringIO()):
         code = install.publish_update(context, {Host.CLAUDE: outcome()})
     assert code == 2 * returncode
-    assert calls == [["tj", "update", "--host", "claude", "--revision", "f" * 40]]
+    assert calls == [
+        [
+            str(native_runtime.executable()),
+            "update",
+            "--host",
+            "claude",
+            "--revision",
+            "f" * 40,
+        ]
+    ]
     assert context.failures == ([] if not returncode else ["claude update: no tj"])
 
 
@@ -1639,7 +1649,15 @@ def test_install_asks_tj_to_republish_only_a_stale_record_when_nothing_moved(
     with contextlib.redirect_stdout(output):
         assert install.publish_update(context, outcomes) == 0
     assert calls == [
-        ["tj", "update", "--host", "claude", "--revision", "f" * 40, "--if-stale"]
+        [
+            str(native_runtime.executable()),
+            "update",
+            "--host",
+            "claude",
+            "--revision",
+            "f" * 40,
+            "--if-stale",
+        ]
     ]
     assert output.getvalue() == ""
 

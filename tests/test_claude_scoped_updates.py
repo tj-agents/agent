@@ -500,6 +500,30 @@ def test_a_retired_only_inventory_still_runs_the_installer_convergence(
     assert [command for command in commands if command[:3] == NATIVE_UPDATE] == []
 
 
+@pytest.mark.parametrize("scope", ["local", "user"])
+def test_incomplete_published_registration_still_gets_repaired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
+) -> None:
+    commands = retired_plugin_machine(tmp_path, monkeypatch, "b" * 40)
+    registry = tmp_path / "claude/plugins/installed_plugins.json"
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    rows = document["plugins"]["python@tj-agents"]
+    if scope == "user":
+        del rows[0]["gitCommitSha"]
+    else:
+        rows.append({"scope": scope, "projectPath": str(tmp_path)})
+    write_json(registry, document)
+
+    result = plugin_update.update(Host.CLAUDE, Digests(jobs.state_directory()), {})
+
+    assert result.failures == []
+    assert result.changed
+    updates = [command for command in commands if command[:3] == NATIVE_UPDATE]
+    assert updates == [
+        [*NATIVE_UPDATE, "python@tj-agents", "--scope", scope, "--json", "-y"]
+    ]
+
+
 @pytest.mark.parametrize("catalog_text", ["{", '{"plugins": [{}]}'])
 def test_an_unreadable_marketplace_does_not_retire_installed_plugins(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog_text: str
