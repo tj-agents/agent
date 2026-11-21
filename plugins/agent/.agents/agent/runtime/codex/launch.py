@@ -182,14 +182,19 @@ def candidate_paths(
     return list(dict.fromkeys(candidates))
 
 
-def _absent_daemon(detail: str, codex_home: Path) -> bool:
+def _absent_daemon(detail: str, codex_home: Path | None = None) -> bool:
     if "failed to connect to" not in detail:
         return False
+    if any(f"(os error {code})" in detail for code in (2, 111, 10061)):
+        return True
+    endpoint = observer.socket_path(codex_home or Host.CODEX.configuration_root)
+    if not any(line.endswith(f"failed to connect to {endpoint}") for line in detail.splitlines()):
+        return False
     try:
-        observer.socket_path(codex_home).stat()
+        endpoint.stat()
     except FileNotFoundError:
         return True
-    return any(f"(os error {code})" in detail for code in (2, 111, 10061))
+    return False
 
 
 def _running_daemon(
@@ -206,8 +211,7 @@ def _running_daemon(
             f"Could not check the Codex daemon: {error}"
         ) from error
     if result.returncode:
-        if _absent_daemon(result.stderr.strip() or result.stdout.strip(),
-                          codex_home or Host.CODEX.configuration_root):
+        if _absent_daemon(result.stderr.strip() or result.stdout.strip(), codex_home):
             if start_if_absent:
                 return _start_daemon(executable, codex_home)
             return None
@@ -445,7 +449,7 @@ def liveness(*, strict: bool = False, native: str | None = None) -> dict[str, Li
             )
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip()
-                if _absent_daemon(detail, Host.CODEX.configuration_root):
+                if _absent_daemon(detail):
                     return observed
                 raise LaunchError(f"Cannot determine Codex daemon state: {detail}")
             if not isinstance(json.loads(result.stdout), dict):

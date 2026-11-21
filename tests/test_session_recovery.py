@@ -131,7 +131,8 @@ def test_codex_network_failure_requires_proof_that_the_endpoint_is_absent(
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
             stdout="",
-            stderr=f"failed to connect to {endpoint}: dead network (os error 10050)",
+            stderr=f"failed to connect to {endpoint}\n"
+            "Caused by: dead network (os error 10050)",
         ),
     )
     if endpoint_exists:
@@ -141,9 +142,20 @@ def test_codex_network_failure_requires_proof_that_the_endpoint_is_absent(
         assert codex_launch.liveness(strict=True) == expected
 
 
+def test_codex_network_error_at_another_endpoint_is_not_absence(tmp_path: Path) -> None:
+    endpoint = codex_observer.socket_path(tmp_path / "other")
+    detail = (
+        f"failed to connect to {endpoint}\nCaused by: dead network (os error 10050)"
+    )
+    assert not codex_launch._absent_daemon(detail, tmp_path)
+
+
 def test_codex_inaccessible_endpoint_is_not_absence(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    endpoint = codex_observer.socket_path(tmp_path)
     monkeypatch.setattr(codex_launch.processes, "inventory", dict)
     monkeypatch.setattr(codex_launch, "executable", lambda **_options: "fake-agent")
     monkeypatch.setattr(
@@ -152,7 +164,8 @@ def test_codex_inaccessible_endpoint_is_not_absence(
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
             stdout="",
-            stderr="failed to connect to native control socket (os error 10050)",
+            stderr=f"failed to connect to {endpoint}\n"
+            "Caused by: dead network (os error 10050)",
         ),
     )
 
