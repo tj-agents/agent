@@ -624,7 +624,7 @@ def test_plugin_entrypoint_passes_its_configured_environment(
         assert host is Host.CLAUDE
         assert environ is os.environ
         assert os.environ["GIT_CONFIG_GLOBAL"] == "entrypoint-only-config"
-        return plugin_update.Outcome([], False, OLD_PIN)
+        return plugin_update.Outcome([], False, None)
 
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", "entrypoint-only-config")
     monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
@@ -671,7 +671,7 @@ def test_plugin_entrypoint_uses_current_machine_git_credentials(
             timeout=10,
         )
         assert result.stdout.strip() == "current-machine-helper"
-        return plugin_update.Outcome([], False, OLD_PIN)
+        return plugin_update.Outcome([], False, None)
 
     monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
     monkeypatch.setattr(plugin_update, "update", update)
