@@ -81,12 +81,13 @@ def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    ("host", "windows", "terminal", "force_colour"),
+    ("host", "windows", "terminal", "force_colour", "redirected"),
     [
-        (Host.CODEX, True, None, None),
-        (Host.CODEX, False, "screen-256color", None),
-        (Host.CLAUDE, True, "xterm-256color", "1"),
-        (Host.CLAUDE, False, "screen-256color", "1"),
+        (Host.CODEX, True, None, None, False),
+        (Host.CODEX, False, "screen-256color", None, False),
+        (Host.CLAUDE, True, "xterm-256color", "1", False),
+        (Host.CLAUDE, False, "screen-256color", "1", False),
+        (Host.CLAUDE, True, "dumb", None, True),
     ],
 )
 def test_managed_foreground_uses_the_tab_colour_environment(
@@ -96,6 +97,7 @@ def test_managed_foreground_uses_the_tab_colour_environment(
     windows: bool,
     terminal: str | None,
     force_colour: str | None,
+    redirected: bool,
 ) -> None:
     parent = {
         "NO_COLOR": "1",
@@ -124,15 +126,25 @@ def test_managed_foreground_uses_the_tab_colour_environment(
 
     monkeypatch.setattr(agent_cli, "IS_WINDOWS", windows)
     monkeypatch.setattr(agent_cli.host_launch(host), "prepare_foreground", prepare)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: not redirected)
     main = command_main()
+    arguments = ("-p", "prompt") if redirected else ()
     assert (
-        main(host, (), cwd=tmp_path, environ=parent, resolver=lambda: native, run=run)
+        main(
+            host,
+            arguments,
+            cwd=tmp_path,
+            environ=parent,
+            resolver=lambda: native,
+            run=run,
+        )
         == 0
     )
 
     assert prepared_environments == child_environments
     (child,) = child_environments
-    assert "NO_COLOR" not in child
+    assert child.get("NO_COLOR") == ("1" if redirected else None)
     assert child.get("TERM") == terminal
     assert child.get("FORCE_COLOR") == force_colour
     assert child["KEPT"] == "value"
