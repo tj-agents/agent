@@ -5,9 +5,11 @@ import threading
 from collections.abc import Mapping
 from pathlib import Path
 
+import install
 import jobs
 import plugin_update
 import pytest
+from claude import installed as claude_installed
 from fake_machine import (
     claude_payload,
     claude_plugin_arguments,
@@ -400,3 +402,112 @@ def test_a_direct_update_that_cannot_verify_is_reported_and_left_native(
         (home / "plugins/installed_plugins.json").read_text(encoding="utf-8")
     )
     assert registry["plugins"]["python@tj-agents"] == [row]
+
+
+def retired_plugin_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed: str
+) -> list[list[str]]:
+    """python is published, built at `installed`; infonetica left the marketplace."""
+    home = tmp_path / "claude"
+    pin_plugin(home, "python", "b" * 40)
+    build = home / "plugins/cache/tj-agents/python" / installed[:12]
+    claude_payload(build, "python")
+    write_json(
+        home / "plugins/installed_plugins.json",
+        {
+            "plugins": {
+                "python@tj-agents": [
+                    {
+                        "scope": "user",
+                        "gitCommitSha": installed,
+                        "installPath": str(build),
+                    }
+                ],
+                "infonetica@tj-agents": [{"scope": "user", "gitCommitSha": "c" * 40}],
+            }
+        },
+    )
+    for name, value in environment(tmp_path).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = claude_plugin_arguments(command)
+        commands.append(command)
+        if command[:3] == NATIVE_UPDATE and command[3].startswith("infonetica"):
+            return subprocess.CompletedProcess(
+                command, 1, "", 'Plugin "infonetica" not found'
+            )
+        if command[:3] == NATIVE_UPDATE:
+            update_claude_plugin(home, command)
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr(process, "run", run)
+    return commands
+
+
+def test_a_plugin_the_marketplace_no_longer_publishes_is_not_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands = retired_plugin_machine(tmp_path, monkeypatch, "b" * 40)
+
+    outcome = plugin_update.update(HOSTS["claude"], Digests(jobs.state_directory()), {})
+
+    assert outcome.failures == []
+    assert not outcome.changed
+    assert [command for command in commands if command[:3] == NATIVE_UPDATE] == []
+
+
+def test_a_retired_plugin_does_not_stop_a_published_plugin_from_updating(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    commands = retired_plugin_machine(tmp_path, monkeypatch, "a" * 40)
+
+    outcome = plugin_update.update(HOSTS["claude"], Digests(jobs.state_directory()), {})
+
+    assert outcome.failures == []
+    assert outcome.changed
+    assert [command[3] for command in commands if command[:3] == NATIVE_UPDATE] == [
+        "python@tj-agents"
+    ]
+    streams = capsys.readouterr()
+    assert "FAILED" not in streams.err
+    assert (
+        "claude: infonetica@tj-agents is no longer published; leaving it as installed"
+        in streams.out
+    )
+
+
+def test_a_retired_only_inventory_still_runs_the_installer_convergence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands = retired_plugin_machine(tmp_path, monkeypatch, "b" * 40)
+    registry = tmp_path / "claude/plugins/installed_plugins.json"
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    del document["plugins"]["python@tj-agents"]
+    write_json(registry, document)
+    monkeypatch.setattr(install, "plugin_hosts", lambda _context: [Host.CLAUDE])
+
+    context = install.Context(home=tmp_path, environ={}, windows=False)
+    outcomes = install.update_plugins(context)
+
+    assert outcomes[Host.CLAUDE].failures == []
+    assert not outcomes[Host.CLAUDE].changed
+    assert [command for command in commands if command[:3] == NATIVE_UPDATE] == []
+
+
+@pytest.mark.parametrize("catalog_text", ["{", '{"plugins": [{}]}'])
+def test_an_unreadable_marketplace_does_not_retire_installed_plugins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog_text: str
+) -> None:
+    retired_plugin_machine(tmp_path, monkeypatch, "b" * 40)
+    catalog = tmp_path / "claude/plugins/marketplaces/tj-agents/.claude-plugin"
+    (catalog / "marketplace.json").write_text(catalog_text, encoding="utf-8")
+
+    assert (
+        claude_installed.retired(["python@tj-agents", "infonetica@tj-agents"]) == set()
+    )
