@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from functools import partial
 import hashlib
@@ -9,7 +10,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from claude import plugins, project_plugins, registry
 import plugin_payload
@@ -104,7 +105,7 @@ def retired(identities: Iterable[str]) -> set[str]:
     withdrawn plugin.
     """
     listed: dict[str, set[str] | None] = {}
-    found = set()
+    found: set[str] = set()
     for identity in identities:
         name, _, marketplace = identity.rpartition("@")
         if marketplace not in listed:
