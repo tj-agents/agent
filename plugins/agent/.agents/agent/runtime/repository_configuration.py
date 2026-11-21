@@ -120,9 +120,9 @@ def auto_merge(root):
     return settings.get("auto_merge", False)
 
 
-def permissions(root):
+def permissions(root) -> str | None:
     settings = core(root)
-    return "bypass" if settings is None else settings.get("permissions", "bypass")
+    return None if settings is None else settings.get("permissions")
 
 
 def auto_approve_design(root):

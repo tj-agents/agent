@@ -1,18 +1,19 @@
 <!-- BEGIN tj-agents:standards -->
 ## Repository standards
 
-Before the first edit, read the full standards relevant to your changes
-from the index below. Invoke the skill or read its advertised
+Before the first edit, select skills whose descriptions match your task.
+The index below lists available standards, not a required reading list.
+Read the applicable bodies by invoking the skill or reading its advertised
 SKILL.md and its canonical definition. A skill listing is not a read.
 Load only the applicable standards and their needed references; reassess when
 the task changes. Report any missing required skill and repair this repo's
 plugin installation before editing the files it governs.
 
-Selected plugins: `agent-store@tj-agents`, `agent@tj-agents`, `base@tj-agents`, `cli@tj-agents`, `docs@tj-agents`, `engineering@tj-agents`, `github-actions@tj-agents`, `personal@tj-agents`, `python@tj-agents`, `skill@tj-agents`, `template@tj-agents`, `workflow@tj-agents`.
+Selected plugins: `agent-store@tj-agents`, `agent@tj-agents`, `base@tj-agents`, `cli@tj-agents`, `docs@tj-agents`, `engineering@tj-agents`, `github-actions@tj-agents`, `github@tj-agents`, `personal@tj-agents`, `python@tj-agents`, `skill@tj-agents`, `template@tj-agents`, `workflow@tj-agents`.
 
 - GitHub Actions projects: `github-actions:build`, `github-actions:domain-design`, `github-actions:errors`, `github-actions:explanation`, `github-actions:libraries`, `github-actions:security`, `github-actions:structure`, `github-actions:style`, `github-actions:testing`
 - Python projects: `python:build`, `python:dispatch`, `python:domain-design`, `python:enums`, `python:errors`, `python:explanation`, `python:imports`, `python:libraries`, `python:modules`, `python:structure`, `python:style`, `python:testing`
-- When relevant to this task: `base:agent-files`, `base:project-setup`, `base:solution-assessment`, `docs:diagram`, `docs:layout`, `engineering:branching`, `engineering:committing`, `engineering:docs`, `engineering:failure-provenance`, `engineering:merging`, `engineering:plans`, `engineering:remote-validation`, `engineering:review-lifecycle`, `engineering:session`, `workflow:plan-artifacts`, `workflow:session`
+- When relevant to this task: `base:agent-files`, `base:machine-agnostic`, `base:project-setup`, `base:solution-assessment`, `docs:diagram`, `docs:layout`, `engineering:branching`, `engineering:committing`, `engineering:docs`, `engineering:failure-provenance`, `engineering:merging`, `engineering:plans`, `engineering:remote-validation`, `engineering:review-lifecycle`, `engineering:session`, `workflow:plan-artifacts`, `workflow:session`
 - agent sessions: `agent:lanes`
 - material Tommy revises or rehearses: `personal:revision`
 - projects explicitly selecting personal: `personal:rules`

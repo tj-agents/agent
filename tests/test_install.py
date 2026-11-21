@@ -25,7 +25,8 @@ if sys.version_info < (3, 12):
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import install  # noqa: E402
-from plugin_update import Outcome  # noqa: E402
+import native_runtime  # noqa: E402
+from plugin_update import ActivationReceipt, Outcome  # noqa: E402
 from tj_agent.host import Host  # noqa: E402
 import tomllib  # noqa: E402
 
@@ -166,14 +167,14 @@ class ProfileTests(Machine):
             )
             self.assertEqual([], list(path.parent.glob("*.bak")))
 
-    def test_profiles_put_the_runtime_bin_on_path_and_wrap_no_host(self):
+    def test_profiles_put_the_runtime_bin_on_path_and_manage_both_hosts(self):
         posix = install.posix_block(install.runtime_bin(self.context(windows=False)))
         self.assertIn(shlex.quote(str(self.home / ".agents-state" / "bin")), posix)
         for block in (self.block(), posix):
-            self.assertNotIn("claude", block)
-            self.assertNotIn("codex", block)
+            self.assertIn("tj claude", block)
+            self.assertIn("tj codex", block)
 
-    def test_a_stale_block_wrapping_the_hosts_is_rewritten_without_the_wrappers(self):
+    def test_a_stale_launcher_is_replaced_by_the_current_managed_commands(self):
         path = self.profiles()[0]
         path.parent.mkdir(parents=True)
         stale = "\r\n".join(
@@ -751,16 +752,29 @@ class RuntimeTests(Machine):
         context = self.context(windows=os.name == "nt")
         install.apply_runtime(context)
         runtime = context.state_directory / "bin" / ".agents" / "agent" / "runtime"
-        for script in install.LIFECYCLE_COMMANDS.values():
+        native_help = subprocess.run(
+            [str(Path(sys.executable).resolve()), "--help"],
+            capture_output=True, text=True, check=True, timeout=15,
+        ).stdout
+        for command, script in install.LIFECYCLE_COMMANDS.items():
+            arguments = [str(runtime / script), "--help"]
+            if command in {host.value for host in Host}:
+                arguments = [
+                    str(ROOT / "tests/fixtures/installed_command_probe.py"),
+                    str(runtime), command, script,
+                ]
             result = subprocess.run(
-                [sys.executable, "-E", "-s", "-B", str(runtime / script), "--help"],
+                [sys.executable, "-E", "-s", "-B", *arguments],
                 cwd=self.root,
                 capture_output=True,
                 text=True,
                 timeout=15,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            self.assertIn("usage: tj ", result.stdout)
+            if command in {host.value for host in Host}:
+                self.assertEqual(native_help, result.stdout)
+            else:
+                self.assertIn("usage: tj ", result.stdout)
 
     def test_runtime_check_detects_export_drift_without_writing_and_preserves_unrelated_files(
         self,
@@ -1102,7 +1116,6 @@ class RunStepsTests(Machine):
                 "Git long paths",
                 "native CLI",
                 "native permission defaults",
-                "Codex shared daemon",
                 "agent-store CLI",
                 "tj item CLI",
                 "worktrunk",
@@ -1235,6 +1248,12 @@ class NativePermissionsTests(Machine):
 
     def test_open_app_blocks_all_writes_and_closed_app_state_is_read_again(self):
         context = self.context()
+        settings = self.checkout / ".agents/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(
+            json.dumps({"configuration": {"core": {"permissions": "standard"}}}),
+            encoding="utf-8",
+        )
         app = context.codex_home / ".codex-global-state.json"
         app.parent.mkdir(parents=True, exist_ok=True)
         state = {
@@ -1270,6 +1289,75 @@ def machine_context(home: Path) -> install.Context:
 
 
 @pytest.mark.parametrize("windows", [False, True])
+@pytest.mark.parametrize("existing_settings", [False, True])
+@pytest.mark.parametrize("project_document", [None, {"configuration": {"core": {}}}])
+def test_install_without_permission_choice_preserves_native_settings_and_credentials(
+    tmp_path: Path,
+    windows: bool,
+    existing_settings: bool,
+    project_document: dict[str, object] | None,
+) -> None:
+    project = tmp_path / "generic project ü"
+    project.mkdir()
+    context = install.Context(
+        home=tmp_path / "generic home", environ={}, windows=windows, project=project
+    )
+    if project_document is not None:
+        settings = project / ".agents/settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps(project_document), encoding="utf-8")
+    if existing_settings:
+        files = {
+            context.claude_home / "settings.json":
+                '{"permissions":{"defaultMode":"plan","deny":["Bash(custom)"]},'
+                '"apiKeyHelper":"native-auth-helper"}\n',
+            context.claude_home / ".credentials.json": '{"fixture":true}\n',
+            context.codex_home / "config.toml":
+                'approval_policy = "untrusted"\nsandbox_mode = "read-only"\n'
+                'cli_auth_credentials_store = "keyring"\n',
+            context.codex_home / "auth.json": '{"fixture":true}\n',
+            context.codex_home / ".codex-global-state.json":
+                '{"electron-persisted-atom-state":'
+                '{"agent-mode-by-host-id":{"local":"guardian-approvals"}}}\n',
+        }
+        for path, text in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+    before = snapshot(tmp_path)
+
+    assert install.check_native_permissions(context) == []
+    assert install.apply_native_permissions(context) == []
+    assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("hosts", [(), (Host.CLAUDE,), (Host.CODEX,), tuple(Host)])
+def test_install_plugin_setup_checks_only_installed_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hosts: tuple[Host, ...]
+) -> None:
+    executables = {host: f"native-{host.value}" for host in hosts}
+    context = install.Context(
+        home=tmp_path,
+        environ={},
+        windows=False,
+        project=tmp_path,
+        which=lambda name: next(
+            (path for host, path in executables.items() if host.value == name), None
+        ),
+        onboard=True,
+    )
+    monkeypatch.setattr(install.native_runtime, "pending", lambda: ())
+    with (
+        mock.patch.object(install.required_plugins, "check_setup", return_value=[]) as check,
+        mock.patch.object(install.required_plugins, "converge_setup", return_value=[]) as apply,
+    ):
+        assert install.check_plugin_setup(context) == []
+        assert install.apply_plugin_setup(context) == []
+
+    check.assert_called_once_with(tmp_path, hosts, executables, context.state_directory)
+    apply.assert_called_once_with(tmp_path, hosts, executables, context.state_directory, True)
+
+
+@pytest.mark.parametrize("windows", [False, True])
 def test_lifecycle_bindings_preserve_line_endings_and_existing_interpreter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, windows: bool
 ) -> None:
@@ -1291,6 +1379,43 @@ def test_lifecycle_bindings_preserve_line_endings_and_existing_interpreter(
     assert shim.read_bytes() == contents
     assert shim.stat().st_mtime_ns == modified
     fallback.assert_not_called()
+
+
+def test_windows_lifecycle_puts_managed_host_first_on_the_user_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_environment = FakeUserEnvironment({"Path": r"C:\tools;%USERPROFILE%\bin"})
+    context = install.Context(home=tmp_path, environ={}, windows=True, user_environment=user_environment)
+    runtime = install.runtime_bin(context)
+    native = tmp_path / "provider"
+    native.mkdir()
+    user_environment.set("Path", f"{native};{user_environment.get('Path')}")
+    script = tmp_path / "fixture.py"
+    script.write_text("import sys\nprint(sys.argv[1])\nraise SystemExit(23)\n", encoding="utf-8")
+    (native / "codex.cmd").write_text("@exit /b 99\n", encoding="utf-8")
+    monkeypatch.setattr(install, "lifecycle_paths", lambda _context: {runtime / "codex.cmd": script})
+
+    assert "add managed host commands to the Windows user PATH" in install.check_lifecycle_commands(context)
+    install.apply_lifecycle_commands(context)
+    assert user_environment.get("Path") == f"{runtime};{native};C:\\tools;%USERPROFILE%\\bin"
+    assert install.check_lifecycle_commands(context) == []
+    assert install.apply_lifecycle_commands(context) == []
+    assert user_environment.broadcasts == 1
+
+    if os.name == "nt":
+        command = shutil.which("cmd.exe")
+        assert command is not None
+        monkeypatch.setenv("PATH", user_environment.get("Path"))
+        result = subprocess.run(
+            f'"{command}" /d /s /c "codex "two words""',
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+        assert result.returncode == 23, result.stderr
+        assert result.stdout.strip() == "two words"
 
 
 def test_install_records_its_failures(tmp_path: Path) -> None:
@@ -1467,12 +1592,19 @@ def test_an_install_outside_the_managed_runtime_runs_its_own_build(
 
 
 def outcome(
+    state: Path,
+    host: Host,
     *,
     changed: bool = True,
     failures: list[str] | None = None,
-    revision: str | None = "f" * 40,
 ) -> Outcome:
-    return Outcome(failures or [], changed, revision)
+    revision = "f" * 40
+    if failures:
+        return Outcome(failures, changed, revision)
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / f"activated-{host}.txt"
+    path.write_text(revision, encoding="utf-8")
+    return Outcome([], changed, revision, ActivationReceipt(path, revision))
 
 
 def published_context(tmp_path: Path, run: object) -> install.Context:
@@ -1491,9 +1623,20 @@ def test_install_publishes_the_marketplace_revision_for_a_host_that_moved(
 
     context = published_context(tmp_path, run)
     with contextlib.redirect_stdout(io.StringIO()):
-        code = install.publish_update(context, {Host.CLAUDE: outcome()})
+        code = install.publish_update(
+            context, {Host.CLAUDE: outcome(context.state_directory, Host.CLAUDE)}
+        )
     assert code == 2 * returncode
-    assert calls == [["tj", "update", "--host", "claude", "--revision", "f" * 40]]
+    assert calls == [
+        [
+            str(native_runtime.executable()),
+            "update",
+            "--host",
+            "claude",
+            "--revision",
+            "f" * 40,
+        ]
+    ]
     assert context.failures == ([] if not returncode else ["claude update: no tj"])
 
 
@@ -1508,14 +1651,24 @@ def test_install_asks_tj_to_republish_only_a_stale_record_when_nothing_moved(
 
     context = published_context(tmp_path, run)
     outcomes = {
-        Host.CLAUDE: outcome(changed=False),
-        Host.CODEX: outcome(failures=["codex: list: boom"]),
+        Host.CLAUDE: outcome(context.state_directory, Host.CLAUDE, changed=False),
+        Host.CODEX: outcome(
+            context.state_directory, Host.CODEX, failures=["codex: list: boom"]
+        ),
     }
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         assert install.publish_update(context, outcomes) == 0
     assert calls == [
-        ["tj", "update", "--host", "claude", "--revision", "f" * 40, "--if-stale"]
+        [
+            str(native_runtime.executable()),
+            "update",
+            "--host",
+            "claude",
+            "--revision",
+            "f" * 40,
+            "--if-stale",
+        ]
     ]
     assert output.getvalue() == ""
 
@@ -1536,7 +1689,7 @@ def full_install(
     def update(host: Host, _digests: object, environ: object) -> Outcome:
         assert environ is context.environ
         updated.append(host)
-        return outcome(changed=False)
+        return outcome(context.state_directory, host, changed=False)
 
     calls: list[list[str]] = []
 
@@ -1631,7 +1784,7 @@ def test_a_full_install_delivers_the_native_cli_before_updating_plugins(
     def update(host: Host, _digests: object, environ: object) -> Outcome:
         assert environ is context.environ
         order.append(host.value)
-        return outcome(changed=False)
+        return outcome(context.state_directory, host, changed=False)
 
     native = install.Step(
         "native CLI", lambda _context: ["install"], deliver, required=True

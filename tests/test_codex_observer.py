@@ -43,10 +43,13 @@ def test_start_waits_for_ready_without_restarting_the_daemon(tmp_path: Path) -> 
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, next(results), "", "")
 
-    assert observer.ensure(tmp_path, tmp_path, run=run)
+    assert observer.ensure(tmp_path, tmp_path, native="exact-native", run=run)
     assert [command[-1] for command, _ in calls] == ["--status", "--start", "--status"]
     assert calls[1][1]["preserve_descendants"] is True
     assert all(str(socket) in command for command, _ in calls)
+    assert all(
+        command[command.index("--codex") + 1] == "exact-native" for command, _ in calls
+    )
 
 
 def test_idle_daemon_needs_no_observer(tmp_path: Path) -> None:
@@ -57,7 +60,7 @@ def test_idle_daemon_needs_no_observer(tmp_path: Path) -> None:
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 3, "", "")
 
-    assert observer.status(tmp_path, tmp_path, run=run)
+    assert observer.status(tmp_path, tmp_path, native="exact-native", run=run)
 
 
 def test_last_thread_exits_during_start_without_failing_setup(tmp_path: Path) -> None:
@@ -69,7 +72,7 @@ def test_last_thread_exits_during_start_without_failing_setup(tmp_path: Path) ->
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, next(results), "", "")
 
-    assert not observer.ensure(tmp_path, tmp_path, run=run)
+    assert not observer.ensure(tmp_path, tmp_path, native="exact-native", run=run)
 
 
 def test_daemon_errors_are_not_reported_as_ready(tmp_path: Path) -> None:
@@ -81,7 +84,7 @@ def test_daemon_errors_are_not_reported_as_ready(tmp_path: Path) -> None:
         return subprocess.CompletedProcess(command, 2, "", "connection failed")
 
     with pytest.raises(RuntimeError, match="connection failed"):
-        observer.status(tmp_path, tmp_path, run=run)
+        observer.status(tmp_path, tmp_path, native="exact-native", run=run)
 
 
 def test_failed_install_does_not_start_the_observer(tmp_path: Path) -> None:

@@ -20,6 +20,14 @@
         ]
       },
       {
+        "path": ".agents/agent/runtime/completion_hook.py",
+        "hosts": ["claude", "codex"]
+      },
+      {
+        "path": ".agents/agent/runtime/claude/native_bridge.mjs",
+        "hosts": ["claude"]
+      },
+      {
         "path": ".agents/agent/runtime/observer_start.py",
         "hosts": [
           "codex"

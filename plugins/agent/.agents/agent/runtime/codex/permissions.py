@@ -134,11 +134,6 @@ def require_project_trust(
         raise LaunchError(
             "Codex config/read did not return merged configuration and layers"
         )
-    features = config.get("features", {})
-    if isinstance(features, dict) and features.get("daemon_auto_start") is False:
-        raise LaunchError(
-            "Codex shared daemon startup is disabled in the effective configuration"
-        )
     projects = config.get("projects")
     if (
         not isinstance(projects, dict)

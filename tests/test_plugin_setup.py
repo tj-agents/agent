@@ -352,8 +352,9 @@ def test_converge_setup_does_not_record_a_setup_that_did_not_converge(
     assert not setup_machine.record.exists()
 
 
-def test_install_plugin_setup_step_is_current_after_one_run(
-    setup_machine: SetupMachine, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("host", [None, *Host])
+def test_install_plugin_setup_runs_once_only_for_an_installed_host(
+    setup_machine: SetupMachine, monkeypatch: pytest.MonkeyPatch, host: Host | None
 ) -> None:
     monkeypatch.setattr(native_runtime, "pending", lambda: False)
     context = install.Context(
@@ -361,7 +362,8 @@ def test_install_plugin_setup_step_is_current_after_one_run(
         environ={"AGENT_STATE_DIRECTORY": str(setup_machine.state)},
         windows=False,
         project=setup_machine.project,
-        which=lambda _name: None,
+        which=lambda name: str(setup_machine.runtime / name)
+        if host is not None and name == host.value else None,
     )
     step = next(item for item in install.STEPS if item.name == "plugin setup")
     outputs = []
@@ -369,12 +371,16 @@ def test_install_plugin_setup_step_is_current_after_one_run(
         output = io.StringIO()
         assert install.run_steps([step], context, False, output, io.StringIO()) == 0
         outputs.append(output.getvalue().splitlines()[-1])
-    assert outputs == [
-        "apply  plugin setup: selected@publisher: setup has not succeeded with its "
-        "current runtime",
-        "ok     plugin setup",
-    ]
-    assert setup_machine.runs == ["setup"]
+    if host is None:
+        assert outputs == ["ok     plugin setup", "ok     plugin setup"]
+        assert setup_machine.runs == []
+    else:
+        assert outputs == [
+            "apply  plugin setup: selected@publisher: setup has not succeeded with its "
+            "current runtime",
+            "ok     plugin setup",
+        ]
+        assert setup_machine.runs == ["setup"]
 
 
 if __name__ == "__main__":

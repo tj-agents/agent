@@ -1,22 +1,149 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Sequence
+from enum import StrEnum
 from pathlib import Path
+from typing import assert_never
 
+import agent_cli
 import agent_store
+from launch_contract import Liveness
+from launch_errors import LaunchError
 from tj_agent import worktrees
+from tj_agent.host import Host
+
+
+class Command(StrEnum):
+    CLAIM_WORKTREE = "claim-worktree"
+    LIVENESS = "liveness"
+
+
+class LivenessError(RuntimeError):
+    pass
+
+
+def require_binding(host: Host, native_id: str, launch_id: str) -> dict[str, object]:
+    session = f"{host}:{native_id}"
+    current = agent_store.run("show", session)
+    bound = agent_store.run("show", "--launch-id", launch_id)
+    if not isinstance(current, dict) or not isinstance(bound, dict):
+        raise LivenessError("agent-store returned an invalid binding response")
+    expected = {
+        "session": session,
+        "host": host.value,
+        "native_id": native_id,
+        "launch_id": launch_id,
+    }
+    for row in (current.get("session"), bound.get("session")):
+        if not isinstance(row, dict) or any(
+            row.get(key) != value for key, value in expected.items()
+        ):
+            raise LivenessError("The current native session does not match the launch")
+    launch = bound.get("launch")
+    if not isinstance(launch, dict) or any(
+        launch.get(key) != expected[key] for key in ("session", "host", "launch_id")
+    ):
+        raise LivenessError("The launch does not reciprocally bind the native session")
+    return launch
+
+
+def session_liveness(session: str, launch_id: str) -> dict[str, object]:
+    host_name, separator, native_id = session.partition(":")
+    if (
+        not separator
+        or not native_id
+        or ":" in native_id
+        or any(character.isspace() for character in session)
+        or not launch_id
+        or any(character.isspace() for character in launch_id)
+    ):
+        raise LivenessError("An exact host:id and launch id are required")
+    host = {host.value: host for host in Host}.get(host_name)
+    if host is None:
+        raise LivenessError(f"Unsupported session host: {host_name}")
+    launch = require_binding(host, native_id, launch_id)
+    inventory = agent_cli.host_launch(host).liveness(strict=True)
+    if not isinstance(inventory, dict) or any(
+        not isinstance(key, str)
+        or not key
+        or not isinstance(value, Liveness)
+        or not isinstance(value.alive, bool)
+        for key, value in inventory.items()
+    ):
+        raise LivenessError("The native host returned an invalid liveness inventory")
+    # Codex also runs embedded engines that the daemon cannot inventory. Only a
+    # recorded native process or explicit provider state can prove their death.
+    observed = inventory.get(native_id)
+    spawn_failed = (
+        launch.get("state") == "ended"
+        and launch.get("end_reason") == "not_started"
+        and (observed is None or not observed.alive)
+    )
+    if host is Host.CODEX and observed is None and not spawn_failed:
+        raise LivenessError(
+            "No native process evidence exists for this Codex conversation; "
+            "its liveness is unverified"
+        )
+    if (
+        host is Host.CODEX
+        and observed is not None
+        and observed.process_ids is not None
+        and launch_id not in (observed.launch_ids or ())
+        and not spawn_failed
+    ):
+        raise LivenessError(
+            "This Codex launch has no native process evidence; "
+            "a replacement observation cannot establish its predecessor's liveness"
+        )
+    # A concurrent resume can replace the launch/session binding during the probe.
+    require_binding(host, native_id, launch_id)
+    result: dict[str, object] = {
+        "session": session,
+        "launch_id": launch_id,
+        "state": "live" if observed is not None and observed.alive else "dead",
+    }
+    if observed is not None and observed.process_ids is not None:
+        result["process_ids"] = list(observed.process_ids)
+    return result
+
+
+def report_liveness(session: str, launch_id: str) -> int:
+    try:
+        result = session_liveness(session, launch_id)
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        RuntimeError,
+        ValueError,
+        LaunchError,
+    ) as error:
+        print(f"tj session liveness: {error}", file=sys.stderr)
+        return 1
+    print(json.dumps(result))
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="tj session", description="Record session worktree ownership"
+        prog="tj session", description="Inspect session liveness and record ownership"
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    claim = commands.add_parser("claim-worktree")
+    claim = commands.add_parser(Command.CLAIM_WORKTREE)
     claim.add_argument("--path", type=Path, required=True)
+    liveness = commands.add_parser(Command.LIVENESS)
+    liveness.add_argument("--session", required=True, metavar="HOST:ID")
+    liveness.add_argument("--launch-id", required=True)
     arguments = parser.parse_args(argv)
+    match Command(arguments.command):
+        case Command.LIVENESS:
+            return report_liveness(arguments.session, arguments.launch_id)
+        case Command.CLAIM_WORKTREE:
+            pass
+        case other:
+            assert_never(other)
     try:
         owner = worktrees.current_owner(os.environ)
         ownership = worktrees.claim(arguments.path, owner) if owner else None

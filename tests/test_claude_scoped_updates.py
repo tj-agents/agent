@@ -5,6 +5,7 @@ import threading
 from collections.abc import Mapping
 from pathlib import Path
 
+import install
 import jobs
 import plugin_update
 import pytest
@@ -481,12 +482,55 @@ def test_a_retired_plugin_does_not_stop_a_published_plugin_from_updating(
     )
 
 
-def test_an_unreadable_marketplace_does_not_retire_installed_plugins(
+def test_a_retired_only_inventory_still_runs_the_installer_convergence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands = retired_plugin_machine(tmp_path, monkeypatch, "b" * 40)
+    registry = tmp_path / "claude/plugins/installed_plugins.json"
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    del document["plugins"]["python@tj-agents"]
+    write_json(registry, document)
+    monkeypatch.setattr(install, "plugin_hosts", lambda _context: [Host.CLAUDE])
+
+    context = install.Context(home=tmp_path, environ={}, windows=False)
+    outcomes = install.update_plugins(context)
+
+    assert outcomes[Host.CLAUDE].failures == []
+    assert not outcomes[Host.CLAUDE].changed
+    assert [command for command in commands if command[:3] == NATIVE_UPDATE] == []
+
+
+@pytest.mark.parametrize("scope", ["local", "user"])
+def test_incomplete_published_registration_still_gets_repaired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
+) -> None:
+    commands = retired_plugin_machine(tmp_path, monkeypatch, "b" * 40)
+    registry = tmp_path / "claude/plugins/installed_plugins.json"
+    document = json.loads(registry.read_text(encoding="utf-8"))
+    rows = document["plugins"]["python@tj-agents"]
+    if scope == "user":
+        del rows[0]["gitCommitSha"]
+    else:
+        rows.append({"scope": scope, "projectPath": str(tmp_path)})
+    write_json(registry, document)
+
+    result = plugin_update.update(Host.CLAUDE, Digests(jobs.state_directory()), {})
+
+    assert result.failures == []
+    assert result.changed
+    updates = [command for command in commands if command[:3] == NATIVE_UPDATE]
+    assert updates == [
+        [*NATIVE_UPDATE, "python@tj-agents", "--scope", scope, "--json", "-y"]
+    ]
+
+
+@pytest.mark.parametrize("catalog_text", ["{", '{"plugins": [{}]}'])
+def test_an_unreadable_marketplace_does_not_retire_installed_plugins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog_text: str
 ) -> None:
     retired_plugin_machine(tmp_path, monkeypatch, "b" * 40)
     catalog = tmp_path / "claude/plugins/marketplaces/tj-agents/.claude-plugin"
-    (catalog / "marketplace.json").write_text("{", encoding="utf-8")
+    (catalog / "marketplace.json").write_text(catalog_text, encoding="utf-8")
 
     assert (
         claude_installed.retired(["python@tj-agents", "infonetica@tj-agents"]) == set()

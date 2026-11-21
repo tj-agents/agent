@@ -15,6 +15,7 @@ sys.path.insert(0, str(HERE))
 
 from tj_agent.host import Host
 from launch_contract import Liveness
+from launch_errors import LaunchError
 import agent_cli
 import agent_store
 import work_item
@@ -47,8 +48,11 @@ def tj_item(*arguments: str, cwd: Path | None = None):
     return json.loads(command(["tj", "item", *arguments], cwd=cwd))
 
 
-def liveness() -> dict[Host, dict[str, Liveness]]:
-    return {host: agent_cli.host_launch(host).liveness() for host in Host}
+def liveness(hosts: set[Host]) -> dict[Host, dict[str, Liveness]]:
+    try:
+        return {host: agent_cli.host_launch(host).liveness(strict=True) for host in hosts}
+    except LaunchError as error:
+        raise LifecycleError(f"Linked session liveness is unverified: {error}") from error
 
 
 @dataclass
@@ -70,6 +74,8 @@ class Agent:
             return self.live.activity or "live"
         if self.session["state"] == "ended":
             return "ended"
+        if self.live is None and self.host is Host.CODEX:
+            return "unverified"
         return "dead"
 
 
@@ -89,7 +95,6 @@ class Item:
 def open_items(refs: list[str] | None = None, cwd: Path | None = None) -> list[Item]:
     """The named items, or every item with linked sessions plus the tracker's items assigned to you,
     leaving out those the tracker says are done."""
-    live = liveness()
     if refs is None:
         linked = [entry["item"]["ref"] for entry in agent_store.run("items")["items"]]
         try:
@@ -97,12 +102,19 @@ def open_items(refs: list[str] | None = None, cwd: Path | None = None) -> list[I
         except (LifecycleError, ValueError):
             mine = []
         refs = list(dict.fromkeys([*linked, *mine]))
-    def resolve(ref: str) -> Item:
+    def linked_sessions(ref: str) -> dict:
         ref = work_item.reference(cwd or Path.cwd(), ref)
-        sessions = agent_store.run("sessions", "--item", ref)
+        return agent_store.run("sessions", "--item", ref)
+
+    def resolve(sessions: dict) -> Item:
         canonical = sessions["item"]["ref"]
         agents = [Agent(session, live[Host(session["host"])].get(session["native_id"]))
                   for session in sessions["sessions"]]
+        if any(agent.host is Host.CODEX and agent.live is None and agent.session.get("state") != "ended"
+               for agent in agents):
+            raise LifecycleError(
+                "Linked Codex session liveness is unverified: no native process evidence"
+            )
         item = Item(canonical, None, agents)
         try:
             item.card = tj_item("resolve", canonical, cwd=Path(item.worktree) if item.worktree else cwd)
@@ -111,7 +123,12 @@ def open_items(refs: list[str] | None = None, cwd: Path | None = None) -> list[I
         return item
 
     with ThreadPoolExecutor(max_workers=LOOKUP_WORKERS) as pool:
-        items = list(pool.map(resolve, refs))
+        entries = list(pool.map(linked_sessions, refs))
+        hosts: set[Host] = set()
+        for entry in entries:
+            hosts.update(Host(session["host"]) for session in entry["sessions"])
+        live = liveness(hosts)
+        items = list(pool.map(resolve, entries))
     return [item for item in items if not item.card or item.card.get("state") != DONE]
 
 

@@ -25,11 +25,12 @@ DIRECTORY_OPTIONS: frozenset[str] = frozenset()
 INFORMATION_OPTIONS = frozenset({"--help", "-h", "--version", "-v"})
 MAINTENANCE_COMMANDS = frozenset({
     "plugin", "plugins", "auth", "doctor", "install", "setup-token", "update", "upgrade", "mcp",
+    "agents", "logs", "stop", "kill", "rm", "purge", "auto-mode", "import", "gateway",
 })
 NODE_SHIM_BYPASSED = False
 
 
-def resolve_executable() -> str:
+def resolve_executable(*, maintenance: bool = False) -> str:
     return agent_cli.host_launch(HOST).resolve_executable()
 
 
@@ -64,7 +65,7 @@ def linked_common_directory(marker: Path) -> Path:
         ) from error
 
 
-def installations(project: Path, entries: list) -> list:
+def installations(project: Path, entries: list, *, record: bool = True) -> list:
     if not entries:
         return []
     project = project.resolve()
@@ -122,7 +123,7 @@ def ensure_hooks(project: Path, executable: str | None = None, *, running_sessio
     return None
 
 
-def prepare_instructions(project: Path) -> None:
+def prepare_instructions(project: Path, *, write: bool = False) -> bool:
     pointer = project / "CLAUDE.md"
     shared = project / "AGENTS.md"
     for path in (pointer, shared):
@@ -132,7 +133,9 @@ def prepare_instructions(project: Path) -> None:
             )
     original = pointer.read_text(encoding="utf-8") if pointer.exists() else ""
     if original.strip() == "@AGENTS.md":
-        return
+        return False
+    if not write:
+        return True
     if original.strip():
         current = shared.read_text(encoding="utf-8") if shared.exists() else ""
         content = "\n".join(
@@ -140,7 +143,7 @@ def prepare_instructions(project: Path) -> None:
         ).strip()
         shared.write_text(current.rstrip() + "\n\n" + content + "\n", encoding="utf-8")
     pointer.write_text("@AGENTS.md\n", encoding="utf-8")
-
+    return True
 
 def user_enabled() -> Mapping[str, object]:
     try:

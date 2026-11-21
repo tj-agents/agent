@@ -71,7 +71,7 @@ class AppServer:
              *(["--sock", str(socket_path)] if socket_path is not None else [])], cwd=cwd,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=not existing, encoding=None if existing else "utf-8", bufsize=-1 if existing else 1,
-            env=dict(os.environ, **(environment or {})),
+            env=environment,
         )
         self.messages = queue.Queue()
         self.sequence = 0
@@ -391,8 +391,13 @@ def require_ready(listing, cwd, required=None, expected=None):
         elif hook.get("enabled") and not hook.get("isManaged") and hook.get("trustStatus") != "trusted":
             problems.append(f"{key}: {hook.get('trustStatus', 'unknown trust')}")
     for key, value in (expected or {}).items():
-        if key not in hooks or hooks[key].get("currentHash") != value["trusted_hash"]:
+        observed = hooks.get(key, {}).get("currentHash")
+        if observed != value["trusted_hash"] and (
+            "declaration_hash" not in value or observed != value["declaration_hash"]
+        ):
             problems.append(f"{key}: contents changed during verification")
+        elif "source_path" in value and hooks[key].get("sourcePath") != value["source_path"]:
+            problems.append(f"{key}: loaded hook still uses a different plugin build path")
     if problems:
         raise RuntimeError("Required hooks are not ready: " + "; ".join(problems)
                            + ". Stop ordinary work; repair and verify these hooks in /hooks.")
@@ -405,7 +410,8 @@ def apply_trust(executable, cwd, preview=False, verified_roots=None, launch_args
     limit = TIMEOUT if timeout is None else timeout
     if limit <= 0:
         raise RuntimeError("Codex hook trust deadline expired")
-    with AppServer(executable, cwd, launch_args, environment, timeout=limit) as server:
+    child_environment = dict(os.environ, **environment) if environment is not None else None
+    with AppServer(executable, cwd, launch_args, child_environment, timeout=limit) as server:
         config = server.request("config/read", {"cwd": str(cwd), "includeLayers": False})["config"]
         features = config.get("features") or {}
         if features.get("hooks", features.get("codex_hooks", True)) is False:
@@ -568,22 +574,72 @@ def reload_running(executable, cwd, required, session_id=None, timeout=TIMEOUT):
         return
     deadline = time.monotonic() + timeout
     with AppServer(executable, cwd, timeout=timeout, existing=True) as server:
-        if identity not in server.request("thread/loaded/list", {}).get("data", []):
-            raise RuntimeError("Current Codex conversation is not loaded in the existing daemon; "
-                               "resume this same conversation in a fresh native process")
+        parameters, cursors = {}, set()
+        while True:
+            page = server.request("thread/loaded/list", parameters)
+            if identity in page.get("data", []):
+                break
+            cursor = page.get("nextCursor")
+            if not cursor:
+                raise RuntimeError("Current Codex conversation is not loaded in the existing daemon; "
+                                   "resume this same conversation in a managed native process")
+            if cursor in cursors or time.monotonic() >= deadline:
+                raise RuntimeError("Could not complete the loaded Codex conversation inventory")
+            cursors.add(cursor)
+            parameters = {"cursor": cursor}
         thread = server.request("thread/read", {"threadId": identity, "includeTurns": False})["thread"]
         if thread.get("id") != identity or Path(thread.get("cwd", "")).resolve() != cwd:
             raise RuntimeError("Existing Codex conversation does not match the refresh checkout")
         server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
-        while True:
-            listing = server.request("hooks/list", {"cwds": [str(cwd)]})
-            try:
-                require_ready(listing, cwd, required)
-                return
-            except RuntimeError:
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.1)
+        verify_loaded_hooks(server, cwd, identity, required=required, deadline=deadline)
+
+
+def verify_loaded_hooks(server, cwd, identity, *, required, deadline=None):
+    """Verify live declarations, trust and build paths; native live hashes can omit content."""
+    deadline = time.monotonic() + TIMEOUT if deadline is None else deadline
+    marketplace = "@" + required_plugins.MARKETPLACE_NAME
+
+    def relevant(hook):
+        plugin = hook.get("pluginId")
+        return plugin in required or (hook.get("enabled") and str(plugin).endswith(marketplace))
+
+    def scoped(listing):
+        return {
+            "data": [dict(entry, hooks=[hook for hook in entry.get("hooks", []) if relevant(hook)])
+                     for entry in listing.get("data", [])]
+        }
+
+    installed = scoped(server.request("hooks/list", {"cwds": [str(cwd)]}))
+    readiness = dict(required)
+    for entry in installed.get("data", []):
+        for hook in entry.get("hooks", []):
+            readiness.setdefault(hook["pluginId"], [])
+    require_ready(installed, cwd, readiness)
+    expected = {
+        hook["key"]: {
+            "trusted_hash": hook["currentHash"],
+            "declaration_hash": hook["currentHash"].partition("/")[0],
+            "source_path": hook.get("sourcePath"),
+        }
+        for entry in installed["data"] for hook in entry.get("hooks", [])
+        if Path(entry["cwd"]).resolve() == cwd
+    }
+    while True:
+        listing = scoped(server.request("hooks/list", {"threadId": identity}))
+        try:
+            require_ready(listing, cwd, readiness, expected=expected)
+            loaded = {
+                hook["key"] for entry in listing["data"] for hook in entry.get("hooks", [])
+                if Path(entry["cwd"]).resolve() == cwd
+            }
+            if loaded != expected.keys():
+                raise RuntimeError("Codex conversation still has removed plugin hook definitions")
+        except RuntimeError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+        else:
+            return
 
 
 def main(argv=None):

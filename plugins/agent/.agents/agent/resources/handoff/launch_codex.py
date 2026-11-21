@@ -40,7 +40,7 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--prompt-path', required=True)
     parser.add_argument('--title', required=True)
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'), required=True)
-    parser.add_argument('--minimum-version', default='0.154.0')
+    parser.add_argument('--minimum-version', default='0.169.0')
     parser.add_argument('--item', help='existing work-item URL or reference to link; omit to launch with no work item')
     parser.add_argument('--parent', help='parent session (host:id); defaults to the calling session')
     args = parser.parse_args(argv)

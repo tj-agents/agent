@@ -31,6 +31,7 @@ from fake_machine import (
     update_claude_plugin,
 )
 from git_isolation import without_git_config
+from launch_contract import Liveness
 from tj_agent.host import Host
 from tj_cli import process
 from tree_digest import Digests
@@ -80,6 +81,11 @@ def test_codex_refresh_uses_only_selected_marketplace_inventories(
     }
     calls: list[str] = []
     remembered: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        codex_launch,
+        "liveness",
+        lambda **_kwargs: {"embedded": Liveness(True, process_ids=(42,))},
+    )
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         assert command[:3] == ["codex", "plugin", "list"]
@@ -620,7 +626,7 @@ def test_refresh_overlaps_pin_checks_with_remote_freshness_probes(
 def test_plugin_entrypoint_passes_its_configured_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def update(host: Host, _digests: Digests, environ: object) -> plugin_update.Outcome:
+    def update(host: Host, _digests: Digests, environ: object, **_kwargs: object) -> plugin_update.Outcome:
         assert host is Host.CLAUDE
         assert environ is os.environ
         assert os.environ["GIT_CONFIG_GLOBAL"] == "entrypoint-only-config"
@@ -660,7 +666,7 @@ def test_plugin_entrypoint_uses_current_machine_git_credentials(
     monkeypatch.chdir(tmp_path)
 
     def update(
-        host: Host, _digests: Digests, environ: Mapping[str, str]
+        host: Host, _digests: Digests, environ: Mapping[str, str], **_kwargs: object
     ) -> plugin_update.Outcome:
         result = subprocess.run(
             ["git", "config", "--get", "credential.helper"],
@@ -780,6 +786,7 @@ def daemon_refresh(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     daemon: FakeDaemon,
+    sessions: dict[str, Liveness] | None = None,
 ) -> tuple[plugin_update.Outcome, list[list[str]], list[tuple[object, ...]]]:
     inventory = CodexPlugins(
         tmp_path / "codex", {"agent@tj-agents": "local", "base@tj-agents": "local"}
@@ -794,11 +801,17 @@ def daemon_refresh(
             return completed(0, inventory.listing())
         if command[:4] == ["codex", "plugin", "marketplace", "list"]:
             return completed(0, roots)
+        if command[:3] == ["codex", "plugin", "add"]:
+            inventory.install(command[3])
         return completed(0)
 
     trusted: list[tuple[object, ...]] = []
     monkeypatch.setattr(
-        codex_launch, "liveness", lambda **_kwargs: {"thread": object()}
+        codex_launch,
+        "liveness",
+        lambda **_kwargs: sessions
+        if sessions is not None
+        else {"thread": Liveness(True, activity="idle")},
     )
     monkeypatch.setattr(codex_launch, "daemon", lambda _timeout: daemon)
     monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
@@ -819,6 +832,104 @@ def daemon_refresh(
     )
 
 
+def test_dead_receipts_use_cli_without_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon = FakeDaemon()
+    outcome, commands, _ = daemon_refresh(
+        tmp_path, monkeypatch, daemon, {"old": Liveness(False, process_ids=())}
+    )
+    assert not outcome.failures
+    assert len(
+        [command for command in commands if command[:3] == ["codex", "plugin", "add"]]
+    ) == 2
+    assert daemon.requests == []
+
+
+def test_embedded_session_keeps_its_installed_hooks_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon = FakeDaemon()
+    outcome, commands, _ = daemon_refresh(
+        tmp_path, monkeypatch, daemon, {"embedded": Liveness(True, process_ids=(42,))}
+    )
+    assert not [
+        command for command in commands if command[:3] == ["codex", "plugin", "add"]
+    ]
+    assert daemon.requests == []
+    assert any(
+        "embedded" in failure and "left unchanged" in failure
+        for failure in outcome.failures
+    )
+
+
+def test_verified_daemon_frontend_allows_plugin_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    daemon = FakeDaemon()
+    outcome, _, _ = daemon_refresh(
+        tmp_path, monkeypatch, daemon,
+        {"thread": Liveness(True, activity="idle", process_ids=(42,), processes_reloadable=True)},
+    )
+    assert not outcome.failures
+    assert any(method == "plugin/install" for method, _ in daemon.requests)
+
+
+@pytest.mark.parametrize("same_thread", [False, True])
+def test_daemon_cannot_authorize_replacement_of_an_embedded_sessions_hooks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_thread: bool
+) -> None:
+    daemon = FakeDaemon()
+    outcome, commands, _ = daemon_refresh(
+        tmp_path,
+        monkeypatch,
+        daemon,
+        {
+            "daemon": Liveness(True, activity="idle"),
+            "embedded": Liveness(
+                True, activity="idle" if same_thread else None, process_ids=(42,)
+            ),
+            "dead": Liveness(False, process_ids=()),
+        },
+    )
+    assert not [
+        command for command in commands if command[:3] == ["codex", "plugin", "add"]
+    ]
+    assert daemon.requests == []
+    assert any(
+        "embedded" in failure and "left unchanged" in failure
+        for failure in outcome.failures
+    )
+
+
+@pytest.mark.parametrize("inspection_failed", [False, True])
+def test_codex_rejects_unsafe_refresh_before_direct_cache_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, inspection_failed: bool
+) -> None:
+    cached_hook = tmp_path / "cached-hook.py"
+    cached_hook.write_text("approved hook", encoding="utf-8")
+
+    def replace(*_args: object) -> list[str]:
+        cached_hook.write_text("changed hook", encoding="utf-8")
+        return ["agent@tj-agents"]
+
+    def sessions(**_kwargs: object) -> dict[str, Liveness]:
+        if inspection_failed:
+            raise codex_launch.LaunchError("native process inspection failed")
+        return {"embedded": Liveness(True, process_ids=(42,))}
+
+    monkeypatch.setattr(codex_launch, "liveness", sessions)
+    monkeypatch.setattr(codex_installed, "direct_update", replace)
+    monkeypatch.setattr(
+        codex_installed, "refresh_identities", lambda *_args: {"agent@tj-agents"}
+    )
+    report = plugin_update.Report()
+    codex_installed.refresh(report, ("tj-agents",), lambda *_args: False)
+
+    assert cached_hook.read_text(encoding="utf-8") == "approved hook"
+    assert report.failures
+
+
 def test_open_codex_sessions_install_through_the_daemon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -832,6 +943,7 @@ def test_open_codex_sessions_install_through_the_daemon(
     assert daemon.requests == [
         ("plugin/install", {"marketplacePath": manifest, "pluginName": "agent"}),
         ("plugin/install", {"marketplacePath": manifest, "pluginName": "base"}),
+        ("config/batchWrite", {"edits": [], "reloadUserConfig": True}),
         ("thread/loaded/list", {"cursor": None}),
     ]
     assert trusted == [
@@ -839,8 +951,60 @@ def test_open_codex_sessions_install_through_the_daemon(
     ]
 
 
-def test_codex_reloads_after_the_updated_repository_standards_are_written(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("state", ["matching", "stale", "missing"])
+def test_activation_requires_loaded_thread_hook_hashes_to_match_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    report = plugin_update.Report()
+    daemon = FakeDaemon()
+    checked: list[Path] = []
+    fresh = {
+        "key": "hook", "pluginId": "agent@tj-agents", "currentHash": "new",
+        "enabled": True, "isManaged": False, "trustStatus": "trusted",
+        "eventName": "sessionStart", "handlerType": "command", "command": "fixture",
+    }
+    disabled = dict(fresh, key="optional", pluginId="optional@tj-agents", enabled=False)
+    root = tmp_path / "agent"
+    manifest = root / ".codex-plugin/plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "fixture"}]}]}}',
+        encoding="utf-8",
+    )
+
+    def request(method: str, params: dict[str, object]) -> dict[str, object]:
+        if method == "config/batchWrite":
+            return {"status": "ok"}
+        if method == "thread/loaded/list":
+            return {"data": ["thread"], "nextCursor": None}
+        if method == "thread/read":
+            return {"thread": {"cwd": str(tmp_path)}}
+        assert method == "hooks/list"
+        if state == "stale" and "threadId" in params:
+            return {"data": [{"cwd": str(tmp_path), "errors": [], "hooks": [dict(fresh, currentHash="old"), disabled]}]}
+        hooks = [disabled] if state == "missing" else [fresh, disabled]
+        return {"data": [{"cwd": str(tmp_path), "errors": [], "hooks": hooks}]}
+
+    monkeypatch.setattr(daemon, "request", request)
+    monkeypatch.setattr(codex_launch, "daemon", lambda _timeout: daemon)
+    monkeypatch.setattr(codex_hook_trust, "TIMEOUT", 0)
+    monkeypatch.setattr(required_plugins, "project_root", lambda directory: directory)
+    monkeypatch.setattr(required_plugins, "selected", lambda _directory: ("agent@tj-agents",))
+    monkeypatch.setattr(codex_launch, "executable", lambda: "codex")
+    monkeypatch.setattr(required_plugins, "check", lambda *_args: {"agent@tj-agents": root})
+    monkeypatch.setattr(codex_installed, "update_project_standards", checked.append)
+    codex_installed.activate_open_sessions(report)
+    if state != "matching":
+        message = "contents changed" if state == "stale" else "required hook definitions missing"
+        assert any(message in failure for failure in report.failures)
+        assert not checked
+    else:
+        assert not report.failures
+        assert checked == [tmp_path]
+
+
+def test_codex_refresh_reports_standards_drift_without_rewriting_the_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     selection = tmp_path / ".agents/plugins.json"
     selection.parent.mkdir()
@@ -860,15 +1024,13 @@ def test_codex_reloads_after_the_updated_repository_standards_are_written(
     )
     outcome, _commands, _trusted = daemon_refresh(tmp_path, monkeypatch, FakeDaemon())
     assert not outcome.failures
-    content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
-    assert "agent:lanes" in content
+    assert not (tmp_path / "AGENTS.md").exists()
+    assert "--write to update repository standards" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-    ("local", "failed"), [(False, False), (True, False), (False, True)]
-)
-def test_codex_reconciles_other_loaded_repositories_while_activating(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local: bool, failed: bool
+@pytest.mark.parametrize("local", [False, True])
+def test_codex_refresh_checks_loaded_repository_standards_without_rewriting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local: bool
 ) -> None:
     other = tmp_path / "other-repository"
     selection = other / ".agents/plugins.json"
@@ -884,16 +1046,8 @@ def test_codex_reconciles_other_loaded_repositories_while_activating(
         )
     daemon = FakeDaemon()
     native_request = daemon.request
-    update_standards = codex_installed.update_project_standards
-
-    def update(project: Path) -> None:
-        if failed:
-            raise required_plugins.RequiredPluginsError(
-                "Cannot verify updated standards"
-            )
-        update_standards(project)
-
-    monkeypatch.setattr(codex_installed, "update_project_standards", update)
+    agent_root = tmp_path / "codex/plugins/cache/tj-agents/agent/local"
+    monkeypatch.setattr(required_plugins, "check", lambda *_args: {"agent@tj-agents": agent_root})
 
     def request(method: str, params: dict[str, object]) -> dict[str, object]:
         response = native_request(method, params)
@@ -901,11 +1055,10 @@ def test_codex_reconciles_other_loaded_repositories_while_activating(
             return {"data": ["other-thread"], "nextCursor": None}
         if method == "thread/read":
             return {"thread": {"cwd": str(other)}}
+        if method == "hooks/list":
+            return {"data": [{"cwd": str(other), "hooks": [], "errors": []}]}
         if method == "plugin/install" and params.get("pluginName") == "agent":
-            standard = (
-                tmp_path
-                / "codex/plugins/cache/tj-agents/agent/local/.agents/agent/convention/lanes/SKILL.md"
-            )
+            standard = agent_root / ".agents/agent/convention/lanes/SKILL.md"
             standard.parent.mkdir(parents=True)
             standard.write_text(
                 "---\nname: lanes\nkind: convention\nprofile: core\n"
@@ -916,19 +1069,10 @@ def test_codex_reconciles_other_loaded_repositories_while_activating(
 
     monkeypatch.setattr(daemon, "request", request)
     outcome, _commands, _trusted = daemon_refresh(tmp_path, monkeypatch, daemon)
-    assert bool(outcome.failures) == failed
-    if not failed:
-        content = instructions.read_text(encoding="utf-8")
-        assert ("agent:lanes" in content) is not local
-        assert "Existing repository instructions" in content
-    else:
-        failed = False
-        report = plugin_update.Report()
-        with _patched_homes(tmp_path):
-            codex_installed.activate(report)
-        assert not report.failures
-        content = instructions.read_text(encoding="utf-8")
-        assert ("agent:lanes" in content) is not local
+    assert not outcome.failures
+    assert (
+        instructions.read_text(encoding="utf-8") == "Existing repository instructions\n"
+    )
 
 
 def test_a_failed_daemon_install_is_reported_and_the_rest_still_install(
@@ -1101,7 +1245,11 @@ def test_current_codex_plugins_repair_pending_hook_trust(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: bool
 ) -> None:
     monkeypatch.setattr(codex_hook_trust, "pending", lambda _state: ["trust"])
-    monkeypatch.setattr(codex_launch, "liveness", lambda **_kwargs: {"session": {}})
+    monkeypatch.setattr(
+        codex_launch,
+        "liveness",
+        lambda **_kwargs: {"session": Liveness(True, activity="idle")},
+    )
     with (
         _patched_homes(tmp_path),
         mock.patch.object(plugin_update, "already_current", return_value=True),

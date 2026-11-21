@@ -19,8 +19,11 @@ from launch_contract import PreparedLaunch
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'plugins/agent/.agents/agent/runtime'))
-CLI = importlib.import_module('agent_cli')
+sys.path.insert(0, str(ROOT / '.agents/agent/runtime'))
+CLI_SPEC = importlib.util.spec_from_file_location('agent_cli_under_test', ROOT / '.agents/agent/runtime/agent_cli.py')
+assert CLI_SPEC is not None and CLI_SPEC.loader is not None
+CLI = importlib.util.module_from_spec(CLI_SPEC)
+CLI_SPEC.loader.exec_module(CLI)
 Host = importlib.import_module('tj_agent.host').Host
 
 
@@ -315,16 +318,16 @@ class CodexExecutableTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_picks_the_newest_answering_candidate(self):
-        old = executable(self.base / 'old', '#!/bin/sh\necho "codex-cli 0.155.0"\n')
-        alpha = executable(self.base / 'alpha', '#!/bin/sh\necho "codex-cli 0.160.0-alpha.3"\n')
-        new = executable(self.base / 'new', '#!/bin/sh\necho "codex-cli 0.160.0"\n')
+        old = executable(self.base / 'old', '#!/bin/sh\necho "codex-cli 0.169.0"\n')
+        alpha = executable(self.base / 'alpha', '#!/bin/sh\necho "codex-cli 0.170.0-alpha.3"\n')
+        new = executable(self.base / 'new', '#!/bin/sh\necho "codex-cli 0.170.0"\n')
         silent = executable(self.base / 'silent', '#!/bin/sh\nexit 1\n')
         path, version = CLI.host_launch(Host.CODEX).resolve_executable(candidates=[str(old), str(silent), str(new), str(alpha)])
-        self.assertEqual((path, version['text']), (str(new), '0.160.0'))
+        self.assertEqual((path, version['text']), (str(new), '0.170.0'))
 
     def test_refuses_a_build_below_the_minimum_and_lists_what_was_found(self):
         old = executable(self.base / 'old', '#!/bin/sh\necho "codex-cli 0.150.0"\n')
-        with self.assertRaisesRegex(CLI.LaunchError, r'0\.150\.0.*below the required 0\.154\.0(?s:.*)old'):
+        with self.assertRaisesRegex(CLI.LaunchError, r'0\.150\.0.*below the required 0\.169\.0(?s:.*)old'):
             CLI.host_launch(Host.CODEX).resolve_executable(candidates=[str(old)])
 
     def test_refuses_when_nothing_answers(self):
@@ -469,11 +472,11 @@ class OpenTabTests(unittest.TestCase):
         run = fake_run()
         with mock.patch.object(CLI, 'IS_WINDOWS', True), \
                 mock.patch.object(CLI.shutil, 'which', return_value='wt.exe'):
-            CLI.open_tab(r'C:\work', 'agent#98', ['tj', 'run', '--', 'claude', 'a; b'], cleared=['GONE'],
+            CLI.open_tab(r'C:\work', 'agent#98', ['tj', '_session', '--', 'claude', 'a; b'], cleared=['GONE'],
                          forced={'FORCE_COLOR': '1'}, environ={'GONE': 'x', 'KEPT': 'y'}, run=run)
         command, kwargs = run.calls[0]
         self.assertEqual(['wt.exe', '--window', '0', 'new-tab', '--startingDirectory', r'C:\work', '--title',
-                          'agent#98', '--suppressApplicationTitle', 'tj', 'run', '--', 'claude', 'a\\; b'], command)
+                          'agent#98', '--suppressApplicationTitle', 'tj', '_session', '--', 'claude', 'a\\; b'], command)
         self.assertEqual({'KEPT': 'y', 'FORCE_COLOR': '1'}, kwargs['env'])
 
     def test_the_terminal_is_started_directly_and_never_through_the_hidden_launcher(self):
@@ -483,10 +486,10 @@ class OpenTabTests(unittest.TestCase):
     def test_tmux_opens_a_named_window_that_keeps_its_name(self):
         run = fake_run([('@7', '', 0)])
         with mock.patch.object(CLI, 'IS_WINDOWS', False):
-            CLI.open_tab('/work', 'agent#98', ['tj', 'run'], cleared=['NO_COLOR'], forced={'A': '1'},
+            CLI.open_tab('/work', 'agent#98', ['tj', '_session'], cleared=['NO_COLOR'], forced={'A': '1'},
                          environ={'TMUX': '/tmp/tmux'}, run=run)
         self.assertEqual(['tmux', 'new-window', '-n', 'agent#98', '-P', '-F', '#{window_id}', '--',
-                          *CLI.posix_inner_command('/work', ['NO_COLOR'], {'A': '1'}, 'tj', ['run'])],
+                          *CLI.posix_inner_command('/work', ['NO_COLOR'], {'A': '1'}, 'tj', ['_session'])],
                          run.calls[0][0])
         self.assertEqual(['automatic-rename', 'allow-rename'], [call[0][5] for call in run.calls[1:]])
 
@@ -550,7 +553,7 @@ class AwaitLaunchTests(unittest.TestCase):
 
 
 class LaunchTests(unittest.TestCase):
-    def test_the_tab_root_is_tj_run_carrying_the_launch_identity(self):
+    def test_the_tab_root_is_the_managed_wrapper_carrying_the_launch_identity(self):
         adapter = mock.Mock(TAB_CLEARED=(), TAB_FORCED={}, SESSION_ENVIRONMENT=(), executable=lambda: 'claude')
         adapter.prepare.return_value = PreparedLaunch(('claude', '--name', 'agent#98', 'go'))
         with mock.patch.object(CLI, 'host_launch', return_value=adapter), \
@@ -561,7 +564,7 @@ class LaunchTests(unittest.TestCase):
             CLI.launch(CLI.Host.CLAUDE, Path('/work'), 'agent#98', ['--name', 'agent#98', 'go'],
                        item='98', parent='claude:p')
         command = open_tab.call_args.args[2]
-        self.assertEqual(['tj', 'run', '--host', 'claude', '--title', 'agent#98', '--cwd', str(Path('/work')),
+        self.assertEqual(['tj', '_session', '--host', 'claude', '--title', 'agent#98', '--cwd', str(Path('/work')),
                           '--item', '98', '--launch-id', 'L1', '--parent', 'claude:p', '--',
                           'claude', '--name', 'agent#98', 'go'], command)
         await_launch.assert_called_once_with('L1', want_session=False)

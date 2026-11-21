@@ -15,13 +15,15 @@ def socket_path(codex_home: Path) -> Path:
     return codex_home / "app-server-control" / "app-server-control.sock"
 
 
-def command(codex_home: Path, cwd: Path, action: str) -> list[str]:
+def command(codex_home: Path, cwd: Path, action: str, native: str) -> list[str]:
     executable = native_install.default_bin_dir() / (
         "tj.exe" if os.name == "nt" else "tj"
     )
     return [
         str(executable),
         "observe-codex-updates",
+        "--codex",
+        native,
         "--socket",
         str(socket_path(codex_home)),
         "--cwd",
@@ -34,12 +36,17 @@ def status(
     codex_home: Path,
     cwd: Path,
     *,
+    native: str | None = None,
     run: Callable[..., subprocess.CompletedProcess[Any]] = process.run,
 ) -> bool:
     if not socket_path(codex_home).exists():
         return True
+    if native is None:
+        from codex import launch
+
+        native = launch.executable()
     result = run(
-        command(codex_home, cwd, "--status"),
+        command(codex_home, cwd, "--status", native),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -58,12 +65,19 @@ def ensure(
     codex_home: Path,
     cwd: Path,
     *,
+    native: str | None = None,
     run: Callable[..., subprocess.CompletedProcess[Any]] = process.run,
 ) -> bool:
-    if status(codex_home, cwd, run=run):
+    if not socket_path(codex_home).exists():
+        return False
+    if native is None:
+        from codex import launch
+
+        native = launch.executable()
+    if status(codex_home, cwd, native=native, run=run):
         return False
     result = run(
-        command(codex_home, cwd, "--start"),
+        command(codex_home, cwd, "--start", native),
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -76,6 +90,6 @@ def ensure(
     if result.returncode:
         detail = (result.stderr or result.stdout).strip()
         raise RuntimeError(f"Codex update observer failed to start: {detail}")
-    if not status(codex_home, cwd, run=run):
+    if not status(codex_home, cwd, native=native, run=run):
         raise RuntimeError("Codex update observer did not become ready")
     return True

@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -103,8 +104,26 @@ class RemovePluginTests(unittest.TestCase):
 
     def test_default_selection_never_selects_the_retired_machine_package(self):
         ADOPT.run(self.root, [], [], "write")
-        self.assertIn("cli@tj-agents", self.selected())
+        self.assertEqual(sorted(ADOPT.plugin_selection.plugin_id(name) for name in ADOPT.plugin_selection.CORE_PLUGINS),
+                         self.selected())
         self.assertNotIn("machine@tj-agents", self.selected())
+
+    def test_adoption_writes_only_the_requested_plugins_not_their_dependencies(self):
+        ADOPT.run(self.root, [], ["python"], "write")
+        self.assertEqual(["python@tj-agents"], self.selected())
+
+    def test_adoption_keeps_an_existing_flattened_selection_unchanged(self):
+        flattened = ["agent-store@tj-agents", "agent@tj-agents", "base@tj-agents", "cli@tj-agents"]
+        self.write_selection(flattened)
+        ADOPT.run(self.root, [], ["python"], "write")
+        self.assertEqual(sorted([*flattened, "python@tj-agents"]), self.selected())
+
+    def test_removal_of_an_unlisted_dependency_of_a_remaining_plugin_refuses(self):
+        self.write_selection(["agent@tj-agents"])
+        before = (self.root / ".agents" / "plugins.json").read_bytes()
+        with self.assertRaisesRegex(LockError, "prerequisite required by remaining plugins: cli"):
+            ADOPT.run(self.root, [], [], "write", removals=["cli"])
+        self.assertEqual(before, (self.root / ".agents" / "plugins.json").read_bytes())
 
     def test_automatic_reconciliation_checks_then_repairs_both_hosts_and_is_idempotent(self):
         self.write_selection(["engineering@tj-agents", "machine@tj-agents", "python@tj-agents"])
@@ -114,8 +133,7 @@ class RemovePluginTests(unittest.TestCase):
             self.assertEqual(before, (self.root / ".agents/plugins.json").read_bytes())
             self.assertFalse((self.root / ".codex").exists())
             ADOPT.reconcile(self.root, "write")
-        for identity in ("agent@tj-agents", "cli@tj-agents", "python@tj-agents"):
-            self.assertIn(identity, self.selected())
+        self.assertEqual(["engineering@tj-agents", "python@tj-agents"], self.selected())
         for path in (".agents/plugins.json", ".claude/settings.json", ".codex/config.toml"):
             self.assertNotIn("machine@tj-agents", (self.root / path).read_text(encoding="utf-8"))
         before = {path: (path.read_bytes(), path.stat().st_mtime_ns)
@@ -215,7 +233,7 @@ def profile_roster(installed_employers: list[object]) -> dict[str, object]:
         entry["kind"] = ("profile" if entry["name"] in {"personal", "work"}
                          else "organization" if "extends" in entry else "shared")
     entries.append({"name": "example-employer", "repository": "example-employer", "revision": "a" * 40,
-                    "requires": ["work"], "kind": "organization", "extends": "work"})
+                    "dependencies": ["work"], "kind": "organization", "extends": "work"})
     roster: dict[str, object] = ADOPT.load_roster(snapshot)
     return roster
 
@@ -255,7 +273,8 @@ def test_load_roster_reads_profiles_and_the_profile_each_organization_extends(
 def test_load_roster_refuses_an_organization_without_the_profile_it_extends() -> None:
     snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK)
     snapshot["marketplace"]["plugins"].append(
-        {"name": "example-employer", "repository": "example-employer", "revision": "a" * 40, "kind": "organization"})
+        {"name": "example-employer", "repository": "example-employer", "revision": "a" * 40,
+         "kind": "organization", "dependencies": []})
     with pytest.raises(LockError, match="organization example-employer must extend a profile"):
         ADOPT.load_roster(snapshot)
 
@@ -265,9 +284,65 @@ def test_run_selects_a_single_profile(project: Path, profile_roster: dict[str, o
     assert "personal@tj-agents" in selection(project)
 
 
-def test_run_adds_the_profile_an_organization_extends(project: Path, profile_roster: dict[str, object]) -> None:
+@pytest.mark.parametrize("scope", [None, "local", "project"])
+def test_generic_adoption_does_not_select_personal_or_an_account_profile(
+    project: Path, profile_roster: dict[str, object], scope: str | None
+) -> None:
+    set_origin(project, "https://github.com/example-user/project.git")
+
+    ADOPT.run(project, [], [], "write", scope=scope, roster=profile_roster)
+
+    selected = set(selection(project))
+    assert {"agent@tj-agents", "base@tj-agents", "workflow@tj-agents"} <= selected
+    assert not selected & {"personal@tj-agents", "work@tj-agents", "example-employer@tj-agents"}
+    assert not (project / ".agents/settings.json").exists()
+    claude_name = "settings.json" if scope == "project" else "settings.local.json"
+    claude = json.loads((project / ".claude" / claude_name).read_text(encoding="utf-8"))
+    codex = tomllib.loads((project / ".codex/config.toml").read_text(encoding="utf-8"))
+    assert "defaultMode" not in claude.get("permissions", {})
+    assert not {"approval_policy", "default_permissions", "sandbox_mode", "projects"} & codex.keys()
+    if scope != "project":
+        assert not (project / ".claude/settings.json").exists()
+        excluded = subprocess.run(
+            ["git", "check-ignore", ".agents/plugins.json", ".claude/settings.local.json", ".codex/config.toml"],
+            cwd=project, capture_output=True, text=True, check=True, timeout=15,
+        )
+        assert set(excluded.stdout.splitlines()) == {
+            ".agents/plugins.json", ".claude/settings.local.json", ".codex/config.toml",
+        }
+
+
+def test_adoption_preserves_tracked_selection_scope_for_an_external_owner(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
+    set_origin(project, "https://github.com/example-user/project.git")
+    ADOPT.run(project, [], [], "write", scope="project", roster=profile_roster)
+    subprocess.run(["git", "add", ".agents/plugins.json"], cwd=project, check=True, timeout=15)
+
+    ADOPT.run(project, [], ["python"], "write", roster=profile_roster)
+
+    assert "python@tj-agents" in selection(project)
+    assert "python@tj-agents" in (project / ".claude/settings.json").read_text(encoding="utf-8")
+    assert not (project / ".claude/settings.local.json").exists()
+    assert not (project / ".agents/repo-capabilities.local.json").exists()
+
+
+def test_adoption_accepts_a_custom_marketplace_from_an_external_owner(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
+    ADOPT.run(project, [], ["tools@custom"], "write", scope="project",
+              marketplaces=["custom=Example-Org/custom-plugins"], roster=profile_roster)
+
+    assert selection(project) == ["tools@custom"]
+    document = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
+    assert document["extraKnownMarketplaces"]["custom"]["source"]["repo"] == "Example-Org/custom-plugins"
+
+
+def test_run_leaves_the_profile_an_organization_extends_to_its_dependencies(
+    project: Path, profile_roster: dict[str, object]
+) -> None:
     ADOPT.run(project, [], ["example-employer"], "write", roster=profile_roster)
-    assert {"example-employer@tj-agents", "work@tj-agents"} <= set(selection(project))
+    assert selection(project) == ["example-employer@tj-agents"]
 
 
 @pytest.mark.parametrize("plugins", [["personal", "work"], ["personal", "example-employer"]])
@@ -316,7 +391,7 @@ def test_run_selects_the_profile_a_matching_employer_extends(
     installed_employers.append(employer())
     set_origin(project, "git@example.test:example-employer/service.git")
     ADOPT.run(project, [], ["example-employer"], "write", roster=profile_roster)
-    assert {"example-employer@tj-agents", "work@tj-agents"} <= set(selection(project))
+    assert selection(project) == ["example-employer@tj-agents"]
 
 
 def test_run_selects_personal_where_no_installed_employer_matches(

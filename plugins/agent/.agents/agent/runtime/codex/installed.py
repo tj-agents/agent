@@ -14,7 +14,8 @@ import jobs
 import plugin_payload
 import required_plugins
 import standards
-from codex import catalog, hook_trust, launch, user_plugins
+from codex import catalog, hook_trust, launch, plugins, user_plugins
+from launch_contract import Liveness
 from launch_errors import LaunchError
 from tj_agent.host import Host
 from tj_cli.git import repository_file
@@ -39,8 +40,8 @@ class Server(Protocol):
     def request(self, method: str, params: dict[str, object]) -> dict[str, object]: ...
 
 
-def loaded_directories(server: Server) -> set[Path]:
-    directories = set()
+def loaded_threads(server: Server) -> dict[str, Path]:
+    directories = {}
     seen = set()
     cursor: str | None = None
     while True:
@@ -57,7 +58,7 @@ def loaded_directories(server: Server) -> set[Path]:
                 raise RuntimeError(
                     f"Codex thread {identity} has no absolute working directory"
                 )
-            directories.add(Path(directory))
+            directories[identity] = Path(directory)
         next_cursor = page.get("nextCursor")
         if next_cursor is None:
             return directories
@@ -77,7 +78,8 @@ def update_project_standards(directory: Path) -> None:
     builds = catalog.recorded(jobs.state_directory())
     digests = Digests(jobs.state_directory())
     roots = {}
-    for identity in selected:
+
+    def locate(identity: str) -> Path:
         plugin, _, marketplace = identity.rpartition("@")
         build = builds.get(identity)
         root = catalog.root(marketplace, plugin, build.version) if build else None
@@ -86,8 +88,16 @@ def update_project_standards(directory: Path) -> None:
                 f"Cannot verify updated standards for {identity} in {project}"
             )
         roots[identity] = root
+        return root
+
+    required_plugins.closure(selected, locate)
     digests.save()
-    standards.update(project, roots)
+    if standards.update(project, roots, check=True):
+        print(
+            f"{HOST}: left {project} unchanged; from that checkout run "
+            f"tj prepare --host {HOST.value} --write to update repository standards",
+            file=sys.stderr,
+        )
 
 
 class InventoryError(Exception):
@@ -274,9 +284,42 @@ def inventory(
     return entries
 
 
+def refresh_sessions(report: Any) -> dict[str, Liveness] | None:
+    try:
+        sessions = launch.liveness(strict=True)
+    except LaunchError as error:
+        report.fail(HOST, "open sessions", str(error))
+        return None
+    embedded = sorted(
+        identity
+        for identity, session in sessions.items()
+        if session.alive
+        and (
+            session.activity is None
+            or (session.process_ids and not session.processes_reloadable)
+        )
+    )
+    if embedded:
+        report.fail(
+            HOST,
+            "open sessions",
+            "Installed plugins were left unchanged because these running Codex "
+            "engines still use the cached hook files and cannot reload them: "
+            + ", ".join(embedded),
+        )
+        return None
+    return sessions
+
+
 def refresh(
     report: Any, marketplaces: tuple[str, ...], current: Callable[[str, str], bool]
 ) -> None:
+    pending = any(
+        not current(identity.rpartition("@")[2], identity.rpartition("@")[0])
+        for identity in refresh_identities(marketplaces)
+    )
+    if pending and refresh_sessions(report) is None:
+        return
     if direct_update(marketplaces, current) and all(
         current(identity.rpartition("@")[2], identity.rpartition("@")[0])
         for identity in refresh_identities(marketplaces)
@@ -331,10 +374,14 @@ def refresh(
         for identity in installed
         if not current(identity.rpartition("@")[2], identity.rpartition("@")[0])
     ]
+    sessions = refresh_sessions(report) if stale else {}
+    if sessions is None:
+        return
     if len(stale) < len(installed):
         print(f"{HOST}: {len(installed) - len(stale)} plugin(s) already at their build")
-    open_sessions = bool(stale) and bool(launch.liveness())
-    if open_sessions:
+    if any(
+        session.alive and session.activity is not None for session in sessions.values()
+    ):
         install_through_daemon(report, stale)
     else:
         for identity in stale:
@@ -453,6 +500,7 @@ def trust_hooks(report: Any) -> bool:
     if not hook_trust.pending(state):
         return False
     try:
+        (state / f"activated-{HOST}.txt").unlink(missing_ok=True)
         trusted = hook_trust.trust_installed(
             launch.executable(), state, MARKETPLACE_OVERRIDES
         )
@@ -509,11 +557,29 @@ def install_through_daemon(report: Any, identities: list[str]) -> None:
 def activate_open_sessions(report: Any) -> None:
     try:
         with launch.daemon(INSTALL_TIMEOUT_SECONDS) as server:
+            server.request("config/batchWrite", {"edits": [], "reloadUserConfig": True})
+            threads = loaded_threads(server)
+            directories = set(threads.values())
+            selected = {
+                directory for directory in directories
+                if required_plugins.selected(required_plugins.project_root(directory))
+            }
+            binary = launch.executable() if selected else None
+            expected = {
+                directory: plugins.required_hook_definitions(
+                    required_plugins.check(directory, HOST, binary)
+                )
+                for directory in selected
+            }
+            for identity, directory in threads.items():
+                hook_trust.verify_loaded_hooks(
+                    server, directory, identity, required=expected.get(directory, {})
+                )
             projects = {
                 required_plugins.project_root(directory)
-                for directory in loaded_directories(server)
+                for directory in threads.values()
             }
-    except (OSError, RuntimeError) as error:
+    except (LaunchError, OSError, RuntimeError, ValueError) as error:
         report.fail(HOST, "open sessions", str(error))
         return
     for project in sorted(projects):
@@ -538,5 +604,23 @@ def activate(report: Any) -> None:
     except LaunchError as error:
         report.fail(HOST, "open sessions", str(error))
         return
-    if sessions:
+    embedded = [
+        identity
+        for identity, session in sessions.items()
+        if session.alive
+        and (
+            session.activity is None
+            or (session.process_ids and not session.processes_reloadable)
+        )
+    ]
+    if embedded:
+        report.fail(
+            HOST,
+            "open sessions",
+            "Embedded Codex sessions cannot be reloaded through the shared daemon; "
+            f"restart them: {', '.join(sorted(embedded))}",
+        )
+    if any(
+        session.alive and session.activity is not None for session in sessions.values()
+    ):
         activate_open_sessions(report)

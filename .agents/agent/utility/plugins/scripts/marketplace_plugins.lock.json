@@ -1,6 +1,6 @@
 {
   "repository": "tj-agents/marketplace",
-  "revision": "f17ceab7e6d16e858a714124054c0ad8d5188d0f",
+  "revision": "a85f88a6463d716c7688d552df03bf246f3438b6",
   "marketplace": {
     "name": "tj-agents",
     "description": "Shared base, Agent Store, agent, CLI, workflow, engineering, documentation, C++, .NET, React, Neovim, Rust, Python, GitHub, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
@@ -9,287 +9,311 @@
       {
         "name": "base",
         "repository": "core",
-        "revision": "6b8ca94ed488d7e04d34a98152fce4c811489f77",
-        "kind": "shared"
+        "revision": "e59d88c31745db2ed99332c9a463db6534e709fc",
+        "kind": "shared",
+        "dependencies": []
       },
       {
         "name": "agent-store",
         "repository": "agent",
-        "revision": "de3587535ef9d9e0c6f1448d06ab430116a840fa",
-        "requires": [
+        "revision": "9dc7e1a714ae71ba7a47efce9356aa0684d55b33",
+        "kind": "shared",
+        "dependencies": [
           "base"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "agent",
         "repository": "agent",
-        "revision": "de3587535ef9d9e0c6f1448d06ab430116a840fa",
-        "requires": [
+        "revision": "9dc7e1a714ae71ba7a47efce9356aa0684d55b33",
+        "kind": "shared",
+        "dependencies": [
           "base",
           "agent-store",
           "cli"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "codex",
         "repository": "agent",
-        "revision": "de3587535ef9d9e0c6f1448d06ab430116a840fa",
-        "requires": [
+        "revision": "9dc7e1a714ae71ba7a47efce9356aa0684d55b33",
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "agent"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "cli",
         "repository": "cli",
-        "revision": "1bdd165d6efd9516f9782cb153305529cbb4ea5e",
-        "requires": [
+        "revision": "10ce3695eedc0750d169bfecf90402edf8e856e6",
+        "kind": "shared",
+        "dependencies": [
           "base"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "workflow",
         "repository": "core",
-        "revision": "6b8ca94ed488d7e04d34a98152fce4c811489f77",
-        "requires": [
+        "revision": "e59d88c31745db2ed99332c9a463db6534e709fc",
+        "kind": "shared",
+        "dependencies": [
           "base",
-          "agent-store",
-          "agent"
-        ],
-        "kind": "shared"
+          "agent",
+          "cli"
+        ]
       },
       {
         "name": "engineering",
         "repository": "core",
-        "revision": "6b8ca94ed488d7e04d34a98152fce4c811489f77",
-        "requires": [
+        "revision": "e59d88c31745db2ed99332c9a463db6534e709fc",
+        "kind": "shared",
+        "dependencies": [
           "base",
           "workflow",
-          "agent-store",
-          "agent"
-        ],
-        "kind": "shared"
+          "agent",
+          "cli"
+        ]
       },
       {
         "name": "docs",
         "repository": "core",
-        "revision": "6b8ca94ed488d7e04d34a98152fce4c811489f77",
-        "kind": "shared"
+        "revision": "e59d88c31745db2ed99332c9a463db6534e709fc",
+        "kind": "shared",
+        "dependencies": []
       },
       {
         "name": "cpp",
         "repository": "cpp",
         "revision": "5b116c470c951760f668825814cef0a5df11d763",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "gpp",
         "repository": "cpp",
         "revision": "5b116c470c951760f668825814cef0a5df11d763",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
           "cpp"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "msvc",
         "repository": "cpp",
         "revision": "5b116c470c951760f668825814cef0a5df11d763",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
           "cpp"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "win32",
         "repository": "cpp",
         "revision": "5b116c470c951760f668825814cef0a5df11d763",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
           "cpp"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "dotnet",
         "repository": "dotnet",
         "revision": "975d50d40e025c8e4806bcdd27d6feea3d7afd67",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "efcore",
         "repository": "dotnet",
         "revision": "975d50d40e025c8e4806bcdd27d6feea3d7afd67",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
+          "engineering",
           "dotnet"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "react",
         "repository": "react",
         "revision": "3b3b7fa09f703a5711e9d5b53fd4a4733437ee53",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "nvim",
         "repository": "nvim",
         "revision": "21779f5ae821842f1b06adaba1213714c513ada2",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "rust",
         "repository": "rust",
         "revision": "9e08a777c1848286ba4de0e8db30e4c3f1964f6e",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "tauri",
         "repository": "rust",
         "revision": "9e08a777c1848286ba4de0e8db30e4c3f1964f6e",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
+          "engineering",
           "rust"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "rust-sqlx",
         "repository": "rust",
         "revision": "9e08a777c1848286ba4de0e8db30e4c3f1964f6e",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
+          "engineering",
           "rust"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "seaorm",
         "repository": "rust",
         "revision": "9e08a777c1848286ba4de0e8db30e4c3f1964f6e",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
+          "engineering",
           "rust"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "python",
         "repository": "python",
         "revision": "cd143949fb027ec30ed0267dfd37a76c5cc17910",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "github",
         "repository": "github",
-        "revision": "a32b3b7203df9a261c345d269494887b4479fb79",
-        "requires": [
+        "revision": "f2c99f959c50b0f5a5778875852d1dab03f4ccef",
+        "kind": "shared",
+        "dependencies": [
           "base"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "github-actions",
         "repository": "github-actions",
         "revision": "e44e73539816e5ebf3acb9eb31d59e29b7e7d1c6",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "azure",
         "repository": "azure",
         "revision": "25dccc121fa1c1b2f8fb90721b6410ede70a9f9e",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "template",
         "repository": "template",
-        "revision": "c7b61a71f3c902edd12ebdc9d961a911f15aa416",
-        "requires": [
+        "revision": "a304090dbc92c8abd2eee3fcf10a8a878774f2c0",
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "engineering",
           "skill"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "skill",
         "repository": "template",
-        "revision": "c7b61a71f3c902edd12ebdc9d961a911f15aa416",
-        "requires": [
+        "revision": "a304090dbc92c8abd2eee3fcf10a8a878774f2c0",
+        "kind": "shared",
+        "dependencies": [
+          "base",
           "engineering"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "learning",
         "repository": "learning",
         "revision": "22d3ea2b9265ad7b9dd2b11070a38574c819af46",
-        "requires": [
+        "kind": "shared",
+        "dependencies": [
           "base"
-        ],
-        "kind": "shared"
+        ]
       },
       {
         "name": "personal",
         "repository": "personal",
-        "revision": "ef19db7df0a304d56fe037106a23358931a3c43c",
-        "requires": [
+        "revision": "18919f8400cf7fc206b62523738be3ce55042811",
+        "kind": "profile",
+        "dependencies": [
+          "base",
           "engineering",
           "agent",
           "docs",
           "github"
-        ],
-        "kind": "profile"
+        ]
       },
       {
         "name": "teams",
         "repository": "work",
-        "revision": "810a14882f4a69f93f0197bbf30587774121248e",
-        "kind": "shared"
+        "revision": "f24dd748ebe551306d1f3e72a551d963949d10f6",
+        "kind": "shared",
+        "dependencies": []
       },
       {
         "name": "work",
         "repository": "work",
-        "revision": "810a14882f4a69f93f0197bbf30587774121248e",
-        "requires": [
+        "revision": "f24dd748ebe551306d1f3e72a551d963949d10f6",
+        "kind": "profile",
+        "dependencies": [
+          "base",
           "engineering",
-          "teams"
-        ],
-        "kind": "profile"
+          "teams",
+          "docs"
+        ]
       },
       {
         "name": "company",
         "repository": "company",
         "revision": "c85adc5166fc72275d03ba6ed0bab5c525081dc3",
-        "requires": [
+        "kind": "organization",
+        "extends": "work",
+        "dependencies": [
           "work",
+          "docs",
           "base",
           "engineering"
-        ],
-        "kind": "organization",
-        "extends": "work"
+        ]
       }
     ]
   }

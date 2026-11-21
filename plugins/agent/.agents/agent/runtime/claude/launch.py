@@ -6,9 +6,10 @@ from pathlib import Path
 import shutil
 import shlex
 import subprocess
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from uuid import UUID
 
-from launch_contract import Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch
 from launch_errors import LaunchError
 from native_executable import is_script
 from tj_agent.host import Host
@@ -39,7 +40,17 @@ def record_session_environment(
             stream.write(f"export {HOST.session_variable}={shlex.quote(session_id)}\n")
 
 
-def resolve_executable(home=None, which: Callable[[str], str | None] = shutil.which) -> str:
+def native_on_path(name: str) -> str | None:
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = shutil.which(name, path=directory) if directory else None
+        if candidate and (IS_WINDOWS or not is_script(os.path.realpath(candidate))):
+            return candidate
+    return None
+
+
+def resolve_executable(
+    home=None, which: Callable[[str], str | None] = native_on_path
+) -> str:
     home = Path(home) if home else Path.home()
     name = "claude.exe" if IS_WINDOWS else "claude"
     local = home / ".local" / "bin" / name
@@ -61,16 +72,50 @@ def executable() -> str:
     return resolve_executable()
 
 
-def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
-    return PreparedLaunch((executable(), *arguments))
+def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
+    return tuple(arguments)
+
+
+def prepare_foreground(
+    executable: str, directory: Path, arguments: Sequence[str], cli: str,
+    environ: Mapping[str, str],
+) -> PreparedLaunch:
+    return PreparedLaunch((executable, *managed_arguments(arguments)))
+
+
+def prepare(
+    directory: Path,
+    title: str,
+    arguments: list[str],
+    cli: str,
+    environ: Mapping[str, str],
+) -> PreparedLaunch:
+    session = None
+    if (
+        len(arguments) == 4
+        and arguments[0] == "--resume"
+        and arguments[2:] == ["--name", title]
+    ):
+        try:
+            native_id = str(UUID(arguments[1]))
+        except ValueError as error:
+            raise LaunchError(
+                "Claude resume requires a canonical native UUID"
+            ) from error
+        if native_id != arguments[1]:
+            raise LaunchError("Claude resume requires a canonical native UUID")
+        session = f"claude:{native_id}"
+    return PreparedLaunch((executable(), *arguments), session)
 
 
 def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
     return None
 
 
-def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> None:
-    return None
+def confirm(
+    prepared: PreparedLaunch, arguments: list[str], launch_id: str
+) -> Confirmation:
+    return Confirmation.DISPATCHED
 
 
 def start_arguments(directory, title, prompt, model, effort):
@@ -89,33 +134,58 @@ def resume_arguments(directory, title, session_id):
 def liveness(run=process.run, *, strict: bool = False) -> dict[str, Liveness]:
     """Every Claude session the host lists, by session id: alive while it reports a pid."""
     try:
-        result = run([executable(), "agents", "--json", "--all"], capture_output=True, text=True,
-                     encoding="utf-8", timeout=30, check=False)
+        result = run(
+            [executable(), "agents", "--json", "--all"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=False,
+        )
         if result.returncode:
             detail = result.stderr.strip() or result.stdout.strip()
             raise LaunchError(f"Claude liveness failed: {detail}")
         rows = json.loads(result.stdout)
         if not isinstance(rows, list):
             raise LaunchError("Claude liveness returned an invalid session list")
+        sessions: dict[str, Liveness] = {}
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("sessionId"), str):
+                continue
+            pid = row.get("pid")
+            if "pid" in row and (type(pid) is not int or pid <= 0):
+                raise LaunchError("Claude liveness returned an invalid process id")
+            prior = sessions.get(row["sessionId"])
+            processes = set(prior.process_ids or ()) if prior else set()
+            if pid is not None:
+                processes.add(pid)
+            background = row.get("id") if row.get("kind") == "background" else None
+            sessions[row["sessionId"]] = Liveness(
+                alive=bool(processes),
+                activity=row.get("status") or row.get("state"),
+                background=background or (prior.background if prior else None),
+                process_ids=tuple(sorted(processes)),
+            )
     except (OSError, subprocess.SubprocessError, ValueError, LaunchError) as error:
         if strict:
             raise LaunchError(f"Cannot determine Claude liveness: {error}") from error
         return {}
-    return {
-        row["sessionId"]: Liveness(
-            alive="pid" in row,
-            activity=row.get("status") or row.get("state"),
-            background=row.get("id") if row.get("kind") == "background" else None,
-        )
-        for row in rows if isinstance(row, dict) and isinstance(row.get("sessionId"), str)
-    }
+    return sessions
 
 
 def respawn(background, run=process.run):
-    result = run([executable(), "respawn", background], capture_output=True, text=True, encoding="utf-8",
-                 timeout=60, check=False)
+    result = run(
+        [executable(), "respawn", background],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+        check=False,
+    )
     if result.returncode != 0:
-        raise LaunchError(f"claude respawn {background} failed: {result.stderr.strip() or result.stdout.strip()}")
+        raise LaunchError(
+            f"claude respawn {background} failed: {result.stderr.strip() or result.stdout.strip()}"
+        )
 
 
 def name_session(session_id, title):

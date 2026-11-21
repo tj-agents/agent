@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 import os
 from pathlib import Path
 import subprocess
@@ -15,6 +16,7 @@ sys.path.insert(0, str(RUNTIME))
 from tj_agent.host import Host  # noqa: E402
 from host_plugins import PLUGINS  # noqa: E402
 import required_plugins as REQUIRED  # noqa: E402
+from codex import catalog  # noqa: E402
 
 
 class RequiredPluginInventoryTests(unittest.TestCase):
@@ -233,6 +235,150 @@ def test_setup_declaration_rejects_a_non_bool_converge_or_an_unknown_key(
     document = {"requires": {"setup": setup}}
     with pytest.raises(REQUIRED.PluginSetupError):
         REQUIRED.declaration(tmp_path, "agent@tj-agents", document)
+
+
+
+def claude_project(tmp_path: Path, *identities: str) -> Path:
+    project = tmp_path / "project"
+    (project / ".agents").mkdir(parents=True)
+    (project / ".agents/plugins.json").write_text(
+        json.dumps({"schema_version": 1, "plugins": list(identities)}), encoding="utf-8")
+    return project
+
+
+def claude_row(tmp_path: Path, identity: str, dependencies: Sequence[object] = (), **extra: object) -> dict[str, object]:
+    root = tmp_path / "cache" / identity
+    (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    manifest = {"name": identity.split("@")[0], "dependencies": list(dependencies)}
+    (root / ".claude-plugin/plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return {"id": identity, "scope": "user", "enabled": True, "installPath": str(root), **extra}
+
+
+def test_check_verifies_the_transitive_dependencies_installed_builds_declare(tmp_path: Path) -> None:
+    project = claude_project(tmp_path, "company@tj-agents")
+    rows = [
+        claude_row(tmp_path, "company@tj-agents", ["docs@tj-agents", "work"]),
+        claude_row(tmp_path, "work@tj-agents", ["base"]),
+        claude_row(tmp_path, "docs@tj-agents"),
+        claude_row(tmp_path, "base@tj-agents"),
+    ]
+
+    roots = REQUIRED.check(project, Host.CLAUDE, "native-claude", entries=rows)
+
+    assert roots is not None
+    assert sorted(roots) == ["base@tj-agents", "company@tj-agents", "docs@tj-agents", "work@tj-agents"]
+
+
+def test_codex_prefetch_follows_foreign_dependencies_without_recording_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = claude_project(tmp_path, "work@tj-agents")
+    profile = tmp_path / "codex"
+    monkeypatch.setenv("CODEX_HOME", str(profile))
+    rows = {}
+    for identity, dependencies in (
+        ("work@tj-agents", ["docs@foreign"]),
+        ("docs@foreign", ["work@tj-agents"]),
+    ):
+        name, marketplace = identity.split("@")
+        root = profile / "plugins/cache" / marketplace / name / "version"
+        for host in Host:
+            manifest = root / host.manifest_directory / "plugin.json"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps({"name": name, "dependencies": dependencies}), encoding="utf-8")
+        rows[marketplace] = {"name": name, "marketplaceName": marketplace, "version": "version", "enabled": True}
+
+    def response(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        marketplace = command[command.index("--marketplace") + 1]
+        return subprocess.CompletedProcess(command, 0, json.dumps({"installed": [rows[marketplace]]}), "")
+
+    with mock.patch.object(REQUIRED.process, "run", side_effect=response) as run, mock.patch.object(catalog, "remember") as remember:
+        entries = REQUIRED.inventory_rows(project, Host.CODEX, "native-codex", identities=["work@tj-agents"])
+        remember.assert_not_called()
+        roots = REQUIRED.check(project, Host.CODEX, "native-codex", entries=entries)
+        remember.assert_called_once()
+    assert roots is not None and set(roots) == {"work@tj-agents", "docs@foreign"}
+    assert [call.args[0][-2] for call in run.call_args_list] == ["tj-agents", "foreign"]
+
+
+def test_check_reports_a_missing_transitive_dependency(tmp_path: Path) -> None:
+    project = claude_project(tmp_path, "company@tj-agents")
+    rows = [claude_row(tmp_path, "company@tj-agents", ["docs"])]
+
+    with pytest.raises(REQUIRED.MissingRequiredPluginsError, match="cached build: docs@tj-agents") as raised:
+        REQUIRED.check(project, Host.CLAUDE, "native-claude", entries=rows)
+    assert raised.value.missing == ("docs@tj-agents",)
+
+
+@pytest.mark.parametrize(("detail", "problem"), [
+    ({"reason": "not-enabled"}, "is not enabled in"),
+    ({"reason": "not-found"}, "is not installed"),
+    ({"type": "dependency-version-unsatisfied", "required": "^2"}, "does not satisfy the required version ^2"),
+])
+def test_check_names_the_dependency_that_keeps_a_selected_plugin_from_loading(
+    tmp_path: Path, detail: dict[str, object], problem: str,
+) -> None:
+    project = claude_project(tmp_path, "company@tj-agents")
+    error = {"type": "dependency-unsatisfied", "plugin": "company@tj-agents",
+             "dependency": "docs@tj-agents", **detail}
+    rows = [claude_row(tmp_path, "company@tj-agents", ["docs"], errors=["Dependency is unavailable"],
+                       errorDetails=[error])]
+
+    with pytest.raises(REQUIRED.UnsatisfiedDependencyError) as raised:
+        REQUIRED.check(project, Host.CLAUDE, "native-claude", entries=rows)
+
+    assert f"claude will not load company@tj-agents: its dependency docs@tj-agents {problem}" in str(raised.value)
+    assert raised.value.missing == ("docs@tj-agents",)
+    assert REQUIRED.enabled_roots(PLUGINS[Host.CLAUDE], project, rows) == {}
+
+
+def test_check_surfaces_why_a_failing_enabled_plugin_was_excluded(tmp_path: Path) -> None:
+    project = claude_project(tmp_path, "agent@tj-agents")
+    rows = [claude_row(tmp_path, "agent@tj-agents", errors=["Hook load failed"],
+                       errorDetails=[{"type": "hook-load-failed"}])]
+
+    with pytest.raises(REQUIRED.MissingRequiredPluginsError, match=r"agent@tj-agents \(Hook load failed\)"):
+        REQUIRED.check(project, Host.CLAUDE, "native-claude", entries=rows)
+
+
+def test_check_keeps_independent_missing_plugins_in_the_repair_set(
+    tmp_path: Path,
+) -> None:
+    project = claude_project(tmp_path, "company@tj-agents", "agent@tj-agents")
+    error = {
+        "type": "dependency-unsatisfied",
+        "plugin": "company@tj-agents",
+        "dependency": "docs@tj-agents",
+        "reason": "not-found",
+    }
+    rows = [
+        claude_row(
+            tmp_path, "company@tj-agents", ["docs"],
+            errors=["Dependency is unavailable"], errorDetails=[error],
+        )
+    ]
+
+    with pytest.raises(REQUIRED.UnsatisfiedDependencyError, match="docs@tj-agents") as raised:
+        REQUIRED.check(project, Host.CLAUDE, "native-claude", entries=rows)
+
+    assert raised.value.missing == ("agent@tj-agents", "docs@tj-agents")
+
+
+def test_setup_targets_include_the_dependencies_of_the_selection(tmp_path: Path) -> None:
+    project = claude_project(tmp_path, "company@tj-agents")
+    rows = [claude_row(tmp_path, "company@tj-agents", ["docs"]), claude_row(tmp_path, "docs@tj-agents")]
+    for row in rows:
+        root = Path(str(row["installPath"]))
+        identity = str(row["id"])
+        name, marketplace = identity.split("@")
+        (root / "setup.py").write_text("", encoding="utf-8")
+        (root / "harness.json").write_text(json.dumps(
+            {"plugin": f"{marketplace}/{name}", "requires": {"setup": {"script": "setup.py"}}}), encoding="utf-8")
+
+    with mock.patch.object(REQUIRED, "inventory_rows", return_value=rows):
+        targets = REQUIRED.targets(project, Host.CLAUDE, "native-claude")
+
+    assert [target.identity for target in targets] == ["company@tj-agents", "docs@tj-agents"]
 
 
 if __name__ == "__main__":

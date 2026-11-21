@@ -8,7 +8,7 @@ dependencies = ["tj-cli"]
 package = false
 
 [tool.python-standards]
-mypy-groups = [[".agents", "tests"], [".claude/runtime"], [".codex/runtime"]]
+mypy-groups = [[".agents", ".github/scripts", "tests"], [".claude/runtime"], [".codex/runtime"]]
 
 [tool.uv.sources]
 tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "7d650f875704613e5296f35af9c7c680752ec85b", subdirectory = "packages/tj-cli" }
@@ -33,8 +33,8 @@ strict = true
 warn_unreachable = true
 explicit_package_bases = true
 exclude = ['(^|/)(?:\.agents/sync_generated\.py|\.agents/dependencies/|\.codex/skills/|\.claude/skills/|\.codex/hooks/(?:snapshot|bootstrap)\.py|\.worktrees/|\.template/)', '^plugins/']
-files = [".agents", "tests"]
-mypy_path = [".agents/agent/runtime", "plugins/agent/.agents/agent/runtime", "tests"]
+files = [".agents", ".github/scripts", "tests"]
+mypy_path = [".agents/agent/runtime", "plugins/agent/.agents/agent/runtime", ".github/scripts", "tests"]
 
 [[tool.mypy.overrides]]
 module = ["host_permissions", "session_hook", "host", "plugins", "install", "host_sessions", "repo_config", "test_required_plugins", "claude.*", "codex.*", "host_plugins", "required_plugins", "runtime_delivery", "tj_agent", "tj_agent.*", "agent_cli", "agent_store", "lifecycle", "host_sessions"]
@@ -47,7 +47,7 @@ follow_imports = "silent"
 [tool.pytest]
 strict = true
 testpaths = ["tests", ".agents/tests"]
-pythonpath = ["tests", "plugins/agent/.agents/agent/runtime", "plugins/agent/.agents/agent/utility/plugins/scripts"]
+pythonpath = ["tests", "plugins/agent/.agents/agent/runtime", "plugins/agent/.agents/agent/utility/plugins/scripts", ".github/scripts"]
 addopts = ["--import-mode=importlib", "-ra", "--disable-socket"]
 filterwarnings = ["error"]
 
@@ -175,6 +175,11 @@ reason = "Legacy host integration reads process state while resolving native con
 path = ".codex/runtime/installed.py"
 rule = "PY001"
 reason = "Existing host integration traversal flattens nested records."
+
+[[tool.python-standards.exceptions]]
+path = ".claude/runtime/launch.py"
+rule = "PY016"
+reason = "The existing native executable resolver reads PATH to skip managed bindings and find the installed provider."
 
 [[tool.python-standards.exceptions]]
 path = ".codex/runtime/launch.py"

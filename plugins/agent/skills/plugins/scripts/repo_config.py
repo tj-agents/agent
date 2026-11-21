@@ -8,8 +8,8 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 import config_conflicts
@@ -31,77 +31,44 @@ MANAGED_START = "# BEGIN repo-declared agent capabilities"
 MANAGED_END = "# END repo-declared agent capabilities"
 TABLE = re.compile(r"^\s*\[\s*(marketplaces|plugins)(?:\.|\])")
 HEADER = re.compile(r"^\s*\[")
-OWNERS_FILE = "repo-owners.json"
-GITHUB_OWNER = re.compile(r"github\.com[:/]+([^/]+)/", re.IGNORECASE)
-
-
-def repo_owners() -> frozenset[str]:
-    for parent in Path(__file__).resolve().parents:
-        markers = (parent / ".git", parent / ".codex-plugin" / "plugin.json", parent / ".claude-plugin" / "plugin.json",
-                   parent / "source.json")
-        candidate = parent / ".agents" / "agent" / "resources" / OWNERS_FILE
-        if candidate.is_file() and any(marker.exists() for marker in markers):
-            owners = lock_io.load_json(candidate).get("owners", [])
-            return frozenset(owner.casefold() for owner in owners if isinstance(owner, str) and owner)
-    return frozenset()
-
-
-def remote_urls(root: Path, run=process.run) -> list[str]:
-    completed = run(
-        [lock_io.executable("git"), "config", "--null", "--get-regexp", r"^(remote\..*\.url|url\..*\.insteadof)$"],
-        cwd=root, text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-    )
-    if completed.returncode not in {0, 1}:
-        raise lock_io.LockError(f"git config failed: {completed.stderr.strip() or completed.stdout.strip()}")
-    urls, rewrites = [], {}
-    for entry in filter(None, completed.stdout.split("\0")):
-        key, _, value = entry.partition("\n")
-        if key.startswith("remote."):
-            urls.append(value)
-        else:
-            rewrites[value] = key.removeprefix("url.").removesuffix(".insteadof")
-    rewritten = []
-    for url in urls:
-        prefix = max((prefix for prefix in rewrites if url.startswith(prefix)), key=len, default=None)
-        rewritten.append(url if prefix is None else rewrites[prefix] + url.removeprefix(prefix))
-    return rewritten
-
-
-def remote_owners(root: Path, run=process.run) -> set[str]:
-    owners = set()
-    for url in remote_urls(root, run):
-        match = GITHUB_OWNER.search(url)
-        owners.add(match.group(1).casefold() if match else url)
-    return owners
+GENERATED_PLUGIN = re.compile(r'^\[plugins\."([^\"]+)"\]\r?\nenabled = true\r?$', re.MULTILINE)
 
 
 def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
     if scope not in {None, "project", "local"}:
         raise lock_io.LockError(f"Unknown repository scope: {scope}")
+    if scope is not None:
+        return scope
     if not (root / ".git").exists():
-        return scope or "project"
-    foreign = sorted(remote_owners(root, run) - repo_owners())
-    if not foreign:
-        return scope or "project"
-    if scope == "project":
-        raise lock_io.LockError(
-            f"{root} belongs to {', '.join(foreign)}: agent settings there are local and git-excluded only; use --scope local"
-        )
-    return "local"
+        return "project"
+    tracked = lock_io.git(
+        run, ["--literal-pathspecs", "ls-files", "--cached", "-z", "--", ".agents/plugins.json"], root
+    )
+    return "project" if tracked else "local"
 
 
 def declarations(
-    lock_path: Path, lock: dict, root: Path, *, published: bool = True
+    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = ()
 ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
     """Return the selection's marketplaces, enabled plugins and committed permissions.
 
-    Permissions compose every selected plugin's published declaration with the repository overlay
-    (`harness_permissions.compose`). Without `published` they are None: the caller keeps its current ones.
+    The enabled plugins are the selection's transitive dependency closure, from the marketplaces' published
+    catalogs. Permissions compose every enabled plugin's published declaration with the repository overlay
+    (`harness_permissions.compose`). Without `published` there is no network lookup: the closure comes from
+    this machine's fetched catalogs, the `generated` identities the previous generation enabled stay
+    enabled, and permissions are None so the caller keeps its current ones.
     """
     marketplaces, selected_identities = plugin_selection.validate(lock)
     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
-    identities = {identity: True for identity in selected_identities}
-    selected = {plugin_selection.overlay_id(identity) for identity in selected_identities}
+    if published:
+        plugins = published_harness.declarations(marketplaces, selected_identities)
+        enabled = set(plugins) | set(selected_identities)
+    else:
+        enabled = set(published_harness.local_closure(marketplaces, selected_identities))
+        enabled |= {identity for identity in generated
+                    if plugin_selection.valid_identity(identity) and plugin_selection.split(identity)[1] in marketplaces}
+    identities = {identity: True for identity in sorted(enabled)}
+    selected = {plugin_selection.overlay_id(identity) for identity in enabled}
     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
     overlay_path = repository_file(root, ".agents/repository-harness.json")
     if overlay_path.is_file():
@@ -121,7 +88,6 @@ def declarations(
         overlay_permissions = overlay["requires"].get("permissions", overlay_permissions)
     if not published:
         return sources, identities, None
-    plugins = published_harness.declarations(marketplaces, selected_identities)
     return sources, identities, harness_permissions.compose(plugins.values(), overlay_permissions)
 
 
@@ -215,8 +181,30 @@ def unmanaged_codex(text: str) -> str:
     return "".join(kept).rstrip()
 
 
+def generated_plugins(path: Path) -> set[str]:
+    """Return the plugins the managed Codex section enables: the previous generation's closure."""
+    text = text_at(path) or ""
+    if text.count(MANAGED_START) != 1 or text.count(MANAGED_END) != 1:
+        return set()
+    block = text.split(MANAGED_START, 1)[1].split(MANAGED_END, 1)[0]
+    return set(GENERATED_PLUGIN.findall(block))
+
+
 def codex_settings(path: Path, sources: dict[str, dict], identities: dict[str, bool]) -> str:
     existing = config_conflicts.read_text(path, unmanaged=unmanaged_codex) if path.is_file() else ""
+    if (
+        existing == text_at(path)
+        and existing.count(MANAGED_START) == 1
+        and existing.count(MANAGED_END) == 1
+        and existing.index(MANAGED_START) < existing.index(MANAGED_END)
+    ):
+        block = (
+            existing[
+                existing.index(MANAGED_START):
+                existing.index(MANAGED_END) + len(MANAGED_END)
+            ] + "\n"
+        )
+        return local_codex(path, sources, identities, block)[0]
     return codex_document(existing, sources, identities)
 
 
@@ -432,7 +420,10 @@ def local_codex(path: Path, sources: dict, identities: dict, previous: str | Non
     return expected, block
 
 
-def exclusion_text(path: Path, root: Path, targets: list[Path], *, existing: str | None = None) -> str:
+def exclusion_text(
+    path: Path, root: Path, targets: list[Path], *,
+    existing: str | None = None, remove: bool = False,
+) -> str:
     existing = (text_at(path) or "") if existing is None else existing
     owner = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()
     relatives = {relative for target in targets for relative in (target.relative_to(root).as_posix(), target.resolve().relative_to(root).as_posix())}
@@ -449,7 +440,7 @@ def exclusion_text(path: Path, root: Path, targets: list[Path], *, existing: str
                 raise lock_io.LockError(f"{path}: malformed managed exclusions")
             active = suffix
             owners.add(suffix)
-            if suffix == " " + owner:
+            if suffix == " " + owner and not remove:
                 kept.append(block)
         elif stripped.startswith(EXCLUDE_END):
             if active is None or stripped != EXCLUDE_END + active:
@@ -458,12 +449,14 @@ def exclusion_text(path: Path, root: Path, targets: list[Path], *, existing: str
                 kept.append(line)
             active = None
             continue
+        elif remove and active == " " + owner and stripped not in patterns:
+            raise lock_io.LockError(f"{path}: owned exclusions were changed")
         if active != " " + owner:
             kept.append(line)
     if active is not None:
         raise lock_io.LockError(f"{path}: malformed managed exclusions")
     existing = "".join(kept)
-    if " " + owner in owners:
+    if " " + owner in owners or remove:
         return existing
     return existing + ("\n" if existing and not existing.endswith("\n") else "") + block
 
@@ -492,7 +485,10 @@ def plan(
         inputs.append(lock_path)
     exclude = preflight_paths(root, [*paths, *prospective_paths], scope=scope, read_paths=inputs, run=execute)
     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
-    sources, identities, permissions = declarations(lock_path, lock, root, published=not preserve_permissions)
+    sources, identities, permissions = declarations(
+        lock_path, lock, root, published=not preserve_permissions,
+        generated=generated_plugins(codex) if preserve_permissions else (),
+    )
     actual_rules = text_at(rules_path)
     expected_rules = actual_rules if permissions is None else codex_rules(permissions)
     if scope == "local":
@@ -509,9 +505,61 @@ def plan(
             if exclusions is not None:
                 exclusions[exclude] = targets[exclude]
     else:
+        if state_path.exists():
+            local_claude_path = root / ".claude/settings.local.json"
+            exclude = preflight_paths(
+                root, [local_claude_path, state_path], scope="local",
+                read_paths=inputs, run=execute,
+            )
+            validate_aliases(
+                [*paths, local_claude_path, state_path,
+                 *([exclude] if exclude is not None else [])], inputs,
+            )
+            state = local_state(state_path)
+            claude_owned = state[Host.CLAUDE.value]
+            if preserve_permissions and any(claude_owned.get(key) for key in ("allow", "deny")):
+                raise lock_io.LockError(
+                    "Cannot promote local Claude settings while preserving project permissions; "
+                    "reconcile published permissions with agent:plugins in project scope."
+                )
+            local_text, _ = local_claude(
+                local_claude_path, {}, {}, harness_permissions.Permissions(),
+                claude_owned,
+            )
+            current_codex = text_at(codex) or ""
+            prior_codex = state[Host.CODEX.value]
+            if prior_codex is not None and prior_codex not in current_codex:
+                raise lock_io.LockError(
+                    f"{codex}: owned managed section was changed or removed"
+                )
+            project_codex, _ = local_codex(codex, sources, identities, prior_codex)
+            if actual_rules is not None and actual_rules != state["rules"]:
+                raise lock_io.LockError(
+                    f"{rules_path}: harness rules are not owned or were changed"
+                )
         committed = committed_permissions(root) if permissions is not None else {}
         targets = {claude: claude_settings(claude, sources, identities, permissions, committed),
                    codex: codex_settings(codex, sources, identities), rules_path: expected_rules}
+        if state_path.exists():
+            targets[codex] = project_codex
+            targets[local_claude_path] = local_text
+            targets[state_path] = None
+            if exclude is not None:
+                local_paths = [
+                    local_claude_path, codex, rules_path, state_path,
+                    *prospective_paths,
+                ]
+                if lock_path.resolve().is_relative_to(root):
+                    local_paths.append(lock_path)
+                targets[exclude] = exclusion_text(
+                    exclude, root, [contained(root, path) for path in local_paths],
+                    existing=(
+                        exclusions.get(exclude) if exclusions is not None else None
+                    ),
+                    remove=True,
+                )
+                if exclusions is not None:
+                    exclusions[exclude] = targets[exclude]
     try:
         mode = host_permissions.permissions(root)
         targets[claude] = host_permissions.claude_settings(targets[claude], mode, project=True)
@@ -532,7 +580,11 @@ def plan(
 
 
 def reject_machine_paths(root: Path, targets: dict[Path, str | None]) -> None:
-    committed = {**{root / relative: text_at(root / relative) for relative in machine_paths.COMMITTED_SETTINGS}, **targets}
+    committed = {
+        **{root / relative: text_at(root / relative)
+           for relative in machine_paths.COMMITTED_SETTINGS},
+        **{path: text for path, text in targets.items() if path.is_relative_to(root)},
+    }
     problems = [
         problem
         for path, text in committed.items()

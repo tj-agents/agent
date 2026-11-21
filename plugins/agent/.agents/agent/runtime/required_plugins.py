@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -21,6 +21,7 @@ import host_plugins
 
 
 IDENTITY = re.compile(r"[a-z][a-z0-9-]*@[a-z][a-z0-9-]*\Z")
+DEPENDENCY_ERRORS = frozenset({"dependency-unsatisfied", "dependency-version-unsatisfied"})
 INVENTORY_TIMEOUT_SECONDS = 20
 MARKETPLACE_NAME = "tj-agents"
 MARKETPLACE_REPOSITORY = "tj-agents/marketplace"
@@ -53,6 +54,10 @@ class MissingRequiredPluginsError(RequiredPluginsError):
         self.missing = tuple(missing)
 
 
+class UnsatisfiedDependencyError(MissingRequiredPluginsError):
+    pass
+
+
 def project_root(project: Path) -> Path:
     project = project.resolve()
     for directory in (project, *project.parents):
@@ -64,14 +69,6 @@ def project_root(project: Path) -> Path:
         ):
             return directory
     return project
-
-
-def committed_worktree(project: Path) -> bool:
-    if not (project / ".git").is_file():
-        return False
-    tracked = process.run(["git", "ls-files", "--error-unmatch", "--", ".agents/plugins.json"],
-                          cwd=project, capture_output=True, timeout=10, check=False)
-    return tracked.returncode == 0
 
 
 def launch_context(project: Path, host: Host, arguments) -> tuple[Path | None, tuple[str, ...]]:
@@ -162,9 +159,9 @@ def selected(project: Path) -> tuple[str, ...]:
     return tuple(sorted(set(plugins)))
 
 
-def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
+def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list, *, record: bool = True) -> dict[str, Path]:
     roots = {}
-    for entry in plugins.installations(project, entries):
+    for entry in plugins.installations(project, entries, record=record):
         if not isinstance(entry, dict) or entry.get("enabled") is not True:
             continue
         if entry.get("installed") is False or entry.get("error") or entry.get("errors"):
@@ -183,8 +180,84 @@ def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -
     return roots
 
 
+def failures(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, list[dict]]:
+    """Return the native load errors of each enabled plugin row that `enabled_roots` leaves out."""
+    found: dict[str, list[dict]] = {}
+    for entry in plugins.installations(project, entries):
+        if not isinstance(entry, dict) or entry.get("enabled") is not True:
+            continue
+        messages = entry.get("errors") or entry.get("error")
+        if not messages:
+            continue
+        messages = messages if isinstance(messages, list) else [messages]
+        located = plugins.location(entry, project)
+        identity = located[0] if located is not None else entry.get("id")
+        if not isinstance(identity, str):
+            continue
+        details = entry.get("errorDetails")
+        details = details if isinstance(details, list) and len(details) == len(messages) else [{}] * len(messages)
+        found.setdefault(identity, []).extend(
+            {**(detail if isinstance(detail, dict) else {}), "message": str(message)}
+            for message, detail in zip(messages, details, strict=True)
+        )
+    return found
+
+
+def dependencies(root: Path, identity: str) -> tuple[str, ...]:
+    """Return the plugins an installed build's plugin manifest declares it depends on.
+
+    A bare name depends on the plugin of that name in the dependent's own marketplace.
+    """
+    manifest = root / Host.CLAUDE.manifest_directory / "plugin.json"
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return ()
+    except (OSError, ValueError) as error:
+        raise RequiredPluginsError(f"{identity}: cannot read its declared dependencies: {error}") from error
+    declared = document.get("dependencies", []) if isinstance(document, dict) else None
+    if not isinstance(declared, list):
+        raise RequiredPluginsError(f"{identity}: its declared dependencies must be a list")
+    marketplace = identity.split("@", 1)[1]
+    found = []
+    for value in declared:
+        name = value.get("name") if isinstance(value, dict) else value
+        dependency = name if isinstance(name, str) and "@" in name else f"{name}@{marketplace}"
+        if not isinstance(name, str) or not IDENTITY.fullmatch(dependency):
+            raise RequiredPluginsError(f"{identity}: invalid declared dependency {value!r}")
+        found.append(dependency)
+    return tuple(found)
+
+
+def closure(required: Sequence[str], root: Callable[[str], Path | None]) -> tuple[str, ...]:
+    """Return the required plugins and, transitively, every dependency their located builds declare."""
+    needed: set[str] = set()
+    pending = sorted(required, reverse=True)
+    while pending:
+        identity = pending.pop()
+        if identity in needed:
+            continue
+        needed.add(identity)
+        located = root(identity)
+        if located is not None:
+            pending.extend(dependency for dependency in dependencies(located, identity) if dependency not in needed)
+    return tuple(sorted(needed))
+
+
+def unsatisfied(host: Host, project: Path, identity: str, detail: dict) -> str:
+    dependency = detail.get("dependency")
+    if detail.get("type") == "dependency-version-unsatisfied":
+        problem = f"does not satisfy the required version {detail.get('required')}"
+    elif detail.get("reason") == "not-enabled":
+        problem = f"is not enabled in {project}"
+    else:
+        problem = "is not installed"
+    return f"{host} will not load {identity}: its dependency {dependency} {problem}"
+
+
 def check(project: Path, host: Host, executable: str | None = None,
           inventory_options: tuple[str, ...] = (), *, entries: list | None = None) -> dict[str, Path] | None:
+    """Verify the selection and its transitive dependencies; return each one's verified root."""
     plugins = host_plugins.PLUGINS[host]
     launch_directory = project.resolve()
     project = project_root(launch_directory)
@@ -195,16 +268,33 @@ def check(project: Path, host: Host, executable: str | None = None,
     binary = executable or shutil.which(host.value)
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
-    roots = (enabled_roots(plugins, launch_directory, entries) if entries is not None
-             else inventory_roots(launch_directory, host, binary, inventory_options, identities=required))
-    missing = sorted(set(required) - roots.keys())
+    rows = entries if entries is not None else inventory_rows(
+        launch_directory, host, binary, inventory_options, identities=required)
+    roots = enabled_roots(plugins, launch_directory, rows)
+    needed = closure(required, roots.get)
+    missing = sorted(set(needed) - roots.keys())
     if missing:
+        reasons = failures(plugins, launch_directory, rows)
+        dependency_failures = [(identity, detail) for identity in missing for detail in reasons.get(identity, [])
+                               if detail.get("type") in DEPENDENCY_ERRORS]
+        if dependency_failures:
+            repairs = {(identity, dependency) for identity, detail in dependency_failures
+                       if isinstance(dependency := detail.get("dependency"), str) and IDENTITY.fullmatch(dependency)}
+            unresolved = set(missing) - {identity for identity, _ in repairs}
+            targets = sorted(unresolved | {dependency for _, dependency in repairs})
+            raise UnsatisfiedDependencyError(
+                "; ".join(unsatisfied(host, project, identity, detail) for identity, detail in dependency_failures)
+                + ". Run tj install --step 'plugin setup' in this project; it enables the selection's "
+                "dependencies and installs missing builds.", project, targets,
+            )
+        described = [identity + (f" ({'; '.join(detail['message'] for detail in reasons[identity])})"
+                                 if identity in reasons else "") for identity in missing]
         raise MissingRequiredPluginsError(
             f"Required standards unavailable for {host} in {project}; not enabled with a complete "
-            f"cached build: {', '.join(missing)}. Run tj install --step 'plugin setup' "
+            f"cached build: {', '.join(described)}. Run tj install --step 'plugin setup' "
             "in this project; it reinstalls missing and incomplete builds.", project, missing,
         )
-    return {identity: roots[identity] for identity in required}
+    return {identity: roots[identity] for identity in needed}
 
 
 def inventory_roots(project: Path, host: Host, executable: str | None = None,
@@ -216,23 +306,30 @@ def inventory_roots(project: Path, host: Host, executable: str | None = None,
 
 
 def inventory_rows(project: Path, host: Host, executable: str | None = None,
-                   inventory_options: tuple[str, ...] = (), *, identities: Sequence[str] | None = None) -> list:
-    """Read native inventory without processing installations or writing receipts."""
+                   inventory_options: tuple[str, ...] = (), *, identities: Sequence[str] | None = None,
+                   timeout: float = INVENTORY_TIMEOUT_SECONDS) -> list:
+    """Read the selected dependency marketplaces without recording prefetched builds."""
     plugins = host_plugins.PLUGINS[host]
     launch_directory = project.resolve()
     binary = executable or shutil.which(host.value)
     if not binary:
         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
     if identities is None:
-        return inventory(binary, plugins, launch_directory, inventory_options)
+        return inventory(binary, plugins, launch_directory, inventory_options, timeout=timeout)
     plugins.require_inventory_options(inventory_options)
     entries = []
-    deadline = time.monotonic() + INVENTORY_TIMEOUT_SECONDS
-    for marketplace in plugins.inventory_marketplaces(identities):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise RequiredPluginsError(f"Required {host} plugin inventory exceeded its {INVENTORY_TIMEOUT_SECONDS}-second budget")
-        entries.extend(inventory(binary, plugins, launch_directory, inventory_options, marketplace, timeout=remaining))
+    deadline = time.monotonic() + timeout
+    queried: set[str | None] = set()
+    needed = tuple(identities)
+    while pending := [market for market in plugins.inventory_marketplaces(needed) if market not in queried]:
+        for marketplace in pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RequiredPluginsError(f"Required {host} plugin inventory exceeded its {timeout:g}-second budget")
+            entries.extend(inventory(binary, plugins, launch_directory, inventory_options, marketplace, timeout=remaining))
+            queried.add(marketplace)
+        roots = enabled_roots(plugins, launch_directory, entries, record=False)
+        needed = closure(identities, roots.get)
     return entries
 
 
@@ -405,12 +502,8 @@ def targets(project: Path, host: Host, executable: str | None) -> list[Target]:
     roots = check(project, host, executable)
     if roots is None:
         return []
-    identities = selected(project_root(project))
     found = []
-    for identity in identities:
-        root = roots.get(identity)
-        if root is None:
-            raise PluginSetupError(f"{identity}: verified native installation is unavailable")
+    for identity, root in sorted(roots.items()):
         document, declared = harness_document(root)
         if declared != identity:
             raise PluginSetupError(f"{identity}: harness identity does not match the selected plugin")

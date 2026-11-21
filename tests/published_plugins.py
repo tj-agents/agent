@@ -74,7 +74,11 @@ def publish(
     return producer.as_uri(), git(producer, "rev-parse", "HEAD")
 
 
-def catalog(names: Iterable[str], commit: str) -> str:
+def catalog(
+    names: Iterable[str],
+    commit: str,
+    dependencies: Mapping[str, list[object]] | None = None,
+) -> str:
     """A Claude marketplace catalog pinning every plugin to the fixture producer."""
     return json.dumps(
         {
@@ -88,6 +92,11 @@ def catalog(names: Iterable[str], commit: str) -> str:
                         "path": f"./plugins/{name}",
                         "sha": commit,
                     },
+                    **(
+                        {"dependencies": dependencies[name]}
+                        if dependencies and name in dependencies
+                        else {}
+                    ),
                 }
                 for name in sorted(names)
             ],

@@ -114,12 +114,14 @@ def retired(identities: Iterable[str]) -> set[str]:
             )
             entries = catalog.get("plugins") if isinstance(catalog, dict) else None
             listed[marketplace] = (
-                {
-                    entry["name"]
-                    for entry in entries
-                    if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-                }
+                {entry["name"] for entry in entries}
                 if isinstance(entries, list)
+                and all(
+                    isinstance(entry, dict)
+                    and isinstance(entry.get("name"), str)
+                    and entry["name"]
+                    for entry in entries
+                )
                 else None
             )
         names = listed[marketplace]
@@ -129,10 +131,7 @@ def retired(identities: Iterable[str]) -> set[str]:
 
 
 def refresh_identities(marketplaces: tuple[str, ...]) -> set[str]:
-    found = set()
-    for marketplace in marketplaces:
-        found.update(f"{plugin}@{marketplace}" for plugin in installs(marketplace))
-    return found - retired(found)
+    return set(registered(marketplaces))
 
 
 def pinned(marketplace: str, plugin: str, scope: str | None = None) -> bool:
@@ -175,7 +174,11 @@ def torn(marketplace: str, plugin: str, scope: str) -> bool:
 
 
 def current(marketplace: str, plugin: str, digests: Digests) -> bool:
-    return pinned(marketplace, plugin)
+    identity = f"{plugin}@{marketplace}"
+    if retired((identity,)):
+        return True
+    scopes = registered((marketplace,)).get(identity, [])
+    return bool(scopes) and all(pinned(marketplace, plugin, scope) for scope in scopes)
 
 
 def update_marketplaces(report: Any, marketplaces: tuple[str, ...]) -> None:
@@ -323,9 +326,7 @@ def refresh(
 ) -> None:
     registrations = registered(marketplaces)
     for identity in sorted(retired(registrations)):
-        print(
-            f"{HOST}: {identity} is no longer published; leaving it as installed"
-        )
+        print(f"{HOST}: {identity} is no longer published; leaving it as installed")
         del registrations[identity]
     direct_update(stale(registrations))
     behind = stale(registrations)

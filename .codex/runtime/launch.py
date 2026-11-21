@@ -1,5 +1,6 @@
-"""Codex executable selection, daemon-attached launch arguments and thread liveness."""
+"""Codex executable selection, owned native launches and thread liveness."""
 
+import argparse
 import glob
 import json
 import os
@@ -7,13 +8,14 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from tj_cli import process
-from codex import startup
+from codex import observer, processes, startup
+from tj_agent.host import Host
 
 import agent_store
-from launch_contract import Liveness, PreparedLaunch
+from launch_contract import Confirmation, Liveness, PreparedLaunch
 from launch_errors import LaunchError
 from native_executable import is_script
 
@@ -179,7 +181,7 @@ def candidate_paths(
     return list(dict.fromkeys(candidates))
 
 
-def resolve_executable(minimum="0.154.0", candidates=None):
+def resolve_executable(minimum=startup.MINIMUM_VERSION, candidates=None):
     """The newest native Codex executable that answers --version, as (path, version)."""
     paths = candidate_paths() if candidates is None else candidates
     found = []
@@ -206,6 +208,8 @@ def resolve_executable(minimum="0.154.0", candidates=None):
         if compare_version(candidate[1], best[1]) > 0:
             best = candidate
 
+    if minimum is None:
+        return best
     floor = parse_version(minimum)
     if floor is None:
         raise LaunchError(f"The minimum Codex version is not a version: {minimum}")
@@ -224,9 +228,76 @@ def executable() -> str:
     return resolve_executable()[0]
 
 
+def managed_arguments(arguments: Sequence[str]) -> tuple[str, ...]:
+    options = tuple(arguments)
+    before_prompt = options[: options.index("--")] if "--" in options else options
+    attached = False
+    for index, value in enumerate(before_prompt):
+        key, separator, target = value.partition("=")
+        if key in {"--no-daemon", "--dangerously-bypass-hook-trust", "--remote-auth-token-env"}:
+            raise LaunchError(f"Managed Codex requires its local daemon; {key} is incompatible")
+        if key == "--remote":
+            if not separator:
+                target = before_prompt[index + 1] if index + 1 < len(before_prompt) else ""
+            if target != "unix://":
+                raise LaunchError("Managed Codex requires the native default local daemon (--remote unix://)")
+            attached = True
+    return options if attached else (*startup.MANAGED_OPTIONS, *options)
+
+
+def require_stopped_thread(thread_id: str) -> None:
+    observed = liveness(strict=True).get(thread_id)
+    if observed is not None and observed.alive:
+        raise LaunchError(f"Codex {thread_id} is already running; use its existing conversation")
+
+
+def prepare_foreground(
+    executable: str, directory: Path, arguments: Sequence[str], cli: str,
+    environ: Mapping[str, str],
+) -> PreparedLaunch:
+    options = managed_arguments(arguments)
+    delimiter = options.index("--") if "--" in options else len(options)
+    literal = options[delimiter + 1:]
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False, exit_on_error=False)
+    parser.add_argument("-C", "--cd")
+    parser.add_argument("-m", "--model")
+    parser.add_argument("-c", "--config", action="append", default=[])
+    parser.add_argument("--remote")
+    parser.add_argument("values", nargs="*")
+    try:
+        parsed, extra = parser.parse_known_intermixed_args(options[:delimiter])
+    except argparse.ArgumentError as error:
+        raise LaunchError(f"Cannot bind this managed foreground Codex command: {error}") from error
+    if parsed.values and parsed.values[0] in {"exec", "e", "review"}:
+        return PreparedLaunch((executable, *options))
+    if extra:
+        raise LaunchError(f"Unsupported managed foreground Codex option: {extra[0]}")
+    command = ["--cd", str(directory)]
+    if parsed.values[:1] == ["resume"]:
+        if len(parsed.values) != 2 or parsed.model or parsed.config or literal:
+            raise LaunchError("Managed foreground resume requires an exact native UUID; use tj recover for session selection")
+        thread_id = startup.native_id(parsed.values[1])
+        require_stopped_thread(thread_id)
+        command.extend(("resume", thread_id))
+    else:
+        if parsed.values[:1] == ["fork"]:
+            raise LaunchError(f"Managed foreground Codex does not support the {parsed.values[0]} subcommand")
+        prompt = [*parsed.values, *literal]
+        if len(prompt) > 1 or len(parsed.config) > 1:
+            raise LaunchError("Managed foreground Codex accepts one prompt and one reasoning override")
+        if parsed.model is not None:
+            command.extend(("--model", parsed.model))
+        if parsed.config:
+            command.extend(("-c", parsed.config[0]))
+        command.extend(prompt)
+    return startup.prepare(directory, directory.name or "Codex", command, cli, executable, environ)
+
+
 def prepare(directory: Path, title: str, arguments: list[str], cli: str, environ: Mapping[str, str]) -> PreparedLaunch:
-    minimum = "0.154.0" if arguments[2:3] == ["resume"] else startup.MINIMUM_VERSION
-    native = str(resolve_executable(minimum=minimum)[0])
+    native = str(resolve_executable(minimum=startup.MINIMUM_VERSION)[0])
+    if arguments[:3] == ["--cd", str(directory), "resume"] and len(arguments) == 4:
+        thread_id = startup.native_id(arguments[3])
+        require_stopped_thread(thread_id)
     return startup.prepare(directory, title, arguments, cli, native, environ)
 
 
@@ -234,8 +305,8 @@ def abandon(prepared: PreparedLaunch, launch_id: str, dispatched: bool) -> None:
     startup.abandon(prepared, launch_id, dispatched)
 
 
-def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> None:
-    startup.confirm(prepared, arguments, launch_id)
+def confirm(prepared: PreparedLaunch, arguments: list[str], launch_id: str) -> Confirmation:
+    return startup.confirm(prepared, arguments, launch_id)
 
 
 def start_arguments(directory, title, prompt, model, effort):
@@ -258,8 +329,10 @@ def daemon(timeout=DAEMON_TIMEOUT_SECONDS):
 
 
 def liveness(*, strict: bool = False) -> dict[str, Liveness]:
-    """Threads loaded in the shared app-server daemon, by thread id; an absent daemon has none."""
+    """Combine native process evidence with loaded shared-daemon threads."""
+    observed: dict[str, Liveness] = {}
     try:
+        observed = processes.inventory()
         if strict:
             result = process.run(
                 [executable(), "app-server", "daemon", "version"],
@@ -268,10 +341,13 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
             )
             if result.returncode:
                 detail = result.stderr.strip() or result.stdout.strip()
-                if "failed to connect to" in detail and any(
-                    f"(os error {code})" in detail for code in (2, 111, 10061)
-                ):
-                    return {}
+                if "failed to connect to" in detail:
+                    try:
+                        observer.socket_path(Host.CODEX.configuration_root).stat()
+                    except FileNotFoundError:
+                        return observed
+                    if any(f"(os error {code})" in detail for code in (2, 111, 10061)):
+                        return observed
                 raise LaunchError(f"Cannot determine Codex daemon state: {detail}")
             if not isinstance(json.loads(result.stdout), dict):
                 raise LaunchError("Codex daemon version returned invalid JSON")
@@ -291,8 +367,20 @@ def liveness(*, strict: bool = False) -> dict[str, Liveness]:
     ) as error:
         if strict:
             raise LaunchError(f"Cannot determine Codex liveness: {error}") from error
-        return {}
-    return {thread: Liveness(alive=status != "notLoaded", activity=status) for thread, status in statuses.items()}
+        return observed
+    for thread, status in statuses.items():
+        if status != "notLoaded":
+            # A loaded daemon thread and an embedded frontend can coexist. Keep
+            # both observations: reloading the daemon does not reload that process.
+            previous = observed.get(thread)
+            observed[thread] = Liveness(
+                alive=True,
+                activity=status,
+                process_ids=previous.process_ids if previous else None,
+                launch_ids=previous.launch_ids if previous else None,
+                processes_reloadable=previous.processes_reloadable if previous else False,
+            )
+    return observed
 
 
 def respawn(background):
@@ -300,5 +388,5 @@ def respawn(background):
 
 
 def name_session(session_id, title):
-    with daemon() as server:
+    with startup.connection(executable(), Path.cwd()) as server:
         server.request("thread/name/set", {"threadId": session_id, "name": title})

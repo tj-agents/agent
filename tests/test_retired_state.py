@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 
 import install  # noqa: E402
+import jobs  # noqa: E402
 import retired_state  # noqa: E402
 
 AUTHORED = [ROOT / ".agents", ROOT / ".claude" / "runtime", ROOT / ".codex" / "runtime"]
@@ -85,6 +86,14 @@ def test_every_live_entry_survives(tmp_path: Path) -> None:
     retired_state.remove(tmp_path, windows=True, run=Recorder())
     for entry in LIVE_ENTRIES:
         assert (tmp_path / entry).is_file(), entry
+
+
+def test_retirement_keeps_the_active_plugin_publication_lock(tmp_path: Path) -> None:
+    with jobs.held(tmp_path, jobs.Job.PLUGINS) as publishing:
+        assert publishing
+        retired_state.remove(tmp_path, windows=False, run=Recorder())
+        with jobs.held(tmp_path, jobs.Job.PLUGINS) as competing:
+            assert not competing
 
 
 def test_cli_sessions_and_sessions_db_are_kept(tmp_path: Path) -> None:

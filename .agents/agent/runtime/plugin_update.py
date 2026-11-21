@@ -12,10 +12,13 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Protocol
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import jobs
 import marketplace_head
+import native_runtime
 import required_plugins
 import standards
 from claude import installed as claude_installed
@@ -155,8 +158,13 @@ def update_standards(
             if entries is not None
             else required_plugins.check(directory, host)
         )
-        if roots is not None and not required_plugins.committed_worktree(project):
-            standards.update(project, roots)
+        if roots is not None and standards.update(project, roots, check=True):
+            print(
+                f"{host}: left {project} unchanged; from that checkout run "
+                f"tj prepare --host {host.value} --write "
+                "to update repository standards",
+                file=sys.stderr,
+            )
     except (
         OSError,
         ValueError,
@@ -196,23 +204,62 @@ def agent_package(host: Host, state: Path) -> Path | None:
 
 
 @dataclass(frozen=True, slots=True)
+class ActivationReceipt:
+    path: Path
+    identity: str
+
+
+@dataclass(frozen=True, slots=True)
 class Outcome:
     failures: list[str]
     changed: bool
     revision: str | None
+    receipt: ActivationReceipt | None = None
 
     def publish(
         self, host: Host, run: Callable[..., subprocess.CompletedProcess[str]]
     ) -> str | None:
-        """Tell `host`'s running `tj run` tabs about this update; why not, if so.
-
-        Moved plugins always publish. Otherwise `tj` publishes only when its record is
-        behind `revision`, as after an earlier update failed before publishing.
-        """
+        """Announce the installed revision and settle its activation receipt."""
         if self.failures or self.revision is None:
             return None
-        command = ["tj", "update", "--host", host.value, "--revision", self.revision]
-        if not self.changed:
+        receipt = self.receipt
+        assert receipt is not None
+        pending = receipt.identity != self.revision
+        try:
+            with jobs.held(receipt.path.parent, jobs.Job.PLUGINS) as acquired:
+                if not acquired:
+                    return "another plugin update is running; retry publication"
+                if receipt.path.read_text(encoding="utf-8") != receipt.identity:
+                    return "plugin publication was superseded; retry the update"
+                if problem := self._announce(
+                    host, self.revision, run, conditional=not (pending or self.changed)
+                ):
+                    return problem
+                if pending:
+                    receipt.path.write_text(self.revision, encoding="utf-8")
+        except FileNotFoundError:
+            return "plugin publication was superseded; retry the update"
+        except OSError as error:
+            return f"activation receipt: {error}"
+        return None
+
+    @staticmethod
+    def _announce(
+        host: Host,
+        revision: str,
+        run: Callable[..., subprocess.CompletedProcess[str]],
+        *,
+        conditional: bool,
+    ) -> str | None:
+        command = [
+            str(native_runtime.executable()),
+            "update",
+            "--host",
+            host.value,
+            "--revision",
+            revision,
+        ]
+        if conditional:
             command.append("--if-stale")
         try:
             result = run(
@@ -227,7 +274,31 @@ class Outcome:
         )
 
 
-def update(host: Host, digests: Digests, environ: Mapping[str, str]) -> Outcome:
+def update(
+    host: Host,
+    digests: Digests,
+    environ: Mapping[str, str],
+    *,
+    converge_runtime: Callable[[], str | None] | None = None,
+) -> Outcome:
+    """Serialize machine-wide plugin and runtime mutation across managed sessions."""
+    with jobs.held(digests.path.parent, jobs.Job.PLUGINS) as acquired:
+        if not acquired:
+            return Outcome(
+                ["Another plugin update is running; retry after it completes"],
+                False,
+                None,
+            )
+        return _update(host, digests, environ, converge_runtime=converge_runtime)
+
+
+def _update(
+    host: Host,
+    digests: Digests,
+    environ: Mapping[str, str],
+    *,
+    converge_runtime: Callable[[], str | None] | None,
+) -> Outcome:
     """Fetch the marketplaces, then bring this host's plugins to their pins."""
     report = Report()
     installed = INSTALLED[host]
@@ -250,29 +321,50 @@ def update(host: Host, digests: Digests, environ: Mapping[str, str]) -> Outcome:
         return Outcome(report.failures, False, before)
     if any(behind):
         pins_current = already_current(host, digests)
+    activated = digests.path.parent / f"activated-{host}.txt"
     if pins_current:
         print(f"{host}: plugins already match their pins")
         if host is Host.CODEX:
             codex_installed.trust_hooks(report)
     else:
+        try:
+            activated.unlink(missing_ok=True)
+        except OSError as error:
+            report.fail(host, "activation receipt", str(error))
+            return Outcome(report.failures, False, before)
         installed.refresh(report, MARKETPLACES, partial(current, host, digests))
     digests.save()
     if not report.failures:
         update_standards(report, host, inventory if reuse_inventory else None)
+    if (
+        not report.failures
+        and converge_runtime is not None
+        and (problem := converge_runtime())
+    ):
+        report.fail(host, "native commands and launch runtime", problem)
     revision = marketplace_revision(host)
-    # Activation repeats until it succeeds once for the plugins at this revision.
-    activated = digests.path.parent / f"activated-{host}.txt"
+    receipt = None
+    # Keep activation pending until even a same-revision repair is announced.
     try:
         settled = pins_current and activated.read_text(encoding="utf-8") == revision
     except OSError:
         settled = False
-    if not report.failures and not settled:
+    if settled and revision is not None:
+        receipt = ActivationReceipt(activated, revision)
+    elif not report.failures:
         installed.activate(report)
         if not report.failures and revision is not None:
-            activated.parent.mkdir(parents=True, exist_ok=True)
-            activated.write_text(revision, encoding="utf-8")
+            identity = f"pending {revision} {uuid4().hex}"
+            try:
+                activated.write_text(identity, encoding="utf-8")
+            except OSError as error:
+                report.fail(host, "activation receipt", str(error))
+            else:
+                receipt = ActivationReceipt(activated, identity)
     if revision is None and not report.failures:
         report.fail(
             host, "marketplace revision", "the tj-agents marketplace has no commit"
         )
-    return Outcome(report.failures, not pins_current or revision != before, revision)
+    return Outcome(
+        report.failures, not pins_current or revision != before, revision, receipt
+    )

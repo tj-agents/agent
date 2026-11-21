@@ -28,6 +28,10 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           enable-cache: true
+      - name: Verify the native CLI release and matching library pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/check_delivery.py --root .
       - run: uv sync --locked
       - name: Install the shared process boundary
         shell: pwsh

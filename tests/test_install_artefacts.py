@@ -1,10 +1,12 @@
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
+from typing import cast
 from unittest import mock
 
 import install
@@ -149,6 +151,8 @@ def test_installed_commands_survive_removing_the_author_checkout(
     shutil.rmtree(source)
     for shim in shims:
         command = shim.stem.removeprefix("tj-")
+        if command in {"claude", "codex"}:
+            continue
         arguments = ["update", "--help"] if command == "plugins" else ["--help"]
         invocation = [str(shim), *arguments]
         if context.windows:
@@ -163,6 +167,23 @@ def test_installed_commands_survive_removing_the_author_checkout(
         )
         assert result.returncode == 0, f"{shim}: {result.stderr}"
         assert "usage:" in result.stdout
+
+
+@pytest.mark.parametrize("windows", [True, False])
+def test_source_install_registers_public_host_commands_for_both_platforms(
+    windows: bool,
+) -> None:
+    source = runpy.run_path(
+        str(Path(__file__).resolve().parents[1] / ".agents/agent/runtime/install.py"),
+        run_name="source_install",
+    )
+    commands = cast(Mapping[str, str], source["LIFECYCLE_COMMANDS"])
+    shim_name = cast(Callable[[str, bool], str], source["command_shim_name"])
+
+    assert commands["claude"] == "claude/command.py"
+    assert commands["codex"] == "codex/command.py"
+    assert shim_name("claude", windows) == ("tj-claude.cmd" if windows else "tj-claude")
+    assert shim_name("codex", windows) == ("tj-codex.cmd" if windows else "tj-codex")
 
 
 @pytest.mark.parametrize("windows", [True, False])

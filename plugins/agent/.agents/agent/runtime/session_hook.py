@@ -1,11 +1,16 @@
 """Session hooks: SessionStart registers this session in agent-store, and SessionEnd ends it for an
 explicit user exit and otherwise leaves it active for `tj recover`.
 
-A session owned by a `tj run` launch, as `tj launch` reports it, binds to that launch and inherits its title,
-parent, terminal, wrapper and work item; a session that only inherited `tj run` environment registers
+A session owned by a managed launch, as `tj launch` reports it, binds to that launch and inherits its title,
+parent, terminal, wrapper and work item; a session that only inherited the wrapper environment registers
 unbound. When `tj launch` cannot answer, the session is left unregistered and the failure reported, never
-registered unbound beside the launch it may own. A Codex thread is also named after its title, so it is addressable by name. Exit 0 always:
-bookkeeping never stops a session.
+registered unbound beside the launch it may own. A Codex thread is also named after its title, so it is addressable by name.
+Startup diagnostics warn the user and model about admission and freshness independently of registration.
+They attest only to installed inventory and the executing hook package, not all loaded session plugins.
+Bookkeeping errors remain non-blocking; the managed prompt hook enforces admission before native work.
+Claude's outer hook budget includes ownership reads, the 90-second resume admission and linked-worktree
+checks: their individual subprocess limits total 275 seconds, plus at most three seconds for plugin
+inventory, below the 300-second native hook limit.
 """
 
 from __future__ import annotations
@@ -24,9 +29,12 @@ sys.path.insert(0, str(HERE))
 from tj_agent.host import Host
 from tj_agent import worktrees
 from codex import launch as codex_launch
+from codex import processes as codex_processes
 import agent_cli
 import agent_store
 import owned_launch
+import session_plugins
+import session_resume
 from tj_cli import process
 
 LAUNCH_ENV = "TJ_RUN_LAUNCH_ID"
@@ -80,7 +88,7 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
     session = codex_launch.registered_session(session_id) if host is Host.CODEX else None
     inherited = environ.get(LAUNCH_ENV)
     cleared: tuple[str, ...] = ()
-    launch = owned_launch.for_session(f"{host}:{session_id}") if session is None and inherited else None
+    launch = owned_launch.for_session(f"{host}:{session_id}") if inherited else None
     environ = {name: value for name, value in environ.items() if name != LAUNCH_ENV}
     if session is None and inherited and launch is None:
         cleared = tuple(
@@ -91,21 +99,24 @@ def start(host: Host, session_id: str, cwd: str, environ: Mapping[str, str]) -> 
             name: value for name, value in environ.items()
             if not name.startswith("TJ_RUN_") and name not in {TITLE_ENV, "WT_SESSION", "TMUX_PANE"}
         }
-    if session is None:
-        if launch:
-            environ[LAUNCH_ENV] = launch
-            session = register(host, session_id, cwd, root, ["--launch-id", launch])
-        else:
-            session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
+    if launch:
+        environ[LAUNCH_ENV] = launch
+        if host is Host.CODEX:
+            codex_processes.record(session_id, launch)
+        resumed = session_resume.bind_started(f"{host}:{session_id}", launch)
+        if resumed is not None:
+            session = resumed
+        elif session is None or session.get("launch_id") != launch:
+            session = register(host, session_id, cwd, root, ["--launch-id", launch, "--require-unowned"])
+    elif session is None:
+        session = register(host, session_id, cwd, root, [*terminal(environ), *title_arguments(environ)])
     else:
         environ = {host.session_variable: session_id, LAUNCH_ENV: session["launch_id"]}
-    try:
-        if host is Host.CODEX and session.get("title"):
-            adapter.name_session(session_id, session["title"])
-    finally:
-        adapter.record_session_environment(session_id, environ, cleared=cleared)
-        if root:
-            worktrees.claim_started_worktree(host, session_id, Path(root), environ)
+    adapter.record_session_environment(session_id, environ, cleared=cleared)
+    if root:
+        worktrees.claim_started_worktree(host, session_id, Path(root), environ)
+    if host is Host.CODEX and session.get("title"):
+        adapter.name_session(session_id, session["title"])
     return session
 
 
@@ -125,12 +136,22 @@ def main(argv=None) -> int:
     parser.add_argument("--host", type=Host, choices=list(Host), required=True)
     args = parser.parse_args(argv)
     data = payload()
+    cwd = data.get("cwd") or os.getcwd()
+    if args.event == "start":
+        try:
+            diagnostic = session_plugins.check(args.host, Path(cwd), executing_file=Path(__file__))
+        except Exception as error:  # noqa: BLE001 - diagnostics never stop registration or a session
+            diagnostic = session_plugins.warning(f"Startup plugin checks could not complete: {error}")
+        print(json.dumps({
+            "systemMessage": diagnostic,
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": diagnostic},
+        }), flush=True)
     session_id = data.get("session_id") or data.get("sessionId")
     if not isinstance(session_id, str) or not session_id:
         return 0
     try:
         if args.event == "start":
-            start(args.host, session_id, data.get("cwd") or os.getcwd(), os.environ)
+            start(args.host, session_id, cwd, os.environ)
         else:
             reason = data.get("reason")
             end(args.host, session_id, reason if isinstance(reason, str) else None)

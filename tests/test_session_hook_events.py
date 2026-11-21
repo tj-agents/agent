@@ -19,6 +19,9 @@ Host = hook.Host
 @pytest.fixture(autouse=True)
 def isolated_worktree_claim(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hook.worktrees, 'claim_started_worktree', lambda *_: None)
+    monkeypatch.setattr(hook.codex_processes, 'record', lambda *_: None)
+    # main() must never inspect the developer's installed native hosts in these tests.
+    monkeypatch.setattr(hook.session_plugins, 'check', lambda *_args, **_kwargs: 'Fixture plugin diagnostic')
 
 
 class AgentStoreCalls:
@@ -42,6 +45,8 @@ class StartTests(unittest.TestCase):
             if arguments[:2] == ('show', '--launch-id'):
                 return {'launch': {'launch_id': launch, 'host': str(host),
                                    'state': 'active', 'session': None}, 'session': None}
+            if arguments[0] == 'show':
+                raise hook.agent_store.AgentStoreError('not-found', 'new native session')
             return {'session': {'title': title}}
 
         run = mock.Mock(side_effect=response)
@@ -57,7 +62,7 @@ class StartTests(unittest.TestCase):
         arguments, adapter = self.start(Host.CODEX, {hook.LAUNCH_ENV: 'L1', 'WT_SESSION': 'w'}, title='agent#98',
                                         launch='L1')
         self.assertEqual(['register', '--session', 'codex:n1', '--cwd', '/repo/sub', '--worktree', '/repo',
-                          '--launch-id', 'L1'], arguments)
+                          '--launch-id', 'L1', '--require-unowned'], arguments)
         adapter.name_session.assert_called_once_with('n1', 'agent#98')
 
     def test_a_session_outside_tj_run_records_its_terminal_and_title(self):
@@ -207,6 +212,57 @@ def test_main_reads_the_process_environment_and_passes_it_to_start(monkeypatch):
     monkeypatch.setattr(sys, 'stdin', io.StringIO('{"session_id": "n1"}'))
     hook.main(['start', '--host', 'claude'])
     assert captured['environ'] is os.environ
+
+
+@pytest.mark.parametrize('host', list(Host))
+def test_plugin_warning_reaches_user_and_context_even_when_registration_fails(monkeypatch, capsys, host):
+    checked = mock.Mock(return_value='STALE Agent hook; reload plugins')
+    monkeypatch.setattr(hook.session_plugins, 'check', checked)
+    monkeypatch.setattr(hook, 'start', mock.Mock(side_effect=RuntimeError('registration unavailable')))
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{"session_id": "n1", "cwd": "/repo"}'))
+    monkeypatch.delenv(hook.LAUNCH_ENV, raising=False)
+    assert hook.main(['start', '--host', host.value]) == 0
+    output = capsys.readouterr()
+    assert 'registration unavailable' in output.err
+    assert json.loads(output.out) == {
+        'systemMessage': 'STALE Agent hook; reload plugins',
+        'hookSpecificOutput': {
+            'hookEventName': 'SessionStart', 'additionalContext': 'STALE Agent hook; reload plugins',
+        },
+    }
+    assert hook.__file__ is not None
+    checked.assert_called_once_with(host, Path('/repo'), executing_file=Path(hook.__file__))
+
+
+def test_unexpected_diagnostic_failure_warns_and_still_registers(monkeypatch, capsys):
+    registered = mock.Mock()
+    monkeypatch.setattr(hook.session_plugins, 'check', mock.Mock(side_effect=RuntimeError('broken probe')))
+    monkeypatch.setattr(hook, 'start', registered)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{"session_id": "n1"}'))
+    assert hook.main(['start', '--host', 'claude']) == 0
+    warning = json.loads(capsys.readouterr().out)
+    assert 'broken probe' in warning['systemMessage']
+    assert 'loaded plugin versions remain unverified' in warning['systemMessage']
+    assert set(warning) == {'systemMessage', 'hookSpecificOutput'}
+    registered.assert_called_once()
+
+
+def test_start_checks_plugins_even_without_a_registration_id(monkeypatch, capsys):
+    checked = mock.Mock(return_value='unverified')
+    monkeypatch.setattr(hook.session_plugins, 'check', checked)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{}'))
+    assert hook.main(['start', '--host', 'codex']) == 0
+    checked.assert_called_once()
+    assert json.loads(capsys.readouterr().out)['systemMessage'] == 'unverified'
+
+
+def test_end_never_checks_or_emits_plugin_inventory(monkeypatch, capsys):
+    checked = mock.Mock()
+    monkeypatch.setattr(hook.session_plugins, 'check', checked)
+    monkeypatch.setattr(sys, 'stdin', io.StringIO('{"session_id": "n1"}'))
+    assert hook.main(['end', '--host', 'codex']) == 0
+    checked.assert_not_called()
+    assert not capsys.readouterr().out
 
 
 if __name__ == '__main__':

@@ -105,14 +105,16 @@ class HookTrustTests(unittest.TestCase):
         server = app.return_value.__enter__.return_value
         server.request.side_effect = [
             {"data": ["current"]}, {"thread": {"id": "current", "cwd": str(self.cwd)}},
-            {"status": "ok"}, {"data": [{"cwd": str(self.cwd), "errors": [], "hooks": []}]}, listing,
+            {"status": "ok"}, listing,
+            {"data": [{"cwd": str(self.cwd), "errors": [], "hooks": []}]}, listing,
         ]
         required = {"base@tj-agents": [TRUST.signature(hook)]}
         with patch.object(TRUST.time, "sleep"):
             TRUST.reload_running("native", self.cwd, required, session_id="current")
         app.assert_called_once_with("native", self.cwd, timeout=45, existing=True)
         server.request.assert_any_call("config/batchWrite", {"edits": [], "reloadUserConfig": True})
-        self.assertEqual(2, sum(call.args[0] == "hooks/list" for call in server.request.call_args_list))
+        self.assertEqual(3, sum(call.args[0] == "hooks/list" for call in server.request.call_args_list))
+        server.request.assert_any_call("hooks/list", {"threadId": "current"})
 
     @patch.object(TRUST, "AppServer")
     def test_live_reload_does_not_accept_modified_hooks(self, app):
@@ -461,6 +463,139 @@ def hook_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> HookTrustStat
         TRUST, "committed_files", lambda *_: TRUST.package_files(source)
     )
     return HookTrustState(cwd, plugin, hook)
+
+
+@pytest.mark.parametrize("stale", ["hash", "path", "removed", "missing"])
+def test_reload_rejects_stale_thread_hooks_despite_fresh_disk_inventory(
+    hook_state: HookTrustState, monkeypatch: pytest.MonkeyPatch, stale: str
+) -> None:
+    fresh = dict(hook_state.hook, trustStatus="trusted")
+    if stale == "hash":
+        loaded = [dict(fresh, currentHash="sha256:" + "b" * 64)]
+        message = "contents changed"
+    elif stale == "path":
+        loaded = [dict(fresh, sourcePath=str(hook_state.cwd / "old-build/hooks.json"))]
+        message = "different plugin build path"
+    elif stale == "removed":
+        loaded = [fresh, dict(fresh, key="removed-hook")]
+        message = "removed plugin hook"
+    else:
+        loaded = []
+        message = "missing"
+    server = mock.MagicMock()
+    server.__enter__.return_value = server
+
+    def request(method: str, params: dict[str, object]) -> dict[str, object]:
+        if method == "thread/loaded/list":
+            return {"data": ["current"]}
+        if method == "thread/read":
+            return {"thread": {"id": "current", "cwd": str(hook_state.cwd)}}
+        if method == "config/batchWrite":
+            return {"status": "ok"}
+        assert method == "hooks/list"
+        hooks = loaded if params == {"threadId": "current"} else [fresh]
+        return {"data": [{"cwd": str(hook_state.cwd), "hooks": hooks, "errors": []}]}
+
+    server.request.side_effect = request
+    monkeypatch.setattr(TRUST, "AppServer", lambda *args, **kwargs: server)
+    with pytest.raises(RuntimeError, match=message):
+        TRUST.reload_running(
+            "native", hook_state.cwd, {"base@tj-agents": [TRUST.signature(fresh)]},
+            session_id="current", timeout=0,
+        )
+
+
+def test_reload_finds_thread_beyond_first_inventory_page(
+    hook_state: HookTrustState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fresh = dict(hook_state.hook, trustStatus="trusted")
+    listing = {"data": [{"cwd": str(hook_state.cwd), "hooks": [fresh], "errors": []}]}
+    server = mock.MagicMock()
+    server.__enter__.return_value = server
+    server.request.side_effect = [
+        {"data": ["other"], "nextCursor": "next"},
+        {"data": ["current"]},
+        {"thread": {"id": "current", "cwd": str(hook_state.cwd)}},
+        {"status": "ok"}, listing, listing,
+    ]
+    monkeypatch.setattr(TRUST, "AppServer", lambda *args, **kwargs: server)
+    TRUST.reload_running(
+        "native", hook_state.cwd, {"base@tj-agents": [TRUST.signature(fresh)]},
+        session_id="current",
+    )
+    server.request.assert_any_call("thread/loaded/list", {"cursor": "next"})
+    server.request.assert_any_call("hooks/list", {"threadId": "current"})
+
+
+def test_reload_rejects_repeated_inventory_cursor(
+    hook_state: HookTrustState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = mock.MagicMock()
+    server.__enter__.return_value = server
+    server.request.return_value = {"data": [], "nextCursor": "same"}
+    monkeypatch.setattr(TRUST, "AppServer", lambda *args, **kwargs: server)
+    with pytest.raises(RuntimeError, match="complete the loaded"):
+        TRUST.reload_running(
+            "native", hook_state.cwd, {"base@tj-agents": []}, session_id="current"
+        )
+    assert server.request.call_count == 2
+
+
+def test_verify_loaded_hooks_rejects_plugin_removed_from_project(
+    hook_state: HookTrustState,
+) -> None:
+    fresh = {"data": [{"cwd": str(hook_state.cwd), "hooks": [], "errors": []}]}
+    stale = {
+        "data": [{"cwd": str(hook_state.cwd), "errors": [],
+                  "hooks": [dict(hook_state.hook, trustStatus="trusted")]}]
+    }
+    server = mock.Mock()
+    server.request.side_effect = [fresh, stale]
+    with pytest.raises(RuntimeError, match="removed plugin hook"):
+        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
+    server.request.assert_called_with("hooks/list", {"threadId": "current"})
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_verify_loaded_hooks_checks_enabled_optional_hook_trust(
+    hook_state: HookTrustState, enabled: bool,
+) -> None:
+    trusted = dict(hook_state.hook, trustStatus="trusted")
+    optional = dict(trusted, key="optional", trustStatus="untrusted", enabled=enabled)
+    listing = {"data": [{"cwd": str(hook_state.cwd), "hooks": [trusted, optional], "errors": []}]}
+    server = mock.Mock()
+    server.request.return_value = listing
+    if enabled:
+        with pytest.raises(RuntimeError, match="optional: untrusted"):
+            TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
+    else:
+        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
+
+
+@pytest.mark.parametrize("loaded_hash", ["declaration", "composite", "wrong-content", "wrong-declaration"])
+def test_loaded_native_declaration_hash_is_distinct_from_installed_content_approval(
+    hook_state: HookTrustState, loaded_hash: str
+) -> None:
+    declaration = "sha256:" + "a" * 64
+    content = "sha256:" + "b" * 64
+    fresh = dict(hook_state.hook, currentHash=f"{declaration}/{content}", trustStatus="trusted")
+    hashes = {
+        "declaration": declaration,
+        "composite": f"{declaration}/{content}",
+        "wrong-content": f"{declaration}/sha256:" + "c" * 64,
+        "wrong-declaration": "sha256:" + "d" * 64,
+    }
+    server = mock.Mock()
+    server.request.side_effect = [
+        {"data": [{"cwd": str(hook_state.cwd), "hooks": [fresh], "errors": []}]},
+        {"data": [{"cwd": str(hook_state.cwd), "errors": [],
+                   "hooks": [dict(fresh, currentHash=hashes[loaded_hash])]}]},
+    ]
+    if loaded_hash.startswith("wrong-"):
+        with pytest.raises(RuntimeError, match="contents changed"):
+            TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
+    else:
+        TRUST.verify_loaded_hooks(server, hook_state.cwd, "current", required={}, deadline=0)
 
 
 @pytest.mark.parametrize("with_options", [False, True])

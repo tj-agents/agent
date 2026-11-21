@@ -1,4 +1,4 @@
-"""The `tj run` launch that owns the calling process, as `tj launch` reports it."""
+"""The managed launch that owns the calling process, as `tj launch` reports it."""
 
 from __future__ import annotations
 

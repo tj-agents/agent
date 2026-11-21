@@ -58,7 +58,7 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     git(tmp_path, "config", "user.email", "fixture@example.invalid")
     git(tmp_path, "config", "core.hooksPath", "")
     git(tmp_path, "remote", "add", "origin", "https://github.com/tj-agents/fixture.git")
-    ADOPT.run(tmp_path, [], ["base"], "write")
+    ADOPT.run(tmp_path, [], ["base"], "write", scope="project")
     git(tmp_path, "add", ".")
     git(tmp_path, "commit", "-m", "Portable project settings")
     return tmp_path

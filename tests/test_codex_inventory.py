@@ -75,8 +75,12 @@ class MarketplaceReport:
 
 @pytest.mark.parametrize("manifest", [None, "invalid json"])
 def test_unknown_publication_is_not_reported_as_a_retired_plugin(
-    codex_home: Path, manifest: str | None, capsys: pytest.CaptureFixture[str]
+    codex_home: Path,
+    manifest: str | None,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(installed.launch, "liveness", lambda **_kwargs: {})
     build = codex_home / "plugins/cache/tj-agents/agent/build/.codex-plugin"
     build.mkdir(parents=True)
     (build / "plugin.json").write_text('{"name": "agent"}', encoding="utf-8")
