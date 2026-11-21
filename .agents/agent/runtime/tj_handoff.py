@@ -11,7 +11,7 @@ from tj_agent.host import Host
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="tj handoff", description=__doc__)
     parser.add_argument("--host", choices=[host.value for host in Host], required=True)
     values = list(sys.argv[1:] if argv is None else argv)
     boundary = values.index("--") if "--" in values else len(values)

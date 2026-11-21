@@ -5,8 +5,10 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from pathlib import Path
 from typing import cast
+from unittest.mock import Mock
 
 import agent_cli
 import pytest
@@ -117,30 +119,45 @@ def test_managed_codex_matches_the_running_daemon(
         )
 
 
+@pytest.mark.parametrize("stale_socket", [False, True])
 def test_fresh_managed_launch_starts_and_verifies_the_selected_daemon(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_socket: bool
 ) -> None:
     newest = str(tmp_path / "codex")
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    if stale_socket:
+        socket = tmp_path / "app-server-control/app-server-control.sock"
+        socket.parent.mkdir()
+        socket.touch()
+    inherited = ("TJ_RUN_PID", "CODEX_THREAD_ID", "WT_SESSION", "AGENT_CLI_TAB_TITLE")
+    for name in inherited:
+        monkeypatch.setenv(name, "caller")
     adapter = agent_cli.host_launch(Host.CODEX)
     monkeypatch.setattr(adapter, "candidate_paths", lambda: [newest])
     events: list[str] = []
 
-    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+    def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
         assert command[0] == newest
         operation = command[-1]
         events.append(operation)
         if operation == "--version":
             return subprocess.CompletedProcess(command, 0, "codex-cli 0.171.0", "")
         if operation == "start":
+            environment = cast(dict[str, str], options["env"])
+            assert environment["CODEX_HOME"] == str(tmp_path)
+            assert all(name not in environment for name in inherited)
             return subprocess.CompletedProcess(command, 0, "", "")
         assert command[1:] == ["app-server", "daemon", "version"]
+        assert options["encoding"] == "utf-8"
         if "start" in events:
             reply = json.dumps({"status": "running", "appServerVersion": "0.171.0"})
             return subprocess.CompletedProcess(command, 0, reply, "")
-        return subprocess.CompletedProcess(command, 1, "", "No control socket")
+        return subprocess.CompletedProcess(
+            command, 1, "", "failed to connect to socket (os error 10061)"
+        )
 
     monkeypatch.setattr(codex_launch.process, "run", run)
+    monkeypatch.setattr(codex_launch.subprocess, "run", run)
     assert codex_plugins.resolve_executable(start_if_absent=True) == newest
     assert events == ["--version", "version", "start", "version"]
 
@@ -186,6 +203,21 @@ def test_prepared_tab_passes_only_its_requested_relationship_to_the_wrapper(
         *metadata,
     ]
     assert call[-2:] == ["--", prompt]
+
+
+def test_exact_resume_checks_the_selected_executable_and_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = Mock()
+    server.request.return_value = {"data": [], "nextCursor": None}
+    connect = Mock(return_value=nullcontext(server))
+    probe = Mock(return_value=subprocess.CompletedProcess([], 0, "{}", ""))
+    monkeypatch.setattr(codex_launch.processes, "inventory", dict)
+    monkeypatch.setattr(codex_launch.process, "run", probe)
+    monkeypatch.setattr(codex_launch, "daemon", connect)
+    codex_launch.require_stopped_thread("fixture", "selected-native")
+    assert probe.call_args.args[0][0] == "selected-native"
+    connect.assert_called_once_with(native="selected-native")
 
 
 def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> None:

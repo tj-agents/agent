@@ -177,8 +177,8 @@ tj prepare --host claude --write    apply repository settings and standards chan
 New worktrees use [Core's shared creator](https://github.com/tj-agents/core/blob/main/.agents/engineering/operation/open-worktree/SKILL.md)
 from the enabled Base plugin. `tj start` no longer reads or seeds worktrunk configuration; a missing
 creator stops the launch before tracker progress changes.
-Handoff tabs are Windows Terminal or tmux tabs whose root process is `tj run`, from
-[TJ CLI](https://github.com/tj-agents/cli). `tj run` records the launch in agent-store. The SessionStart
+Handoff tabs open in Windows Terminal or tmux through `tj claude` or `tj codex`.
+The managed wrapper records the launch in agent-store. The SessionStart
 hook then binds the native session to that launch, so the session inherits its title, work item and parent,
 and a Codex thread is named after its title. Liveness always comes from the hosts:
 `claude agents --json`, and Codex process evidence plus threads loaded in the shared app-server daemon.

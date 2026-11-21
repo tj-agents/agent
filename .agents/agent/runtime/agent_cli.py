@@ -350,6 +350,7 @@ def launch(
     run=subprocess.run,
     tmux_session=None,
     resume_from=None,
+    prepare=None,
 ):
     """Open a managed tab and return its recorded launch and observed startup stage."""
     adapter = host_launch(host)
@@ -366,7 +367,8 @@ def launch(
     clear.extend(host.session_variable for host in Host)
     clear.extend(name for name in environ if name.startswith("TJ_RUN_"))
     cleared, forced = launch_environment(clear=clear, force=force)
-    prepared = adapter.prepare(directory, title, arguments, tj, _environment_for(environ, cleared, forced))
+    prepare = adapter.prepare if prepare is None else prepare
+    prepared = prepare(directory, title, arguments, tj, _environment_for(environ, cleared, forced))
     if resume_from is not None and prepared.session is None:
         raise LaunchError("Recovery requires the provider's exact native session")
     if prepared.session is not None and not prepared.created:

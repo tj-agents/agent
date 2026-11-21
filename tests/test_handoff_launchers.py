@@ -245,6 +245,24 @@ def test_unconfirmed_launch_exits_three(launcher: Launcher) -> None:
     assert "check the terminal" in err
 
 
+def test_requested_codex_floor_is_checked_during_actual_preparation(
+    launcher: Launcher,
+) -> None:
+    if launcher.host is not Host.CODEX:
+        return
+    code, _, err = launcher.run("--lane", "L4", "--minimum-version", "0.171.0")
+    assert code == 0, err
+    launcher.executable.side_effect = launcher.cli.LaunchError(
+        "no compatible executable"
+    )
+    prepare = launcher.launch.call_args.kwargs["prepare"]
+    with pytest.raises(launcher.cli.LaunchError, match="no compatible executable"):
+        prepare(launcher.directory, "Floor", [], "tj", {})
+    launcher.executable.assert_called_once_with(
+        minimum="0.171.0", match_daemon=True, start_if_absent=True
+    )
+
+
 def test_blank_title_is_refused(launcher: Launcher) -> None:
     code, _, _ = launcher.run("--lane", "L4", "--title", " ")
     assert code == 1
