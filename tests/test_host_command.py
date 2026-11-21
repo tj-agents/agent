@@ -66,6 +66,7 @@ def test_native_codex_maintenance_can_upgrade_an_older_provider(
 @pytest.mark.parametrize(
     ("cli_version", "daemon_status", "package_version", "expected"),
     [
+        ("0.168.0", "running", "0.170.0", "managed"),
         ("0.169.0", "running", "0.170.0", "managed"),
         ("0.171.0", "running", "0.170.0", "managed"),
         ("0.171.0", "stopped", None, "newest"),
@@ -114,6 +115,77 @@ def test_managed_codex_matches_the_running_daemon(
                 "newest": newest,
             }[expected]
         )
+
+
+def test_fresh_managed_launch_starts_and_verifies_the_selected_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    newest = str(tmp_path / "codex")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    adapter = agent_cli.host_launch(Host.CODEX)
+    monkeypatch.setattr(adapter, "candidate_paths", lambda: [newest])
+    events: list[str] = []
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        assert command[0] == newest
+        operation = command[-1]
+        events.append(operation)
+        if operation == "--version":
+            return subprocess.CompletedProcess(command, 0, "codex-cli 0.171.0", "")
+        if operation == "start":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        assert command[1:] == ["app-server", "daemon", "version"]
+        if "start" in events:
+            reply = json.dumps({"status": "running", "appServerVersion": "0.171.0"})
+            return subprocess.CompletedProcess(command, 0, reply, "")
+        return subprocess.CompletedProcess(command, 1, "", "No control socket")
+
+    monkeypatch.setattr(codex_launch.process, "run", run)
+    assert codex_plugins.resolve_executable(start_if_absent=True) == newest
+    assert events == ["--version", "version", "start", "version"]
+
+
+@pytest.mark.parametrize("host", tuple(Host))
+@pytest.mark.parametrize("parent", [None, "claude:requested"])
+def test_prepared_tab_passes_only_its_requested_relationship_to_the_wrapper(
+    tmp_path: Path, host: Host, parent: str | None
+) -> None:
+    native = str(tmp_path / "native")
+    metadata = ["--title", "Named tab", "--cwd", str(tmp_path), "--launch-id", "new"]
+    if parent:
+        metadata.extend(("--parent", parent))
+    prompt = "Read my prepared file."
+    calls: list[Sequence[str]] = []
+
+    def run(
+        command: Sequence[str], *, env: Mapping[str, str], **_options: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert not env
+        calls.append(command)
+        return completed(command)
+
+    result = command_main()(
+        host,
+        ["--tj-tab", *metadata, "--", native, "--", prompt],
+        cwd=tmp_path,
+        environ={
+            "TJ_RUN_LAUNCH_ID": "prior",
+            "CLAUDE_CODE_SESSION_ID": "prior",
+            "CODEX_THREAD_ID": "prior",
+        },
+        resolver=lambda: native,
+        run=run,
+    )
+    assert result == 0
+    (call,) = calls
+    assert call[: call.index("--")] == [
+        "tj",
+        "_session",
+        "--host",
+        host.value,
+        *metadata,
+    ]
+    assert call[-2:] == ["--", prompt]
 
 
 def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> None:

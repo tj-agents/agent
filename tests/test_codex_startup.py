@@ -929,7 +929,8 @@ def test_abandon_preserves_thread_when_dispatch_times_out_without_receipt(
 def test_prepare_requires_proven_native_version_before_any_creation(
     native: Native, monkeypatch: pytest.MonkeyPatch, resuming: bool
 ) -> None:
-    def resolve(*, minimum: str) -> None:
+    def resolve(*, minimum: str, match_daemon: bool, start_if_absent: bool) -> None:
+        assert match_daemon and start_if_absent
         assert minimum == "0.169.0"
         raise LaunchError("below the required 0.169.0")
 

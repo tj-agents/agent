@@ -1,37 +1,14 @@
 #!/usr/bin/env python3
-"""Hand prepared work to an independent Codex session in a new terminal tab.
-
-Run as `python launch_codex.py ...` on Windows (where `python3` is often the Microsoft Store alias stub
-rather than a real interpreter) and `python3 launch_codex.py ...` elsewhere; the shebang and exec bit are
-not relied on.
-"""
+"""Hand prepared work to an independent Codex session in a new terminal tab."""
 
 import argparse
-import importlib.util
 import json
 import sys
-from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-
-
-def _package_root():
-    for root in HERE.parents:
-        markers = (root / '.git', root / '.codex-plugin' / 'plugin.json', root / '.claude-plugin' / 'plugin.json')
-        if any(marker.exists() for marker in markers):
-            return root
-    raise SystemExit(f'The package root was not found relative to {HERE}.')
-
-
-def _load_agent_cli():
-    root = _package_root()
-    path = root / '.agents' / 'agent' / 'runtime' / 'agent_cli.py'
-    if not path.is_file():
-        raise SystemExit(f'The packaged agent_cli.py library was not found under {root}.')
-    spec = importlib.util.spec_from_file_location('agent_cli', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+import agent_cli
+from codex import launch as codex_launch
+from launch_errors import LaunchError
+from tj_agent.host import Host
 
 
 def parse_args(argv, agent_cli):
@@ -42,47 +19,46 @@ def parse_args(argv, agent_cli):
     parser.add_argument('--lane', choices=('L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7'), required=True)
     parser.add_argument('--minimum-version', default='0.169.0')
     parser.add_argument('--item', help='existing work-item URL or reference to link; omit to launch with no work item')
-    parser.add_argument('--parent', help='parent session (host:id); defaults to the calling session')
+    parser.add_argument('--parent', help='explicit reporting parent (host:id)')
     args = parser.parse_args(argv)
     if not args.title.strip():
-        raise agent_cli.LaunchError('--title must name the session; it becomes the tab title.')
+        raise LaunchError('--title must name the session; it becomes the tab title.')
 
     if args.lane == 'L7':
-        raise agent_cli.LaunchError('--lane L7 is for in-session clerical work and cannot open a handoff.')
+        raise LaunchError('--lane L7 is for in-session clerical work and cannot open a handoff.')
 
     return args
 
 
 def resolve_model(args, agent_cli):
-    model, effort = agent_cli.resolve_lane_model(agent_cli.Host.CODEX, lane=args.lane)
+    model, effort = agent_cli.resolve_lane_model(Host.CODEX, lane=args.lane)
     return model, effort, f'lane {args.lane} -> '
 
 
 def main(argv=None):
-    agent_cli = _load_agent_cli()
     agent_cli.make_stdio_encoding_lossy()
     try:
         args = parse_args(argv, agent_cli)
         working_directory = agent_cli.resolve_tab_directory(args.working_directory)
         prompt_sentence, prompt_path = agent_cli.prompt_file_argument(args.prompt_path)
-        adapter = agent_cli.host_launch(agent_cli.Host.CODEX)
-        adapter.resolve_executable(minimum=args.minimum_version)
+        adapter = agent_cli.host_launch(Host.CODEX)
+        codex_launch.resolve_executable(minimum=args.minimum_version, match_daemon=True)
         model, effort, tier = resolve_model(args, agent_cli)
-        parent = agent_cli.parent_session(args.parent)
-        prompt_sentence += agent_cli.parent_rule(parent)
+        handoff = agent_cli.handoff.relationship(args.parent)
+        prompt_sentence = handoff.prompt(prompt_sentence)
         item = agent_cli.resolve_item(args.item, working_directory)
-        shown = agent_cli.launch(agent_cli.Host.CODEX, working_directory, args.title,
+        shown = agent_cli.launch(Host.CODEX, working_directory, args.title,
                                  adapter.start_arguments(working_directory, args.title, prompt_sentence, model, effort),
-                                 item=item, parent=parent)
+                                 item=item, parent=handoff.parent)
 
         selection = f'{tier}{model}'
         if effort:
             selection += f' at {effort}'
         print(f"Launched Codex handoff tab '{args.title}' in {working_directory} on {selection} with prompt {prompt_path}")
         print(json.dumps({"worktree": str(working_directory), "prompt_path": str(prompt_path), "title": args.title,
-                          "parent": parent, "launch_id": shown["launch"]["launch_id"]}))
+                          **handoff.receipt(), "launch_id": shown["launch"]["launch_id"]}))
         return 0
-    except agent_cli.LaunchError as exc:
+    except LaunchError as exc:
         return agent_cli.report_launch_failure(exc)
 
 

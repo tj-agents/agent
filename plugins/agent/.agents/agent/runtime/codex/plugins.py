@@ -87,11 +87,11 @@ INVENTORY_CONFIG_KEYS = frozenset(
 NODE_SHIM_BYPASSED = True
 
 
-def resolve_executable(*, maintenance: bool = False) -> str:
+def resolve_executable(*, maintenance: bool = False, start_if_absent: bool = False) -> str:
     launcher = agent_cli.host_launch(HOST)
     if maintenance:
         return launcher.resolve_executable(minimum=None)[0]
-    return launcher.resolve_executable(match_daemon=True)[0]
+    return launcher.resolve_executable(match_daemon=True, start_if_absent=start_if_absent)[0]
 
 
 def installations(project: Path, entries: list, *, record: bool = True) -> list:

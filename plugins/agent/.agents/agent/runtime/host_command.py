@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 import uuid
@@ -32,7 +33,9 @@ def native_executable(
 ) -> str:
     """Resolve the host's native executable to the absolute path passed to tj."""
     resolved = (
-        host_plugins.PLUGINS[host].resolve_executable(maintenance=maintenance)
+        host_plugins.PLUGINS[host].resolve_executable(
+            maintenance=maintenance, start_if_absent=not maintenance
+        )
         if resolver is None
         else resolver()
     )
@@ -53,6 +56,49 @@ def run_native(
     return completed.returncode
 
 
+def run_prepared_tab(
+    host: Host,
+    values: Sequence[str],
+    directory: Path,
+    environment: Mapping[str, str],
+    resolver: Callable[[], str] | None,
+    execute: Callable[..., subprocess.CompletedProcess[object]],
+) -> int:
+    """Run an already prepared native session in the newly opened foreground."""
+    if "--" not in values:
+        raise LaunchError("A prepared tab requires its native command after --")
+    boundary = values.index("--")
+    metadata = values[:boundary]
+    native = values[boundary + 1 :]
+    parser = argparse.ArgumentParser(prog=f"tj {host} --tj-tab", allow_abbrev=False)
+    for key in ("title", "cwd", "launch-id"):
+        parser.add_argument(f"--{key}", required=True)
+    for key in ("parent", "item", "session", "resume-from"):
+        parser.add_argument(f"--{key}")
+    options = parser.parse_args(metadata)
+    if Path(options.cwd).resolve() != directory:
+        raise LaunchError("The prepared tab opened in a different directory")
+    executable = native_executable(host, resolver)
+    if not native or Path(native[0]).resolve() != Path(executable):
+        raise LaunchError("The selected host executable changed during tab startup")
+    arguments = agent_cli.host_launch(host).managed_arguments(native[1:])
+    return run_native(
+        [
+            "tj",
+            "_session",
+            "--host",
+            host.value,
+            *metadata,
+            "--",
+            executable,
+            *arguments,
+        ],
+        directory,
+        environment,
+        execute,
+    )
+
+
 def main(
     host: Host,
     arguments: Sequence[str],
@@ -68,6 +114,10 @@ def main(
     environment = independent_environment(environ)
     execute = subprocess.run if run is None else run
     try:
+        if values[:1] == ("--tj-tab",):
+            return run_prepared_tab(
+                host, values[1:], directory, environment, resolver, execute
+            )
         effective_directory, _inventory_options = required_plugins.launch_context(
             directory, host, values
         )

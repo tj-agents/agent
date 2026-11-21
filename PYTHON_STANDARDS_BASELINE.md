@@ -181,9 +181,6 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | .agents/agent/runtime/tj_status.py | E501 | 7 | Repair the existing E501 diagnostic and remove this exact ignore. |
 | .agents/agent/runtime/tj_status.py | I001 | 1 | Repair the existing I001 diagnostic and remove this exact ignore. |
 | .agents/agent/runtime/tj_status.py | TID251 | 1 | Repair the existing TID251 diagnostic and remove this exact ignore. |
-| .agents/agent/utility/handoff/scripts/handoff.py | E501 | 4 | Repair the existing E501 diagnostic and remove this exact ignore. |
-| .agents/agent/utility/handoff/scripts/handoff.py | I001 | 1 | Repair the existing I001 diagnostic and remove this exact ignore. |
-| .agents/agent/utility/handoff/scripts/handoff.py | TID251 | 2 | Repair the existing TID251 diagnostic and remove this exact ignore. |
 | .agents/agent/utility/refresh-plugins/scripts/refresh_plugins.py | E501 | 1 | Repair the existing E501 diagnostic and remove this exact ignore. |
 | .agents/agent/utility/refresh-plugins/scripts/refresh_plugins.py | I001 | 1 | Repair the existing I001 diagnostic and remove this exact ignore. |
 | .agents/codex/utility/hooks/scripts/hook_control.py | ANN401 | 5 | Repair the existing ANN401 diagnostic and remove this exact ignore. |
@@ -402,7 +399,6 @@ These exact entries cover unchanged legacy diagnostics exposed when the root Pyt
 | .agents/agent/runtime/tj_start.py | 1 | Format this existing file and remove this exact exclusion. |
 | .agents/agent/runtime/tj_status.py | 1 | Format this existing file and remove this exact exclusion. |
 | .agents/agent/runtime/transcripts.py | 1 | Format this existing file and remove this exact exclusion. |
-| .agents/agent/utility/handoff/scripts/handoff.py | 1 | Format this existing file and remove this exact exclusion. |
 | .agents/agent/utility/refresh-plugins/scripts/refresh_plugins.py | 1 | Format this existing file and remove this exact exclusion. |
 | .agents/codex/utility/hooks/scripts/hook_control.py | 1 | Format this existing file and remove this exact exclusion. |
 | .agents/codex/utility/memory/scripts/memory.py | 1 | Format this existing file and remove this exact exclusion. |

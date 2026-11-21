@@ -26,11 +26,10 @@ from launch_contract import Launch
 from launch_errors import LaunchError, LaunchTimeout, cleanup_failed_launch
 from package_root import find_package_root
 import agent_store
-import owned_launch
+from tj_agent import handoff as handoff
 import session_resume
 import work_item
 
-LAUNCH_ID_ENVIRONMENT = 'TJ_RUN_LAUNCH_ID'
 
 if TYPE_CHECKING:
     from claude import launch as claude_launch
@@ -364,8 +363,10 @@ def launch(
         for name, value in adapter.TAB_FORCED.items()
         if IS_WINDOWS or name != "TERM"
     }
+    clear.extend(host.session_variable for host in Host)
+    clear.extend(name for name in environ if name.startswith("TJ_RUN_"))
     cleared, forced = launch_environment(clear=clear, force=force)
-    prepared = adapter.prepare(directory, title, arguments, tj, environ)
+    prepared = adapter.prepare(directory, title, arguments, tj, _environment_for(environ, cleared, forced))
     if resume_from is not None and prepared.session is None:
         raise LaunchError("Recovery requires the provider's exact native session")
     if prepared.session is not None and not prepared.created:
@@ -403,9 +404,8 @@ def _launch_prepared(
 ):
     command = [
         tj,
-        "_session",
-        "--host",
         str(host),
+        "--tj-tab",
         "--title",
         title,
         "--cwd",
@@ -449,49 +449,8 @@ def attach_tmux(
         )
 
 
-def parent_session(value):
-    """The parent's `host:id`: as given, else the calling session as `tj approve` resolves it, else None."""
-    if value is not None:
-        return value
-    try:
-        launch_id = owned_launch.current()
-    except owned_launch.OwnedLaunchError as error:
-        raise LaunchError(f'Cannot determine the calling launch: {error}') from error
-    if launch_id:
-        try:
-            shown = agent_store.run('show', '--launch-id', launch_id)
-        except agent_store.AgentStoreError as error:
-            if error.code != 'not-found':
-                raise LaunchError(f'agent-store could not read launch {launch_id}: {error}') from error
-        else:
-            session = shown.get('session')
-            if session:
-                return session['session']
-    identities = [f'{host}:{session_id}' for host in Host
-                  if (session_id := os.environ.get(host.session_variable))]
-    if len(identities) > 1:
-        raise LaunchError('Cannot determine the calling session from multiple inherited identities')
-    return identities[0] if identities else None
-
-
 def resolve_item(item: str | None, cwd: Path) -> str | None:
     """The handoff's explicit work item, or None: omitting --item launches with no item."""
     if item is None:
         return None
     return work_item.reference(cwd, item)
-
-
-def parent_rule(parent):
-    """The standing instruction a child gets to report back to the session that started it."""
-    if not parent:
-        return ''
-    try:
-        title = agent_store.run('show', parent)['session'].get('title')
-    except agent_store.AgentStoreError:
-        title = None
-    name = f'"{title}" ({parent})' if title else parent
-    return (f' Standing rule: the session {name} started you. Report to it with agent:message '
-            'only for a blocker you cannot resolve or an approval Tommy must give; '
-            'never send it status updates. After the whole requested outcome and its validation '
-            'are complete, request tj finish and give the final response. Managed completion '
-            'delivers that response to the recorded parent and preserves its delivery and closeout receipts.')

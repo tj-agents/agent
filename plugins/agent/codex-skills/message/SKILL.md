@@ -1,13 +1,13 @@
 ---
 name: message
-description: Message another session with native Claude messaging or tj message/feed when Codex is involved. Use when reporting a final result, an unresolvable blocker or required user approval, when asked to message or correct a session or read its feed, or when a parent waits for a child.
+description: Send a requested session message through tj message on Claude or Codex, read the session feed, or wait for an expected reply.
 kind: utility
 domain: agent
 profile: core
 applicability: agent sessions
 provenance: house
-requires: native host, tj for feed transport
-allowed-tools: ListAgents, SendMessage, Bash(tj message:*), Bash(tj feed:*)
+requires: tj
+allowed-tools: Bash(tj message:*), Bash(tj feed:*)
 ---
 
 # Message a session
