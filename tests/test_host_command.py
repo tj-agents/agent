@@ -5,15 +5,19 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from pathlib import Path
 from typing import cast
+from unittest.mock import Mock
 
 import agent_cli
 import pytest
 from codex import launch as codex_launch
+from codex import plugins as codex_plugins
 from codex import startup
 from fixtures import foreground_console
 from launch_contract import PreparedLaunch
+from launch_errors import LaunchError
 from tj_agent.host import Host
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +63,175 @@ def test_native_codex_maintenance_can_upgrade_an_older_provider(
     assert calls == [[native, "update"]]
     assert main(Host.CODEX, (), cwd=tmp_path, environ={}, run=run) == 1
     assert calls == [[native, "update"]]
+
+
+@pytest.mark.parametrize(
+    ("cli_version", "daemon_status", "package_version", "expected"),
+    [
+        ("0.168.0", "running", "0.170.0", "managed"),
+        ("0.169.0", "running", "0.170.0", "managed"),
+        ("0.171.0", "running", "0.170.0", "managed"),
+        ("0.171.0", "stopped", None, "newest"),
+        ("0.171.0", "running", "0.169.0", None),
+    ],
+)
+def test_managed_codex_matches_the_running_daemon(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cli_version: str,
+    daemon_status: str,
+    package_version: str | None,
+    expected: str | None,
+) -> None:
+    newest = str(tmp_path / "path" / "codex.exe")
+    managed = str(tmp_path / "daemon" / "codex.exe")
+
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        if command == [newest, "app-server", "daemon", "version"]:
+            assert _options["env"] is None
+            content = json.dumps(
+                {
+                    "status": daemon_status,
+                    "appServerVersion": "0.170.0",
+                    "managedCodexPath": managed,
+                }
+            )
+        else:
+            installed = {newest: cli_version, managed: package_version}
+            assert command[1:] == ["--version"]
+            content = f"codex-cli {installed[command[0]]}"
+        return subprocess.CompletedProcess(command, 0, content, "")
+
+    monkeypatch.setattr(codex_launch.process, "run", run)
+    monkeypatch.setattr(
+        agent_cli.host_launch(Host.CODEX), "candidate_paths", lambda: [newest]
+    )
+    assert codex_plugins.resolve_executable(maintenance=True) == newest
+    if cli_version == "0.171.0":
+        assert agent_cli.host_launch(Host.CODEX).executable() == newest
+    if expected is None:
+        with pytest.raises(LaunchError, match=r"daemon is running 0\.170\.0"):
+            codex_plugins.resolve_executable()
+    else:
+        assert (
+            codex_plugins.resolve_executable()
+            == {
+                "managed": managed,
+                "newest": newest,
+            }[expected]
+        )
+
+
+@pytest.mark.parametrize("stale_socket", [False, True])
+def test_fresh_managed_launch_starts_and_verifies_the_selected_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stale_socket: bool
+) -> None:
+    newest = str(tmp_path / "codex")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    if stale_socket:
+        socket = tmp_path / "app-server-control/app-server-control.sock"
+        socket.parent.mkdir()
+        socket.touch()
+    inherited = (
+        "TJ_RUN_PID",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "WT_SESSION",
+        "AGENT_CLI_TAB_TITLE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_PID",
+        "WORKBOARD_LAUNCH_TOKEN",
+        "WORKBOARD_WORKFLOW_TOKEN",
+    )
+    for name in inherited:
+        monkeypatch.setenv(name, "caller")
+    adapter = agent_cli.host_launch(Host.CODEX)
+    monkeypatch.setattr(adapter, "candidate_paths", lambda: [newest])
+    events: list[str] = []
+
+    def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
+        assert command[0] == newest
+        operation = command[-1]
+        events.append(operation)
+        if operation == "--version":
+            return subprocess.CompletedProcess(command, 0, "codex-cli 0.171.0", "")
+        if operation == "start":
+            environment = cast(dict[str, str], options["env"])
+            assert environment["CODEX_HOME"] == str(tmp_path)
+            assert all(name not in environment for name in inherited)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        assert command[1:] == ["app-server", "daemon", "version"]
+        assert options["encoding"] == "utf-8"
+        if "start" in events:
+            reply = json.dumps({"status": "running", "appServerVersion": "0.171.0"})
+            return subprocess.CompletedProcess(command, 0, reply, "")
+        return subprocess.CompletedProcess(
+            command, 1, "", "failed to connect to socket (os error 10061)"
+        )
+
+    monkeypatch.setattr(codex_launch.process, "run", run)
+    monkeypatch.setattr(codex_launch.subprocess, "run", run)
+    assert codex_plugins.resolve_executable(start_if_absent=True) == newest
+    assert events == ["--version", "version", "start", "version"]
+
+
+@pytest.mark.parametrize("host", tuple(Host))
+@pytest.mark.parametrize("parent", [None, "claude:requested"])
+def test_prepared_tab_passes_only_its_requested_relationship_to_the_wrapper(
+    tmp_path: Path, host: Host, parent: str | None
+) -> None:
+    native = str(tmp_path / "native")
+    metadata = ["--title", "Named tab", "--cwd", str(tmp_path), "--launch-id", "new"]
+    if parent:
+        metadata.extend(("--parent", parent))
+    prompt = "Read my prepared file."
+    calls: list[Sequence[str]] = []
+
+    def run(
+        command: Sequence[str], *, env: Mapping[str, str], **_options: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert not env
+        calls.append(command)
+        return completed(command)
+
+    result = command_main()(
+        host,
+        ["--tj-tab", *metadata, "--", native, "--", prompt],
+        cwd=tmp_path,
+        environ={
+            "TJ_RUN_LAUNCH_ID": "prior",
+            "CLAUDE_CODE_SESSION_ID": "prior",
+            "CODEX_THREAD_ID": "prior",
+        },
+        resolver=lambda: native,
+        run=run,
+    )
+    assert result == 0
+    (call,) = calls
+    assert call[: call.index("--")] == [
+        "tj",
+        "_session",
+        "--host",
+        host.value,
+        *metadata,
+    ]
+    assert call[-2:] == ["--", prompt]
+
+
+def test_exact_resume_checks_the_selected_executable_and_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = Mock()
+    server.request.return_value = {"data": [], "nextCursor": None}
+    connect = Mock(return_value=nullcontext(server))
+    probe = Mock(return_value=subprocess.CompletedProcess([], 0, "{}", ""))
+    monkeypatch.setattr(codex_launch.processes, "inventory", dict)
+    monkeypatch.setattr(codex_launch.process, "run", probe)
+    monkeypatch.setattr(codex_launch, "daemon", connect)
+    codex_launch.require_stopped_thread("fixture", "selected-native")
+    assert probe.call_args.args[0][0] == "selected-native"
+    connect.assert_called_once_with(native="selected-native")
 
 
 def test_native_foreground_command_keeps_the_calling_console(tmp_path: Path) -> None:

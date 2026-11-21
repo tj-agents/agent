@@ -137,12 +137,13 @@ def test_handoff_preserves_item_parent_and_standing_rule(
     assert spec is not None and spec.loader is not None
     launcher = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launcher)
-    cli = launcher._load_agent_cli()
-    monkeypatch.setattr(launcher, "_load_agent_cli", lambda: cli)
-    adapter = cli.host_launch(host)
-    monkeypatch.setattr(
-        adapter, "resolve_executable", lambda **kwargs: ("fixture-agent", {})
-    )
+    cli = launcher.agent_cli
+    if host is Host.CODEX:
+        monkeypatch.setattr(
+            launcher.codex_launch,
+            "resolve_executable",
+            lambda **kwargs: ("fixture-agent", {}),
+        )
     monkeypatch.setattr(
         agent_store,
         "run",

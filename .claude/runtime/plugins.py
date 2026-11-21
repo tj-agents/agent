@@ -30,7 +30,7 @@ MAINTENANCE_COMMANDS = frozenset({
 NODE_SHIM_BYPASSED = False
 
 
-def resolve_executable(*, maintenance: bool = False) -> str:
+def resolve_executable(*, maintenance: bool = False, start_if_absent: bool = False) -> str:
     return agent_cli.host_launch(HOST).resolve_executable()
 
 

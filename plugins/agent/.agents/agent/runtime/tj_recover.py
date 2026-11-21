@@ -207,7 +207,7 @@ def plan(
             session=session["session"],
             item=item["ref"] if item else None,
             title=launch.get("title") or session.get("title") or session["session"],
-            parent=launch.get("parent") or session.get("parent"),
+            parent=launch.get("parent") if launch else session.get("parent"),
             launch_id=session.get("launch_id"),
             directory=launch.get("worktree")
             or session.get("worktree")

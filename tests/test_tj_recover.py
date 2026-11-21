@@ -265,8 +265,10 @@ def test_recover_background_respawns_in_place(recovery: Recovery) -> None:
     assert recovery.launched == []
 
 
+@pytest.mark.parametrize("parent", [None, "claude:parent"])
 def test_recover_preserves_launch_metadata_and_existing_links(
     recovery: Recovery,
+    parent: str | None,
 ) -> None:
     recovery.session(
         Host.CODEX,
@@ -275,12 +277,13 @@ def test_recover_preserves_launch_metadata_and_existing_links(
         title="session title",
         links=[{"item": {"ref": ITEM}, "role": "reviewer"}],
     )
+    recovery.records[0]["parent"] = "codex:older-launch"
     recovery.launches.append(
         {
             "launch_id": "original",
             "title": "recorded title",
             "item": {"ref": ITEM},
-            "parent": "claude:parent",
+            "parent": parent,
             "worktree": str(recovery.root),
         }
     )
@@ -288,7 +291,7 @@ def test_recover_preserves_launch_metadata_and_existing_links(
     assert code == 0
     assert recovery.launched[0]["title"] == "recorded title"
     assert recovery.launched[0]["item"] == ITEM
-    assert recovery.launched[0]["parent"] == "claude:parent"
+    assert recovery.launched[0]["parent"] == parent
     assert recovery.records[0]["links"][0]["role"] == "reviewer"
     assert rows[0]["previous_launch_id"] == "original"
     assert recovery.launches[0]["launch_id"] == "original"
@@ -398,7 +401,7 @@ def test_recover_uses_windows_terminal_or_tmux_with_fake_processes(
     assert recovery.run()[0] == 0
     expected = "new-tab" if windows else "new-window"
     assert expected in commands[0]
-    assert "_session" in commands[0]
+    assert commands[0][commands[0].index("--tj-tab") - 1] == "codex"
     assert "resume" in commands[0]
     assert "recent" in commands[0]
 

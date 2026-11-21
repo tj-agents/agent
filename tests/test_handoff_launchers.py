@@ -76,9 +76,9 @@ def launcher(
     for name in ("TJ_RUN_LAUNCH_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID"):
         monkeypatch.delenv(name, raising=False)
     module = load(PACKAGE / f"resources/handoff/launch_{host}.py", f"handoff_{host}")
-    monkeypatch.setattr(module, "_load_agent_cli", lambda: cli)
+    monkeypatch.setattr(module, "agent_cli", cli)
     if host == Host.CODEX:
-        monkeypatch.setattr(cli.host_launch(host), "resolve_executable", executable)
+        monkeypatch.setattr(module.codex_launch, "resolve_executable", executable)
     return Launcher(
         host, module, cli, tmp_path, prompt, launch, item, executable, resolve_item
     )
@@ -168,7 +168,7 @@ def test_parent_and_item_reach_launch(launcher: Launcher) -> None:
         "item": "auto-item",
         "parent": "claude:p",
     }
-    assert '"parent tab" (claude:p)' in launcher.launch.call_args.args[3][-1]
+    assert "tj message to contact claude:p" in launcher.launch.call_args.args[3][-1]
 
 
 @pytest.mark.parametrize(
@@ -225,13 +225,17 @@ def test_without_parent_prompt_has_no_standing_rule(launcher: Launcher) -> None:
     launcher.item.assert_called_once_with(None, launcher.directory)
 
 
-def test_calling_session_becomes_parent(
+def test_inherited_session_and_launch_identities_do_not_create_a_parent(
     launcher: Launcher, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CODEX_THREAD_ID", "caller")
-    code, _, err = launcher.run("--lane", "L4")
+    monkeypatch.setenv("TJ_RUN_LAUNCH_ID", "previous")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "other")
+    code, out, err = launcher.run("--lane", "L4")
     assert code == 0, err
-    assert launcher.launch.call_args.kwargs["parent"] == "codex:caller"
+    assert launcher.launch.call_args.kwargs["parent"] is None
+    assert "parent" not in json.loads(out.splitlines()[-1])
+    assert "Standing rule" not in launcher.launch.call_args.args[3][-1]
 
 
 def test_unconfirmed_launch_exits_three(launcher: Launcher) -> None:
@@ -239,6 +243,24 @@ def test_unconfirmed_launch_exits_three(launcher: Launcher) -> None:
     code, _, err = launcher.run("--lane", "L4")
     assert code == 3
     assert "check the terminal" in err
+
+
+def test_requested_codex_floor_is_checked_during_actual_preparation(
+    launcher: Launcher,
+) -> None:
+    if launcher.host is not Host.CODEX:
+        return
+    code, _, err = launcher.run("--lane", "L4", "--minimum-version", "0.171.0")
+    assert code == 0, err
+    launcher.executable.side_effect = launcher.cli.LaunchError(
+        "no compatible executable"
+    )
+    prepare = launcher.launch.call_args.kwargs["prepare"]
+    with pytest.raises(launcher.cli.LaunchError, match="no compatible executable"):
+        prepare(launcher.directory, "Floor", [], "tj", {})
+    launcher.executable.assert_called_once_with(
+        minimum="0.171.0", match_daemon=True, start_if_absent=True
+    )
 
 
 def test_blank_title_is_refused(launcher: Launcher) -> None:

@@ -163,9 +163,10 @@ same Claude entry or Codex pattern from any plugin, whichever way the plugin dec
 tj claude [native arguments]         managed Claude in this terminal
 tj codex [prompt]                    new managed Codex in this terminal
 tj codex resume UUID                resume an exact Codex thread in this terminal
-tj start 461 --lane L4 [--codex]     Core worktree creator, card In Progress, agent in a tj run tab
+tj handoff --help                    open prepared work in a named managed tab
+tj start 461 --lane L4 [--codex]     Core worktree creator, card In Progress, agent in a managed tab
 tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
-tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
+tj recover [461 | --session H]        respawn dead background sessions, resume the rest in managed tabs
 tj recover --dry-run                 preview restores and stale sessions to end without changing anything
 tj recover --open [461]              reopen exactly the tabs that were open whose agent is not running
 tj prepare --host claude|codex       validate selection and install missing plugins
@@ -176,8 +177,8 @@ tj prepare --host claude --write    apply repository settings and standards chan
 New worktrees use [Core's shared creator](https://github.com/tj-agents/core/blob/main/.agents/engineering/operation/open-worktree/SKILL.md)
 from the enabled Base plugin. `tj start` no longer reads or seeds worktrunk configuration; a missing
 creator stops the launch before tracker progress changes.
-Handoff tabs are Windows Terminal or tmux tabs whose root process is `tj run`, from
-[TJ CLI](https://github.com/tj-agents/cli). `tj run` records the launch in agent-store. The SessionStart
+Handoff tabs open in Windows Terminal or tmux through `tj claude` or `tj codex`.
+The managed wrapper records the launch in agent-store. The SessionStart
 hook then binds the native session to that launch, so the session inherits its title, work item and parent,
 and a Codex thread is named after its title. Liveness always comes from the hosts:
 `claude agents --json`, and Codex process evidence plus threads loaded in the shared app-server daemon.
@@ -186,7 +187,10 @@ default local daemon. The Rust wrapper ensures that daemon before creating the f
 or Windows Job, and uses the same resolved native executable for its control connection. Plugin refresh
 can then reload the running engine while leaving the frontend and its draft in place. Native flags that
 cannot attach to this endpoint fail at launch; `--no-daemon`, hook-trust bypass and other remote endpoints
-are rejected. Prepared launches retain the lane's model and reasoning effort.
+are rejected. Managed launches select a verified executable matching the running daemon. A fresh
+daemon starts from the newest supported local CLI. A previously pinned daemon package can start
+at its pinned version. Replacing it requires a maintenance window because the upstream daemon
+update can interrupt work and drafts. Prepared launches retain the lane's model and reasoning effort.
 Launch confirmation checks native process ownership, the loaded daemon thread and the first recorded turn against both requested settings; a mismatch or missing
 first turn fails visibly and preserves the tab for inspection. The store holds links only. Its release is pinned in
 `.agents/agent/runtime/agent-store.json`, which Renovate bumps.

@@ -34,6 +34,6 @@ Use `--older` to include older dead sessions and `--ended` to include ended sess
 `--session <host:session-id>` or a positional work item. `--dry-run` reports would-resume, would-respawn,
 would-end and would-fail actions without changing sessions, launch records or terminals.
 
-Claude background sessions respawn in place. Other selected sessions resume through `tj run` in new
+Claude background sessions respawn in place. Other selected sessions resume through `tj claude` or `tj codex` in new
 Windows Terminal or tmux tabs in their recorded worktrees. Preserve each session's title, item link,
 parent and launch row.

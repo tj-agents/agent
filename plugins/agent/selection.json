@@ -72,8 +72,7 @@
         "agent sessions"
       ],
       "requires": [
-        "native host",
-        "tj for feed transport"
+        "tj"
       ],
       "provenance": [
         "house"

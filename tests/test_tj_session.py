@@ -385,7 +385,12 @@ def test_codex_strict_inventory_checks_every_page_for_a_loaded_conversation(
         return subprocess.CompletedProcess(command, 0, "{}", "")
 
     monkeypatch.setattr(agent_store, "run", backend.show)
-    monkeypatch.setattr(adapter, "executable", lambda: "fixture-codex")
+
+    def executable(*, match_daemon: bool) -> str:
+        assert match_daemon
+        return "fixture-codex"
+
+    monkeypatch.setattr(adapter, "executable", executable)
     monkeypatch.setattr(adapter, "daemon", lambda: server)
     monkeypatch.setattr(
         codex_processes,

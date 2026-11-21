@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -5,7 +6,7 @@ from typing import NoReturn
 
 import install
 import pytest
-from codex import observer
+from codex import launch, observer
 
 
 def test_no_socket_needs_no_observer(tmp_path: Path) -> None:
@@ -32,7 +33,9 @@ def test_hook_entrypoint_works_without_a_running_daemon(
     assert result.stderr == ""
 
 
-def test_start_waits_for_ready_without_restarting_the_daemon(tmp_path: Path) -> None:
+def test_start_waits_for_ready_without_restarting_the_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     socket = observer.socket_path(tmp_path)
     socket.parent.mkdir()
     socket.touch()
@@ -43,16 +46,43 @@ def test_start_waits_for_ready_without_restarting_the_daemon(tmp_path: Path) -> 
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, next(results), "", "")
 
-    assert observer.ensure(tmp_path, tmp_path, native="exact-native", run=run)
+    default_home = tmp_path / "other-home"
+    monkeypatch.setenv("CODEX_HOME", str(default_home))
+    managed = str(tmp_path / "managed-codex")
+    newest = str(tmp_path / "newest-codex")
+    monkeypatch.setattr(launch, "candidate_paths", lambda: [newest])
+
+    def version(
+        command: list[str], *, env: dict[str, str] | None = None, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if command[1:] == ["--version"]:
+            output = {newest: "codex-cli 0.171.0", managed: "codex-cli 0.170.0"}[
+                command[0]
+            ]
+        else:
+            assert command == [newest, "app-server", "daemon", "version"]
+            home = str(default_home) if env is None else env["CODEX_HOME"]
+            active = {str(default_home): "0.171.0", str(tmp_path): "0.170.0"}[home]
+            output = json.dumps(
+                {
+                    "status": "running",
+                    "appServerVersion": active,
+                    "managedCodexPath": managed,
+                }
+            )
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr(launch.process, "run", version)
+    assert observer.ensure(tmp_path, tmp_path, run=run)
     assert [command[-1] for command, _ in calls] == ["--status", "--start", "--status"]
     assert calls[1][1]["preserve_descendants"] is True
     assert all(str(socket) in command for command, _ in calls)
-    assert all(
-        command[command.index("--codex") + 1] == "exact-native" for command, _ in calls
-    )
+    assert all(command[command.index("--codex") + 1] == managed for command, _ in calls)
 
 
-def test_idle_daemon_needs_no_observer(tmp_path: Path) -> None:
+def test_idle_daemon_needs_no_observer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     socket = observer.socket_path(tmp_path)
     socket.parent.mkdir()
     socket.touch()
@@ -60,7 +90,12 @@ def test_idle_daemon_needs_no_observer(tmp_path: Path) -> None:
     def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(command, 3, "", "")
 
-    assert observer.status(tmp_path, tmp_path, native="exact-native", run=run)
+    def executable(*, match_daemon: bool, codex_home: Path) -> str:
+        assert match_daemon and codex_home == tmp_path
+        return "exact-native"
+
+    monkeypatch.setattr(launch, "executable", executable)
+    assert observer.status(tmp_path, tmp_path, run=run)
 
 
 def test_last_thread_exits_during_start_without_failing_setup(tmp_path: Path) -> None:
