@@ -89,10 +89,10 @@ def update_plugins(host: str) -> int:
 
 @pytest.fixture(autouse=True)
 def report_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-    """Every native command Report.run dispatches while plugin_update.update() runs."""
+    """Record native commands dispatched through the fake process runner."""
     commands: list[list[str]] = []
 
-    def run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
         commands.append(command)
         return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -282,7 +282,7 @@ def test_an_interrupted_update_still_activates_on_the_next_call(
 
 
 def test_current_plugins_activate_once_per_marketplace_revision(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, report_commands: list[list[str]]
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(plugin_update, "already_current", lambda *args: True)
@@ -296,10 +296,15 @@ def test_current_plugins_activate_once_per_marketplace_revision(
         monkeypatch.setattr(
             plugin_update, "marketplace_revision", lambda *_, at=revision: at
         )
-        assert not plugin_update.update(
-            Host.CODEX, Digests(tmp_path / "state"), {}
-        ).failures
+        outcome = plugin_update.update(Host.CODEX, Digests(tmp_path / "state"), {})
+        assert not outcome.failures
+        assert outcome.publish(Host.CODEX, plugin_update.Report.run) is None
     assert events == ["activated", "activated"]
+    assert [command[-1] for command in report_commands] == [
+        "a" * 40,
+        "--if-stale",
+        "b" * 40,
+    ]
 
 
 @pytest.mark.parametrize("failed", [False, True])
@@ -399,7 +404,10 @@ def test_repaired_approvals_invalidate_activation_until_backend_reload_succeeds(
     first = plugin_update.update(Host.CODEX, Digests(state), {})
     assert first.failures == ["codex: open sessions: reload failed"]
     assert not receipt.exists()
-    assert not plugin_update.update(Host.CODEX, Digests(state), {}).failures
+    repaired = plugin_update.update(Host.CODEX, Digests(state), {})
+    assert not repaired.failures
+    assert receipt.read_text(encoding="utf-8").startswith(f"pending {revision} ")
+    assert repaired.publish(Host.CODEX, plugin_update.Report.run) is None
     assert receipt.read_text(encoding="utf-8") == revision
     assert not plugin_update.update(Host.CODEX, Digests(state), {}).failures
     assert attempts == ["reload", "reload"]

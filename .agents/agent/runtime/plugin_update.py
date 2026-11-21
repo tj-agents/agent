@@ -204,7 +204,7 @@ def agent_package(host: Host, state: Path) -> Path | None:
 
 
 @dataclass(frozen=True, slots=True)
-class PendingActivation:
+class ActivationReceipt:
     path: Path
     identity: str
 
@@ -214,7 +214,7 @@ class Outcome:
     failures: list[str]
     changed: bool
     revision: str | None
-    activation: PendingActivation | None = None
+    receipt: ActivationReceipt | None = None
 
     def publish(
         self, host: Host, run: Callable[..., subprocess.CompletedProcess[str]]
@@ -222,27 +222,34 @@ class Outcome:
         """Announce the installed revision and settle its activation receipt."""
         if self.failures or self.revision is None:
             return None
-        if self.activation is None:
-            return self._announce(host, self.revision, run)
-        receipt = self.activation
+        receipt = self.receipt
+        assert receipt is not None
+        pending = receipt.identity != self.revision
         try:
             with jobs.held(receipt.path.parent, jobs.Job.PLUGINS) as acquired:
                 if not acquired:
                     return "another plugin update is running; retry publication"
                 if receipt.path.read_text(encoding="utf-8") != receipt.identity:
                     return "plugin publication was superseded; retry the update"
-                if problem := self._announce(host, self.revision, run):
+                if problem := self._announce(
+                    host, self.revision, run, conditional=not (pending or self.changed)
+                ):
                     return problem
-                receipt.path.write_text(self.revision, encoding="utf-8")
+                if pending:
+                    receipt.path.write_text(self.revision, encoding="utf-8")
+        except FileNotFoundError:
+            return "plugin publication was superseded; retry the update"
         except OSError as error:
             return f"activation receipt: {error}"
         return None
 
+    @staticmethod
     def _announce(
-        self,
         host: Host,
         revision: str,
         run: Callable[..., subprocess.CompletedProcess[str]],
+        *,
+        conditional: bool,
     ) -> str | None:
         command = [
             str(native_runtime.executable()),
@@ -252,7 +259,7 @@ class Outcome:
             "--revision",
             revision,
         ]
-        if not self.changed and self.activation is None:
+        if conditional:
             command.append("--if-stale")
         try:
             result = run(
@@ -336,13 +343,15 @@ def _update(
     ):
         report.fail(host, "native commands and launch runtime", problem)
     revision = marketplace_revision(host)
-    activation = None
+    receipt = None
     # Keep activation pending until even a same-revision repair is announced.
     try:
         settled = pins_current and activated.read_text(encoding="utf-8") == revision
     except OSError:
         settled = False
-    if not report.failures and not settled:
+    if settled and revision is not None:
+        receipt = ActivationReceipt(activated, revision)
+    elif not report.failures:
         installed.activate(report)
         if not report.failures and revision is not None:
             identity = f"pending {revision} {uuid4().hex}"
@@ -351,11 +360,11 @@ def _update(
             except OSError as error:
                 report.fail(host, "activation receipt", str(error))
             else:
-                activation = PendingActivation(activated, identity)
+                receipt = ActivationReceipt(activated, identity)
     if revision is None and not report.failures:
         report.fail(
             host, "marketplace revision", "the tj-agents marketplace has no commit"
         )
     return Outcome(
-        report.failures, not pins_current or revision != before, revision, activation
+        report.failures, not pins_current or revision != before, revision, receipt
     )

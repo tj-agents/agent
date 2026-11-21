@@ -160,7 +160,6 @@ RETIRED_ENTRIES = (
     "plugin-refresh.json",
     "plugin-refresh.log",
     "plugin-update.json",
-    "plugin-update.lock",
     "plugin-update.log",
     "publish-update-owner-setup-result.json",
     "published-manifest.json",

@@ -37,10 +37,22 @@ def test_concurrent_update_does_not_mutate_or_publish(
 
 
 def cached_update(
-    *_args: object, converge_runtime: Callable[[], str | None]
+    host: Host,
+    digests: Digests,
+    _environ: object,
+    *,
+    converge_runtime: Callable[[], str | None],
 ) -> plugin_update.Outcome:
     problem = converge_runtime()
-    return plugin_update.Outcome([problem] if problem else [], False, "revision")
+    revision = "revision"
+    if problem:
+        return plugin_update.Outcome([problem], False, revision)
+    path = digests.path.parent / f"activated-{host}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(revision, encoding="utf-8")
+    return plugin_update.Outcome(
+        [], False, revision, plugin_update.ActivationReceipt(path, revision)
+    )
 
 
 def test_a_plugin_update_moves_the_tj_commands_to_the_installed_agent_runtime(
@@ -172,14 +184,21 @@ def run_update(
         commands.append(command)
         return subprocess.CompletedProcess(command, publish_code, "", "tj is gone")
 
-    monkeypatch.setattr(jobs, "state_directory", lambda: tmp_path / "state")
+    state = tmp_path / "state"
+    state.mkdir()
+    receipt = state / "activated-claude.txt"
+    receipt.write_text(REVISION, encoding="utf-8")
+    monkeypatch.setattr(jobs, "state_directory", lambda: state)
     monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path / "verified-bin"))
     monkeypatch.setenv("PATH", str(tmp_path / "older-bin"), prepend=os.pathsep)
     monkeypatch.setattr(
         plugin_update,
         "update",
         lambda *_args, **_kwargs: plugin_update.Outcome(
-            failures or [], changed, REVISION
+            failures or [],
+            changed,
+            REVISION,
+            plugin_update.ActivationReceipt(receipt, REVISION),
         ),
     )
     monkeypatch.setattr(process, "run", run)
@@ -275,8 +294,9 @@ def test_failed_publication_retries_repairs_at_the_same_revision(
     ]
 
 
+@pytest.mark.parametrize("older_receipt", [REVISION, "older activation"])
 def test_superseded_activation_cannot_publish_or_overwrite_the_receipt(
-    tmp_path: Path,
+    tmp_path: Path, older_receipt: str
 ) -> None:
     receipt = tmp_path / "activated-claude.txt"
     receipt.write_text("newer activation", encoding="utf-8")
@@ -287,7 +307,7 @@ def test_superseded_activation_cannot_publish_or_overwrite_the_receipt(
         pytest.fail("A superseded activation cannot call the native publisher")
 
     outcome = plugin_update.Outcome(
-        [], True, REVISION, plugin_update.PendingActivation(receipt, "older activation")
+        [], False, REVISION, plugin_update.ActivationReceipt(receipt, older_receipt)
     )
     assert (
         outcome.publish(Host.CLAUDE, unexpected)

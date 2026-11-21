@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
 import install  # noqa: E402
 import native_runtime  # noqa: E402
-from plugin_update import Outcome  # noqa: E402
+from plugin_update import ActivationReceipt, Outcome  # noqa: E402
 from tj_agent.host import Host  # noqa: E402
 import tomllib  # noqa: E402
 
@@ -1592,12 +1592,19 @@ def test_an_install_outside_the_managed_runtime_runs_its_own_build(
 
 
 def outcome(
+    state: Path,
+    host: Host,
     *,
     changed: bool = True,
     failures: list[str] | None = None,
-    revision: str | None = "f" * 40,
 ) -> Outcome:
-    return Outcome(failures or [], changed, revision)
+    revision = "f" * 40
+    if failures:
+        return Outcome(failures, changed, revision)
+    state.mkdir(parents=True, exist_ok=True)
+    path = state / f"activated-{host}.txt"
+    path.write_text(revision, encoding="utf-8")
+    return Outcome([], changed, revision, ActivationReceipt(path, revision))
 
 
 def published_context(tmp_path: Path, run: object) -> install.Context:
@@ -1616,7 +1623,9 @@ def test_install_publishes_the_marketplace_revision_for_a_host_that_moved(
 
     context = published_context(tmp_path, run)
     with contextlib.redirect_stdout(io.StringIO()):
-        code = install.publish_update(context, {Host.CLAUDE: outcome()})
+        code = install.publish_update(
+            context, {Host.CLAUDE: outcome(context.state_directory, Host.CLAUDE)}
+        )
     assert code == 2 * returncode
     assert calls == [
         [
@@ -1642,8 +1651,10 @@ def test_install_asks_tj_to_republish_only_a_stale_record_when_nothing_moved(
 
     context = published_context(tmp_path, run)
     outcomes = {
-        Host.CLAUDE: outcome(changed=False),
-        Host.CODEX: outcome(failures=["codex: list: boom"]),
+        Host.CLAUDE: outcome(context.state_directory, Host.CLAUDE, changed=False),
+        Host.CODEX: outcome(
+            context.state_directory, Host.CODEX, failures=["codex: list: boom"]
+        ),
     }
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -1678,7 +1689,7 @@ def full_install(
     def update(host: Host, _digests: object, environ: object) -> Outcome:
         assert environ is context.environ
         updated.append(host)
-        return outcome(changed=False)
+        return outcome(context.state_directory, host, changed=False)
 
     calls: list[list[str]] = []
 
@@ -1773,7 +1784,7 @@ def test_a_full_install_delivers_the_native_cli_before_updating_plugins(
     def update(host: Host, _digests: object, environ: object) -> Outcome:
         assert environ is context.environ
         order.append(host.value)
-        return outcome(changed=False)
+        return outcome(context.state_directory, host, changed=False)
 
     native = install.Step(
         "native CLI", lambda _context: ["install"], deliver, required=True
