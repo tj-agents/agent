@@ -1,0 +1,19 @@
+{
+  "name": "agent",
+  "displayName": "Agent",
+  "description": "Reusable agent sessions, coordination and native host operations.",
+  "author": {
+    "name": "Tommy Seery"
+  },
+  "repository": "https://github.com/tj-agents/agent",
+  "skills": "./skills/",
+  "hooks": "./hooks/claude.json",
+  "keywords": [
+    "agent"
+  ],
+  "dependencies": [
+    "base@tj-agents",
+    "agent-store@tj-agents",
+    "cli@tj-agents"
+  ]
+}

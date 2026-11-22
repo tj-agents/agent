@@ -1,0 +1,220 @@
+"""Claude's native plugin inventory contract (Python 3.9+)."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+import functools
+import json
+import os
+from pathlib import Path
+
+import agent_cli
+from tj_agent.host import Host
+import required_plugins
+import standards
+from tj_cli import process
+
+HOST = Host.CLAUDE
+VALUE_OPTIONS = frozenset({
+    "--model", "--permission-mode", "--settings", "--setting-sources", "--plugin-dir", "--plugin-url",
+})
+CONFIGURATION_OPTIONS = frozenset({"--settings", "--setting-sources", "--plugin-dir", "--plugin-url"})
+FLAG_OPTIONS: frozenset[str] = frozenset()
+DIRECTORY_OPTIONS: frozenset[str] = frozenset()
+INFORMATION_OPTIONS = frozenset({"--help", "-h", "--version", "-v"})
+MAINTENANCE_COMMANDS = frozenset({
+    "plugin", "plugins", "auth", "doctor", "install", "setup-token", "update", "upgrade", "mcp",
+})
+NODE_SHIM_BYPASSED = False
+
+
+def resolve_executable() -> str:
+    return agent_cli.host_launch(HOST).resolve_executable()
+
+
+@functools.lru_cache(maxsize=None)
+def git_common_directory(project: Path) -> str | None:
+    if not project.is_dir():
+        return None
+    for directory in (project, *project.parents):
+        marker = directory / ".git"
+        if marker.is_dir():
+            return os.path.normcase(str(marker.resolve()))
+        if marker.exists():
+            return os.path.normcase(str(linked_common_directory(marker)))
+    return None
+
+
+def linked_common_directory(marker: Path) -> Path:
+    try:
+        link = marker.read_text(encoding="utf-8").strip()
+        if not link.startswith("gitdir:"):
+            raise ValueError(f"{marker} is not a gitdir link")
+        metadata = (marker.parent / link.removeprefix("gitdir:").strip()).resolve()
+        if not (metadata / "HEAD").is_file():
+            raise ValueError(f"{metadata} is not Git metadata")
+        common = metadata / "commondir"
+        if not common.is_file():
+            return metadata
+        return (metadata / common.read_text(encoding="utf-8").strip()).resolve()
+    except (OSError, ValueError) as error:
+        raise required_plugins.RequiredPluginsError(
+            f"Cannot resolve the native Claude repository for {marker.parent}: {error}"
+        ) from error
+
+
+def installations(project: Path, entries: list) -> list:
+    if not entries:
+        return []
+    project = project.resolve()
+    common = git_common_directory(project)
+    selected, seen = [], set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        scope, owner = entry.get('scope'), entry.get('projectPath')
+        if scope in {'project', 'local'}:
+            if not isinstance(owner, str) or not owner:
+                continue
+            owner = Path(owner).resolve()
+            try:
+                owner_common = git_common_directory(owner)
+            except required_plugins.RequiredPluginsError:
+                continue
+            if common and owner_common:
+                if common != owner_common:
+                    continue
+            elif not project.is_relative_to(owner):
+                continue
+            key = entry.get('id'), scope
+            if key in seen:
+                continue
+            seen.add(key)
+        elif owner and scope not in {'user', 'managed'}:
+            if not isinstance(owner, str) or not project.is_relative_to(Path(owner).resolve()):
+                continue
+        selected.append(entry)
+    return selected
+
+
+def location(entry: dict, project: Path) -> tuple[str, Path] | None:
+    identity, path = entry.get("id"), entry.get("installPath")
+    if not isinstance(identity, str) or not required_plugins.IDENTITY.fullmatch(identity) or not isinstance(path, str):
+        return None
+    return identity, Path(path)
+
+
+def require_inventory_options(options: tuple[str, ...]) -> None:
+    return None
+
+
+def inventory_marketplaces(required: tuple[str, ...]) -> tuple[str | None, ...]:
+    return (None,)
+
+
+def inventory_entries(data: object) -> object:
+    return data
+
+
+def ensure_hooks(project: Path, executable: str | None = None, *, running_session: bool = False,
+                 required_roots: Mapping[str, Path] | None = None) -> str | None:
+    return None
+
+
+def prepare_instructions(project: Path, *, write: bool = False) -> bool:
+    pointer = project / "CLAUDE.md"
+    shared = project / "AGENTS.md"
+    for path in (pointer, shared):
+        if path.is_symlink() or path.is_junction():
+            raise standards.StandardsError(
+                f"Refusing redirected instruction file: {path}"
+            )
+    original = pointer.read_text(encoding="utf-8") if pointer.exists() else ""
+    if original.strip() == "@AGENTS.md":
+        return False
+    if not write:
+        return True
+    if original.strip():
+        current = shared.read_text(encoding="utf-8") if shared.exists() else ""
+        content = "\n".join(
+            line for line in original.splitlines() if line.strip() != "@AGENTS.md"
+        ).strip()
+        shared.write_text(current.rstrip() + "\n\n" + content + "\n", encoding="utf-8")
+    pointer.write_text("@AGENTS.md\n", encoding="utf-8")
+    return True
+
+def user_enabled() -> Mapping[str, object]:
+    try:
+        settings = json.loads((HOST.configuration_root / "settings.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    enabled = settings.get("enabledPlugins") if isinstance(settings, dict) else None
+    return enabled if isinstance(enabled, dict) else {}
+
+
+def user_command(*arguments: str) -> list[str]:
+    return ["claude", "--setting-sources", "user", "plugin", *arguments]
+
+
+def disable_user(identities: Sequence[str], run: Callable | None = None) -> list[str]:
+    run = process.run if run is None else run
+    pending = list(identities)
+    disabled = []
+    while pending:
+        refused = {}
+        for identity in pending:
+            result = run(
+                user_command("disable", identity, "--scope", "user", "--json"),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120, check=False,
+            )
+            if result.returncode:
+                refused[identity] = (result.stderr or result.stdout).strip()
+            else:
+                disabled.append(identity)
+        if len(refused) == len(pending):
+            raise required_plugins.RequiredPluginsError("; ".join(
+                f"claude plugin disable {identity}: {error}"
+                for identity, error in refused.items()
+            ))
+        pending = list(refused)
+    return disabled
+
+
+@contextmanager
+def preserve_user_scope() -> Iterator[None]:
+    enabled = dict(user_enabled())
+    try:
+        yield
+    finally:
+        disable_user(sorted(
+            identity for identity, value in user_enabled().items()
+            if value is True and (identity.endswith("@tj-agents") or enabled.get(identity) is not True)
+        ))
+
+
+def plugin_command(project: Path, identity: str, *arguments: str) -> None:
+    command = user_command(*arguments, identity, "--scope", "user", "--json")
+    if arguments[0] in {"install", "update"}:
+        command.append("-y")
+    result = process.run(
+        command,
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=False,
+    )
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise required_plugins.RequiredPluginsError(
+            f"Cannot {arguments[0]} {identity} for {project}: {detail}"
+        )
+
+
+def install(project: Path, identities: Sequence[str]) -> None:
+    with preserve_user_scope():
+        for identity in identities:
+            plugin_command(project, identity, "install")

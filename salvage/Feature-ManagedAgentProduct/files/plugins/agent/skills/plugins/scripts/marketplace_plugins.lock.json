@@ -1,0 +1,296 @@
+{
+  "repository": "tj-agents/marketplace",
+  "revision": "f00a9bec494e13030edf17cd039b86c2816e9f57",
+  "marketplace": {
+    "name": "tj-agents",
+    "description": "Shared base, Agent Store, agent, CLI, workflow, engineering, documentation, C++, .NET, React, Neovim, Rust, Python, GitHub, GitHub Actions, and Azure agent capabilities, plus Template for building plugin repositories.",
+    "owner": "Tommy Seery",
+    "plugins": [
+      {
+        "name": "base",
+        "repository": "core",
+        "revision": "c3b1d857c593f9d7641f717d54cbc9bf091514a1",
+        "kind": "shared"
+      },
+      {
+        "name": "agent-store",
+        "repository": "agent",
+        "revision": "6455ad12c3b5e8506a787e81e2a38cdebe05cdf0",
+        "requires": [
+          "base"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "agent",
+        "repository": "agent",
+        "revision": "6455ad12c3b5e8506a787e81e2a38cdebe05cdf0",
+        "requires": [
+          "base",
+          "agent-store",
+          "cli"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "codex",
+        "repository": "agent",
+        "revision": "6455ad12c3b5e8506a787e81e2a38cdebe05cdf0",
+        "requires": [
+          "agent"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "cli",
+        "repository": "cli",
+        "revision": "fc6e15b9d5a712af93761e22c839c67c4b3f0604",
+        "requires": [
+          "base"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "workflow",
+        "repository": "core",
+        "revision": "c3b1d857c593f9d7641f717d54cbc9bf091514a1",
+        "requires": [
+          "base",
+          "agent-store",
+          "agent"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "engineering",
+        "repository": "core",
+        "revision": "c3b1d857c593f9d7641f717d54cbc9bf091514a1",
+        "requires": [
+          "base",
+          "workflow",
+          "agent-store",
+          "agent"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "docs",
+        "repository": "core",
+        "revision": "c3b1d857c593f9d7641f717d54cbc9bf091514a1",
+        "kind": "shared"
+      },
+      {
+        "name": "cpp",
+        "repository": "cpp",
+        "revision": "8a8a4b7c202737df8e3511c23671b26237e6864a",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "gpp",
+        "repository": "cpp",
+        "revision": "8a8a4b7c202737df8e3511c23671b26237e6864a",
+        "requires": [
+          "cpp"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "msvc",
+        "repository": "cpp",
+        "revision": "8a8a4b7c202737df8e3511c23671b26237e6864a",
+        "requires": [
+          "cpp"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "win32",
+        "repository": "cpp",
+        "revision": "8a8a4b7c202737df8e3511c23671b26237e6864a",
+        "requires": [
+          "cpp"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "dotnet",
+        "repository": "dotnet",
+        "revision": "3e53140f924c1e8bf803b95433ee3ef9a43e9ec6",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "efcore",
+        "repository": "dotnet",
+        "revision": "3e53140f924c1e8bf803b95433ee3ef9a43e9ec6",
+        "requires": [
+          "dotnet"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "react",
+        "repository": "react",
+        "revision": "d4fa252e473de7996e0d9bd2b169054ca5513256",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "nvim",
+        "repository": "nvim",
+        "revision": "df80e979c6475a23670a6dd577f63f443d94de84",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "rust",
+        "repository": "rust",
+        "revision": "dee77d0cfd1728787f453694379c3c048634c159",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "tauri",
+        "repository": "rust",
+        "revision": "dee77d0cfd1728787f453694379c3c048634c159",
+        "requires": [
+          "rust"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "rust-sqlx",
+        "repository": "rust",
+        "revision": "dee77d0cfd1728787f453694379c3c048634c159",
+        "requires": [
+          "rust"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "seaorm",
+        "repository": "rust",
+        "revision": "dee77d0cfd1728787f453694379c3c048634c159",
+        "requires": [
+          "rust"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "python",
+        "repository": "python",
+        "revision": "5d450364e7c496beab5bf70a94b74971ff056454",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "github",
+        "repository": "github",
+        "revision": "1e4475e6d035258209b2111f930bffeab94f1852",
+        "requires": [
+          "base"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "github-actions",
+        "repository": "github-actions",
+        "revision": "793eab87ed3bdffde0d7e53c2e88d712c49b2a3d",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "azure",
+        "repository": "azure",
+        "revision": "cc2ab031698e62b1e8e06897b623f2393c91c158",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "template",
+        "repository": "template",
+        "revision": "bf23b76ee44d221ec63bb124d63fcdb731006870",
+        "requires": [
+          "engineering",
+          "skill"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "skill",
+        "repository": "template",
+        "revision": "bf23b76ee44d221ec63bb124d63fcdb731006870",
+        "requires": [
+          "engineering"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "learning",
+        "repository": "learning",
+        "revision": "37139cc45175272c1871a723a978416b6b3acfa2",
+        "requires": [
+          "base"
+        ],
+        "kind": "shared"
+      },
+      {
+        "name": "personal",
+        "repository": "personal",
+        "revision": "ee960a4a07f8959a03894e989248c865ab586e23",
+        "requires": [
+          "engineering",
+          "agent",
+          "docs",
+          "github"
+        ],
+        "kind": "profile"
+      },
+      {
+        "name": "teams",
+        "repository": "work",
+        "revision": "f0817ffd4439a09667aa36c9132a5bcedbc1dd4c",
+        "kind": "shared"
+      },
+      {
+        "name": "work",
+        "repository": "work",
+        "revision": "f0817ffd4439a09667aa36c9132a5bcedbc1dd4c",
+        "requires": [
+          "engineering",
+          "teams"
+        ],
+        "kind": "profile"
+      },
+      {
+        "name": "company",
+        "repository": "company",
+        "revision": "f788b03adc742511fe29da5e8014ee7b096ad303",
+        "requires": [
+          "work",
+          "base",
+          "engineering"
+        ],
+        "kind": "organization",
+        "extends": "work"
+      }
+    ]
+  }
+}

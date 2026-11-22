@@ -1,0 +1,269 @@
+# agent
+
+Part of [TJ Agents](https://github.com/tj-agents), Tommy's agentic engineering standards and tooling for
+Claude Code and Codex with harness parity. Agent owns behavior that acts on an agent session: session
+registration, the lifecycle commands (`tj start`, `tj status`, `tj recover`), handoff, refresh, lanes and
+machine installation (`install.ps1`, `install.sh`). Deterministic CLI and OS mechanics with no agent
+judgement, such as closing a terminal or the clipboard, belong in `tj-agents/cli`; common behavior and the
+engineering and workflow process belong in `tj-agents/core`; the session↔work-item link store is
+`tj-agents/agent-store`.
+
+Published as `agent@tj-agents` from the shared `tj-agents` marketplace.
+
+## Packages
+
+- `agent-store`: the skill that reads the [agent-store](https://github.com/tj-agents/agent-store) link store.
+- `agent`: the lifecycle commands, session hooks, handoff, history, lanes, lane agents and refresh.
+- `codex`: Codex-specific hooks and memory.
+
+The generated packages have no dependency on a Core checkout. Shared runtime is authored beneath
+`.agents/agent/runtime`; generated payloads embed the canonical paths
+they consume. Claude-only and Codex-only runtime is authored in `.claude/runtime` and `.codex/runtime`
+and ships as the `claude` and `codex` packages inside `.agents/agent/runtime`, so runtime and tests run
+from the generated `plugins/agent` tree.
+
+Shared content hashing and publisher source loading live under the owner-qualified `tj_agent` package:
+
+```python
+from tj_agent import content
+from tj_agent.plugins import sources
+```
+
+Host adapters and runtime delivery import these implementations. Claude registration stays with its native
+plugin adapter, avoiding a second module that imports the adapter back. Generated payloads are delivery
+artifacts; edit the authored source and regenerate them.
+
+Maintainers refresh the offline Marketplace selection snapshot only with
+`.agents/agent/utility/plugins/scripts/update_marketplace_plugins.py --source <marketplace-checkout>`;
+the adjacent `marketplace_plugins.lock.json` is the canonical producer snapshot.
+
+## Install
+
+Install [TJ CLI](https://github.com/tj-agents/cli#install) first and keep `tj_hook` on `PATH`.
+Generated Claude and Codex command hooks run through this native launcher. Template's generator owns
+the wrapping; authored hook manifests keep the payload executable and arguments.
+
+`./install.ps1` on Windows or `./install.sh` on Linux converges this machine: the plugins of every installed host, retired state, native permission defaults,
+Codex's shared daemon auto-start (a `daemon_auto_start = false` override is removed so refresh can reload open
+Codex sessions in place),
+the pinned `agent-store` binary, the `tj item` CLI, worktrunk (`git-wt`), Handy, the launch runtime in `~/.agents-state/bin`, the `tj` lifecycle command shims, packaged shell profiles, Codex
+profile agents, Codex lane agents, provisioning a verified PowerShell runtime when no usable PowerShell is available, plugin
+setup, plugin scope, Codex trust for tj-agents plugin hooks (verified against their
+published source, so no Codex launch asks to trust them) and plugin copies. It is idempotent; `--check` reports
+drift without writing and `--step <name>` runs one step with its prerequisites.
+Plugin setup runs a selected plugin's `setup` only when its `setup --check` fails or its setup runtime differs
+from the one recorded at its last successful setup in `~/.agents-state/plugin-setup.json`. That record is a
+rebuildable cache: deleting it runs each selected plugin's setup once more.
+
+`tj plugins update` uses the current machine Git configuration. It removes inherited per-command Git
+configuration overrides from its own process, while preserving configuration file locations such as
+`GIT_CONFIG_GLOBAL`. A failed marketplace upgrade still attempts to settle verified installed Codex hook
+trust; the update remains failed and publishes no successful revision until convergence succeeds.
+
+`tj item` is `tj-work-items`, installed with `uv tool install` (uv is required) together with the work-item
+profile package each organization plugin installed on this machine declares in its own payload
+(a `work-items.json` naming its package and subdirectory). Its repository comes from the marketplace
+snapshot Agent already carries and its revision is the exact commit that plugin was installed from, so no
+separate pin needs renewal. The tool's own pin is in `.agents/agent/runtime/work-items.json`, which Renovate
+bumps; the step is a no-op while uv's receipt matches the pins. worktrunk and Handy come from the pinned
+`tj-cli`'s own installers.
+
+See [plugin updates](https://github.com/tj-agents/cli/blob/main/docs/plugin-updates.md) for update commands,
+automatic checks and session reloads.
+Install and a Codex session selecting Agent ensure one observer follows the existing Codex daemon while it has
+loaded threads. It checks for published updates and reloads the daemon without restarting those conversations;
+it exits when the daemon disconnects or has no loaded threads.
+Updates regenerate the calling repository's standards index before activation. Codex also reconciles
+the adopted repositories of loaded threads from verified installed builds before publishing.
+Local-only adoption preserves owner-supplied instruction files. Failed verification retains existing
+instructions and reports the update failure.
+
+`tj install` owns plugin updates, machine setup and repair, including Handy, profiles, agent settings and
+command bindings. Run from the managed runtime, it hands over to the pinned Agent build's installer, and after
+updating plugins it hands over again to the Agent build that update converged to, so it always upgrades itself.
+tj-agents plugins are never enabled for every project; each repository's selection enables its own.
+
+Managed launches repair only the failing install step and retry readiness once: missing required plugins
+(plugin setup).
+Claude installs missing transitive dependencies before dependents and verifies their persisted native
+registrations; startup still requires successful native admission and hooks.
+Readiness verifies the selection and every dependency the installed builds' `.claude-plugin/plugin.json`
+declare, transitively, inventorying every marketplace that closure reaches. A plugin Claude demotes because a dependency is disabled, missing or the wrong
+version is reported by name with that dependency.
+
+A selection lists only the plugins a repository chose. Neither host enables a plugin's dependencies on its
+own, so settings generation enables the selection's transitive dependency closure in both hosts, read from
+the `dependencies` of each marketplace's published Claude catalog on `main`. A dependency added in a later
+plugin release is enabled at the next reconciliation without editing the selection. A dependency in a
+marketplace the selection does not declare is refused. `tj prepare` regenerates offline
+(`--preserve-permissions`): it enables the plugins the previous generation enabled, which is the last
+published closure, plus the selection, so it neither disables a dependency the published resolution added
+nor restores one it dropped. Only a repository without a previous generation resolves the closure from the
+marketplace catalogs Claude, or else Codex, last fetched onto this machine. A dependency a later release
+adds is enabled by the next published reconciliation; until then readiness reports it by name.
+
+Before checking native installations, launch and installer plugin setup reconcile an existing
+repository selection and regenerate both hosts' settings through the same scope and ownership checks
+as explicit adoption. Reconciliation against the current Marketplace `main` roster removes retired
+TJ Agents packages, including retirements after the bundled offline snapshot; it never adds dependencies
+to the selection. Adoption's one-profile rule, employer check and prerequisite removal guard evaluate the
+same published catalog dependency closure that settings generation enables, never the roster.
+An unreachable marketplace leaves repository files untouched and reports the failure.
+The same reconciliation commits the published harness permissions of every enabled plugin into the
+repository's settings, never into user settings; see [repository permissions](#repository-permissions).
+Unconfigured projects are not enrolled. Installer `--check` reports
+selection drift without changing repository files, and a converged rerun writes nothing.
+
+Project reconciliation preserves checkout-local Codex settings when the committed and indexed
+configuration is portable. It checks both Git snapshots and regenerated project declarations for
+machine-specific paths. Untracked and unversioned configuration retains full path validation; the
+repository path scanner still checks the complete files before publication.
+
+Unresolved Git conflicts in the selection and generated native settings are planned through that same
+transaction before native configuration is read. Plugin membership uses a three-way set merge;
+generated host declarations are rebuilt from it, while unrelated settings retain their changes.
+Recovery requires Git's complete unmerged index and refuses conflicting user settings or committed
+conflict markers. Check mode writes nothing, and recovery leaves the index and stash intact for the
+repository's normal Git resolution workflow. The regression suite creates real stash conflicts on
+Windows and Linux, including paths with spaces and Unicode.
+
+The retired machine-event watcher (a scheduled task on Windows, a systemd user unit on Linux) is removed by
+install and SessionStart whenever an older cached build re-creates it. On Windows the same paths
+retire `tj-watch`: its Startup shortcut, its binary in `%LOCALAPPDATA%\Programs\tj`, and a running copy, which is
+stopped only when its executable path is exactly that binary.
+
+Shell profiles load the packaged shell resources from the managed runtime in `~/.agents-state/bin`;
+install rewrites the managed block. A plain `claude` or `codex` runs the native CLI.
+Neither launch nor install recovery needs a source checkout. The Windows Bash proxy is built in that
+managed directory rather than modifying the repository or an installed plugin cache.
+
+Runtime self-update accepts only enabled native Agent package bytes that match the current published
+Agent tree. Cache timestamps cannot select an older runtime. Launch updates include the current
+project's Codex selection when locating that native package; publisher lookup failure preserves the
+installed runtime and reports the update failure.
+
+## Repository permissions
+
+A repository's committed `.claude/settings.json` (`permissions.allow` and `permissions.deny`) and
+`.codex/rules/agent-harness.rules` (`allow` and `forbidden` prefix rules) carry the permissions its selected
+plugins and their transitive dependencies declare in `requires.permissions`, merged with its own
+`.agents/repository-harness.json` overlay.
+Adoption and the `tj install` plugin setup reconciliation write them; `--check` reports drift, and a committed
+rule that no selected plugin or the overlay declares any more is removed. An uncommitted Claude entry nobody
+declares is refused rather than discarded. Nothing is written to user settings.
+
+```json
+{"claude_allow": ["Bash(tj item:*)"], "claude_deny": ["Bash(gh auth login *)"],
+ "codex_prefix_rules": [], "codex_forbidden_prefix_rules": []}
+```
+
+Each plugin's declaration is read from the `harness.json` its marketplace publishes on `main`, at the exact
+source revision the marketplace catalog pins, through a blobless Git fetch. A declaration naming a
+placeholder such as `${PLUGIN_ROOT}` or a machine-specific absolute path is rejected, since the repository
+commits every rule literally.
+
+Precedence: plugins combine as a union in which a plugin's deny or forbidden rule removes the identical
+allow entry or Codex pattern. The overlay then extends that result and wins: an overlay entry replaces the
+same Claude entry or Codex pattern from any plugin, whichever way the plugin decided it.
+
+## Lifecycle
+
+```text
+tj start 461 --lane L4 [--codex]     Core worktree creator, card In Progress, agent in a tj run tab
+tj status [--json]                   open items with agents (live/idle/dead from the hosts), worktree, PR, CI, card
+tj recover [461 | --session H]        respawn dead background sessions, resume the rest in tj run tabs
+tj recover --dry-run                 preview restores and stale sessions to end without changing anything
+tj recover --open [461]              reopen exactly the tabs that were open whose agent is not running
+tj prepare --host claude|codex       prepare this repository's selected plugins and standards index
+```
+
+`tj` dispatches these to the lifecycle shims the installer writes beside it.
+New worktrees use [Core's shared creator](https://github.com/tj-agents/core/blob/main/.agents/engineering/operation/open-worktree/SKILL.md)
+from the enabled Base plugin. `tj start` no longer reads or seeds worktrunk configuration; a missing
+creator stops the launch before tracker progress changes.
+Every agent tab is a Windows Terminal or tmux tab whose root process is `tj run`, from
+[TJ CLI](https://github.com/tj-agents/cli). `tj run` records the launch in agent-store. The SessionStart
+hook then binds the native session to that launch, so the session inherits its title, work item and parent,
+and a Codex thread is named after its title. Liveness always comes from the hosts:
+`claude agents --json`, and for Codex the threads loaded in the shared app-server daemon. Codex launches
+attach explicitly to that daemon with `--remote unix://` and carry the lane's model and reasoning effort
+on the native resume command. This keeps effort overrides from selecting an embedded server.
+Launch confirmation checks daemon attachment and the first recorded turn against both requested settings; a mismatch or missing
+first turn fails visibly and preserves the tab for inspection. The store holds links only. Its release is pinned in
+`.agents/agent/runtime/agent-store.json`, which Renovate bumps.
+
+Session startup records its initial linked worktree in the store's ownership collection. Engineering's
+worktree creator calls `tj session claim-worktree --path PATH` after each creation, associating the
+exact linked root with the calling session and its launch. Primary checkouts are never claimed.
+The command returns a JSON ownership record; outside an agent session it returns `{"ownership": null}`.
+Missing or inconsistent agent identities fail visibly and leave the created worktree intact.
+Claude's synchronous registration hook exports its native identity through `CLAUDE_ENV_FILE` for
+subsequent tool commands; Codex provides `CODEX_THREAD_ID`.
+
+Before starting or resuming a host, `tj run` calls `tj prepare`. It derives native project settings
+from `.agents/plugins.json`, installs missing selected plugins, and updates a small marked standards
+index in `AGENTS.md`. It keeps the committed permissions as they are, so a launch needs no published
+harness lookup; adoption and `tj install` own them. The index requires applicable skill bodies to be read before relevant edits;
+ordinary skills remain loaded on demand. Claude imports the shared instructions through `CLAUDE.md`.
+Preparation preserves authored guidance and reports a nonempty Codex override that would hide it.
+Run `tj prepare --host codex --cwd PATH` directly when starting the native host outside `tj run`.
+
+Claude installs a missing plugin once at user scope and disables it there unless the user already
+enabled it; the repository's project or local settings enable it. Project- and local-scope installations
+would shadow the user installation and miss its updates. Codex uses its native
+shared package cache while enablement remains in project config; installation removes the user
+activation written by `codex plugin add`. Shared cache storage does not enable a plugin everywhere.
+Existing user-scoped activation must be removed when adopting this model. Native configuration in a
+local-only adoption is reconciled, but its owner's instruction files remain untouched and preparation
+warns that the owner must provide routing. Other preparation failures also warn; `tj run` still starts.
+
+Recovery considers every registered session, including those without a work item. It leaves live sessions
+alone and restores dead sessions whose host transcript changed after the previous boot. Older dead sessions
+are marked ended; `--older` includes them again, and `--ended` includes sessions that ended cleanly.
+`--open` instead reopens the newest launch of each session whose tab `tj run` last recorded as open and whose
+agent is not running; a tab closed by hand is not reopened, and logoff, shutdown or a crash leave a tab open.
+Missing transcripts and directories are reported per session. On Linux, recovery uses the previous boot
+in the systemd journal and opens tmux windows, creating and attaching to `tj-recover` from a plain terminal.
+
+## Skills
+
+- `agent:handoff`, `agent:lanes`, `agent:listen`, `agent:message`, `agent:open`, `agent:plugins`,
+  `agent:recent`, `agent:recover`, `agent:search`
+- `agent-store:inspect`
+- `codex:hooks`, `codex:memory`
+
+## Lane agents
+
+Agent publishes one lane agent per rung, rendered from the lane tables in `.agents/agent/resources/lanes`:
+Claude loads the `agent` plugin's `lane-l1` to `lane-l7` agents from its `agents/` directory, and the Codex
+lane agents step delivers `lane_l1` to `lane_l7` into `<CODEX_HOME>/agents`. It owns the files it wrote
+and adopts in place a copy that differs only in line endings; it refuses any other file. After changing a lane table or agent body, rerun the renderer and regenerate:
+
+```powershell
+python -B .agents/agent/resources/lanes/render_agents.py
+pwsh .agents/sync-generated.ps1
+```
+
+## Authoring and verification
+
+```powershell
+pwsh .agents/sync-generated.ps1
+pwsh .agents/sync-generated.ps1 -Check
+uv sync --locked
+uv run pytest
+```
+
+The runtime requires Python 3.12 or newer and retains Core's portable utility conventions. Use `python`
+on Windows and `python3` on Linux. CLI owns shared PATH operations in `tj_cli.paths`; the locked `tj-cli`
+distribution ships inside Agent's generated runtime and managed installation. Launching does not require
+a CLI source checkout or a separate package install. The development environment and CI use uv to resolve
+that same dependency and run both the migrated runtime suite and packaging checks.
+
+The installer and managed launches make the native `tj`/`tj_hook` pair available
+before native plugin operations. Missing binaries are downloaded through CLI's verified release installer,
+without a source checkout or Cargo. The installation directory is prepended to the current process PATH,
+including the environment inherited by the launched host. Routine launches with an existing pair do not
+query releases.
+
+The layout, the vendored generator and CI come from [Template](https://github.com/tj-agents/template).
+

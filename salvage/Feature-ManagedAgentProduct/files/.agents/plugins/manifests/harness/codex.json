@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "plugin": "tj-agents/codex",
+  "source_roots": [
+    ".agents/codex"
+  ],
+  "requires": {
+    "marketplaces": [
+      {
+        "id": "tj-agents",
+        "repository": "tj-agents/marketplace"
+      }
+    ],
+    "hooks": [],
+    "permissions": {
+      "claude_allow": [],
+      "codex_prefix_rules": []
+    }
+  }
+}

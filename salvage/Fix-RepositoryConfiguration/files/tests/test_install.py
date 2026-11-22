@@ -1,0 +1,884 @@
+import contextlib
+import hashlib
+import io
+import json
+import os
+from pathlib import Path, PurePosixPath
+import shlex
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+import zipfile
+from unittest import mock
+
+import pytest
+
+from git_isolation import isolate_git_config
+
+if sys.version_info < (3, 12):
+    raise unittest.SkipTest("install requires Python 3.12 or newer")
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "plugins/agent/.agents/agent/runtime"))
+import install  # noqa: E402
+
+BOM = b"\xef\xbb\xbf"
+
+
+def snapshot(root: Path) -> dict[str, bytes]:
+    return {path.relative_to(root).as_posix(): path.read_bytes()
+            for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+def completed(returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess([], returncode, stdout, stderr)
+
+
+class FakeUserEnvironment:
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+        self.broadcasts = 0
+
+    def get(self, name):
+        return self.values.get(name)
+
+    def set(self, name, value):
+        self.values[name] = value
+
+    def broadcast(self):
+        self.broadcasts += 1
+
+
+class Machine(unittest.TestCase):
+    def test_posix_install_supplies_the_interpreter_named_by_claude_hooks(self):
+        context = self.context(windows=False)
+        self.converge(step('launch-check runtime'), context)
+        alias = context.state_directory / 'bin' / 'python'
+        self.assertEqual(install.python_alias(), alias.read_text(encoding='utf-8'))
+        self.assertIn(str(alias.parent), install.posix_block(install.runtime_bin(context)))
+        if os.name != 'nt':
+            result = subprocess.run([str(alias), '-c', 'print("hook-interpreter-ready")'],
+                                    capture_output=True, text=True, timeout=10, check=True)
+            self.assertEqual('hook-interpreter-ready', result.stdout.strip())
+
+    def setUp(self):
+        isolate_git_config()
+        for name, value in (
+            ("pending", ()),
+            ("prepare", ()),
+        ):
+            native = mock.patch.object(install.native_runtime, name, return_value=value)
+            native.start()
+            self.addCleanup(native.stop)
+        temp = tempfile.TemporaryDirectory(prefix="install machine ü ")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.checkout = self.root / "main checkout"
+        (self.checkout / "shell").mkdir(parents=True)
+        (self.checkout / "shell" / "profile.ps1").write_text("# profile\n", encoding="utf-8")
+        self.documents = self.home / "Documents"
+        self.calls = []
+
+    def context(self, windows=True, run=None, which=None, user_environment=None, **environ):
+        return install.Context(
+            home=self.home,
+            project=self.checkout,
+            environ=dict(environ),
+            windows=windows,
+            run=run or self.unexpected_run,
+            which=which or (lambda name: None),
+            documents=self.documents,
+            user_environment=user_environment,
+        )
+
+    def unexpected_run(self, command, **kwargs):
+        raise AssertionError(f"unexpected command {command}")
+
+    def converge(self, step, context):
+        out = io.StringIO()
+        self.assertEqual(1, install.run_steps([step], context, True, out, io.StringIO()), out.getvalue())
+        self.assertEqual(0, install.run_steps([step], context, False, out, io.StringIO()), out.getvalue())
+        self.assertEqual([], step.check(context))
+        before = snapshot(self.root)
+        applied = mock.Mock(side_effect=step.apply)
+        rerun = install.Step(step.name, step.check, applied, step.skip)
+        self.assertEqual(0, install.run_steps([rerun], context, False, io.StringIO(), io.StringIO()))
+        applied.assert_not_called()
+        self.assertEqual(before, snapshot(self.root))
+        self.assertEqual(0, install.run_steps([rerun], context, True, io.StringIO(), io.StringIO()))
+
+
+def step(name):
+    return next(item for item in install.STEPS if item.name == name)
+
+
+class ProfileTests(Machine):
+    def profiles(self):
+        return [self.documents / name / "Microsoft.PowerShell_profile.ps1" for name in install.PROFILE_NAMES]
+
+    def block(self, newline="\r\n", loader=None):
+        loader = loader or install.profile_loader(self.context())
+        return install.powershell_block(loader, newline)
+
+    def test_missing_profiles_are_created_with_the_block(self):
+        self.converge(step("shell profiles"), self.context())
+        for path in self.profiles():
+            self.assertEqual(BOM + (self.block() + "\r\n").encode("utf-8"), path.read_bytes())
+            self.assertEqual([], list(path.parent.glob("*.bak")))
+
+    def test_profiles_put_the_runtime_bin_on_path_and_wrap_no_host(self):
+        posix = install.posix_block(install.runtime_bin(self.context(windows=False)))
+        self.assertIn(shlex.quote(str(self.home / ".agents-state" / "bin")), posix)
+        for block in (self.block(), posix):
+            self.assertNotIn("claude", block)
+            self.assertNotIn("codex", block)
+
+    def test_a_stale_block_wrapping_the_hosts_is_rewritten_without_the_wrappers(self):
+        path = self.profiles()[0]
+        path.parent.mkdir(parents=True)
+        stale = "\r\n".join([install.PROFILE_START, *(
+            f"function global:{host} {{ & 'python' -B 'C:/state/bin/retired_launcher.py' --host {host} -- @args }}"
+            for host in ("claude", "codex")), install.PROFILE_END])
+        path.write_text("# mine\r\n" + stale + "\r\n", encoding="utf-8", newline="")
+        self.converge(step("shell profiles"), self.context())
+        self.assertEqual("# mine\r\n" + self.block() + "\r\n", path.read_bytes().decode("utf-8"))
+
+    def test_an_existing_block_for_another_checkout_is_rewired(self):
+        path = self.profiles()[1]
+        path.parent.mkdir(parents=True)
+        path.write_text("first\n" + self.block("\n", Path("C:/worktree/shell/profile.ps1")) + "\nlast\n",
+                        encoding="utf-8")
+        install.apply_profile(self.context())
+        self.assertEqual("first\n" + self.block("\n") + "\nlast\n", path.read_text(encoding="utf-8"))
+
+    def test_existing_profile_is_backed_up_before_replacement(self):
+        path = self.profiles()[0]
+        path.parent.mkdir(parents=True)
+        original = b"Write-Output 'keep-me'\r\n"
+        path.write_bytes(original)
+
+        install.apply_profile(self.context())
+
+        self.assertEqual(original, path.with_suffix(path.suffix + install.PROFILE_BACKUP).read_bytes())
+
+    def test_duplicate_managed_blocks_collapse_to_one(self):
+        path = self.profiles()[1]
+        path.parent.mkdir(parents=True)
+        stale = install.PROFILE_START + "\r\nold\r\n" + install.PROFILE_END
+        path.write_text("a\r\n" + stale + "\r\nb\r\n" + stale + "\r\nc\r\n", encoding="utf-8", newline="")
+        install.apply_profile(self.context())
+        text = path.read_bytes().decode("utf-8")
+        self.assertEqual(1, text.count(install.PROFILE_START))
+        self.assertEqual("a\r\n" + self.block() + "\r\nb\r\nc\r\n", text)
+
+    def test_malformed_markers_are_rejected_without_writing(self):
+        path = self.profiles()[1]
+        path.parent.mkdir(parents=True)
+        path.write_text(install.PROFILE_START + "\nno end\n", encoding="utf-8")
+        before = snapshot(self.root)
+        out, err = io.StringIO(), io.StringIO()
+        self.assertEqual(2, install.run_steps([step("shell profiles")], self.context(), False, out, err))
+        self.assertIn("Malformed", err.getvalue())
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_an_undecodable_profile_is_skipped_with_a_reason_and_the_others_still_wire(self):
+        windows, core = self.profiles()
+        windows.parent.mkdir(parents=True)
+        core.parent.mkdir(parents=True)
+        undecodable = b"$x = \xe9\r\n"
+        windows.write_bytes(undecodable)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(0, install.run_steps([step("shell profiles")], self.context(), False, out, err))
+
+        self.assertEqual(undecodable, windows.read_bytes())
+        self.assertEqual(BOM + (self.block() + "\r\n").encode("utf-8"), core.read_bytes())
+        self.assertIn(f"warning shell profiles: {windows}: cannot decode as UTF-8 or UTF-16", err.getvalue())
+
+    def test_an_undecodable_profile_reports_a_warning_not_drift(self):
+        windows, core = self.profiles()
+        windows.parent.mkdir(parents=True)
+        core.parent.mkdir(parents=True)
+        core.write_bytes(BOM + (self.block() + "\r\n").encode("utf-8"))
+        undecodable = b"$x = \xe9\r\n"
+        windows.write_bytes(undecodable)
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(0, install.run_steps([step("shell profiles")], self.context(), True, out, err))
+
+        self.assertIn("ok     shell profiles", out.getvalue())
+        self.assertNotIn("drift", out.getvalue())
+        self.assertIn(f"warning shell profiles: {windows}: cannot decode as UTF-8 or UTF-16", err.getvalue())
+
+    def test_utf16_bom_profiles_are_decoded_and_written_back_in_the_same_encoding(self):
+        windows, core = self.profiles()
+        windows.parent.mkdir(parents=True)
+        core.parent.mkdir(parents=True)
+        windows.write_bytes(install.codecs.BOM_UTF16_LE + "Write-Output 'keep-me'\r\n".encode("utf-16-le"))
+
+        self.converge(step("shell profiles"), self.context())
+
+        expected = install.codecs.BOM_UTF16_LE + ("Write-Output 'keep-me'\r\n\r\n" + self.block() + "\r\n").encode("utf-16-le")
+        self.assertEqual(expected, windows.read_bytes())
+
+    def test_linux_wires_only_existing_profiles_and_never_loads_the_windows_profile(self):
+        zshrc = self.home / ".zshrc"
+        zshrc.write_text("export A=1", encoding="utf-8")
+        powershell = self.home / ".config" / "powershell" / "Microsoft.PowerShell_profile.ps1"
+        powershell.parent.mkdir(parents=True)
+        powershell.write_bytes(("keep\n" + install.PROFILE_START + "\nold\n" + install.PROFILE_END + "\n").encode("utf-8"))
+        self.converge(step("shell profiles"), self.context(windows=False))
+
+        self.assertFalse((self.home / ".bashrc").exists())
+        self.assertEqual("export A=1\n\n" + install.posix_block(install.runtime_bin(self.context(windows=False))) + "\n",
+                         zshrc.read_text(encoding="utf-8"))
+        self.assertEqual(("keep\n" + install.powershell_block(None, "\n") + "\n").encode("utf-8"),
+                         powershell.read_bytes())
+        self.assertNotIn("profile.ps1", powershell.read_text(encoding="utf-8"))
+
+    def test_posix_block_escapes_single_quotes_in_paths(self):
+        block = install.posix_block(PurePosixPath("/home/o'neil/.agents-state/bin"))
+        self.assertIn(shlex.quote("/home/o'neil/.agents-state/bin"), block)
+
+    def test_linux_creates_bashrc_when_no_profile_exists(self):
+        self.converge(step("shell profiles"), self.context(windows=False))
+        self.assertEqual([self.home / ".bashrc"],
+                         [path for path in install.profile_paths(self.context(windows=False)) if path.exists()])
+
+
+class HiddenBashTests(Machine):
+    def setUp(self):
+        super().setUp()
+        (self.home / ".agents-state/bin").mkdir(parents=True)
+        (self.checkout / "shell" / "hidden-bash.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        self.real = self.root / "Git" / "bash.exe"
+        self.real.parent.mkdir()
+        self.real.write_text("", encoding="utf-8")
+        self.environment = FakeUserEnvironment({"TJ_AGENTS_REAL_GIT_BASH": str(self.real)})
+        self.target = "x86_64-w64-mingw32\n"
+
+    def apply_user_environment(self, variables):
+        self.environment.values.update(variables)
+
+    def test_gui_flags_follow_the_compiler_target(self):
+        for target, flags in (("x86_64-w64-mingw32\n", ["-municode", "-mwindows"]),
+                              ("x86_64-pc-windows-msvc\n", ["-Wl,/subsystem:windows"])):
+            with self.subTest(target=target):
+                self.target = target
+                self.calls.clear()
+                install.build_hidden_bash(self.context(run=self.run_compiler, which=lambda name: name), str(self.real))
+                self.assertEqual(["clang.exe", "-O2", *flags], self.calls[0][:2 + len(flags)])
+
+    def run_compiler(self, command, **kwargs):
+        if command[1:] == ["-dumpmachine"]:
+            return completed(0, self.target)
+        self.calls.append(command)
+        if command[0] == "clang.exe":
+            Path(command[-1]).write_bytes(b"proxy")
+            return completed()
+        self.assertEqual(str(self.real), kwargs["env"]["TJ_AGENTS_REAL_GIT_BASH"])
+        return completed(73, "HIDDEN_BASH_OK")
+
+    def test_the_proxy_is_built_once_and_the_user_environment_is_set(self):
+        context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
+                               user_environment=self.environment)
+        with mock.patch.object(
+            install.installer_boundary,
+            "apply_user_environment",
+            side_effect=self.apply_user_environment,
+        ) as apply:
+            self.converge(step("hidden Git Bash for Claude"), context)
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
+        self.assertEqual(b"proxy", proxy.read_bytes())
+        self.assertFalse((self.home / ".agents-state/bin/hidden-bash.build.exe").exists())
+        apply.assert_called_once_with({
+            "CLAUDE_CODE_GIT_BASH_PATH": str(proxy),
+        })
+        self.assertEqual(2, len(self.calls))
+
+    def test_only_a_changed_source_rebuilds_the_proxy(self):
+        plugin = self.root / "plugin"
+        source = plugin / ".agents/agent/resources/shell/hidden-bash.c"
+        source.parent.mkdir(parents=True)
+        source.write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
+                               user_environment=self.environment)
+        context.root = plugin
+        with mock.patch.object(
+            install.installer_boundary,
+            "apply_user_environment",
+            side_effect=self.apply_user_environment,
+        ):
+            self.converge(step("hidden Git Bash for Claude"), context)
+        source.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        os.utime(source, (2_000_000_000, 2_000_000_000))
+        self.assertNotIn("build shell/hidden-bash.exe", install.check_hidden_bash(context))
+        source.write_text("int main(void) { return 1; }\n", encoding="utf-8")
+        self.assertIn("build shell/hidden-bash.exe", install.check_hidden_bash(context))
+
+    def test_a_proxy_without_a_receipt_is_rebuilt(self):
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
+        proxy.parent.mkdir(parents=True, exist_ok=True)
+        proxy.write_bytes(b"old")
+        context = self.context(run=self.run_compiler, which=lambda name: name if name == "clang.exe" else None,
+                               user_environment=self.environment)
+        self.assertIn("build shell/hidden-bash.exe", install.check_hidden_bash(context))
+
+    def test_a_failed_probe_keeps_the_previous_proxy(self):
+        def broken(command, **kwargs):
+            if command[1:] == ["-dumpmachine"]:
+                return completed(0, self.target)
+            if command[0] == "clang.exe":
+                Path(command[-1]).write_bytes(b"broken")
+                return completed()
+            return completed(1, "")
+
+        context = self.context(run=broken, which=lambda name: "clang.exe" if name == "clang.exe" else None,
+                               user_environment=self.environment)
+        with self.assertRaises(install.InstallError):
+            install.apply_hidden_bash(context)
+        self.assertFalse((self.home / ".agents-state/bin/hidden-bash.exe").exists())
+        self.assertFalse((self.home / ".agents-state/bin/hidden-bash.build.exe").exists())
+
+    def test_rebuilding_renames_the_running_proxy_aside_instead_of_replacing_it(self):
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
+        proxy.write_bytes(b"old")
+        build = proxy.with_name("hidden-bash.build.exe")
+        build.write_bytes(b"new")
+
+        install.install_hidden_bash(build, proxy)
+
+        self.assertEqual(b"new", proxy.read_bytes())
+        self.assertFalse(build.exists())
+        first_asides = install.hidden_bash_stale_asides(proxy)
+        self.assertEqual(1, len(first_asides))
+        self.assertEqual(b"old", first_asides[0].read_bytes())
+
+        second_build = proxy.with_name("hidden-bash.build.exe")
+        second_build.write_bytes(b"newer")
+        install.install_hidden_bash(second_build, proxy)
+
+        self.assertEqual(b"newer", proxy.read_bytes())
+        second_asides = install.hidden_bash_stale_asides(proxy)
+        self.assertEqual(1, len(second_asides))
+        self.assertEqual(b"new", second_asides[0].read_bytes())
+        self.assertNotEqual(first_asides[0], second_asides[0])
+
+    def test_a_stale_aside_that_cannot_be_deleted_is_ignored(self):
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
+        proxy.write_bytes(b"old")
+        stuck = proxy.with_name(f"{proxy.stem}.stale-stuck{proxy.suffix}")
+        stuck.mkdir()
+        build = proxy.with_name("hidden-bash.build.exe")
+        build.write_bytes(b"new")
+
+        install.install_hidden_bash(build, proxy)
+
+        self.assertEqual(b"new", proxy.read_bytes())
+        self.assertTrue(stuck.is_dir())
+
+    def test_a_failed_install_restores_the_moved_aside_proxy(self):
+        proxy = self.home / ".agents-state/bin/hidden-bash.exe"
+        proxy.write_bytes(b"old")
+        build = proxy.with_name("hidden-bash.build.exe")
+        build.write_bytes(b"new")
+        real_replace = os.replace
+
+        def failing_replace(source, destination):
+            if Path(source) == build:
+                raise OSError("disk full")
+            real_replace(source, destination)
+
+        with mock.patch.object(install.os, "replace", side_effect=failing_replace):
+            with self.assertRaises(OSError):
+                install.install_hidden_bash(build, proxy)
+
+        self.assertEqual(b"old", proxy.read_bytes())
+        self.assertEqual([], install.hidden_bash_stale_asides(proxy))
+
+    def test_hidden_bash_is_windows_only(self):
+        out = io.StringIO()
+        install.run_steps([step("hidden Git Bash for Claude")], self.context(windows=False), False, out)
+        self.assertIn("n/a", out.getvalue())
+
+
+
+
+
+
+class RuntimeTests(Machine):
+    def installed_receipt(self, context):
+        return json.loads((context.state_directory / "bin" / "source.json").read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(shutil.which("powershell.exe") or shutil.which("pwsh"), "PowerShell shell ownership check")
+    def test_agent_profile_preserves_cli_owned_session_search_and_navigation(self):
+        loader = install.ROOT / ".agents/agent/resources/shell/profile.ps1"
+        quoted = str(loader).replace("'", "''")
+        script = (
+            "function global:cr { 'CLI_CR' }; function global:f { 'CLI_F' }; "
+            f". '{quoted}'; "
+            "if ((Get-Command cr).Definition -notmatch 'CLI_CR' -or "
+            "(Get-Command f).Definition -notmatch 'CLI_F') { exit 9 }; "
+            "Write-Output 'cli-commands-preserved'"
+        )
+        result = subprocess.run([shutil.which("powershell.exe") or shutil.which("pwsh"), "-NoProfile", "-Command", script],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("cli-commands-preserved", result.stdout)
+
+    def test_packaged_install_and_fresh_shell_survive_removing_the_source_checkout(self):
+        source = self.root / "published package"
+        shutil.copytree(install.ROOT, source)
+        context = self.context(windows=os.name == "nt")
+        context.root = source
+        install.apply_runtime(context)
+        install.apply_profile(context)
+        shutil.rmtree(source)
+        shutil.rmtree(self.checkout)
+        loader = context.state_directory / "bin/.agents/agent/resources/shell/profile.ps1"
+        self.assertTrue(loader.is_file())
+        if context.windows:
+            profile = install.profile_paths(context)[0]
+            quoted = str(profile).replace("'", "''")
+            command = ["powershell.exe", "-NoProfile", "-Command", f". '{quoted}'; 'loaded'"]
+        else:
+            command = ["bash", "--noprofile", "--norc", "-c", 'source "$1"; echo "$PATH"',
+                       "fixture", str(context.home / ".bashrc")]
+        result = subprocess.run(command, cwd=self.root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn(str(source), result.stdout + result.stderr)
+        self.assertEqual([], install.check_profile(context))
+
+
+    def test_installed_runtime_preserves_the_agent_package_closure_without_source_checkout(self):
+        context = self.context(windows=False)
+        self.converge(step("launch-check runtime"), context)
+        installed = self.home / ".agents-state/bin"
+        self.assertEqual(install.runtime_receipt(install.ROOT), self.installed_receipt(context))
+        for relative in (Path('.agents/agent/runtime/tj_start.py'),
+                         Path('.agents/agent/runtime/install.py'),
+                         Path('.agents/agent/runtime/tj_agent/content.py'),
+                         Path('.agents/agent/runtime/tj_agent/plugins/sources.py'),
+                         Path('.agents/agent/resources/lanes/resolve.py'),
+                         Path('.agents/agent/runtime/agent_store.py')):
+            self.assertTrue((installed / relative).is_file(), relative)
+
+    def test_the_agent_runtime_receipt_and_exports_are_installed_once(self):
+        context = self.context(windows=False)
+        self.converge(step("launch-check runtime"), context)
+        installed = context.state_directory / 'bin'
+        for name in install.runtime_receipt(install.ROOT)["files"]:
+            self.assertEqual((install.ROOT / name).read_bytes(), (installed / name).read_bytes())
+
+    def test_a_root_without_the_runtime_exports_fails_closed_without_writing(self):
+        empty = self.root / "empty root"
+        empty.mkdir()
+        context = self.context(windows=False)
+        context.root = empty
+        before = snapshot(self.root)
+        with self.assertRaises(install.InstallError):
+            install.check_runtime(context)
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_installed_lifecycle_commands_resolve_their_complete_dependency_closure(self):
+        context = self.context(windows=os.name == 'nt')
+        install.apply_runtime(context)
+        runtime = context.state_directory / 'bin' / '.agents' / 'agent' / 'runtime'
+        for script in install.LIFECYCLE_COMMANDS.values():
+            if not script.endswith(".py"):
+                continue
+            result = subprocess.run([sys.executable, '-E', '-s', '-B', str(runtime / script), '--help'],
+                                    cwd=self.root, capture_output=True, text=True, timeout=15)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn('usage: tj ', result.stdout)
+
+    def test_runtime_check_detects_export_drift_without_writing_and_preserves_unrelated_files(self):
+        context = self.context(windows=False)
+        install.apply_runtime(context)
+        installed = context.state_directory / 'bin'
+        unrelated = installed / 'keep-me.txt'
+        unrelated.write_text('keep', encoding='utf-8')
+        bot_identity = installed / 'bot-identity' / 'identity.json'
+        bot_identity.parent.mkdir()
+        bot_identity.write_text('keep', encoding='utf-8')
+        target = install.runtime_bin(context) / '.agents/agent/runtime/tj_start.py'
+        target.write_text('changed', encoding='utf-8')
+        before = snapshot(self.root)
+        changes = install.check_runtime(context)
+        self.assertIn('install Agent runtime: managed runtime file differs: '
+                      '.agents/agent/runtime/tj_start.py', changes)
+        self.assertEqual({'install Agent runtime: managed runtime file differs: '
+                          '.agents/agent/runtime/tj_start.py'}, set(changes))
+        self.assertEqual(before, snapshot(self.root))
+        install.apply_runtime(context)
+        self.assertTrue(unrelated.is_file())
+        self.assertTrue(bot_identity.is_file())
+        self.assertEqual(install.python_alias(), (installed / 'python').read_text(encoding='utf-8'))
+
+    def test_unowned_or_linked_python_alias_is_refused_without_writing(self):
+        context = self.context(windows=False)
+        install.apply_runtime(context)
+        alias = context.state_directory / 'bin' / 'python'
+        alias.write_text('custom', encoding='utf-8')
+        before = snapshot(self.root)
+        self.assertIn('refuse unowned', install.python_alias_status(context, alias.parent))
+        with self.assertRaises(install.InstallError):
+            install.install_python_alias(context, alias.parent)
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_managed_python_alias_updates_when_the_interpreter_changes(self):
+        context = self.context(windows=False)
+        alias = context.state_directory / 'bin' / 'python'
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-a'):
+            install.apply_runtime(context)
+            self.assertEqual(install.python_alias('/managed/python-a'), alias.read_text(encoding='utf-8'))
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-b'):
+            self.assertIn('install Claude hook interpreter', install.python_alias_status(context, alias.parent))
+            install.apply_runtime(context)
+            self.assertEqual(install.python_alias('/managed/python-b'), alias.read_text(encoding='utf-8'))
+
+    def test_managed_python_alias_upgrade_preserves_an_unowned_temporary_collision(self):
+        context = self.context(windows=False)
+        alias = context.state_directory / 'bin' / 'python'
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-a'):
+            install.apply_runtime(context)
+        collision = alias.with_name('.python.collision.tmp')
+        collision.write_text('custom', encoding='utf-8')
+        before = snapshot(self.root)
+        with mock.patch.object(install, 'console_python', return_value='/managed/python-b'), \
+             mock.patch.object(install.secrets, 'token_hex', return_value='collision'):
+            with self.assertRaises(FileExistsError):
+                install.install_python_alias(context, alias.parent)
+        self.assertEqual(install.python_alias('/managed/python-a'), alias.read_text(encoding='utf-8'))
+        self.assertEqual('custom', collision.read_text(encoding='utf-8'))
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_modified_managed_python_alias_is_refused_without_writing(self):
+        context = self.context(windows=False)
+        install.apply_runtime(context)
+        alias = context.state_directory / 'bin' / 'python'
+        alias.write_text(install.python_alias() + '# modified\n', encoding='utf-8')
+        before = snapshot(self.root)
+        self.assertIn('refuse unowned', install.python_alias_status(context, alias.parent))
+        with self.assertRaises(install.InstallError):
+            install.install_python_alias(context, alias.parent)
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_python_alias_symlink_refuses_without_touching_outside_file(self):
+        context = self.context(windows=False)
+        install.apply_runtime(context)
+        alias = context.state_directory / 'bin' / 'python'
+        outside = self.root / 'outside-python'
+        outside.write_text('custom', encoding='utf-8')
+        alias.unlink()
+        try:
+            alias.symlink_to(outside)
+        except OSError as error:
+            self.skipTest(f'symlink creation is unavailable: {error}')
+        before = snapshot(self.root)
+        with self.assertRaises(install.InstallError):
+            install.install_python_alias(context, alias.parent)
+        self.assertEqual('custom', outside.read_text(encoding='utf-8'))
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_dangling_reparse_python_alias_is_refused_before_existence_check(self):
+        context = self.context(windows=False)
+        alias = context.state_directory / 'bin' / 'python'
+        delivery = mock.Mock()
+        delivery.is_reparse.side_effect = lambda path: path == alias
+        with mock.patch.object(install, 'runtime_delivery', delivery), \
+             mock.patch.object(install.os.path, 'lexists', side_effect=lambda path: Path(path) == alias):
+            with self.assertRaisesRegex(install.InstallError, 'interpreter is a link'):
+                install.python_alias_path(context, alias.parent)
+        delivery.is_reparse.assert_called_once_with(alias)
+
+
+class AutoUpdateTests(Machine):
+    def test_claude_marketplace_auto_update_converges(self):
+        claude = self.home / ".claude"
+        (claude / "plugins").mkdir(parents=True)
+        (claude / "settings.json").write_text(json.dumps({"enabledPlugins": {"base@tj-agents": True}}), encoding="utf-8")
+        (claude / "plugins" / "known_marketplaces.json").write_text(json.dumps({"tj-agents": {"autoUpdate": False}}),
+                                                                       encoding="utf-8")
+
+
+
+
+class RunStepsTests(Machine):
+    def test_cli_step_selection_preserves_defaults_and_declared_order(self):
+        cases = (
+            ([], [item.name for item in install.STEPS]),
+            (["--step", "shell profiles"],
+             ["native CLI", "launch-check runtime", "shell profiles"]),
+            (["--check", "--step", "shell profiles", "--step", "launch-check runtime"],
+             ["native CLI", "launch-check runtime", "shell profiles"]),
+            (["--step", "plugin setup"],
+             ["native CLI", "plugin setup"]),
+            (["--step", "tj lifecycle commands"],
+             ["native CLI", "launch-check runtime", "tj lifecycle commands"]),
+            (["--step", "tj item CLI"], ["native CLI", "tj item CLI"]),
+            (["--step", "plugin copies"], ["native CLI", "plugin copies"]),
+            (["--step", "retired state"], ["retired state", "native CLI"]),
+        )
+        for arguments, expected in cases:
+            with mock.patch.object(install, "machine_context", return_value=self.context()), \
+                    mock.patch.object(install.machine_state, "drift", return_value={}), \
+                    mock.patch.object(install, "run_steps", return_value=0) as run:
+                self.assertEqual(0, install.main(arguments))
+                self.assertEqual(expected, [item.name for item in run.call_args.args[0]])
+                self.assertEqual("--check" in arguments, run.call_args.args[2])
+
+    def test_unknown_step_fails_before_any_machine_operation_and_is_recorded(self):
+        state = self.root / "state"
+        with mock.patch.object(install, "machine_context") as context, \
+                mock.patch.object(install.jobs, "state_directory", return_value=state), \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            install.main(["--step", "not an install step"])
+        self.assertEqual(2, error.exception.code)
+        context.assert_not_called()
+        self.assertEqual("install rejected its arguments: --step 'not an install step'",
+                         install.jobs.recent_failure(state, install.jobs.Job.INSTALL))
+
+    def legacy_machine(self):
+        pass
+
+    def file_steps(self):
+        return [step(name) for name in ("shell profiles",)]
+
+    def test_check_writes_nothing_and_reports_drift_until_converged(self):
+        self.legacy_machine()
+        context = self.context()
+        before = snapshot(self.root)
+        out = io.StringIO()
+        self.assertEqual(1, install.run_steps(self.file_steps(), context, True, out, io.StringIO()))
+        self.assertEqual(before, snapshot(self.root))
+        self.assertIn("drift  shell profiles", out.getvalue())
+        self.assertEqual(0, install.run_steps(self.file_steps(), context, False, io.StringIO(), io.StringIO()))
+        converged = snapshot(self.root)
+        self.assertEqual(0, install.run_steps(self.file_steps(), context, False, io.StringIO(), io.StringIO()))
+        self.assertEqual(converged, snapshot(self.root))
+        self.assertEqual(0, install.run_steps(self.file_steps(), context, True, io.StringIO(), io.StringIO()))
+
+    def test_a_failed_step_does_not_stop_later_steps_but_fails_the_run(self):
+        later = mock.Mock(return_value=[])
+        failing = install.Step("failing", mock.Mock(side_effect=RuntimeError("boom")), mock.Mock())
+        steps = [failing, install.Step("later", later, mock.Mock())]
+        err = io.StringIO()
+        self.assertEqual(2, install.run_steps(steps, self.context(), False, io.StringIO(), err))
+        later.assert_called_once()
+        self.assertIn("failed failing: boom", err.getvalue())
+
+    def test_a_failed_required_step_stops_the_run(self):
+        later = mock.Mock(return_value=[])
+        failing = install.Step("required", mock.Mock(side_effect=RuntimeError("not tommy")), mock.Mock(), required=True)
+        self.assertEqual(2, install.run_steps([failing, install.Step("later", later, mock.Mock())], self.context(), False,
+                                            io.StringIO(), io.StringIO()))
+        later.assert_not_called()
+
+
+    def test_windows_only_steps_skip_on_linux_without_running_anything(self):
+        out = io.StringIO()
+        self.assertEqual(0, install.run_steps([step("hidden Git Bash for Claude")], self.context(windows=False), True, out))
+        self.assertIn("n/a    hidden Git Bash for Claude: Windows only", out.getvalue())
+
+    def test_the_steps_run_in_the_documented_order(self):
+        self.assertEqual([
+            "retired state", "Git long paths", "native CLI",
+            "agent-store CLI",
+            "tj item CLI", "worktrunk", "Handy",
+            "launch-check runtime", "tj lifecycle commands",
+            "shell profiles", "hidden Git Bash for Claude",
+            "plugin setup", "Codex hook trust", "plugin copies",
+        ], [item.name for item in install.STEPS])
+
+
+class RepairTests(Machine):
+    def test_repair_checks_required_steps_then_applies_only_the_named_step(self):
+        prerequisite = mock.Mock(return_value=[])
+        applied = mock.Mock(return_value=["converged"])
+        unrelated = mock.Mock(side_effect=AssertionError("unselected step"))
+        steps = (
+            install.Step("preconditions", prerequisite, unrelated, required=True),
+            install.Step("plugin setup", unrelated, applied),
+            install.Step("launch-check runtime", unrelated, unrelated),
+        )
+        context = self.context()
+        project = self.root / "project"
+        with mock.patch.object(install, "STEPS", steps), \
+                mock.patch.object(install, "machine_context", return_value=context):
+            self.assertEqual(["converged"], install.repair("plugin setup", project))
+        prerequisite.assert_called_once_with(context)
+        applied.assert_called_once_with(context)
+        unrelated.assert_not_called()
+        self.assertEqual(project, install.plugin_setup_project(context))
+
+    def test_repair_refuses_git_longpaths_outside_a_selected_repository(self):
+        git_longpaths = step("Git long paths")
+        context = self.context(windows=True)
+        with mock.patch.object(install, "STEPS", (git_longpaths,)), \
+                mock.patch.object(install, "machine_context", return_value=context), \
+                self.assertRaisesRegex(install.InstallError, "Git long paths refused"):
+            install.repair("Git long paths", self.checkout)
+
+    def test_repair_stops_when_a_required_precondition_fails(self):
+        applied = mock.Mock()
+        steps = (
+            install.Step("preconditions", mock.Mock(side_effect=RuntimeError("not tommy")), mock.Mock(), required=True),
+            install.Step("plugin setup", mock.Mock(), applied),
+        )
+        with mock.patch.object(install, "STEPS", steps), \
+                mock.patch.object(install, "machine_context", return_value=self.context()), \
+                self.assertRaisesRegex(RuntimeError, "not tommy"):
+            install.repair("plugin setup", self.root)
+        applied.assert_not_called()
+
+    def test_repair_rejects_an_unknown_step(self):
+        with mock.patch.object(install, "machine_context") as context, \
+                self.assertRaisesRegex(install.InstallError, "unknown install step"):
+            install.repair("not an install step", self.root)
+        context.assert_not_called()
+
+
+
+
+def machine_context(home: Path) -> install.Context:
+    return install.Context(home=home, environ={}, windows=False)
+
+
+def test_install_records_its_failures_for_the_stale_check(tmp_path: Path) -> None:
+    context = machine_context(tmp_path)
+    failing = install.Step(
+        "plugin copies", mock.Mock(side_effect=RuntimeError("boom")), mock.Mock()
+    )
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install, "STEPS", (failing,)),
+        mock.patch.object(install.machine_state, "drift", return_value={}) as drift,
+        contextlib.redirect_stdout(io.StringIO()),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        assert install.main(["--step", "plugin copies"]) == 2
+    state = context.state_directory
+    assert (
+        install.jobs.recent_failure(state, install.jobs.Job.INSTALL)
+        == "plugin copies: boom"
+    )
+    assert not install.jobs.running(state, install.jobs.Job.INSTALL)
+    drift.assert_called_once_with(state)
+
+
+def test_a_running_install_makes_a_second_install_exit_without_running(
+    tmp_path: Path,
+) -> None:
+    context = machine_context(tmp_path)
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install, "run_steps") as run,
+        install.jobs.held(context.state_directory, install.jobs.Job.INSTALL),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        assert install.main(["--step", "plugin copies"]) == 2
+    run.assert_not_called()
+
+
+def test_install_check_runs_without_the_install_lock(tmp_path: Path) -> None:
+    context = machine_context(tmp_path)
+    with (
+        mock.patch.object(install, "machine_context", return_value=context),
+        mock.patch.object(install, "run_steps", return_value=0) as run,
+        install.jobs.held(context.state_directory, install.jobs.Job.INSTALL),
+    ):
+        assert install.main(["--check", "--step", "plugin copies"]) == 0
+    run.assert_called_once()
+
+
+def agent_store_archive(binary: bytes) -> bytes:
+    store = install.agent_store
+    archive = io.BytesIO()
+    if os.name == "nt":
+        with zipfile.ZipFile(archive, "w") as contents:
+            contents.writestr(store.executable_name(), binary)
+    else:
+        with tarfile.open(fileobj=archive, mode="w:gz") as contents:
+            member = tarfile.TarInfo(store.executable_name())
+            member.size = len(binary)
+            contents.addfile(member, io.BytesIO(binary))
+    return archive.getvalue()
+
+
+def test_the_agent_store_check_reads_its_install_receipt_without_running_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = install.agent_store
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path))
+    monkeypatch.setattr(store.process, "run", mock.Mock(side_effect=AssertionError))
+    archive = agent_store_archive(b"agent-store binary")
+
+    def download(url: str) -> bytes:
+        if url.endswith(".sha256"):
+            return hashlib.sha256(archive).hexdigest().encode()
+        return archive
+
+    assert store.pending() is not None
+    assert store.install(download) == store.pinned_version()
+    assert store.pending() is None
+    store.executable().write_bytes(b"replaced")
+    assert store.pending() is not None
+    store.write_receipt("v0.0.0", b"replaced")
+    assert store.pending() is not None
+
+
+def test_an_older_agent_store_pin_never_replaces_a_newer_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = install.agent_store
+    monkeypatch.setenv("TJ_BIN_DIR", str(tmp_path))
+    store.executable().write_bytes(b"newer agent-store")
+    store.write_receipt("v99.0.0", b"newer agent-store")
+    assert store.pending() is None
+    assert store.install(mock.Mock(side_effect=AssertionError)) == "v99.0.0"
+    assert store.executable().read_bytes() == b"newer agent-store"
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+def test_a_locked_executable_is_retried_then_succeeds() -> None:
+    results = [
+        subprocess.CompletedProcess(
+            [], 1, "", "tj_hook: Access is denied. (os error 5)"
+        ),
+        subprocess.CompletedProcess([], 0, "ok", ""),
+    ]
+    sleeps: list[float] = []
+
+    def run(_command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return results.pop(0)
+
+    context = install.Context(
+        home=Path(), environ={}, windows=True, run=run, sleep=sleeps.append
+    )
+    assert install.run_installer(context, ["installer"]).returncode == 0
+    assert sleeps == [install.LOCKED_RETRY_SECONDS]
+
+
+def test_other_failures_are_not_retried() -> None:
+    calls: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess([], 1, "", "verification failed")
+
+    context = install.Context(
+        home=Path(), environ={}, windows=True, run=run, sleep=lambda _s: None
+    )
+    assert install.run_installer(context, ["installer"]).returncode == 1
+    assert calls == [["installer"]]

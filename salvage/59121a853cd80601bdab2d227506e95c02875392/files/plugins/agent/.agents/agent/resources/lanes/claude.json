@@ -1,0 +1,62 @@
+{
+  "_": "Lane model and effort pairings, ordered L1 (most capable) to L7 (cheapest). The sibling host table uses the same reasoning tiers.",
+  "host": "claude",
+  "effort_key": "effort",
+  "skill_supports_effort": true,
+  "model_key": "model",
+  "lanes": {
+    "L1": {
+      "summary": "Routes critical analysis and consequential design to Codex L1.",
+      "model": "claude-sonnet-5",
+      "effort": "low",
+      "context_ceiling": 1000000,
+      "why": "Routing proxy that returns a required Codex L1 handoff; the proxy does not perform the delegated work.",
+      "handoff": {
+        "host": "codex",
+        "lane": "L1"
+      }
+    },
+    "L2": {
+      "summary": "Difficult bounded analysis or judgement requiring careful reasoning.",
+      "model": "claude-opus-5-5",
+      "effort": "xhigh",
+      "context_ceiling": 1000000,
+      "why": "Careful reasoning for difficult bounded analysis, diagnosis, design or review."
+    },
+    "L3": {
+      "summary": "Open investigation or bounded uncertain design.",
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "context_ceiling": 1000000,
+      "why": "General reasoning for open investigation and bounded uncertain design."
+    },
+    "L4": {
+      "summary": "Specified implementation, ordinary review, and small local testable choices.",
+      "model": "claude-sonnet-5",
+      "effort": "high",
+      "context_ceiling": 1000000,
+      "why": "the workhorse. Specified implementation and ordinary review, including a small local mechanism choice inside a testable fix. Features, bugfixes and review lenses whose mistakes a compiler or a test suite will catch. Delivery never selects this rung."
+    },
+    "L5": {
+      "summary": "Mechanical work whose shape is already decided.",
+      "model": "claude-sonnet-5",
+      "effort": "medium",
+      "context_ceiling": 1000000,
+      "why": "the workhorse at reduced spend. Mechanical work whose shape is already decided: scripted edits, docs, ledger upkeep."
+    },
+    "L6": {
+      "summary": "Bulk clerical work whose input is too large for the cheapest rung.",
+      "model": "claude-sonnet-5",
+      "effort": "low",
+      "context_ceiling": 1000000,
+      "why": "the workhorse at its lowest setting, kept for the full context window. Clerical loops and bulk passes -- a monitor, a long transcript, a big diff -- that L7's window or capability cannot hold."
+    },
+    "L7": {
+      "summary": "Clerical work with a small input and no judgement to make.",
+      "model": "claude-haiku-4-5",
+      "context_ceiling": 200000,
+      "why": "in-session clerical work with a small input: commit, push, pull, sync, one poll. Carries NO effort key -- Haiku 4.5 rejects `effort` outright, which is also why this rung is a capability step and not just a price step. Handoff launchers reject this rung.",
+      "no_effort_reason": "claude-haiku-4-5 does not accept the effort parameter"
+    }
+  }
+}

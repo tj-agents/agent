@@ -1,0 +1,1583 @@
+diff --git a/.agents/agent/runtime/plugin_update.py b/.agents/agent/runtime/plugin_update.py
+index 4d407336..47f8c167 100644
+--- a/.agents/agent/runtime/plugin_update.py
++++ b/.agents/agent/runtime/plugin_update.py
+@@ -138,7 +138,7 @@ def prefetch_standards(host: Host) -> list[object] | None:
+     required = required_plugins.selected(project)
+     if not required:
+         return None
+-    return list(required_plugins.inventory_rows(directory, host, identities=required))
++    return list(required_plugins.closure_rows(directory, host, identities=required))
+ 
+ 
+ def update_standards(
+diff --git a/.agents/agent/runtime/required_plugins.py b/.agents/agent/runtime/required_plugins.py
+index 34ca3ecc..d836740b 100644
+--- a/.agents/agent/runtime/required_plugins.py
++++ b/.agents/agent/runtime/required_plugins.py
+@@ -168,8 +168,13 @@ def selected(project: Path) -> tuple[str, ...]:
+ 
+ 
+ def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
++    return readable_roots(plugins, project, plugins.installations(project, entries))
++
++
++def readable_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
++    """Return the readable payload of each enabled, error-free row, without recording the native inventory."""
+     roots = {}
+-    for entry in plugins.installations(project, entries):
++    for entry in entries:
+         if not isinstance(entry, dict) or entry.get("enabled") is not True:
+             continue
+         if entry.get("installed") is False or entry.get("error") or entry.get("errors"):
+@@ -276,8 +281,8 @@ def check(project: Path, host: Host, executable: str | None = None,
+     binary = executable or shutil.which(host.value)
+     if not binary:
+         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
+-    rows = entries if entries is not None else inventory_rows(
+-        launch_directory, host, binary, inventory_options, identities=required)
++    rows = entries if entries is not None else closure_rows(launch_directory, host, binary, inventory_options,
++                                                             identities=required)
+     roots = enabled_roots(plugins, launch_directory, rows)
+     needed = closure(required, roots.get)
+     missing = sorted(set(needed) - roots.keys())
+@@ -311,6 +316,30 @@ def inventory_roots(project: Path, host: Host, executable: str | None = None,
+     return roots if identities is None else {identity: root for identity, root in roots.items() if identity in identities}
+ 
+ 
++def closure_rows(project: Path, host: Host, executable: str | None = None,
++                 inventory_options: tuple[str, ...] = (), *, identities: Sequence[str]) -> list:
++    """Read native inventory covering every marketplace of the identities' transitive dependency closure.
++
++    A dependency in another marketplace is only listed once that marketplace is queried, which may in turn
++    reveal further dependencies, so querying repeats until the closure adds no new marketplace.
++    """
++    plugins = host_plugins.PLUGINS[host]
++    launch_directory = project.resolve()
++    queried = tuple(identities)
++    rows = inventory_rows(project, host, executable, inventory_options, identities=queried)
++    if None in plugins.inventory_marketplaces(queried):
++        return rows
++    while True:
++        needed = closure(identities, readable_roots(plugins, launch_directory, rows).get)
++        known = set(plugins.inventory_marketplaces(queried))
++        extra = tuple(identity for identity in needed
++                      if not set(plugins.inventory_marketplaces((identity,))) <= known)
++        if not extra:
++            return rows
++        rows = [*rows, *inventory_rows(project, host, executable, inventory_options, identities=extra)]
++        queried = (*queried, *extra)
++
++
+ def inventory_rows(project: Path, host: Host, executable: str | None = None,
+                    inventory_options: tuple[str, ...] = (), *, identities: Sequence[str] | None = None) -> list:
+     """Read native inventory without processing installations or writing receipts."""
+diff --git a/.agents/agent/utility/plugins/SKILL.md b/.agents/agent/utility/plugins/SKILL.md
+index 734f8c00..a8d9655c 100644
+--- a/.agents/agent/utility/plugins/SKILL.md
++++ b/.agents/agent/utility/plugins/SKILL.md
+@@ -89,7 +89,8 @@ python -B '<skill-directory>\scripts\adopt_plugins.py' --root C:\path\to\reposit
+ A stack (`dotnet`, `azure`, `react`, `cpp-gcc`, `cpp-msvc`, `win32`, `neovim`, `rust`, `python`, `github-actions`,
+ `plugin-repository`) resolves to its plugins through `scripts/plugin_roster.json`, so nobody guesses which
+ plugins a project type needs. Repeat `--stack`, or add `--plugin <name>`. Only the requested plugins are
+-written, existing selections are kept, and removing a plugin that a remaining one depends on is refused.
++written, existing selections are kept, and removing a plugin that a remaining one depends on through the
++published catalogs' dependencies is refused.
+ With no requested stack or plugin, a new selection uses Agent, Agent Store, Base, Engineering and Workflow. `preview` lists the changed files, `write` applies them together, and `check`
+ exits nonzero on drift, which is what CI runs. An unknown stack or plugin is rejected with the valid choices.
+ 
+@@ -97,7 +98,8 @@ Personal is only for personal projects explicitly adopting `personal@tj-agents`.
+ README.md and AGENTS.md before selection; a GitHub owner, home directory or publisher account never
+ establishes personal scope. When the user explicitly confirms personal scope, include `--plugin personal`;
+ otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it.
+-A repository selects one `kind: profile` plugin, counting the profiles its selection depends on; an
++A repository selects one `kind: profile` plugin, counting the profiles its selection reaches through the
++published catalogs' dependencies; an
+ `organization` brings the profile it extends as a dependency. Selection, adoption and reconciliation refuse
+ a second profile, and refuse any profile other than the one an organization extends when that organization's installed employer declaration matches the
+ repository's origin or names it as its source repository. See
+@@ -141,9 +143,10 @@ published `requires.permissions` merged with `.agents/repository-harness.json`,
+ [repository permissions](https://github.com/tj-agents/agent#repository-permissions). A committed entry nobody
+ declares any more is removed; an uncommitted Claude allow or deny entry outside the declared harness is refused
+ rather than discarded, so move it into that overlay first. `--preserve-permissions` keeps the current
+-permissions, which is how `tj prepare` runs without a published harness lookup; it resolves the dependency
+-closure from the marketplace catalogs Claude, or else Codex, last fetched onto this machine and keeps every
+-plugin the previous generation enabled. Project scope also rejects
++permissions, which is how `tj prepare` runs without a published harness lookup; it enables the plugins the
++previous generation enabled, the last published closure, plus the selection, and resolves the closure from
++the marketplace catalogs Claude, or else Codex, last fetched onto this machine only when there is no
++previous generation. Project scope also rejects
+ machine-specific absolute paths (Windows drive and UNC paths, `/home/<user>`, `/Users/<user>`, `/mnt/<drive>`)
+ anywhere in the committed `.claude/settings.json`, `.codex/config.toml` or `.codex/hooks.json`, in every mode,
+ reporting `file:line`. Replace such a path with a repository-relative one, or move the setting to an
+diff --git a/.agents/agent/utility/plugins/scripts/adopt_plugins.py b/.agents/agent/utility/plugins/scripts/adopt_plugins.py
+index 103f9202..0fdcedca 100644
+--- a/.agents/agent/utility/plugins/scripts/adopt_plugins.py
++++ b/.agents/agent/utility/plugins/scripts/adopt_plugins.py
+@@ -16,6 +16,7 @@ from types import MappingProxyType
+ 
+ import lock_io
+ import plugin_selection
++import published_harness
+ import repo_config
+ from plugin_runtime import declarations, process
+ 
+@@ -38,7 +39,7 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     entries = marketplace.get("plugins")
+     if not isinstance(entries, list):
+         raise lock_io.LockError(f"{LOCK}: plugins must be a list")
+-    plugins = {}
++    plugins: set[str] = set()
+     profiles = set()
+     organizations = {}
+     for entry in entries:
+@@ -47,16 +48,13 @@ def load_roster(snapshot: dict | None = None) -> dict:
+         name = entry["name"]
+         if name in plugins:
+             raise lock_io.LockError(f"{LOCK}: duplicate plugin: {name}")
+-        plugins[name] = lock_io.require_string_list(entry.get("requires", []), f"{name}.requires")
++        plugins.add(name)
+         if entry.get("kind") == "profile":
+             profiles.add(name)
+         elif entry.get("kind") == "organization":
+             if not isinstance(entry.get("extends"), str):
+                 raise lock_io.LockError(f"{LOCK}: organization {name} must extend a profile")
+             organizations[name] = entry["extends"]
+-    for name, required in plugins.items():
+-        if any(dependency not in plugins for dependency in required):
+-            raise lock_io.LockError(f"{LOCK}: unknown dependency in {name}")
+     if live:
+         return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": {}}
+     stacks = lock_io.load_json(STACKS)
+@@ -69,20 +67,6 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": stacks["stacks"]}
+ 
+ 
+-def expand(requested: set[str], roster: dict) -> list[str]:
+-    known = roster["plugins"]
+-    pending = sorted(requested)
+-    selected: set[str] = set()
+-    while pending:
+-        name = pending.pop()
+-        if name not in known:
+-            raise lock_io.LockError(f"Unknown plugin: {name}")
+-        if name not in selected:
+-            selected.add(name)
+-            pending.extend(known[name])
+-    return sorted(selected)
+-
+-
+ def requested_plugins(stacks: list[str], plugins: list[str], roster: dict) -> tuple[set[str], set[str]]:
+     unknown = sorted(set(stacks) - set(roster["stacks"]))
+     if unknown:
+@@ -132,7 +116,12 @@ def refuse_employer_conflict(root: Path, profile: str, roster: dict, environ: Ma
+                                     f"matches this repository ({', '.join(evidence)}); {reason}")
+ 
+ 
+-def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> dict:
++def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> tuple[dict, dict[str, dict]]:
++    """Return the selection document and the published declarations of its dependency closure.
++
++    The one-profile rule, the employer check and the removal guard evaluate the closure that the published
++    catalogs' dependencies define, the same closure settings generation enables.
++    """
+     selection = plugin_selection.resolve(root)
+     kept: list[str] = []
+     marketplaces = {}
+@@ -147,24 +136,11 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+                       and plugin_selection.split(identity)[0] in roster["plugins"]}
+     elif not requested and not foreign and not removals:
+         requested = set(plugin_selection.CORE_PLUGINS)
+-    unknown = sorted(requested - roster["plugins"].keys())
++    unknown = sorted(requested - roster["plugins"])
+     if unknown:
+         raise lock_io.LockError("Unknown plugin: " + ", ".join(unknown))
+     selected = {plugin_selection.plugin_id(name) for name in requested} | set(kept) | foreign
+     selected -= removals
+-    local = {plugin_selection.split(identity)[0] for identity in selected
+-             if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
+-             and plugin_selection.split(identity)[0] in roster["plugins"]}
+-    profiles = sorted(set(expand(local, roster)) & roster["profiles"])
+-    if len(profiles) > 1:
+-        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
+-                                + "; keep one and drop the others with --remove-plugin <name>")
+-    if profiles:
+-        refuse_employer_conflict(root, profiles[0], roster, environ)
+-    required = set().union(*(expand({name}, roster) for name in local)) if local else set()
+-    blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
+-    if blocked:
+-        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
+     if requested:
+         marketplaces.setdefault(plugin_selection.MARKETPLACE_NAME, {"repository": plugin_selection.MARKETPLACE_REPOSITORY})
+     marketplaces.update(declared)
+@@ -175,8 +151,21 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+         "marketplaces": dict(sorted(marketplaces.items())),
+         "plugins": sorted(selected),
+     }
+-    plugin_selection.validate(document)
+-    return document
++    validated_marketplaces, identities = plugin_selection.validate(document)
++    published = published_harness.declarations(validated_marketplaces, identities)
++    closure = set(published) | set(identities)
++    profiles = sorted(plugin_selection.split(identity)[0] for identity in closure
++                      if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
++                      and plugin_selection.split(identity)[0] in roster["profiles"])
++    if len(profiles) > 1:
++        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
++                                + "; keep one and drop the others with --remove-plugin <name>")
++    if profiles:
++        refuse_employer_conflict(root, profiles[0], roster, environ)
++    blocked = sorted(closure & removals)
++    if blocked:
++        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
++    return document, published
+ 
+ 
+ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> tuple[dict[Path, str | None], Path]:
+@@ -191,9 +180,10 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
+         if name in declared:
+             raise lock_io.LockError(f"--marketplace {name} is given more than once")
+         declared[name] = source
+-    document = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
++    document, published = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
+     selection = root / ".agents" / plugin_selection.SELECTION_NAME
+-    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document, exclusions=exclusions)
++    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document,
++                                    exclusions=exclusions, declared=published)
+     targets = {selection: json.dumps(document, indent=2, ensure_ascii=False) + "\n", **host_targets}
+     return targets, root
+ 
+diff --git a/.agents/agent/utility/plugins/scripts/repo_config.py b/.agents/agent/utility/plugins/scripts/repo_config.py
+index 54a60251..8fbfbfa4 100644
+--- a/.agents/agent/utility/plugins/scripts/repo_config.py
++++ b/.agents/agent/utility/plugins/scripts/repo_config.py
+@@ -10,7 +10,7 @@ import os
+ import re
+ import subprocess
+ import sys
+-from collections.abc import Iterable
++from collections.abc import Iterable, Mapping
+ from pathlib import Path
+ 
+ import config_conflicts
+@@ -93,25 +93,31 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
+ 
+ 
+ def declarations(
+-    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = ()
++    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = (),
++    declared: Mapping[str, dict] | None = None,
+ ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
+     """Return the selection's marketplaces, enabled plugins and committed permissions.
+ 
+     The enabled plugins are the selection's transitive dependency closure, from the marketplaces' published
+-    catalogs. Permissions compose every enabled plugin's published declaration with the repository overlay
+-    (`harness_permissions.compose`). Without `published` there is no network lookup: the closure comes from
+-    this machine's fetched catalogs, the `generated` identities the previous generation enabled stay
+-    enabled, and permissions are None so the caller keeps its current ones.
++    catalogs, or from `declared` when the caller already resolved them with `published_harness.declarations`.
++    Permissions compose every enabled plugin's published declaration with the repository overlay
++    (`harness_permissions.compose`). Without `published` there is no network lookup and permissions are None
++    so the caller keeps its current ones. The enabled plugins are then the `generated` identities the
++    previous generation enabled, the last published closure, plus the selection; only without a previous
++    generation does the closure come from this machine's fetched catalogs. Offline generation therefore never
++    restores a dependency the published closure dropped.
+     """
+     marketplaces, selected_identities = plugin_selection.validate(lock)
+     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
+     if published:
+-        plugins = published_harness.declarations(marketplaces, selected_identities)
++        plugins = (published_harness.declarations(marketplaces, selected_identities) if declared is None
++                   else dict(declared))
+         enabled = set(plugins) | set(selected_identities)
+     else:
+-        enabled = set(published_harness.local_closure(marketplaces, selected_identities))
+-        enabled |= {identity for identity in generated
++        previous = {identity for identity in generated
+                     if plugin_selection.valid_identity(identity) and plugin_selection.split(identity)[1] in marketplaces}
++        enabled = (previous | set(selected_identities) if previous
++                   else set(published_harness.local_closure(marketplaces, selected_identities)))
+     identities = {identity: True for identity in sorted(enabled)}
+     selected = {plugin_selection.overlay_id(identity) for identity in enabled}
+     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
+@@ -499,6 +505,7 @@ def plan(
+     execute=process.run,
+     exclusions: dict[Path, str] | None = None,
+     preserve_permissions: bool = False,
++    declared: Mapping[str, dict] | None = None,
+ ) -> dict[Path, str | None]:
+     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
+     scope = resolve_scope(root, scope, execute)
+@@ -514,7 +521,7 @@ def plan(
+     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
+     sources, identities, permissions = declarations(
+         lock_path, lock, root, published=not preserve_permissions,
+-        generated=generated_plugins(codex) if preserve_permissions else (),
++        generated=generated_plugins(codex) if preserve_permissions else (), declared=declared,
+     )
+     actual_rules = text_at(rules_path)
+     expected_rules = actual_rules if permissions is None else codex_rules(permissions)
+diff --git a/.claude/skills/agent-plugins/scripts/adopt_plugins.py b/.claude/skills/agent-plugins/scripts/adopt_plugins.py
+index 103f9202..0fdcedca 100644
+--- a/.claude/skills/agent-plugins/scripts/adopt_plugins.py
++++ b/.claude/skills/agent-plugins/scripts/adopt_plugins.py
+@@ -16,6 +16,7 @@ from types import MappingProxyType
+ 
+ import lock_io
+ import plugin_selection
++import published_harness
+ import repo_config
+ from plugin_runtime import declarations, process
+ 
+@@ -38,7 +39,7 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     entries = marketplace.get("plugins")
+     if not isinstance(entries, list):
+         raise lock_io.LockError(f"{LOCK}: plugins must be a list")
+-    plugins = {}
++    plugins: set[str] = set()
+     profiles = set()
+     organizations = {}
+     for entry in entries:
+@@ -47,16 +48,13 @@ def load_roster(snapshot: dict | None = None) -> dict:
+         name = entry["name"]
+         if name in plugins:
+             raise lock_io.LockError(f"{LOCK}: duplicate plugin: {name}")
+-        plugins[name] = lock_io.require_string_list(entry.get("requires", []), f"{name}.requires")
++        plugins.add(name)
+         if entry.get("kind") == "profile":
+             profiles.add(name)
+         elif entry.get("kind") == "organization":
+             if not isinstance(entry.get("extends"), str):
+                 raise lock_io.LockError(f"{LOCK}: organization {name} must extend a profile")
+             organizations[name] = entry["extends"]
+-    for name, required in plugins.items():
+-        if any(dependency not in plugins for dependency in required):
+-            raise lock_io.LockError(f"{LOCK}: unknown dependency in {name}")
+     if live:
+         return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": {}}
+     stacks = lock_io.load_json(STACKS)
+@@ -69,20 +67,6 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": stacks["stacks"]}
+ 
+ 
+-def expand(requested: set[str], roster: dict) -> list[str]:
+-    known = roster["plugins"]
+-    pending = sorted(requested)
+-    selected: set[str] = set()
+-    while pending:
+-        name = pending.pop()
+-        if name not in known:
+-            raise lock_io.LockError(f"Unknown plugin: {name}")
+-        if name not in selected:
+-            selected.add(name)
+-            pending.extend(known[name])
+-    return sorted(selected)
+-
+-
+ def requested_plugins(stacks: list[str], plugins: list[str], roster: dict) -> tuple[set[str], set[str]]:
+     unknown = sorted(set(stacks) - set(roster["stacks"]))
+     if unknown:
+@@ -132,7 +116,12 @@ def refuse_employer_conflict(root: Path, profile: str, roster: dict, environ: Ma
+                                     f"matches this repository ({', '.join(evidence)}); {reason}")
+ 
+ 
+-def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> dict:
++def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> tuple[dict, dict[str, dict]]:
++    """Return the selection document and the published declarations of its dependency closure.
++
++    The one-profile rule, the employer check and the removal guard evaluate the closure that the published
++    catalogs' dependencies define, the same closure settings generation enables.
++    """
+     selection = plugin_selection.resolve(root)
+     kept: list[str] = []
+     marketplaces = {}
+@@ -147,24 +136,11 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+                       and plugin_selection.split(identity)[0] in roster["plugins"]}
+     elif not requested and not foreign and not removals:
+         requested = set(plugin_selection.CORE_PLUGINS)
+-    unknown = sorted(requested - roster["plugins"].keys())
++    unknown = sorted(requested - roster["plugins"])
+     if unknown:
+         raise lock_io.LockError("Unknown plugin: " + ", ".join(unknown))
+     selected = {plugin_selection.plugin_id(name) for name in requested} | set(kept) | foreign
+     selected -= removals
+-    local = {plugin_selection.split(identity)[0] for identity in selected
+-             if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
+-             and plugin_selection.split(identity)[0] in roster["plugins"]}
+-    profiles = sorted(set(expand(local, roster)) & roster["profiles"])
+-    if len(profiles) > 1:
+-        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
+-                                + "; keep one and drop the others with --remove-plugin <name>")
+-    if profiles:
+-        refuse_employer_conflict(root, profiles[0], roster, environ)
+-    required = set().union(*(expand({name}, roster) for name in local)) if local else set()
+-    blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
+-    if blocked:
+-        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
+     if requested:
+         marketplaces.setdefault(plugin_selection.MARKETPLACE_NAME, {"repository": plugin_selection.MARKETPLACE_REPOSITORY})
+     marketplaces.update(declared)
+@@ -175,8 +151,21 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+         "marketplaces": dict(sorted(marketplaces.items())),
+         "plugins": sorted(selected),
+     }
+-    plugin_selection.validate(document)
+-    return document
++    validated_marketplaces, identities = plugin_selection.validate(document)
++    published = published_harness.declarations(validated_marketplaces, identities)
++    closure = set(published) | set(identities)
++    profiles = sorted(plugin_selection.split(identity)[0] for identity in closure
++                      if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
++                      and plugin_selection.split(identity)[0] in roster["profiles"])
++    if len(profiles) > 1:
++        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
++                                + "; keep one and drop the others with --remove-plugin <name>")
++    if profiles:
++        refuse_employer_conflict(root, profiles[0], roster, environ)
++    blocked = sorted(closure & removals)
++    if blocked:
++        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
++    return document, published
+ 
+ 
+ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> tuple[dict[Path, str | None], Path]:
+@@ -191,9 +180,10 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
+         if name in declared:
+             raise lock_io.LockError(f"--marketplace {name} is given more than once")
+         declared[name] = source
+-    document = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
++    document, published = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
+     selection = root / ".agents" / plugin_selection.SELECTION_NAME
+-    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document, exclusions=exclusions)
++    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document,
++                                    exclusions=exclusions, declared=published)
+     targets = {selection: json.dumps(document, indent=2, ensure_ascii=False) + "\n", **host_targets}
+     return targets, root
+ 
+diff --git a/.claude/skills/agent-plugins/scripts/repo_config.py b/.claude/skills/agent-plugins/scripts/repo_config.py
+index 54a60251..8fbfbfa4 100644
+--- a/.claude/skills/agent-plugins/scripts/repo_config.py
++++ b/.claude/skills/agent-plugins/scripts/repo_config.py
+@@ -10,7 +10,7 @@ import os
+ import re
+ import subprocess
+ import sys
+-from collections.abc import Iterable
++from collections.abc import Iterable, Mapping
+ from pathlib import Path
+ 
+ import config_conflicts
+@@ -93,25 +93,31 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
+ 
+ 
+ def declarations(
+-    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = ()
++    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = (),
++    declared: Mapping[str, dict] | None = None,
+ ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
+     """Return the selection's marketplaces, enabled plugins and committed permissions.
+ 
+     The enabled plugins are the selection's transitive dependency closure, from the marketplaces' published
+-    catalogs. Permissions compose every enabled plugin's published declaration with the repository overlay
+-    (`harness_permissions.compose`). Without `published` there is no network lookup: the closure comes from
+-    this machine's fetched catalogs, the `generated` identities the previous generation enabled stay
+-    enabled, and permissions are None so the caller keeps its current ones.
++    catalogs, or from `declared` when the caller already resolved them with `published_harness.declarations`.
++    Permissions compose every enabled plugin's published declaration with the repository overlay
++    (`harness_permissions.compose`). Without `published` there is no network lookup and permissions are None
++    so the caller keeps its current ones. The enabled plugins are then the `generated` identities the
++    previous generation enabled, the last published closure, plus the selection; only without a previous
++    generation does the closure come from this machine's fetched catalogs. Offline generation therefore never
++    restores a dependency the published closure dropped.
+     """
+     marketplaces, selected_identities = plugin_selection.validate(lock)
+     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
+     if published:
+-        plugins = published_harness.declarations(marketplaces, selected_identities)
++        plugins = (published_harness.declarations(marketplaces, selected_identities) if declared is None
++                   else dict(declared))
+         enabled = set(plugins) | set(selected_identities)
+     else:
+-        enabled = set(published_harness.local_closure(marketplaces, selected_identities))
+-        enabled |= {identity for identity in generated
++        previous = {identity for identity in generated
+                     if plugin_selection.valid_identity(identity) and plugin_selection.split(identity)[1] in marketplaces}
++        enabled = (previous | set(selected_identities) if previous
++                   else set(published_harness.local_closure(marketplaces, selected_identities)))
+     identities = {identity: True for identity in sorted(enabled)}
+     selected = {plugin_selection.overlay_id(identity) for identity in enabled}
+     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
+@@ -499,6 +505,7 @@ def plan(
+     execute=process.run,
+     exclusions: dict[Path, str] | None = None,
+     preserve_permissions: bool = False,
++    declared: Mapping[str, dict] | None = None,
+ ) -> dict[Path, str | None]:
+     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
+     scope = resolve_scope(root, scope, execute)
+@@ -514,7 +521,7 @@ def plan(
+     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
+     sources, identities, permissions = declarations(
+         lock_path, lock, root, published=not preserve_permissions,
+-        generated=generated_plugins(codex) if preserve_permissions else (),
++        generated=generated_plugins(codex) if preserve_permissions else (), declared=declared,
+     )
+     actual_rules = text_at(rules_path)
+     expected_rules = actual_rules if permissions is None else codex_rules(permissions)
+diff --git a/README.md b/README.md
+index b6c09fea..c2b43c3c 100644
+--- a/README.md
++++ b/README.md
+@@ -88,7 +88,7 @@ Managed launches repair only the failing install step and retry readiness once:
+ Claude installs missing transitive dependencies before dependents and verifies their persisted native
+ registrations; startup still requires successful native admission and hooks.
+ Readiness verifies the selection and every dependency the installed builds' `.claude-plugin/plugin.json`
+-declare, transitively. A plugin Claude demotes because a dependency is disabled, missing or the wrong
++declare, transitively, inventorying every marketplace that closure reaches. A plugin Claude demotes because a dependency is disabled, missing or the wrong
+ version is reported by name with that dependency.
+ 
+ A selection lists only the plugins a repository chose. Neither host enables a plugin's dependencies on its
+@@ -96,15 +96,18 @@ own, so settings generation enables the selection's transitive dependency closur
+ the `dependencies` of each marketplace's published Claude catalog on `main`. A dependency added in a later
+ plugin release is enabled at the next reconciliation without editing the selection. A dependency in a
+ marketplace the selection does not declare is refused. `tj prepare` regenerates offline
+-(`--preserve-permissions`): it resolves the closure from the marketplace catalogs Claude, or else Codex,
+-last fetched onto this machine, and keeps every plugin the previous generation enabled, so it never
+-disables a dependency the published resolution added.
++(`--preserve-permissions`): it enables the plugins the previous generation enabled, which is the last
++published closure, plus the selection, so it neither disables a dependency the published resolution added
++nor restores one it dropped. Only a repository without a previous generation resolves the closure from the
++marketplace catalogs Claude, or else Codex, last fetched onto this machine. A dependency a later release
++adds is enabled by the next published reconciliation; until then readiness reports it by name.
+ 
+ Before checking native installations, launch and installer plugin setup reconcile an existing
+ repository selection and regenerate both hosts' settings through the same scope and ownership checks
+ as explicit adoption. Reconciliation against the current Marketplace `main` roster removes retired
+ TJ Agents packages, including retirements after the bundled offline snapshot; it never adds dependencies
+-to the selection.
++to the selection. Adoption's one-profile rule, employer check and prerequisite removal guard evaluate the
++same published catalog dependency closure that settings generation enables, never the roster.
+ An unreachable marketplace leaves repository files untouched and reports the failure.
+ The same reconciliation commits the published harness permissions of every enabled plugin into the
+ repository's settings, never into user settings; see [repository permissions](#repository-permissions).
+diff --git a/plugins/agent/.agents/agent/runtime/plugin_update.py b/plugins/agent/.agents/agent/runtime/plugin_update.py
+index 4d407336..47f8c167 100644
+--- a/plugins/agent/.agents/agent/runtime/plugin_update.py
++++ b/plugins/agent/.agents/agent/runtime/plugin_update.py
+@@ -138,7 +138,7 @@ def prefetch_standards(host: Host) -> list[object] | None:
+     required = required_plugins.selected(project)
+     if not required:
+         return None
+-    return list(required_plugins.inventory_rows(directory, host, identities=required))
++    return list(required_plugins.closure_rows(directory, host, identities=required))
+ 
+ 
+ def update_standards(
+diff --git a/plugins/agent/.agents/agent/runtime/required_plugins.py b/plugins/agent/.agents/agent/runtime/required_plugins.py
+index 34ca3ecc..d836740b 100644
+--- a/plugins/agent/.agents/agent/runtime/required_plugins.py
++++ b/plugins/agent/.agents/agent/runtime/required_plugins.py
+@@ -168,8 +168,13 @@ def selected(project: Path) -> tuple[str, ...]:
+ 
+ 
+ def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
++    return readable_roots(plugins, project, plugins.installations(project, entries))
++
++
++def readable_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
++    """Return the readable payload of each enabled, error-free row, without recording the native inventory."""
+     roots = {}
+-    for entry in plugins.installations(project, entries):
++    for entry in entries:
+         if not isinstance(entry, dict) or entry.get("enabled") is not True:
+             continue
+         if entry.get("installed") is False or entry.get("error") or entry.get("errors"):
+@@ -276,8 +281,8 @@ def check(project: Path, host: Host, executable: str | None = None,
+     binary = executable or shutil.which(host.value)
+     if not binary:
+         raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
+-    rows = entries if entries is not None else inventory_rows(
+-        launch_directory, host, binary, inventory_options, identities=required)
++    rows = entries if entries is not None else closure_rows(launch_directory, host, binary, inventory_options,
++                                                             identities=required)
+     roots = enabled_roots(plugins, launch_directory, rows)
+     needed = closure(required, roots.get)
+     missing = sorted(set(needed) - roots.keys())
+@@ -311,6 +316,30 @@ def inventory_roots(project: Path, host: Host, executable: str | None = None,
+     return roots if identities is None else {identity: root for identity, root in roots.items() if identity in identities}
+ 
+ 
++def closure_rows(project: Path, host: Host, executable: str | None = None,
++                 inventory_options: tuple[str, ...] = (), *, identities: Sequence[str]) -> list:
++    """Read native inventory covering every marketplace of the identities' transitive dependency closure.
++
++    A dependency in another marketplace is only listed once that marketplace is queried, which may in turn
++    reveal further dependencies, so querying repeats until the closure adds no new marketplace.
++    """
++    plugins = host_plugins.PLUGINS[host]
++    launch_directory = project.resolve()
++    queried = tuple(identities)
++    rows = inventory_rows(project, host, executable, inventory_options, identities=queried)
++    if None in plugins.inventory_marketplaces(queried):
++        return rows
++    while True:
++        needed = closure(identities, readable_roots(plugins, launch_directory, rows).get)
++        known = set(plugins.inventory_marketplaces(queried))
++        extra = tuple(identity for identity in needed
++                      if not set(plugins.inventory_marketplaces((identity,))) <= known)
++        if not extra:
++            return rows
++        rows = [*rows, *inventory_rows(project, host, executable, inventory_options, identities=extra)]
++        queried = (*queried, *extra)
++
++
+ def inventory_rows(project: Path, host: Host, executable: str | None = None,
+                    inventory_options: tuple[str, ...] = (), *, identities: Sequence[str] | None = None) -> list:
+     """Read native inventory without processing installations or writing receipts."""
+diff --git a/plugins/agent/.agents/agent/utility/plugins/SKILL.md b/plugins/agent/.agents/agent/utility/plugins/SKILL.md
+index 734f8c00..a8d9655c 100644
+--- a/plugins/agent/.agents/agent/utility/plugins/SKILL.md
++++ b/plugins/agent/.agents/agent/utility/plugins/SKILL.md
+@@ -89,7 +89,8 @@ python -B '<skill-directory>\scripts\adopt_plugins.py' --root C:\path\to\reposit
+ A stack (`dotnet`, `azure`, `react`, `cpp-gcc`, `cpp-msvc`, `win32`, `neovim`, `rust`, `python`, `github-actions`,
+ `plugin-repository`) resolves to its plugins through `scripts/plugin_roster.json`, so nobody guesses which
+ plugins a project type needs. Repeat `--stack`, or add `--plugin <name>`. Only the requested plugins are
+-written, existing selections are kept, and removing a plugin that a remaining one depends on is refused.
++written, existing selections are kept, and removing a plugin that a remaining one depends on through the
++published catalogs' dependencies is refused.
+ With no requested stack or plugin, a new selection uses Agent, Agent Store, Base, Engineering and Workflow. `preview` lists the changed files, `write` applies them together, and `check`
+ exits nonzero on drift, which is what CI runs. An unknown stack or plugin is rejected with the valid choices.
+ 
+@@ -97,7 +98,8 @@ Personal is only for personal projects explicitly adopting `personal@tj-agents`.
+ README.md and AGENTS.md before selection; a GitHub owner, home directory or publisher account never
+ establishes personal scope. When the user explicitly confirms personal scope, include `--plugin personal`;
+ otherwise omit it. Later adoption preserves that selection. Ownership alone never adds it.
+-A repository selects one `kind: profile` plugin, counting the profiles its selection depends on; an
++A repository selects one `kind: profile` plugin, counting the profiles its selection reaches through the
++published catalogs' dependencies; an
+ `organization` brings the profile it extends as a dependency. Selection, adoption and reconciliation refuse
+ a second profile, and refuse any profile other than the one an organization extends when that organization's installed employer declaration matches the
+ repository's origin or names it as its source repository. See
+@@ -141,9 +143,10 @@ published `requires.permissions` merged with `.agents/repository-harness.json`,
+ [repository permissions](https://github.com/tj-agents/agent#repository-permissions). A committed entry nobody
+ declares any more is removed; an uncommitted Claude allow or deny entry outside the declared harness is refused
+ rather than discarded, so move it into that overlay first. `--preserve-permissions` keeps the current
+-permissions, which is how `tj prepare` runs without a published harness lookup; it resolves the dependency
+-closure from the marketplace catalogs Claude, or else Codex, last fetched onto this machine and keeps every
+-plugin the previous generation enabled. Project scope also rejects
++permissions, which is how `tj prepare` runs without a published harness lookup; it enables the plugins the
++previous generation enabled, the last published closure, plus the selection, and resolves the closure from
++the marketplace catalogs Claude, or else Codex, last fetched onto this machine only when there is no
++previous generation. Project scope also rejects
+ machine-specific absolute paths (Windows drive and UNC paths, `/home/<user>`, `/Users/<user>`, `/mnt/<drive>`)
+ anywhere in the committed `.claude/settings.json`, `.codex/config.toml` or `.codex/hooks.json`, in every mode,
+ reporting `file:line`. Replace such a path with a repository-relative one, or move the setting to an
+diff --git a/plugins/agent/.agents/agent/utility/plugins/scripts/adopt_plugins.py b/plugins/agent/.agents/agent/utility/plugins/scripts/adopt_plugins.py
+index 103f9202..0fdcedca 100644
+--- a/plugins/agent/.agents/agent/utility/plugins/scripts/adopt_plugins.py
++++ b/plugins/agent/.agents/agent/utility/plugins/scripts/adopt_plugins.py
+@@ -16,6 +16,7 @@ from types import MappingProxyType
+ 
+ import lock_io
+ import plugin_selection
++import published_harness
+ import repo_config
+ from plugin_runtime import declarations, process
+ 
+@@ -38,7 +39,7 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     entries = marketplace.get("plugins")
+     if not isinstance(entries, list):
+         raise lock_io.LockError(f"{LOCK}: plugins must be a list")
+-    plugins = {}
++    plugins: set[str] = set()
+     profiles = set()
+     organizations = {}
+     for entry in entries:
+@@ -47,16 +48,13 @@ def load_roster(snapshot: dict | None = None) -> dict:
+         name = entry["name"]
+         if name in plugins:
+             raise lock_io.LockError(f"{LOCK}: duplicate plugin: {name}")
+-        plugins[name] = lock_io.require_string_list(entry.get("requires", []), f"{name}.requires")
++        plugins.add(name)
+         if entry.get("kind") == "profile":
+             profiles.add(name)
+         elif entry.get("kind") == "organization":
+             if not isinstance(entry.get("extends"), str):
+                 raise lock_io.LockError(f"{LOCK}: organization {name} must extend a profile")
+             organizations[name] = entry["extends"]
+-    for name, required in plugins.items():
+-        if any(dependency not in plugins for dependency in required):
+-            raise lock_io.LockError(f"{LOCK}: unknown dependency in {name}")
+     if live:
+         return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": {}}
+     stacks = lock_io.load_json(STACKS)
+@@ -69,20 +67,6 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": stacks["stacks"]}
+ 
+ 
+-def expand(requested: set[str], roster: dict) -> list[str]:
+-    known = roster["plugins"]
+-    pending = sorted(requested)
+-    selected: set[str] = set()
+-    while pending:
+-        name = pending.pop()
+-        if name not in known:
+-            raise lock_io.LockError(f"Unknown plugin: {name}")
+-        if name not in selected:
+-            selected.add(name)
+-            pending.extend(known[name])
+-    return sorted(selected)
+-
+-
+ def requested_plugins(stacks: list[str], plugins: list[str], roster: dict) -> tuple[set[str], set[str]]:
+     unknown = sorted(set(stacks) - set(roster["stacks"]))
+     if unknown:
+@@ -132,7 +116,12 @@ def refuse_employer_conflict(root: Path, profile: str, roster: dict, environ: Ma
+                                     f"matches this repository ({', '.join(evidence)}); {reason}")
+ 
+ 
+-def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> dict:
++def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> tuple[dict, dict[str, dict]]:
++    """Return the selection document and the published declarations of its dependency closure.
++
++    The one-profile rule, the employer check and the removal guard evaluate the closure that the published
++    catalogs' dependencies define, the same closure settings generation enables.
++    """
+     selection = plugin_selection.resolve(root)
+     kept: list[str] = []
+     marketplaces = {}
+@@ -147,24 +136,11 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+                       and plugin_selection.split(identity)[0] in roster["plugins"]}
+     elif not requested and not foreign and not removals:
+         requested = set(plugin_selection.CORE_PLUGINS)
+-    unknown = sorted(requested - roster["plugins"].keys())
++    unknown = sorted(requested - roster["plugins"])
+     if unknown:
+         raise lock_io.LockError("Unknown plugin: " + ", ".join(unknown))
+     selected = {plugin_selection.plugin_id(name) for name in requested} | set(kept) | foreign
+     selected -= removals
+-    local = {plugin_selection.split(identity)[0] for identity in selected
+-             if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
+-             and plugin_selection.split(identity)[0] in roster["plugins"]}
+-    profiles = sorted(set(expand(local, roster)) & roster["profiles"])
+-    if len(profiles) > 1:
+-        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
+-                                + "; keep one and drop the others with --remove-plugin <name>")
+-    if profiles:
+-        refuse_employer_conflict(root, profiles[0], roster, environ)
+-    required = set().union(*(expand({name}, roster) for name in local)) if local else set()
+-    blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
+-    if blocked:
+-        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
+     if requested:
+         marketplaces.setdefault(plugin_selection.MARKETPLACE_NAME, {"repository": plugin_selection.MARKETPLACE_REPOSITORY})
+     marketplaces.update(declared)
+@@ -175,8 +151,21 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+         "marketplaces": dict(sorted(marketplaces.items())),
+         "plugins": sorted(selected),
+     }
+-    plugin_selection.validate(document)
+-    return document
++    validated_marketplaces, identities = plugin_selection.validate(document)
++    published = published_harness.declarations(validated_marketplaces, identities)
++    closure = set(published) | set(identities)
++    profiles = sorted(plugin_selection.split(identity)[0] for identity in closure
++                      if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
++                      and plugin_selection.split(identity)[0] in roster["profiles"])
++    if len(profiles) > 1:
++        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
++                                + "; keep one and drop the others with --remove-plugin <name>")
++    if profiles:
++        refuse_employer_conflict(root, profiles[0], roster, environ)
++    blocked = sorted(closure & removals)
++    if blocked:
++        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
++    return document, published
+ 
+ 
+ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> tuple[dict[Path, str | None], Path]:
+@@ -191,9 +180,10 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
+         if name in declared:
+             raise lock_io.LockError(f"--marketplace {name} is given more than once")
+         declared[name] = source
+-    document = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
++    document, published = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
+     selection = root / ".agents" / plugin_selection.SELECTION_NAME
+-    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document, exclusions=exclusions)
++    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document,
++                                    exclusions=exclusions, declared=published)
+     targets = {selection: json.dumps(document, indent=2, ensure_ascii=False) + "\n", **host_targets}
+     return targets, root
+ 
+diff --git a/plugins/agent/.agents/agent/utility/plugins/scripts/repo_config.py b/plugins/agent/.agents/agent/utility/plugins/scripts/repo_config.py
+index 54a60251..8fbfbfa4 100644
+--- a/plugins/agent/.agents/agent/utility/plugins/scripts/repo_config.py
++++ b/plugins/agent/.agents/agent/utility/plugins/scripts/repo_config.py
+@@ -10,7 +10,7 @@ import os
+ import re
+ import subprocess
+ import sys
+-from collections.abc import Iterable
++from collections.abc import Iterable, Mapping
+ from pathlib import Path
+ 
+ import config_conflicts
+@@ -93,25 +93,31 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
+ 
+ 
+ def declarations(
+-    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = ()
++    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = (),
++    declared: Mapping[str, dict] | None = None,
+ ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
+     """Return the selection's marketplaces, enabled plugins and committed permissions.
+ 
+     The enabled plugins are the selection's transitive dependency closure, from the marketplaces' published
+-    catalogs. Permissions compose every enabled plugin's published declaration with the repository overlay
+-    (`harness_permissions.compose`). Without `published` there is no network lookup: the closure comes from
+-    this machine's fetched catalogs, the `generated` identities the previous generation enabled stay
+-    enabled, and permissions are None so the caller keeps its current ones.
++    catalogs, or from `declared` when the caller already resolved them with `published_harness.declarations`.
++    Permissions compose every enabled plugin's published declaration with the repository overlay
++    (`harness_permissions.compose`). Without `published` there is no network lookup and permissions are None
++    so the caller keeps its current ones. The enabled plugins are then the `generated` identities the
++    previous generation enabled, the last published closure, plus the selection; only without a previous
++    generation does the closure come from this machine's fetched catalogs. Offline generation therefore never
++    restores a dependency the published closure dropped.
+     """
+     marketplaces, selected_identities = plugin_selection.validate(lock)
+     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
+     if published:
+-        plugins = published_harness.declarations(marketplaces, selected_identities)
++        plugins = (published_harness.declarations(marketplaces, selected_identities) if declared is None
++                   else dict(declared))
+         enabled = set(plugins) | set(selected_identities)
+     else:
+-        enabled = set(published_harness.local_closure(marketplaces, selected_identities))
+-        enabled |= {identity for identity in generated
++        previous = {identity for identity in generated
+                     if plugin_selection.valid_identity(identity) and plugin_selection.split(identity)[1] in marketplaces}
++        enabled = (previous | set(selected_identities) if previous
++                   else set(published_harness.local_closure(marketplaces, selected_identities)))
+     identities = {identity: True for identity in sorted(enabled)}
+     selected = {plugin_selection.overlay_id(identity) for identity in enabled}
+     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
+@@ -499,6 +505,7 @@ def plan(
+     execute=process.run,
+     exclusions: dict[Path, str] | None = None,
+     preserve_permissions: bool = False,
++    declared: Mapping[str, dict] | None = None,
+ ) -> dict[Path, str | None]:
+     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
+     scope = resolve_scope(root, scope, execute)
+@@ -514,7 +521,7 @@ def plan(
+     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
+     sources, identities, permissions = declarations(
+         lock_path, lock, root, published=not preserve_permissions,
+-        generated=generated_plugins(codex) if preserve_permissions else (),
++        generated=generated_plugins(codex) if preserve_permissions else (), declared=declared,
+     )
+     actual_rules = text_at(rules_path)
+     expected_rules = actual_rules if permissions is None else codex_rules(permissions)
+diff --git a/plugins/agent/.codex-plugin/plugin.json b/plugins/agent/.codex-plugin/plugin.json
+index 200040e0..0a2b9f08 100644
+--- a/plugins/agent/.codex-plugin/plugin.json
++++ b/plugins/agent/.codex-plugin/plugin.json
+@@ -19,5 +19,5 @@
+     "capabilities": [],
+     "defaultPrompt": "Apply the agent project policies."
+   },
+-  "version": "08f49226c10b"
++  "version": "eb92309c0264"
+ }
+diff --git a/plugins/agent/codex-skills/plugins/scripts/adopt_plugins.py b/plugins/agent/codex-skills/plugins/scripts/adopt_plugins.py
+index 103f9202..0fdcedca 100644
+--- a/plugins/agent/codex-skills/plugins/scripts/adopt_plugins.py
++++ b/plugins/agent/codex-skills/plugins/scripts/adopt_plugins.py
+@@ -16,6 +16,7 @@ from types import MappingProxyType
+ 
+ import lock_io
+ import plugin_selection
++import published_harness
+ import repo_config
+ from plugin_runtime import declarations, process
+ 
+@@ -38,7 +39,7 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     entries = marketplace.get("plugins")
+     if not isinstance(entries, list):
+         raise lock_io.LockError(f"{LOCK}: plugins must be a list")
+-    plugins = {}
++    plugins: set[str] = set()
+     profiles = set()
+     organizations = {}
+     for entry in entries:
+@@ -47,16 +48,13 @@ def load_roster(snapshot: dict | None = None) -> dict:
+         name = entry["name"]
+         if name in plugins:
+             raise lock_io.LockError(f"{LOCK}: duplicate plugin: {name}")
+-        plugins[name] = lock_io.require_string_list(entry.get("requires", []), f"{name}.requires")
++        plugins.add(name)
+         if entry.get("kind") == "profile":
+             profiles.add(name)
+         elif entry.get("kind") == "organization":
+             if not isinstance(entry.get("extends"), str):
+                 raise lock_io.LockError(f"{LOCK}: organization {name} must extend a profile")
+             organizations[name] = entry["extends"]
+-    for name, required in plugins.items():
+-        if any(dependency not in plugins for dependency in required):
+-            raise lock_io.LockError(f"{LOCK}: unknown dependency in {name}")
+     if live:
+         return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": {}}
+     stacks = lock_io.load_json(STACKS)
+@@ -69,20 +67,6 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": stacks["stacks"]}
+ 
+ 
+-def expand(requested: set[str], roster: dict) -> list[str]:
+-    known = roster["plugins"]
+-    pending = sorted(requested)
+-    selected: set[str] = set()
+-    while pending:
+-        name = pending.pop()
+-        if name not in known:
+-            raise lock_io.LockError(f"Unknown plugin: {name}")
+-        if name not in selected:
+-            selected.add(name)
+-            pending.extend(known[name])
+-    return sorted(selected)
+-
+-
+ def requested_plugins(stacks: list[str], plugins: list[str], roster: dict) -> tuple[set[str], set[str]]:
+     unknown = sorted(set(stacks) - set(roster["stacks"]))
+     if unknown:
+@@ -132,7 +116,12 @@ def refuse_employer_conflict(root: Path, profile: str, roster: dict, environ: Ma
+                                     f"matches this repository ({', '.join(evidence)}); {reason}")
+ 
+ 
+-def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> dict:
++def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> tuple[dict, dict[str, dict]]:
++    """Return the selection document and the published declarations of its dependency closure.
++
++    The one-profile rule, the employer check and the removal guard evaluate the closure that the published
++    catalogs' dependencies define, the same closure settings generation enables.
++    """
+     selection = plugin_selection.resolve(root)
+     kept: list[str] = []
+     marketplaces = {}
+@@ -147,24 +136,11 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+                       and plugin_selection.split(identity)[0] in roster["plugins"]}
+     elif not requested and not foreign and not removals:
+         requested = set(plugin_selection.CORE_PLUGINS)
+-    unknown = sorted(requested - roster["plugins"].keys())
++    unknown = sorted(requested - roster["plugins"])
+     if unknown:
+         raise lock_io.LockError("Unknown plugin: " + ", ".join(unknown))
+     selected = {plugin_selection.plugin_id(name) for name in requested} | set(kept) | foreign
+     selected -= removals
+-    local = {plugin_selection.split(identity)[0] for identity in selected
+-             if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
+-             and plugin_selection.split(identity)[0] in roster["plugins"]}
+-    profiles = sorted(set(expand(local, roster)) & roster["profiles"])
+-    if len(profiles) > 1:
+-        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
+-                                + "; keep one and drop the others with --remove-plugin <name>")
+-    if profiles:
+-        refuse_employer_conflict(root, profiles[0], roster, environ)
+-    required = set().union(*(expand({name}, roster) for name in local)) if local else set()
+-    blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
+-    if blocked:
+-        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
+     if requested:
+         marketplaces.setdefault(plugin_selection.MARKETPLACE_NAME, {"repository": plugin_selection.MARKETPLACE_REPOSITORY})
+     marketplaces.update(declared)
+@@ -175,8 +151,21 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+         "marketplaces": dict(sorted(marketplaces.items())),
+         "plugins": sorted(selected),
+     }
+-    plugin_selection.validate(document)
+-    return document
++    validated_marketplaces, identities = plugin_selection.validate(document)
++    published = published_harness.declarations(validated_marketplaces, identities)
++    closure = set(published) | set(identities)
++    profiles = sorted(plugin_selection.split(identity)[0] for identity in closure
++                      if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
++                      and plugin_selection.split(identity)[0] in roster["profiles"])
++    if len(profiles) > 1:
++        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
++                                + "; keep one and drop the others with --remove-plugin <name>")
++    if profiles:
++        refuse_employer_conflict(root, profiles[0], roster, environ)
++    blocked = sorted(closure & removals)
++    if blocked:
++        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
++    return document, published
+ 
+ 
+ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> tuple[dict[Path, str | None], Path]:
+@@ -191,9 +180,10 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
+         if name in declared:
+             raise lock_io.LockError(f"--marketplace {name} is given more than once")
+         declared[name] = source
+-    document = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
++    document, published = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
+     selection = root / ".agents" / plugin_selection.SELECTION_NAME
+-    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document, exclusions=exclusions)
++    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document,
++                                    exclusions=exclusions, declared=published)
+     targets = {selection: json.dumps(document, indent=2, ensure_ascii=False) + "\n", **host_targets}
+     return targets, root
+ 
+diff --git a/plugins/agent/codex-skills/plugins/scripts/repo_config.py b/plugins/agent/codex-skills/plugins/scripts/repo_config.py
+index 54a60251..8fbfbfa4 100644
+--- a/plugins/agent/codex-skills/plugins/scripts/repo_config.py
++++ b/plugins/agent/codex-skills/plugins/scripts/repo_config.py
+@@ -10,7 +10,7 @@ import os
+ import re
+ import subprocess
+ import sys
+-from collections.abc import Iterable
++from collections.abc import Iterable, Mapping
+ from pathlib import Path
+ 
+ import config_conflicts
+@@ -93,25 +93,31 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
+ 
+ 
+ def declarations(
+-    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = ()
++    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = (),
++    declared: Mapping[str, dict] | None = None,
+ ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
+     """Return the selection's marketplaces, enabled plugins and committed permissions.
+ 
+     The enabled plugins are the selection's transitive dependency closure, from the marketplaces' published
+-    catalogs. Permissions compose every enabled plugin's published declaration with the repository overlay
+-    (`harness_permissions.compose`). Without `published` there is no network lookup: the closure comes from
+-    this machine's fetched catalogs, the `generated` identities the previous generation enabled stay
+-    enabled, and permissions are None so the caller keeps its current ones.
++    catalogs, or from `declared` when the caller already resolved them with `published_harness.declarations`.
++    Permissions compose every enabled plugin's published declaration with the repository overlay
++    (`harness_permissions.compose`). Without `published` there is no network lookup and permissions are None
++    so the caller keeps its current ones. The enabled plugins are then the `generated` identities the
++    previous generation enabled, the last published closure, plus the selection; only without a previous
++    generation does the closure come from this machine's fetched catalogs. Offline generation therefore never
++    restores a dependency the published closure dropped.
+     """
+     marketplaces, selected_identities = plugin_selection.validate(lock)
+     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
+     if published:
+-        plugins = published_harness.declarations(marketplaces, selected_identities)
++        plugins = (published_harness.declarations(marketplaces, selected_identities) if declared is None
++                   else dict(declared))
+         enabled = set(plugins) | set(selected_identities)
+     else:
+-        enabled = set(published_harness.local_closure(marketplaces, selected_identities))
+-        enabled |= {identity for identity in generated
++        previous = {identity for identity in generated
+                     if plugin_selection.valid_identity(identity) and plugin_selection.split(identity)[1] in marketplaces}
++        enabled = (previous | set(selected_identities) if previous
++                   else set(published_harness.local_closure(marketplaces, selected_identities)))
+     identities = {identity: True for identity in sorted(enabled)}
+     selected = {plugin_selection.overlay_id(identity) for identity in enabled}
+     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
+@@ -499,6 +505,7 @@ def plan(
+     execute=process.run,
+     exclusions: dict[Path, str] | None = None,
+     preserve_permissions: bool = False,
++    declared: Mapping[str, dict] | None = None,
+ ) -> dict[Path, str | None]:
+     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
+     scope = resolve_scope(root, scope, execute)
+@@ -514,7 +521,7 @@ def plan(
+     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
+     sources, identities, permissions = declarations(
+         lock_path, lock, root, published=not preserve_permissions,
+-        generated=generated_plugins(codex) if preserve_permissions else (),
++        generated=generated_plugins(codex) if preserve_permissions else (), declared=declared,
+     )
+     actual_rules = text_at(rules_path)
+     expected_rules = actual_rules if permissions is None else codex_rules(permissions)
+diff --git a/plugins/agent/hooks/codex.json b/plugins/agent/hooks/codex.json
+index c9ca1511..bc72e8e6 100644
+--- a/plugins/agent/hooks/codex.json
++++ b/plugins/agent/hooks/codex.json
+@@ -6,8 +6,8 @@
+           {
+             "type": "command",
+             "timeout": 30,
+-            "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:ff1d165eea938cfd7712f935c083c7e3813c516e046047e4441189b569f8475d\" \"agent\" \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" start --host codex",
+-            "commandWindows": "cmd.exe /d /s /v:off /c tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;sys.argv = [sys.argv[0], os.environ['PLUGIN_ROOT'], 'sha256:ff1d165eea938cfd7712f935c083c7e3813c516e046047e4441189b569f8475d', 'agent', ''.join([os.environ['PLUGIN_ROOT'], '/.agents/agent/runtime/session_hook.py']), 'start', '--host', 'codex'];package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\""
++            "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:ce68639295519cc673e2eddf66ac4c42ab0c66ea342ed8701c066e4994f64d41\" \"agent\" \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" start --host codex",
++            "commandWindows": "cmd.exe /d /s /v:off /c tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;sys.argv = [sys.argv[0], os.environ['PLUGIN_ROOT'], 'sha256:ce68639295519cc673e2eddf66ac4c42ab0c66ea342ed8701c066e4994f64d41', 'agent', ''.join([os.environ['PLUGIN_ROOT'], '/.agents/agent/runtime/session_hook.py']), 'start', '--host', 'codex'];package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\""
+           }
+         ]
+       },
+@@ -16,8 +16,8 @@
+           {
+             "type": "command",
+             "timeout": 60,
+-            "command": "tj_hook --preserve-descendants -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:ff1d165eea938cfd7712f935c083c7e3813c516e046047e4441189b569f8475d\" \"agent\" \"${PLUGIN_ROOT}/.agents/agent/runtime/observer_start.py\"",
+-            "commandWindows": "cmd.exe /d /s /v:off /c tj_hook --preserve-descendants -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;sys.argv = [sys.argv[0], os.environ['PLUGIN_ROOT'], 'sha256:ff1d165eea938cfd7712f935c083c7e3813c516e046047e4441189b569f8475d', 'agent', ''.join([os.environ['PLUGIN_ROOT'], '/.agents/agent/runtime/observer_start.py'])];package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\""
++            "command": "tj_hook --preserve-descendants -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:ce68639295519cc673e2eddf66ac4c42ab0c66ea342ed8701c066e4994f64d41\" \"agent\" \"${PLUGIN_ROOT}/.agents/agent/runtime/observer_start.py\"",
++            "commandWindows": "cmd.exe /d /s /v:off /c tj_hook --preserve-descendants -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;sys.argv = [sys.argv[0], os.environ['PLUGIN_ROOT'], 'sha256:ce68639295519cc673e2eddf66ac4c42ab0c66ea342ed8701c066e4994f64d41', 'agent', ''.join([os.environ['PLUGIN_ROOT'], '/.agents/agent/runtime/observer_start.py'])];package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\""
+           }
+         ]
+       }
+@@ -28,8 +28,8 @@
+           {
+             "type": "command",
+             "timeout": 5,
+-            "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:ff1d165eea938cfd7712f935c083c7e3813c516e046047e4441189b569f8475d\" \"agent\" \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" end --host codex",
+-            "commandWindows": "cmd.exe /d /s /v:off /c tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;sys.argv = [sys.argv[0], os.environ['PLUGIN_ROOT'], 'sha256:ff1d165eea938cfd7712f935c083c7e3813c516e046047e4441189b569f8475d', 'agent', ''.join([os.environ['PLUGIN_ROOT'], '/.agents/agent/runtime/session_hook.py']), 'end', '--host', 'codex'];package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\""
++            "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:ce68639295519cc673e2eddf66ac4c42ab0c66ea342ed8701c066e4994f64d41\" \"agent\" \"${PLUGIN_ROOT}/.agents/agent/runtime/session_hook.py\" end --host codex",
++            "commandWindows": "cmd.exe /d /s /v:off /c tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;sys.argv = [sys.argv[0], os.environ['PLUGIN_ROOT'], 'sha256:ce68639295519cc673e2eddf66ac4c42ab0c66ea342ed8701c066e4994f64d41', 'agent', ''.join([os.environ['PLUGIN_ROOT'], '/.agents/agent/runtime/session_hook.py']), 'end', '--host', 'codex'];package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '8dbbd604e5f5b74dd05e7f4218c3d0d38dd867902c7165a6b78881d1d17d5c2a'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();sys.pycache_prefix = str(Path(workspace.name) / 'pycache');sys.dont_write_bytecode = True;staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\""
+           }
+         ]
+       }
+diff --git a/plugins/agent/skills/plugins/scripts/adopt_plugins.py b/plugins/agent/skills/plugins/scripts/adopt_plugins.py
+index 103f9202..0fdcedca 100644
+--- a/plugins/agent/skills/plugins/scripts/adopt_plugins.py
++++ b/plugins/agent/skills/plugins/scripts/adopt_plugins.py
+@@ -16,6 +16,7 @@ from types import MappingProxyType
+ 
+ import lock_io
+ import plugin_selection
++import published_harness
+ import repo_config
+ from plugin_runtime import declarations, process
+ 
+@@ -38,7 +39,7 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     entries = marketplace.get("plugins")
+     if not isinstance(entries, list):
+         raise lock_io.LockError(f"{LOCK}: plugins must be a list")
+-    plugins = {}
++    plugins: set[str] = set()
+     profiles = set()
+     organizations = {}
+     for entry in entries:
+@@ -47,16 +48,13 @@ def load_roster(snapshot: dict | None = None) -> dict:
+         name = entry["name"]
+         if name in plugins:
+             raise lock_io.LockError(f"{LOCK}: duplicate plugin: {name}")
+-        plugins[name] = lock_io.require_string_list(entry.get("requires", []), f"{name}.requires")
++        plugins.add(name)
+         if entry.get("kind") == "profile":
+             profiles.add(name)
+         elif entry.get("kind") == "organization":
+             if not isinstance(entry.get("extends"), str):
+                 raise lock_io.LockError(f"{LOCK}: organization {name} must extend a profile")
+             organizations[name] = entry["extends"]
+-    for name, required in plugins.items():
+-        if any(dependency not in plugins for dependency in required):
+-            raise lock_io.LockError(f"{LOCK}: unknown dependency in {name}")
+     if live:
+         return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": {}}
+     stacks = lock_io.load_json(STACKS)
+@@ -69,20 +67,6 @@ def load_roster(snapshot: dict | None = None) -> dict:
+     return {"plugins": plugins, "profiles": profiles, "organizations": organizations, "stacks": stacks["stacks"]}
+ 
+ 
+-def expand(requested: set[str], roster: dict) -> list[str]:
+-    known = roster["plugins"]
+-    pending = sorted(requested)
+-    selected: set[str] = set()
+-    while pending:
+-        name = pending.pop()
+-        if name not in known:
+-            raise lock_io.LockError(f"Unknown plugin: {name}")
+-        if name not in selected:
+-            selected.add(name)
+-            pending.extend(known[name])
+-    return sorted(selected)
+-
+-
+ def requested_plugins(stacks: list[str], plugins: list[str], roster: dict) -> tuple[set[str], set[str]]:
+     unknown = sorted(set(stacks) - set(roster["stacks"]))
+     if unknown:
+@@ -132,7 +116,12 @@ def refuse_employer_conflict(root: Path, profile: str, roster: dict, environ: Ma
+                                     f"matches this repository ({', '.join(evidence)}); {reason}")
+ 
+ 
+-def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> dict:
++def selection_document(root: Path, requested: set[str], foreign: set[str], removals: set[str], declared: dict, roster: dict, environ: Mapping[str, str]) -> tuple[dict, dict[str, dict]]:
++    """Return the selection document and the published declarations of its dependency closure.
++
++    The one-profile rule, the employer check and the removal guard evaluate the closure that the published
++    catalogs' dependencies define, the same closure settings generation enables.
++    """
+     selection = plugin_selection.resolve(root)
+     kept: list[str] = []
+     marketplaces = {}
+@@ -147,24 +136,11 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+                       and plugin_selection.split(identity)[0] in roster["plugins"]}
+     elif not requested and not foreign and not removals:
+         requested = set(plugin_selection.CORE_PLUGINS)
+-    unknown = sorted(requested - roster["plugins"].keys())
++    unknown = sorted(requested - roster["plugins"])
+     if unknown:
+         raise lock_io.LockError("Unknown plugin: " + ", ".join(unknown))
+     selected = {plugin_selection.plugin_id(name) for name in requested} | set(kept) | foreign
+     selected -= removals
+-    local = {plugin_selection.split(identity)[0] for identity in selected
+-             if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
+-             and plugin_selection.split(identity)[0] in roster["plugins"]}
+-    profiles = sorted(set(expand(local, roster)) & roster["profiles"])
+-    if len(profiles) > 1:
+-        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
+-                                + "; keep one and drop the others with --remove-plugin <name>")
+-    if profiles:
+-        refuse_employer_conflict(root, profiles[0], roster, environ)
+-    required = set().union(*(expand({name}, roster) for name in local)) if local else set()
+-    blocked = sorted(name for name in required if plugin_selection.plugin_id(name) in removals)
+-    if blocked:
+-        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
+     if requested:
+         marketplaces.setdefault(plugin_selection.MARKETPLACE_NAME, {"repository": plugin_selection.MARKETPLACE_REPOSITORY})
+     marketplaces.update(declared)
+@@ -175,8 +151,21 @@ def selection_document(root: Path, requested: set[str], foreign: set[str], remov
+         "marketplaces": dict(sorted(marketplaces.items())),
+         "plugins": sorted(selected),
+     }
+-    plugin_selection.validate(document)
+-    return document
++    validated_marketplaces, identities = plugin_selection.validate(document)
++    published = published_harness.declarations(validated_marketplaces, identities)
++    closure = set(published) | set(identities)
++    profiles = sorted(plugin_selection.split(identity)[0] for identity in closure
++                      if plugin_selection.split(identity)[1] == plugin_selection.MARKETPLACE_NAME
++                      and plugin_selection.split(identity)[0] in roster["profiles"])
++    if len(profiles) > 1:
++        raise lock_io.LockError("A repository selects one profile, not " + " and ".join(profiles)
++                                + "; keep one and drop the others with --remove-plugin <name>")
++    if profiles:
++        refuse_employer_conflict(root, profiles[0], roster, environ)
++    blocked = sorted(closure & removals)
++    if blocked:
++        raise lock_io.LockError("Cannot remove prerequisite required by remaining plugins: " + ", ".join(blocked))
++    return document, published
+ 
+ 
+ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str], scope: str | None, marketplaces: list[str] = (), *, roster: dict | None = None, exclusions: dict[Path, str] | None = None, environ: Mapping[str, str] = NO_ENVIRONMENT) -> tuple[dict[Path, str | None], Path]:
+@@ -191,9 +180,10 @@ def plan(root: Path, stacks: list[str], plugins: list[str], removals: list[str],
+         if name in declared:
+             raise lock_io.LockError(f"--marketplace {name} is given more than once")
+         declared[name] = source
+-    document = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
++    document, published = selection_document(root, names, foreign, removal_identities(removals), declared, roster, environ)
+     selection = root / ".agents" / plugin_selection.SELECTION_NAME
+-    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document, exclusions=exclusions)
++    host_targets = repo_config.plan(selection, root=root, scope=scope, prospective_paths=[selection], lock_document=document,
++                                    exclusions=exclusions, declared=published)
+     targets = {selection: json.dumps(document, indent=2, ensure_ascii=False) + "\n", **host_targets}
+     return targets, root
+ 
+diff --git a/plugins/agent/skills/plugins/scripts/repo_config.py b/plugins/agent/skills/plugins/scripts/repo_config.py
+index 54a60251..8fbfbfa4 100644
+--- a/plugins/agent/skills/plugins/scripts/repo_config.py
++++ b/plugins/agent/skills/plugins/scripts/repo_config.py
+@@ -10,7 +10,7 @@ import os
+ import re
+ import subprocess
+ import sys
+-from collections.abc import Iterable
++from collections.abc import Iterable, Mapping
+ from pathlib import Path
+ 
+ import config_conflicts
+@@ -93,25 +93,31 @@ def resolve_scope(root: Path, scope: str | None, run=process.run) -> str:
+ 
+ 
+ def declarations(
+-    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = ()
++    lock_path: Path, lock: dict, root: Path, *, published: bool = True, generated: Iterable[str] = (),
++    declared: Mapping[str, dict] | None = None,
+ ) -> tuple[dict[str, dict], dict[str, bool], harness_permissions.Permissions | None]:
+     """Return the selection's marketplaces, enabled plugins and committed permissions.
+ 
+     The enabled plugins are the selection's transitive dependency closure, from the marketplaces' published
+-    catalogs. Permissions compose every enabled plugin's published declaration with the repository overlay
+-    (`harness_permissions.compose`). Without `published` there is no network lookup: the closure comes from
+-    this machine's fetched catalogs, the `generated` identities the previous generation enabled stay
+-    enabled, and permissions are None so the caller keeps its current ones.
++    catalogs, or from `declared` when the caller already resolved them with `published_harness.declarations`.
++    Permissions compose every enabled plugin's published declaration with the repository overlay
++    (`harness_permissions.compose`). Without `published` there is no network lookup and permissions are None
++    so the caller keeps its current ones. The enabled plugins are then the `generated` identities the
++    previous generation enabled, the last published closure, plus the selection; only without a previous
++    generation does the closure come from this machine's fetched catalogs. Offline generation therefore never
++    restores a dependency the published closure dropped.
+     """
+     marketplaces, selected_identities = plugin_selection.validate(lock)
+     sources = {name: {"owner_repository": source["repository"]} for name, source in marketplaces.items()}
+     if published:
+-        plugins = published_harness.declarations(marketplaces, selected_identities)
++        plugins = (published_harness.declarations(marketplaces, selected_identities) if declared is None
++                   else dict(declared))
+         enabled = set(plugins) | set(selected_identities)
+     else:
+-        enabled = set(published_harness.local_closure(marketplaces, selected_identities))
+-        enabled |= {identity for identity in generated
++        previous = {identity for identity in generated
+                     if plugin_selection.valid_identity(identity) and plugin_selection.split(identity)[1] in marketplaces}
++        enabled = (previous | set(selected_identities) if previous
++                   else set(published_harness.local_closure(marketplaces, selected_identities)))
+     identities = {identity: True for identity in sorted(enabled)}
+     selected = {plugin_selection.overlay_id(identity) for identity in enabled}
+     overlay_permissions = harness_permissions.EMPTY_PERMISSIONS
+@@ -499,6 +505,7 @@ def plan(
+     execute=process.run,
+     exclusions: dict[Path, str] | None = None,
+     preserve_permissions: bool = False,
++    declared: Mapping[str, dict] | None = None,
+ ) -> dict[Path, str | None]:
+     root = (root or lock_path.resolve().parent.parent).expanduser().resolve()
+     scope = resolve_scope(root, scope, execute)
+@@ -514,7 +521,7 @@ def plan(
+     lock = lock_document if lock_document is not None else lock_io.load_json(lock_path)
+     sources, identities, permissions = declarations(
+         lock_path, lock, root, published=not preserve_permissions,
+-        generated=generated_plugins(codex) if preserve_permissions else (),
++        generated=generated_plugins(codex) if preserve_permissions else (), declared=declared,
+     )
+     actual_rules = text_at(rules_path)
+     expected_rules = actual_rules if permissions is None else codex_rules(permissions)
+diff --git a/tests/published_plugins.py b/tests/published_plugins.py
+index 33a1ee0b..5b1de0ce 100644
+--- a/tests/published_plugins.py
++++ b/tests/published_plugins.py
+@@ -4,7 +4,7 @@ from __future__ import annotations
+ 
+ import json
+ import subprocess
+-from collections.abc import Iterable, Mapping
++from collections.abc import Callable, Iterable, Mapping
+ from pathlib import Path
+ 
+ PRODUCER = "https://github.com/tj-agents/fixture-producer.git"
+@@ -18,6 +18,36 @@ def none_declared(
+     return {identity: dict(EMPTY) for identity in identities}
+ 
+ 
++def declared_with(
++    dependencies: Mapping[str, Iterable[str]],
++) -> Callable[
++    [Mapping[str, Mapping[str, str]], Iterable[str]], dict[str, dict[str, list[object]]]
++]:
++    """Stand in for `published_harness.declarations` with dependencies by plugin name.
++
++    Bare names resolve in the dependent's marketplace; no plugin declares permissions.
++    """
++
++    def declarations(
++        marketplaces: Mapping[str, Mapping[str, str]], identities: Iterable[str]
++    ) -> dict[str, dict[str, list[object]]]:
++        resolved: set[str] = set()
++        pending = list(identities)
++        while pending:
++            identity = pending.pop()
++            if identity in resolved:
++                continue
++            resolved.add(identity)
++            name, _, marketplace = identity.partition("@")
++            pending.extend(
++                f"{dependency}@{marketplace}"
++                for dependency in dependencies.get(name, ())
++            )
++        return {identity: dict(EMPTY) for identity in resolved}
++
++    return declarations
++
++
+ def git(directory: Path, *arguments: str) -> str:
+     result = subprocess.run(
+         [
+diff --git a/tests/test_adopt_plugins.py b/tests/test_adopt_plugins.py
+index fb1662af..f72faea7 100644
+--- a/tests/test_adopt_plugins.py
++++ b/tests/test_adopt_plugins.py
+@@ -6,11 +6,12 @@ import re
+ import subprocess
+ import sys
+ import tempfile
++from typing import Any
+ import unittest
+ from unittest import mock
+ 
+ import pytest
+-from published_plugins import none_declared
++from published_plugins import declared_with
+ 
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+@@ -27,6 +28,23 @@ def load(name):
+ 
+ ADOPT = load("adopt_plugins")
+ LockError = ADOPT.lock_io.LockError
++DEPENDENCIES = {
++    "agent": ["base", "agent-store", "cli"],
++    "agent-store": ["base"],
++    "cli": ["base"],
++    "example-employer": ["work"],
++    "helper": ["personal"],
++}
++PUBLISHED = declared_with(DEPENDENCIES)
++
++
++def roster_without_requires(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
++    """The bundled roster once the marketplace no longer publishes requires."""
++    snapshot = ADOPT.lock_io.load_json(ADOPT.LOCK) if snapshot is None else snapshot
++    for entry in snapshot["marketplace"]["plugins"]:
++        entry.pop("requires", None)
++    roster: dict[str, Any] = ADOPT.load_roster(snapshot)
++    return roster
+ 
+ 
+ class RemovePluginTests(unittest.TestCase):
+@@ -34,7 +52,7 @@ class RemovePluginTests(unittest.TestCase):
+         live = mock.patch.object(ADOPT, "current_roster", side_effect=ADOPT.load_roster)
+         live.start()
+         self.addCleanup(live.stop)
+-        published = mock.patch.object(ADOPT.repo_config.published_harness, "declarations", none_declared)
++        published = mock.patch.object(ADOPT.repo_config.published_harness, "declarations", PUBLISHED)
+         published.start()
+         self.addCleanup(published.stop)
+         temporary = tempfile.TemporaryDirectory()
+@@ -117,6 +135,13 @@ class RemovePluginTests(unittest.TestCase):
+         ADOPT.run(self.root, [], ["python"], "write")
+         self.assertEqual(sorted([*flattened, "python@tj-agents"]), self.selected())
+ 
++    def test_removal_guard_follows_published_dependencies_not_the_roster(self):
++        self.write_selection(["agent@tj-agents", "cli@tj-agents"])
++        before = (self.root / ".agents" / "plugins.json").read_bytes()
++        with self.assertRaisesRegex(LockError, "prerequisite required by remaining plugins: cli@tj-agents"):
++            ADOPT.run(self.root, [], [], "write", removals=["cli"], roster=roster_without_requires())
++        self.assertEqual(before, (self.root / ".agents" / "plugins.json").read_bytes())
++
+     def test_removal_of_an_unlisted_dependency_of_a_remaining_plugin_refuses(self):
+         self.write_selection(["agent@tj-agents"])
+         before = (self.root / ".agents" / "plugins.json").read_bytes()
+@@ -144,7 +169,7 @@ class RemovePluginTests(unittest.TestCase):
+     def test_automatic_reconciliation_does_not_drop_newer_published_plugins(self):
+         self.write_selection(["base@tj-agents", "new-plugin@tj-agents"])
+         roster = ADOPT.load_roster()
+-        roster["plugins"]["new-plugin"] = ["base"]
++        roster["plugins"].add("new-plugin")
+         with mock.patch.object(ADOPT, "current_roster", return_value=roster) as current:
+             ADOPT.reconcile(self.root, "write")
+         current.assert_called_once()
+@@ -190,7 +215,7 @@ class RemovePluginTests(unittest.TestCase):
+         self.write_selection(["base@tj-agents", "docs@tj-agents"])
+         roster = ADOPT.load_roster()
+         self.assertIn("docs", roster["plugins"])
+-        del roster["plugins"]["docs"]
++        roster["plugins"].discard("docs")
+         with mock.patch.object(ADOPT, "current_roster", return_value=roster):
+             ADOPT.reconcile(self.root, "write")
+         self.assertEqual(["base@tj-agents"], self.selected())
+@@ -232,14 +257,15 @@ def profile_roster(installed_employers: list[object]) -> dict[str, object]:
+         entry["kind"] = ("profile" if entry["name"] in {"personal", "work"}
+                          else "organization" if "extends" in entry else "shared")
+     entries.append({"name": "example-employer", "repository": "example-employer", "revision": "a" * 40,
+-                    "requires": ["work"], "kind": "organization", "extends": "work"})
+-    roster: dict[str, object] = ADOPT.load_roster(snapshot)
++                    "kind": "organization", "extends": "work"})
++    entries.append({"name": "helper", "repository": "helper", "revision": "b" * 40, "kind": "shared"})
++    roster: dict[str, object] = roster_without_requires(snapshot)
+     return roster
+ 
+ 
+ @pytest.fixture
+ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+-    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", none_declared)
++    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", PUBLISHED)
+     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+     (tmp_path / ".agents").mkdir()
+@@ -338,6 +364,16 @@ def test_run_selects_the_profile_a_matching_employer_extends(
+     assert selection(project) == ["example-employer@tj-agents"]
+ 
+ 
++def test_run_refuses_a_profile_reached_only_through_published_dependencies_where_an_employer_matches(
++    project: Path, profile_roster: dict[str, object], installed_employers: list[object]
++) -> None:
++    installed_employers.append(employer())
++    set_origin(project, "git@example.test:example-employer/service.git")
++    with pytest.raises(LockError, match="Cannot select personal"):
++        ADOPT.run(project, [], ["helper"], "write", roster=profile_roster)
++    assert not (project / ".agents" / "plugins.json").exists()
++
++
+ def test_run_selects_personal_where_no_installed_employer_matches(
+     project: Path, profile_roster: dict[str, object], installed_employers: list[object]
+ ) -> None:
+@@ -350,7 +386,7 @@ def test_run_selects_personal_where_no_installed_employer_matches(
+ def test_adoption_copies_an_inherited_selection_to_the_linked_checkout_and_excludes_it(
+     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+ ) -> None:
+-    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", none_declared)
++    monkeypatch.setattr(ADOPT.repo_config.published_harness, "declarations", PUBLISHED)
+     primary = tmp_path / "primary"
+     primary.mkdir()
+     (primary / "README.md").write_text("primary\n", encoding="utf-8")
+diff --git a/tests/test_repo_config.py b/tests/test_repo_config.py
+index b138dd13..d4d25396 100644
+--- a/tests/test_repo_config.py
++++ b/tests/test_repo_config.py
+@@ -382,15 +382,13 @@ def test_preserved_generation_keeps_dependencies_a_stale_fetched_catalog_omits(
+     assert enabled(repository) == {"delta@tj-agents": True, "gamma@tj-agents": True}
+ 
+ 
+-def test_preserved_generation_enables_new_dependencies_from_the_fetched_catalog(
++def test_first_preserved_generation_resolves_dependencies_from_the_fetched_catalog(
+     repository: Path,
+     published: list[list[str]],
+     fetched: Callable[[Mapping[str, list[object]]], None],
+ ) -> None:
+-    selection = select(repository, "alpha@tj-agents")
+-    REPO_CONFIG.run(selection, "write")
+     fetched({"delta": ["gamma"]})
+-    select(repository, "alpha@tj-agents", "delta@tj-agents")
++    selection = select(repository, "alpha@tj-agents", "delta@tj-agents")
+ 
+     REPO_CONFIG.run(selection, "write", preserve_permissions=True)
+ 
+@@ -399,7 +397,23 @@ def test_preserved_generation_enables_new_dependencies_from_the_fetched_catalog(
+         "delta@tj-agents": True,
+         "gamma@tj-agents": True,
+     }
+-    assert published == [["alpha@tj-agents"]]
++    assert published == []
++
++
++def test_preserved_generation_never_restores_a_dependency_the_published_one_dropped(
++    repository: Path,
++    published: list[list[str]],
++    fetched: Callable[[Mapping[str, list[object]]], None],
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setitem(DEPENDENCIES, "delta", [])
++    fetched({"delta": ["gamma"]})
++    selection = select(repository, "delta@tj-agents")
++    REPO_CONFIG.run(selection, "write")
++
++    assert REPO_CONFIG.run(selection, "write", preserve_permissions=True) == []
++    assert enabled(repository) == {"delta@tj-agents": True}
++    assert REPO_CONFIG.run(selection, "check") == []
+ 
+ 
+ def test_preserved_permissions_need_no_published_lookup(
+diff --git a/tests/test_selection_convergence.py b/tests/test_selection_convergence.py
+index d772297d..3a97ad16 100644
+--- a/tests/test_selection_convergence.py
++++ b/tests/test_selection_convergence.py
+@@ -36,8 +36,8 @@ class SelectionConvergenceTests(unittest.TestCase):
+             self.project / "producer", dict.fromkeys(names, published_plugins.EMPTY))
+         (source / ".claude-plugin").mkdir()
+         (source / ".claude-plugin/marketplace.json").write_text(
+-            published_plugins.catalog(names, commit, {plugin["name"]: plugin.get("requires", [])
+-                                                      for plugin in snapshot["marketplace"]["plugins"]}),
++            published_plugins.catalog(names, commit, {"engineering": ["workflow"], "workflow": ["agent"],
++                                                      "agent": ["base", "agent-store", "cli"]}),
+             encoding="utf-8")
+         for arguments in (["init", "--initial-branch=main"], ["add", "plugins.json", ".claude-plugin"],
+                           ["-c", "user.name=Test", "-c", "user.email=test@example.invalid",

@@ -1,0 +1,127 @@
+{
+  "payloads": {
+    "agent-store": [
+      "agent-store"
+    ],
+    "agent": [
+      "agent"
+    ],
+    "codex": [
+      "codex"
+    ]
+  },
+  "dependencies": {
+    "agent": [
+      "tj-agents/base",
+      "agent-store",
+      "tj-agents/cli"
+    ],
+    "codex": [
+      "agent"
+    ]
+  },
+  "resources": [
+    {
+      "plugin": "agent-store",
+      "distribution": "tj-agent-store",
+      "destination": "python"
+    },
+    {
+      "plugin": "agent",
+      "distribution": "tj-agent-store",
+      "destination": "python"
+    },
+    {
+      "plugin": "agent",
+      "distribution": "tj-agent",
+      "destination": "python"
+    },
+    {
+      "plugin": "agent",
+      "distribution": "tj-cli",
+      "destination": "python"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/hooks/hook_dispatch.py",
+      "destination": "hooks/hook_dispatch.py"
+    },
+    {
+      "plugin": "agent",
+      "source": ".claude/hooks/agent.json",
+      "destination": "hooks/claude.json"
+    },
+    {
+      "plugin": "agent",
+      "source": ".codex/hooks/agent.json",
+      "destination": "hooks/codex.json"
+    },
+    {
+      "plugin": "codex",
+      "distribution": "tj-agent",
+      "destination": "python"
+    },
+    {
+      "plugin": "codex",
+      "distribution": "tj-agent-store",
+      "destination": "python"
+    },
+    {
+      "plugin": "codex",
+      "distribution": "tj-cli",
+      "destination": "python"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/hooks/install.py",
+      "destination": "hooks/install.py"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/hooks/session_store.py",
+      "destination": "hooks/session_store.py"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/hooks/close_lifecycle.py",
+      "destination": "hooks/close_lifecycle.py"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/hooks/startup_binding.py",
+      "destination": "hooks/startup_binding.py"
+    },
+    {
+      "plugin": "agent-store",
+      "source": ".agents/hooks/session_store.py",
+      "destination": "hooks/session_store.py"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/agent/references",
+      "destination": ".agents/agent/references"
+    }
+  ],
+  "host_adapters": [
+    {
+      "skill": "agent:listen",
+      "host": "codex",
+      "source": ".agents/plugins/adapters/codex/agent/listen.md"
+    },
+    {
+      "skill": "agent:listen",
+      "host": "claude",
+      "source": ".agents/plugins/adapters/claude/agent/listen.md"
+    },
+    {
+      "skill": "agent:refresh-plugins",
+      "host": "codex",
+      "source": ".agents/plugins/adapters/codex/agent/refresh-plugins.md"
+    },
+    {
+      "skill": "agent:refresh-plugins",
+      "host": "claude",
+      "source": ".agents/plugins/adapters/claude/agent/refresh-plugins.md"
+    }
+  ]
+}

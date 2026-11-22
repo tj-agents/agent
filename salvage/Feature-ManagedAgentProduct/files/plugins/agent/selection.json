@@ -1,0 +1,154 @@
+{
+  "plugin": "agent",
+  "dependencies": [
+    "tj-agents/base",
+    "agent-store",
+    "tj-agents/cli"
+  ],
+  "profiles": {
+    "core": [
+      "handoff",
+      "lanes",
+      "listen",
+      "message",
+      "open",
+      "plugins",
+      "recent",
+      "recover",
+      "search"
+    ]
+  },
+  "compatibilitySkillAliases": {},
+  "skills": [
+    {
+      "name": "handoff",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python",
+        "tj",
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "lanes",
+      "kind": "policy",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "listen",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "native host"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "message",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "native host",
+        "tj"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "open",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "tj"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "plugins",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "repositories adopting plugins"
+      ],
+      "requires": [
+        "python",
+        "git"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "recent",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "recover",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "tj"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "search",
+      "kind": "utility",
+      "profile": "core",
+      "applicability": [
+        "agent sessions"
+      ],
+      "requires": [
+        "python"
+      ],
+      "provenance": [
+        "house"
+      ]
+    }
+  ]
+}

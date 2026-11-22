@@ -1,0 +1,26 @@
+diff --git a/.agents/agent/runtime/latest_plugins.py b/.agents/agent/runtime/latest_plugins.py
+index 4a977f68..dc5bd03a 100644
+--- a/.agents/agent/runtime/latest_plugins.py
++++ b/.agents/agent/runtime/latest_plugins.py
+@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
+     if refusal is None:
+         return 0
+     if event == "UserPromptSubmit":
+-        print(json.dumps({"decision": "block", "reason": refusal}))
++        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": refusal}}))
+     else:
+         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "SessionStart",
+                                                  "additionalContext": refusal}}))
+diff --git a/plugins/agent/.agents/agent/runtime/latest_plugins.py b/plugins/agent/.agents/agent/runtime/latest_plugins.py
+index 4a977f68..dc5bd03a 100644
+--- a/plugins/agent/.agents/agent/runtime/latest_plugins.py
++++ b/plugins/agent/.agents/agent/runtime/latest_plugins.py
+@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
+     if refusal is None:
+         return 0
+     if event == "UserPromptSubmit":
+-        print(json.dumps({"decision": "block", "reason": refusal}))
++        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": refusal}}))
+     else:
+         print(json.dumps({"hookSpecificOutput": {"hookEventName": event or "SessionStart",
+                                                  "additionalContext": refusal}}))

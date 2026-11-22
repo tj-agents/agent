@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "plugin": "tj-agents/agent",
+  "source_roots": [
+    ".agents/agent"
+  ],
+  "requires": {
+    "marketplaces": [
+      {
+        "id": "tj-agents",
+        "repository": "tj-agents/marketplace"
+      }
+    ],
+    "hooks": [
+      {
+        "path": ".agents/agent/runtime/session_hook.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/runtime/completion_hook.py",
+        "hosts": [
+          "claude",
+          "codex"
+        ]
+      },
+      {
+        "path": ".agents/agent/runtime/claude/native_bridge.mjs",
+        "hosts": [
+          "claude"
+        ]
+      },
+      {
+        "path": ".agents/agent/runtime/observer_start.py",
+        "hosts": [
+          "codex"
+        ]
+      }
+    ],
+    "permissions": {
+      "claude_allow": [],
+      "codex_prefix_rules": []
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "plugin": "codex",
+  "dependencies": [
+    "tj-agents/base",
+    "agent"
+  ],
+  "profiles": {
+    "core": [
+      "hooks",
+      "memory"
+    ]
+  },
+  "compatibilitySkillAliases": {},
+  "skills": [
+    {
+      "name": "hooks",
+      "kind": "operation",
+      "profile": "core",
+      "applicability": [
+        "codex sessions"
+      ],
+      "requires": [
+        "python",
+        "codex"
+      ],
+      "provenance": [
+        "house"
+      ]
+    },
+    {
+      "name": "memory",
+      "kind": "operation",
+      "profile": "core",
+      "applicability": [
+        "codex sessions"
+      ],
+      "requires": [
+        "python"
+      ],
+      "provenance": [
+        "house"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,416 @@
+import io
+import json
+import subprocess
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+import host_plugins
+import pytest
+import required_plugins
+import standards
+import tj_prepare
+from claude import installed as claude_installed
+from claude import plugins as claude_projects
+from claude import project_plugins as claude_scope
+from codex import plugins as codex_projects
+from tj_agent.host import Host
+from tj_cli import process
+
+
+@pytest.fixture
+def selected_project(tmp_path: Path) -> Path:
+    selection = tmp_path / ".agents/plugins.json"
+    selection.parent.mkdir()
+    selection.write_text(
+        json.dumps({"schema_version": 1, "plugins": ["python@tj-agents"]}),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+@pytest.mark.parametrize("host", list(Host))
+@pytest.mark.parametrize("local", [False, True])
+def test_prepare_installs_missing_selection_before_writing_instructions(
+    selected_project: Path, monkeypatch: pytest.MonkeyPatch, host: Host, local: bool
+) -> None:
+    if host == Host.CLAUDE:
+        (selected_project / "AGENTS.override.md").write_text(
+            "Codex rules\n", encoding="utf-8"
+        )
+    if local:
+        (selected_project / ".agents/repo-capabilities.local.json").write_text(
+            "{}", encoding="utf-8"
+        )
+    calls: list[str] = []
+    plugin = selected_project / "installed"
+    plugin.mkdir()
+    skill = plugin / ".agents/python/convention/style"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: style\nkind: convention\nprofile: core\n"
+        "applicability: Python projects\n---\nFull style body\n",
+        encoding="utf-8",
+    )
+
+    def configure(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = args[0]
+        assert isinstance(command, list)
+        calls.append(
+            "permissions"
+            if Path(command[2]).name == "repository_permissions.py"
+            else "configure"
+        )
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    def inventory(
+        directory: Path, selected_host: Host, *, inventory_options: tuple[str, ...]
+    ) -> dict[str, Path]:
+        assert directory == selected_project
+        assert selected_host == host
+        assert inventory_options == ()
+        calls.append("inventory")
+        if "install" not in calls:
+            raise required_plugins.MissingRequiredPluginsError(
+                "missing", directory, ["python@tj-agents"]
+            )
+        return {"python@tj-agents": plugin}
+
+    def install(directory: Path, identities: Sequence[str]) -> None:
+        assert directory == selected_project
+        assert tuple(identities) == ("python@tj-agents",)
+        calls.append("install")
+
+    monkeypatch.setattr(process, "run", configure)
+    monkeypatch.setattr(required_plugins, "check", inventory)
+    monkeypatch.setattr(host_plugins.PLUGINS[host], "install", install)
+    if local:
+        with pytest.raises(standards.StandardsError, match="Local-only adoption"):
+            tj_prepare.prepare(selected_project, host)
+        assert calls == [
+            "configure",
+            "inventory",
+            "install",
+            "inventory",
+            "permissions",
+        ]
+        assert not (selected_project / "AGENTS.md").exists()
+        return
+    assert tj_prepare.prepare(selected_project, host)
+    assert calls == ["configure", "inventory", "install", "inventory", "permissions"]
+    assert "python:style" in (selected_project / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    assert (selected_project / "CLAUDE.md").read_text(
+        encoding="utf-8"
+    ) == "@AGENTS.md\n"
+
+
+def test_prepare_leaves_unadopted_directories_unchanged(tmp_path: Path) -> None:
+    assert not tj_prepare.prepare(tmp_path, Host.CLAUDE)
+    assert not (tmp_path / "AGENTS.md").exists()
+
+
+def test_prepare_revokes_owned_permissions_after_selection_is_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = tmp_path / ".agents/repository-permissions.local.json"
+    state.parent.mkdir()
+    state.write_text("{}", encoding="utf-8")
+    calls: list[object] = []
+
+    def run(
+        command: Sequence[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert Path(command[2]).name == "repository_permissions.py"
+        calls.append(json.loads(str(kwargs["input"])))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(process, "run", run)
+
+    assert not tj_prepare.prepare(tmp_path, Host.CLAUDE)
+    assert calls == [{"selected": [], "roots": {}}]
+    assert not (tmp_path / "AGENTS.md").exists()
+
+
+def test_prepare_reports_failure_without_replacing_existing_instructions(
+    selected_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = selected_project / "AGENTS.md"
+    path.write_text("Existing guidance\n", encoding="utf-8")
+
+    def fail(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 1, "", "configuration unavailable")
+
+    monkeypatch.setattr(process, "run", fail)
+    assert tj_prepare.main(["--host", "claude", "--cwd", str(selected_project)]) == 1
+    assert "standards warning: configuration unavailable" in capsys.readouterr().err
+    assert path.read_text(encoding="utf-8") == "Existing guidance\n"
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_claude_installs_at_local_scope_without_user_activation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local: bool
+) -> None:
+    project = tmp_path / "project"
+    if local:
+        state = project / ".agents/repo-capabilities.local.json"
+        state.parent.mkdir(parents=True)
+        state.write_text("{}", encoding="utf-8")
+    configuration = tmp_path / "claude"
+    configuration.mkdir()
+    settings = configuration / "settings.json"
+    original = json.dumps({"enabledPlugins": {"python@tj-agents": True}})
+    settings.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(configuration))
+    calls: list[tuple[Sequence[str], object]] = []
+
+    def run(
+        command: Sequence[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs.get("cwd")))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(claude_projects.process, "run", run)
+    claude_projects.install(project, ["python@tj-agents"])
+    assert [command[2] for command, _ in calls] == ["install"]
+    for command, directory in calls:
+        assert directory == project
+        assert command[3] == "python@tj-agents"
+        assert command[command.index("--scope") + 1] == "local"
+    assert settings.read_text(encoding="utf-8") == original
+
+
+def test_claude_reports_a_failed_local_scope_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+
+    def run(
+        command: Sequence[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 1, "", "native failure")
+
+    monkeypatch.setattr(claude_projects.process, "run", run)
+    with pytest.raises(required_plugins.RequiredPluginsError, match="native failure"):
+        claude_projects.install(tmp_path, ["python@tj-agents"])
+
+
+def test_codex_install_acquires_selected_cache_without_global_config_mutation(
+    selected_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = selected_project / "config.toml"
+    original = 'model = "kept"\n[plugins."unrelated@other"]\nenabled = true\n'
+    config.write_text(original, encoding="utf-8")
+    calls: list[tuple[Path, tuple[str, ...]]] = []
+    remembered: list[tuple[list[dict[str, object]], bool]] = []
+
+    def acquire(project: Path, identities: tuple[str, ...]) -> list[dict[str, object]]:
+        calls.append((project, identities))
+        return [{"pluginId": "python@tj-agents"}]
+
+    monkeypatch.setattr(
+        codex_projects.installer_boundary, "acquire_codex_cache", acquire
+    )
+    monkeypatch.setattr(
+        codex_projects.catalog,
+        "remember",
+        lambda rows, *, verified_install: remembered.append((rows, verified_install)),
+    )
+    codex_projects.install(selected_project, ["python@tj-agents"])
+
+    assert calls == [(selected_project, ("python@tj-agents",))]
+    assert remembered == [([{"pluginId": "python@tj-agents"}], True)]
+    assert config.read_text(encoding="utf-8") == original
+
+
+def test_prepare_skips_host_maintenance_commands(selected_project: Path) -> None:
+    assert not tj_prepare.prepare(selected_project, Host.CODEX, ("plugin", "list"))
+    assert not (selected_project / "AGENTS.md").exists()
+
+
+def test_prepare_uses_the_hosts_directory_and_configuration_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "café"
+    target.mkdir()
+    (target / ".agents").mkdir()
+    (target / ".agents/plugins.json").write_text(
+        json.dumps({"schema_version": 1, "plugins": ["python@tj-agents"]}),
+        encoding="utf-8",
+    )
+
+    def configure(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert kwargs["cwd"] == target
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    def inventory(
+        directory: Path, host: Host, *, inventory_options: tuple[str, ...]
+    ) -> dict[str, Path]:
+        assert directory == target
+        assert inventory_options == ("--config", 'model="test"')
+        return {}
+
+    monkeypatch.setattr(process, "run", configure)
+    monkeypatch.setattr(required_plugins, "check", inventory)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.TextIOWrapper(
+            io.BytesIO(
+                json.dumps(
+                    [
+                        "-C",
+                        "café",
+                        "--config",
+                        'model="test"',
+                        "multiline\nprompt & | < > ^ %",
+                    ],
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ),
+            encoding="cp1252",
+        ),
+    )
+    assert (
+        tj_prepare.main(
+            [
+                "--host",
+                "codex",
+                "--cwd",
+                str(tmp_path),
+                "--arguments-stdin",
+            ]
+        )
+        == 0
+    )
+    assert (target / "AGENTS.md").is_file()
+    assert not (tmp_path / "AGENTS.md").exists()
+
+
+def test_local_adoption_preserves_the_repositorys_instructions(
+    selected_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (selected_project / ".agents/repo-capabilities.local.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    original = "Owner's instructions\n"
+    path = selected_project / "AGENTS.md"
+    path.write_text(original, encoding="utf-8")
+
+    def configure(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(process, "run", configure)
+    monkeypatch.setattr(required_plugins, "check", lambda *args, **kwargs: {})
+    with pytest.raises(standards.StandardsError, match="Local-only adoption"):
+        tj_prepare.prepare(selected_project, Host.CLAUDE)
+    assert path.read_text(encoding="utf-8") == original
+    assert not (selected_project / "CLAUDE.md").exists()
+
+
+def test_claude_pairing_preserves_distinct_existing_instructions(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "AGENTS.md").write_text("Shared rules\n", encoding="utf-8")
+    pointer = tmp_path / "CLAUDE.md"
+    pointer.write_text(
+        "@AGENTS.md\n\nExtra rules mention `@AGENTS.md`.\n", encoding="utf-8"
+    )
+    claude_projects.prepare_instructions(tmp_path)
+    assert pointer.read_text(encoding="utf-8") == "@AGENTS.md\n"
+    assert (tmp_path / "AGENTS.md").read_text(encoding="utf-8") == (
+        "Shared rules\n\nExtra rules mention `@AGENTS.md`.\n"
+    )
+
+
+def test_codex_reports_an_override_that_would_hide_standards(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.override.md").write_text("Override\n", encoding="utf-8")
+    with pytest.raises(standards.StandardsError, match="shadows"):
+        codex_projects.prepare_instructions(tmp_path)
+
+
+def test_claude_refresh_recognizes_project_installs_in_linked_worktrees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = tmp_path / "primary"
+    common = primary / ".git"
+    admin = common / "worktrees/topic"
+    admin.mkdir(parents=True)
+    (admin / "commondir").write_text("../..\n", encoding="utf-8")
+    worktree = tmp_path / "topic"
+    worktree.mkdir()
+    (worktree / ".git").write_text(f"gitdir: {admin}\n", encoding="utf-8")
+    registry = {
+        "plugins": {
+            "python@tj-agents": [
+                {
+                    "scope": "project",
+                    "projectPath": str(primary),
+                    "gitCommitSha": "current",
+                    "installPath": str(tmp_path / "cache"),
+                }
+            ],
+            "rust@tj-agents": [
+                {
+                    "scope": "project",
+                    "projectPath": str(tmp_path / "elsewhere"),
+                    "gitCommitSha": "other",
+                    "installPath": str(tmp_path / "rust"),
+                }
+            ],
+        }
+    }
+    monkeypatch.chdir(worktree)
+    monkeypatch.setattr(claude_installed, "read", lambda path: registry)
+    assert claude_installed.installs("tj-agents") == {
+        "python": ("current", tmp_path / "cache")
+    }
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [
+        ["local", "project", "user"],
+        ["user", "project", "local"],
+        ["project", "user"],
+        ["user", "project"],
+    ],
+)
+def test_claude_installed_version_obeys_scope_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scopes: list[str]
+) -> None:
+    rows = [
+        {
+            "scope": scope,
+            "projectPath": str(tmp_path),
+            "gitCommitSha": scope,
+            "installPath": str(tmp_path / scope),
+        }
+        for scope in scopes
+    ]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        claude_installed,
+        "read",
+        lambda path: {
+            "plugins": {"python@tj-agents": rows},
+        },
+    )
+    expected = "local" if "local" in scopes else "project"
+    assert claude_installed.installs("tj-agents") == {
+        "python": (expected, tmp_path / expected),
+    }
+
+
+def test_claude_scope_covers_nested_folders_but_not_nested_repositories(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    assert claude_scope.applies(nested, "project", str(tmp_path))
+    (tmp_path / ".git").mkdir()
+    (nested / ".git").mkdir()
+    assert not claude_scope.applies(nested, "project", str(tmp_path))

@@ -1,0 +1,274 @@
+diff --git a/.agents/agent/utility/message/SKILL.md b/.agents/agent/utility/message/SKILL.md
+index 13564242..5e0092cc 100644
+--- a/.agents/agent/utility/message/SKILL.md
++++ b/.agents/agent/utility/message/SKILL.md
+@@ -11,9 +11,8 @@ provenance: house
+ 
+ # Verified Codex follow-up
+ 
+-Owns one verified message attempt to an independent Codex session. In a Claude session this transport is
+-unavailable and must report `unavailable` without sending; use native child-agent message tools for
+-in-conversation peers on either host.
++Owns one verified message attempt to an independent Codex session. The same shipped Python helper runs
++from either a Claude or Codex caller.
+ 
+ Use this only when the user authorized messaging the other session. Keep ownership of the current task.
+ For a child agent in the current conversation, use the host's native collaboration message tool instead.
+diff --git a/plugins/agent/.agents/agent/runtime/codex/plugins.py b/plugins/agent/.agents/agent/runtime/codex/plugins.py
+index 383003fb..1168040d 100644
+--- a/plugins/agent/.agents/agent/runtime/codex/plugins.py
++++ b/plugins/agent/.agents/agent/runtime/codex/plugins.py
+@@ -34,9 +34,9 @@ INFORMATION_OPTIONS = frozenset({"--help", "-h", "--version", "-V"})
+ MAINTENANCE_COMMANDS = frozenset({
+     "plugin", "login", "logout", "doctor", "help", "completion", "update", "mcp", "features",
+ })
+-MODEL_CONFIG_KEYS = frozenset({
++INVENTORY_CONFIG_KEYS = frozenset({
+     "model", "model_provider", "model_reasoning_effort", "model_reasoning_summary",
+-    "model_verbosity", "service_tier", "personality",
++    "model_verbosity", "service_tier", "personality", "tui.terminal_title",
+ })
+ NODE_SHIM_BYPASSED = True
+ 
+@@ -77,12 +77,12 @@ def location(entry: dict, project: Path) -> tuple[str, Path] | None:
+ def require_inventory_options(options: tuple[str, ...]) -> None:
+     for option, value in zip(options[::2], options[1::2]):
+         key = value.partition("=")[0].strip().strip("\"'")
+-        if option not in ("-c", "--config") or key not in MODEL_CONFIG_KEYS:
++        if option not in ("-c", "--config") or key not in INVENTORY_CONFIG_KEYS:
+             raise required_plugins.RequiredPluginsError(
+                 f"Cannot verify required Codex plugins with launch override {option}: native plugin "
+                 "inventory does not apply session activation overrides. Use the persisted repository "
+                 "configuration for plugin, profile and feature settings, then relaunch. "
+-                "Model and reasoning overrides remain available."
++                "Model, reasoning and terminal-title overrides remain available."
+             )
+ 
+ 
+diff --git a/plugins/agent/.agents/agent/utility/message/SKILL.md b/plugins/agent/.agents/agent/utility/message/SKILL.md
+index 13564242..5e0092cc 100644
+--- a/plugins/agent/.agents/agent/utility/message/SKILL.md
++++ b/plugins/agent/.agents/agent/utility/message/SKILL.md
+@@ -11,9 +11,8 @@ provenance: house
+ 
+ # Verified Codex follow-up
+ 
+-Owns one verified message attempt to an independent Codex session. In a Claude session this transport is
+-unavailable and must report `unavailable` without sending; use native child-agent message tools for
+-in-conversation peers on either host.
++Owns one verified message attempt to an independent Codex session. The same shipped Python helper runs
++from either a Claude or Codex caller.
+ 
+ Use this only when the user authorized messaging the other session. Keep ownership of the current task.
+ For a child agent in the current conversation, use the host's native collaboration message tool instead.
+diff --git a/plugins/agent/hooks/codex.json b/plugins/agent/hooks/codex.json
+index 86b8fdf2..8af8aef5 100644
+--- a/plugins/agent/hooks/codex.json
++++ b/plugins/agent/hooks/codex.json
+@@ -5,8 +5,13 @@
+         "hooks": [
+           {
+             "type": "command",
++<<<<<<< HEAD
+             "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:239aabe2b84feffd1e7233021af5fbf8ab8a2386260a286c652c661c77c45e5f\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
+             "commandWindows": "tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:239aabe2b84feffd1e7233021af5fbf8ab8a2386260a286c652c661c77c45e5f\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
++=======
++            "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:22f02a77491a43683aa7dd0163f52f450b0e1f4feb10e3ebc292026a70c93ffb\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
++            "commandWindows": "tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:22f02a77491a43683aa7dd0163f52f450b0e1f4feb10e3ebc292026a70c93ffb\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 7 --hook \"${PLUGIN_ROOT}/.agents/agent/utility/peer/scripts/register_session.py\"",
++>>>>>>> origin/main
+             "timeout": 10
+           }
+         ]
+@@ -18,8 +23,13 @@
+           {
+             "type": "command",
+             "timeout": 15,
++<<<<<<< HEAD
+             "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:239aabe2b84feffd1e7233021af5fbf8ab8a2386260a286c652c661c77c45e5f\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex",
+             "commandWindows": "tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:239aabe2b84feffd1e7233021af5fbf8ab8a2386260a286c652c661c77c45e5f\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex"
++=======
++            "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:22f02a77491a43683aa7dd0163f52f450b0e1f4feb10e3ebc292026a70c93ffb\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex",
++            "commandWindows": "tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:22f02a77491a43683aa7dd0163f52f450b0e1f4feb10e3ebc292026a70c93ffb\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 12 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" prompt --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" prompt --host codex"
++>>>>>>> origin/main
+           }
+         ]
+       }
+@@ -30,8 +40,13 @@
+           {
+             "type": "command",
+             "timeout": 60,
++<<<<<<< HEAD
+             "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:239aabe2b84feffd1e7233021af5fbf8ab8a2386260a286c652c661c77c45e5f\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex",
+             "commandWindows": "tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:239aabe2b84feffd1e7233021af5fbf8ab8a2386260a286c652c661c77c45e5f\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex"
++=======
++            "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:22f02a77491a43683aa7dd0163f52f450b0e1f4feb10e3ebc292026a70c93ffb\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex",
++            "commandWindows": "tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:22f02a77491a43683aa7dd0163f52f450b0e1f4feb10e3ebc292026a70c93ffb\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 55 --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" stop --host codex --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" stop --host codex"
++>>>>>>> origin/main
+           }
+         ]
+       }
+@@ -42,8 +57,13 @@
+           {
+             "type": "command",
+             "timeout": 3,
++<<<<<<< HEAD
+             "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:239aabe2b84feffd1e7233021af5fbf8ab8a2386260a286c652c661c77c45e5f\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex",
+             "commandWindows": "tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:239aabe2b84feffd1e7233021af5fbf8ab8a2386260a286c652c661c77c45e5f\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex"
++=======
++            "command": "tj_hook -- python3 -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:22f02a77491a43683aa7dd0163f52f450b0e1f4feb10e3ebc292026a70c93ffb\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex",
++            "commandWindows": "tj_hook -- python -I -B -c \"import hashlib, os, runpy, sys, tempfile;from pathlib import Path;package_root = Path(sys.argv[1]);package_digest = sys.argv[2];configured_snapshots = os.environ.get('TJ_AGENTS_STARTUP_SNAPSHOT_DIRECTORY', '');plugin_data = Path(os.environ.get('PLUGIN_DATA', '')).resolve();snapshots = Path(configured_snapshots) if configured_snapshots else plugin_data / 'hook-snapshots';snapshot_key = hashlib.sha256((str(package_root) + chr(0) + package_digest).encode()).hexdigest();loaders = (base / 'hooks' / 'codex' / 'snapshot.py' for base in (snapshots / snapshot_key, package_root));newline = chr(10).encode();sources = (loader.read_bytes().replace(chr(13).encode() + newline, newline).replace(chr(13).encode(), newline) for loader in loaders if loader.is_file());source = next((candidate for candidate in sources if hashlib.sha256(candidate).hexdigest() == '43b2b800fd10d444f0aea8a865409d31499be16dcbccd3bc0c75f92b623f6acd'), None);source is not None or (sys.stderr.write('Codex hook snapshot loader integrity check failed' + chr(10)), sys.exit(2));workspace = tempfile.TemporaryDirectory();staged = Path(workspace.name) / 'loader.py';staged.write_bytes(source);runpy.run_path(str(staged), run_name='__main__')\" \"${PLUGIN_ROOT}\" \"sha256:22f02a77491a43683aa7dd0163f52f450b0e1f4feb10e3ebc292026a70c93ffb\" \"agent\" \"${PLUGIN_ROOT}/hooks/hook_dispatch.py\" --deadline 2 --hook \"${PLUGIN_ROOT}/.agents/agent/runtime/close_lifecycle.py\" end --host codex --hook \"${PLUGIN_ROOT}/.agents/agent-store/runtime/session_hook.py\" session-end --host codex"
++>>>>>>> origin/main
+           }
+         ]
+       }
+diff --git a/pyproject.toml b/pyproject.toml
+index 558b3915..fd2639ff 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -14,7 +14,7 @@ tj-cli = { git = "https://github.com/tj-agents/cli.git", rev = "f676d6ddf6345cf2
+ dev = ["mypy>=2.4.0", "pytest>=9.1.1", "ruff>=0.17.1"]
+ 
+ [tool.ruff]
+-include = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/close/scripts/agent_close.py", "tests/test_close_assessment_order.py"]
++include = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/close/scripts/agent_close.py", "tests/test_close_assessment_order.py", "tests/test_handoff_followup.py"]
+ target-version = "py312"
+ 
+ [tool.ruff.lint]
+@@ -23,11 +23,11 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "A", "BLE", "C4", "SIM", "PTH", "P
+ [tool.mypy]
+ strict = true
+ warn_unreachable = true
+-files = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/close/scripts/agent_close.py", "tests/test_close_assessment_order.py"]
++files = [".agents/tests/test_shared_python_paths.py", "tests/conftest.py", ".agents/agent/runtime/close_lifecycle.py", ".agents/agent/utility/close/scripts/agent_close.py", "tests/test_close_assessment_order.py", "tests/test_handoff_followup.py"]
+ mypy_path = ".agents/agent/runtime"
+ 
+ [[tool.mypy.overrides]]
+-module = ["host", "host_sessions", "plugin_autoupdate", "close_fixtures"]
++module = ["host", "host_sessions", "plugin_autoupdate", "close_fixtures", "test_codex_followup", "test_required_plugins"]
+ follow_imports = "skip"
+ 
+ [tool.pytest]
+diff --git a/tests/test_handoff_followup.py b/tests/test_handoff_followup.py
+new file mode 100644
+index 00000000..a75469fa
+--- /dev/null
++++ b/tests/test_handoff_followup.py
+@@ -0,0 +1,118 @@
++import contextlib
++import io
++import json
++import subprocess
++from collections.abc import Iterator
++from contextlib import ExitStack
++from typing import Any
++from unittest import mock
++
++import pytest
++import test_codex_followup as followup
++import test_required_plugins as required_plugins
++
++
++@pytest.fixture
++def inventory() -> Iterator[Any]:
++    with ExitStack() as stack:
++        fixture: Any = required_plugins.RequiredPluginInventoryTests()
++        fixture.addCleanup = stack.callback
++        fixture.setUp()
++        yield fixture
++
++
++@pytest.fixture
++def caller() -> Iterator[Any]:
++    with ExitStack() as stack:
++        fixture: Any = followup.FollowupTests()
++        fixture.addCleanup = stack.callback
++        fixture.setUp()
++        yield fixture
++
++
++def test_handoff_title_override_preserves_required_plugin_verification(
++    inventory: Any,
++) -> None:
++    inventory.select("agent@tj-agents")
++    entry = inventory.entry("agent@tj-agents")
++    options = (
++        "--config",
++        "model_reasoning_effort=high",
++        "--config",
++        "tui.terminal_title=[]",
++    )
++    with mock.patch.object(
++        required_plugins.REQUIRED.subprocess,
++        "run",
++        return_value=subprocess.CompletedProcess(
++            [], 0, json.dumps({"installed": [entry]}), ""
++        ),
++    ) as run:
++        project, roots = required_plugins.REQUIRED.check_launch_roots(
++            inventory.project,
++            required_plugins.Host.CODEX,
++            "native-codex",
++            [*options, "prepared handoff"],
++        )
++    assert project == inventory.project.resolve()
++    assert roots.keys() == {"agent@tj-agents"}
++    assert run.call_args.args[0] == [
++        "native-codex",
++        *options,
++        "plugin",
++        "list",
++        "--marketplace",
++        "tj-agents",
++        "--json",
++    ]
++
++
++@pytest.mark.parametrize(
++    "option",
++    [
++        ("--config", "plugins.agent.enabled=false"),
++        ("--config", "features.hooks=false"),
++        ("--profile", "other"),
++        ("--disable", "hooks"),
++        ("--config", "tui={}"),
++    ],
++)
++def test_title_override_does_not_admit_plugin_activation_overrides(
++    inventory: Any, option: tuple[str, str]
++) -> None:
++    inventory.select("agent@tj-agents")
++    with mock.patch.object(required_plugins.REQUIRED.subprocess, "run") as run:
++        with pytest.raises(
++            required_plugins.REQUIRED.RequiredPluginsError, match="launch override"
++        ):
++            required_plugins.REQUIRED.check_launch_roots(
++                inventory.project,
++                required_plugins.Host.CODEX,
++                "native-codex",
++                ["--config", "tui.terminal_title=[]", *option, "prepared handoff"],
++            )
++        run.assert_not_called()
++
++
++def test_claude_caller_delivers_to_explicit_codex_profile_and_thread(
++    caller: Any, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    proxy = followup.Session(caller.receipt)
++    output = io.StringIO()
++    monkeypatch.setenv("CLAUDECODE", "1")
++    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "caller")
++    monkeypatch.setenv("CODEX_HOME", str(caller.root / "other-profile"))
++    with (
++        mock.patch.object(followup.FOLLOWUP, "Proxy", return_value=proxy) as connection,
++        mock.patch.object(followup.FOLLOWUP, "responsibility", return_value="owner"),
++        contextlib.redirect_stdout(output),
++    ):
++        code = followup.FOLLOWUP.main(caller.arguments())
++    assert code == 0
++    assert json.loads(output.getvalue())["status"] == "delivered"
++    assert followup.FOLLOWUP.path_key(caller.root) == followup.FOLLOWUP.path_key(
++        connection.call_args.args[1]
++    )
++    receipt = json.loads(caller.receipt_path.read_text(encoding="utf-8"))
++    assert receipt["thread_id"] == followup.THREAD
++    assert sum(method.startswith("turn/") for method, _ in proxy.calls) == 1

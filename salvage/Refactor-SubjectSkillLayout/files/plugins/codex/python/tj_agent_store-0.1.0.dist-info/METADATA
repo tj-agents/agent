@@ -1,0 +1,5 @@
+Metadata-Version: 2.3
+Name: tj-agent-store
+Version: 0.1.0
+Summary: Independent agent execution and ownership records
+Requires-Python: >=3.9

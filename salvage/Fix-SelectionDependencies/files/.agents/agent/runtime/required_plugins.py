@@ -1,0 +1,712 @@
+"""Require every repository-selected plugin in the active native host (Python 3.9+)."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+from tj_cli import process
+from tj_cli.git import repository_file
+from tj_agent.host import Host
+import host_plugins
+
+
+IDENTITY = re.compile(r"[a-z][a-z0-9-]*@[a-z][a-z0-9-]*\Z")
+DEPENDENCY_ERRORS = frozenset({"dependency-unsatisfied", "dependency-version-unsatisfied"})
+INVENTORY_TIMEOUT_SECONDS = 20
+MARKETPLACE_NAME = "tj-agents"
+MARKETPLACE_REPOSITORY = "tj-agents/marketplace"
+MARKETPLACE_SPARSE_PATHS = (".agents/plugins", ".claude-plugin", "plugins")
+
+
+def producer_repository(repository: object) -> bool:
+    return (isinstance(repository, str) and repository.casefold().startswith("tj-agents/")
+            and repository.casefold() != MARKETPLACE_REPOSITORY)
+
+
+def marketplace_error(name: str, repository: object) -> str | None:
+    canonical_repository = isinstance(repository, str) and repository.casefold() == MARKETPLACE_REPOSITORY
+    if ((name == MARKETPLACE_NAME and repository != MARKETPLACE_REPOSITORY)
+            or (name != MARKETPLACE_NAME and canonical_repository)):
+        return f"The {MARKETPLACE_NAME} marketplace must be {MARKETPLACE_REPOSITORY} and nothing else may use that name"
+    if producer_repository(repository):
+        return f"{repository} is published through the {MARKETPLACE_NAME} marketplace; select {MARKETPLACE_REPOSITORY}"
+    return None
+
+
+class RequiredPluginsError(RuntimeError):
+    pass
+
+
+class MissingRequiredPluginsError(RequiredPluginsError):
+    def __init__(self, message: str, project: Path, missing: Sequence[str]) -> None:
+        super().__init__(message)
+        self.project = project
+        self.missing = tuple(missing)
+
+
+class UnsatisfiedDependencyError(MissingRequiredPluginsError):
+    pass
+
+
+def project_root(project: Path) -> Path:
+    project = project.resolve()
+    for directory in (project, *project.parents):
+        selection = repository_file(directory, ".agents/plugins.json")
+        if (
+            selection.exists()
+            or selection.is_symlink()
+            or (directory / ".git").exists()
+        ):
+            return directory
+    return project
+
+
+def committed_worktree(project: Path) -> bool:
+    if not (project / ".git").is_file():
+        return False
+    tracked = process.run(["git", "ls-files", "--error-unmatch", "--", ".agents/plugins.json"],
+                          cwd=project, capture_output=True, timeout=10, check=False)
+    return tracked.returncode == 0
+
+
+def launch_context(project: Path, host: Host, arguments) -> tuple[Path | None, tuple[str, ...]]:
+    plugins = host_plugins.PLUGINS[host]
+    original_project = project
+    inventory_options = []
+    command_seen = False
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            break
+        if argument in plugins.INFORMATION_OPTIONS:
+            return None, ()
+        if not command_seen and argument in plugins.MAINTENANCE_COMMANDS:
+            return None, ()
+        option, separator, value = argument.partition("=")
+        if len(argument) > 2 and argument[:2] in plugins.VALUE_OPTIONS:
+            option, separator, value = argument[:2], "=", argument[2:].removeprefix("=")
+        if option in plugins.VALUE_OPTIONS:
+            if not separator:
+                index += 1
+                if index >= len(arguments):
+                    raise RequiredPluginsError(f"{option} requires a value")
+                value = arguments[index]
+            if option in plugins.DIRECTORY_OPTIONS:
+                project = original_project / value
+            if option in plugins.CONFIGURATION_OPTIONS:
+                inventory_options.extend((option, value))
+        elif argument not in plugins.FLAG_OPTIONS:
+            command_seen = True
+        index += 1
+    return project.resolve(), tuple(inventory_options)
+
+
+def check_launch_roots(project: Path, host: Host, executable: str | None, arguments) -> tuple[Path | None, dict[str, Path] | None]:
+    effective_project, inventory_options = launch_context(project, host, arguments)
+    if effective_project is None:
+        return None, None
+    return effective_project, check(effective_project, host, executable, inventory_options=inventory_options)
+
+
+def check_launch(project: Path, host: Host, executable: str | None, arguments) -> Path | None:
+    return check_launch_roots(project, host, executable, arguments)[0]
+
+
+def readable_payload(path: Path, host: Host, name: str) -> bool:
+    manifest = path / host.manifest_directory / "plugin.json"
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8-sig"))
+        if not isinstance(document, dict) or document.get("name") != name:
+            return False
+        for field in ("skills", "hooks", "agents", "commands"):
+            values = document.get(field, [])
+            if isinstance(values, str):
+                values = [values]
+            if field == "hooks" and isinstance(values, dict):
+                continue
+            if not isinstance(values, list):
+                return False
+            for value in values:
+                if not isinstance(value, str):
+                    return False
+                target = (path / value).resolve()
+                if not target.is_relative_to(path.resolve()) or not target.exists():
+                    return False
+                if target.is_file():
+                    target.read_bytes()
+                else:
+                    next(target.iterdir(), None)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def selected(project: Path) -> tuple[str, ...]:
+    path = repository_file(project, ".agents/plugins.json")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return ()
+    except (OSError, ValueError) as error:
+        raise RequiredPluginsError(f"Cannot read required plugin selection {path}: {error}") from error
+    plugins = document.get("plugins") if isinstance(document, dict) and document.get("schema_version") == 1 else None
+    if (not isinstance(plugins, list) or not plugins
+            or any(not isinstance(value, str) or not IDENTITY.fullmatch(value) for value in plugins)):
+        raise RequiredPluginsError(f"{path}: plugins must list required <plugin>@<marketplace> identities")
+    return tuple(sorted(set(plugins)))
+
+
+def enabled_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
+    return readable_roots(plugins, project, plugins.installations(project, entries))
+
+
+def readable_roots(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, Path]:
+    """Return the readable payload of each enabled, error-free row, without recording the native inventory."""
+    roots = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("enabled") is not True:
+            continue
+        if entry.get("installed") is False or entry.get("error") or entry.get("errors"):
+            continue
+        owner = entry.get("projectPath")
+        if entry.get("scope") in ("project", "local") and not owner:
+            continue
+        if owner and not isinstance(owner, str):
+            continue
+        located = plugins.location(entry, project)
+        if located is None:
+            continue
+        identity, path = located
+        if readable_payload(path, plugins.HOST, identity.split("@", 1)[0]):
+            roots[identity] = path
+    return roots
+
+
+def failures(plugins: host_plugins.Plugins, project: Path, entries: list) -> dict[str, list[dict]]:
+    """Return the native load errors of each enabled plugin row that `enabled_roots` leaves out."""
+    found: dict[str, list[dict]] = {}
+    for entry in plugins.installations(project, entries):
+        if not isinstance(entry, dict) or entry.get("enabled") is not True:
+            continue
+        messages = entry.get("errors") or entry.get("error")
+        if not messages:
+            continue
+        messages = messages if isinstance(messages, list) else [messages]
+        located = plugins.location(entry, project)
+        identity = located[0] if located is not None else entry.get("id")
+        if not isinstance(identity, str):
+            continue
+        details = entry.get("errorDetails")
+        details = details if isinstance(details, list) and len(details) == len(messages) else [{}] * len(messages)
+        found.setdefault(identity, []).extend(
+            {**(detail if isinstance(detail, dict) else {}), "message": str(message)}
+            for message, detail in zip(messages, details, strict=True)
+        )
+    return found
+
+
+def dependencies(root: Path, identity: str) -> tuple[str, ...]:
+    """Return the plugins an installed build's plugin manifest declares it depends on.
+
+    A bare name depends on the plugin of that name in the dependent's own marketplace.
+    """
+    manifest = root / Host.CLAUDE.manifest_directory / "plugin.json"
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return ()
+    except (OSError, ValueError) as error:
+        raise RequiredPluginsError(f"{identity}: cannot read its declared dependencies: {error}") from error
+    declared = document.get("dependencies", []) if isinstance(document, dict) else None
+    if not isinstance(declared, list):
+        raise RequiredPluginsError(f"{identity}: its declared dependencies must be a list")
+    marketplace = identity.split("@", 1)[1]
+    found = []
+    for value in declared:
+        name = value.get("name") if isinstance(value, dict) else value
+        dependency = name if isinstance(name, str) and "@" in name else f"{name}@{marketplace}"
+        if not isinstance(name, str) or not IDENTITY.fullmatch(dependency):
+            raise RequiredPluginsError(f"{identity}: invalid declared dependency {value!r}")
+        found.append(dependency)
+    return tuple(found)
+
+
+def closure(required: Sequence[str], root: Callable[[str], Path | None]) -> tuple[str, ...]:
+    """Return the required plugins and, transitively, every dependency their located builds declare."""
+    needed: set[str] = set()
+    pending = sorted(required, reverse=True)
+    while pending:
+        identity = pending.pop()
+        if identity in needed:
+            continue
+        needed.add(identity)
+        located = root(identity)
+        if located is not None:
+            pending.extend(dependency for dependency in dependencies(located, identity) if dependency not in needed)
+    return tuple(sorted(needed))
+
+
+def unsatisfied(host: Host, project: Path, identity: str, detail: dict) -> str:
+    dependency = detail.get("dependency")
+    if detail.get("type") == "dependency-version-unsatisfied":
+        problem = f"does not satisfy the required version {detail.get('required')}"
+    elif detail.get("reason") == "not-enabled":
+        problem = f"is not enabled in {project}"
+    else:
+        problem = "is not installed"
+    return f"{host} will not load {identity}: its dependency {dependency} {problem}"
+
+
+def check(project: Path, host: Host, executable: str | None = None,
+          inventory_options: tuple[str, ...] = (), *, entries: list | None = None) -> dict[str, Path] | None:
+    """Verify the selection and its transitive dependencies; return each one's verified root."""
+    plugins = host_plugins.PLUGINS[host]
+    launch_directory = project.resolve()
+    project = project_root(launch_directory)
+    required = selected(project)
+    if not required:
+        return None
+    plugins.require_inventory_options(inventory_options)
+    binary = executable or shutil.which(host.value)
+    if not binary:
+        raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
+    rows = entries if entries is not None else closure_rows(launch_directory, host, binary, inventory_options,
+                                                             identities=required)
+    roots = enabled_roots(plugins, launch_directory, rows)
+    needed = closure(required, roots.get)
+    missing = sorted(set(needed) - roots.keys())
+    if missing:
+        reasons = failures(plugins, launch_directory, rows)
+        dependency_failures = [(identity, detail) for identity in missing for detail in reasons.get(identity, [])
+                               if detail.get("type") in DEPENDENCY_ERRORS]
+        if dependency_failures:
+            absent = sorted({detail["dependency"] for _, detail in dependency_failures
+                             if isinstance(detail.get("dependency"), str) and IDENTITY.fullmatch(detail["dependency"])})
+            raise UnsatisfiedDependencyError(
+                "; ".join(unsatisfied(host, project, identity, detail) for identity, detail in dependency_failures)
+                + ". Run tj install --step 'plugin setup' in this project; it enables the selection's "
+                "dependencies and installs missing builds.", project, absent or missing,
+            )
+        described = [identity + (f" ({'; '.join(detail['message'] for detail in reasons[identity])})"
+                                 if identity in reasons else "") for identity in missing]
+        raise MissingRequiredPluginsError(
+            f"Required standards unavailable for {host} in {project}; not enabled with a complete "
+            f"cached build: {', '.join(described)}. Run tj install --step 'plugin setup' "
+            "in this project; it reinstalls missing and incomplete builds.", project, missing,
+        )
+    return {identity: roots[identity] for identity in needed}
+
+
+def inventory_roots(project: Path, host: Host, executable: str | None = None,
+                    inventory_options: tuple[str, ...] = (), *, identities: Sequence[str] | None = None) -> dict[str, Path]:
+    """Return verified enabled roots, optionally limited to selected marketplaces and identities."""
+    entries = inventory_rows(project, host, executable, inventory_options, identities=identities)
+    roots = enabled_roots(host_plugins.PLUGINS[host], project.resolve(), entries)
+    return roots if identities is None else {identity: root for identity, root in roots.items() if identity in identities}
+
+
+def closure_rows(project: Path, host: Host, executable: str | None = None,
+                 inventory_options: tuple[str, ...] = (), *, identities: Sequence[str]) -> list:
+    """Read native inventory covering every marketplace of the identities' transitive dependency closure.
+
+    A dependency in another marketplace is only listed once that marketplace is queried, which may in turn
+    reveal further dependencies, so querying repeats until the closure adds no new marketplace.
+    """
+    plugins = host_plugins.PLUGINS[host]
+    launch_directory = project.resolve()
+    queried = tuple(identities)
+    rows = inventory_rows(project, host, executable, inventory_options, identities=queried)
+    if None in plugins.inventory_marketplaces(queried):
+        return rows
+    while True:
+        needed = closure(identities, readable_roots(plugins, launch_directory, rows).get)
+        known = set(plugins.inventory_marketplaces(queried))
+        extra = tuple(identity for identity in needed
+                      if not set(plugins.inventory_marketplaces((identity,))) <= known)
+        if not extra:
+            return rows
+        rows = [*rows, *inventory_rows(project, host, executable, inventory_options, identities=extra)]
+        queried = (*queried, *extra)
+
+
+def inventory_rows(project: Path, host: Host, executable: str | None = None,
+                   inventory_options: tuple[str, ...] = (), *, identities: Sequence[str] | None = None) -> list:
+    """Read native inventory without processing installations or writing receipts."""
+    plugins = host_plugins.PLUGINS[host]
+    launch_directory = project.resolve()
+    binary = executable or shutil.which(host.value)
+    if not binary:
+        raise RequiredPluginsError(f"Required standards cannot be verified: {host} executable is unavailable")
+    if identities is None:
+        return inventory(binary, plugins, launch_directory, inventory_options)
+    plugins.require_inventory_options(inventory_options)
+    entries = []
+    deadline = time.monotonic() + INVENTORY_TIMEOUT_SECONDS
+    for marketplace in plugins.inventory_marketplaces(identities):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RequiredPluginsError(f"Required {host} plugin inventory exceeded its {INVENTORY_TIMEOUT_SECONDS}-second budget")
+        entries.extend(inventory(binary, plugins, launch_directory, inventory_options, marketplace, timeout=remaining))
+    return entries
+
+
+def inventory(binary: str, plugins: host_plugins.Plugins, launch_directory: Path, inventory_options: tuple[str, ...],
+              marketplace: str | None = None, *, timeout: float | None = None) -> list:
+    command = [binary, *inventory_options, "plugin", "list"]
+    if marketplace is not None:
+        command.extend(("--marketplace", marketplace))
+    command.append("--json")
+    try:
+        if os.name == "nt" and Path(binary).suffix.casefold() == ".ps1":
+            command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-File", *command]
+        result = process.run(
+            command, cwd=launch_directory, capture_output=True,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=INVENTORY_TIMEOUT_SECONDS if timeout is None else timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        scope = f" for marketplace {marketplace}" if marketplace is not None else ""
+        raise RequiredPluginsError(f"Required {plugins.HOST} plugin inventory{scope} could not run: {error}") from error
+    if result.returncode:
+        scope = f" for marketplace {marketplace}" if marketplace is not None else ""
+        raise RequiredPluginsError(
+            f"Required {plugins.HOST} plugin inventory{scope} failed: {(result.stderr or result.stdout).strip()[:1024]}"
+        )
+    try:
+        data = json.loads(result.stdout)
+    except ValueError as error:
+        raise RequiredPluginsError(f"Required {plugins.HOST} plugin inventory returned invalid JSON") from error
+    entries = plugins.inventory_entries(data)
+    if not isinstance(entries, list):
+        raise RequiredPluginsError(f"Required {plugins.HOST} plugin inventory returned an invalid roster")
+    return entries
+
+
+CHECK_TIMEOUT_SECONDS = 90
+ONBOARD_TIMEOUT_SECONDS = 660
+MAX_OUTPUT = 1024
+SETUP_RECORD = "plugin-setup.json"
+
+
+class PluginSetupError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class Target:
+    identity: str
+    script: Path
+    declaration: str
+    runtime: bytes
+    converge: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CollectionResult:
+    targets: list[Target]
+    errors: list[str]
+    missing: dict[Host, MissingRequiredPluginsError]
+
+
+def bounded(result: subprocess.CompletedProcess) -> str:
+    return ((result.stderr or result.stdout or f"exit {result.returncode}").strip()[:MAX_OUTPUT])
+
+
+def private_path(root: Path, relative: str) -> Path:
+    candidate = PurePosixPath(relative)
+    if candidate.is_absolute() or ".." in candidate.parts or not candidate.parts or candidate.suffix != ".py":
+        raise PluginSetupError(f"invalid setup script declaration {relative!r}")
+    path = root.joinpath(*candidate.parts)
+    current = root
+    if is_reparse(current):
+        raise PluginSetupError(f"declared setup script is unsafe: {relative}")
+    for part in candidate.parts:
+        current /= part
+        if is_reparse(current):
+            raise PluginSetupError(f"declared setup script is unsafe: {relative}")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise PluginSetupError(f"declared setup script is unavailable: {relative}") from error
+    if not resolved.is_relative_to(root.resolve()) or is_reparse(path) or not resolved.is_file():
+        raise PluginSetupError(f"declared setup script is unsafe: {relative}")
+    return resolved
+
+
+def is_reparse(path: Path) -> bool:
+    try:
+        return path.is_symlink() or bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
+    except OSError:
+        return True
+
+
+def runtime_bytes(root: Path) -> bytes:
+    if is_reparse(root):
+        raise PluginSetupError("plugin setup runtime directory is a reparse point")
+    digest = hashlib.sha256()
+    directories = [root]
+    while directories:
+        directory = directories.pop()
+        for path in sorted(directory.iterdir(), reverse=True):
+            relative = path.relative_to(root)
+            if "__pycache__" in relative.parts or path.suffix == ".pyc":
+                continue
+            if is_reparse(path):
+                raise PluginSetupError(f"plugin setup runtime contains a reparse point: {relative}")
+            if path.is_dir():
+                directories.append(path)
+            elif path.is_file():
+                digest.update(relative.as_posix().encode() + b"\0" + path.read_bytes())
+    return digest.digest()
+
+
+def harness_document(root: Path) -> tuple[dict, str]:
+    harness = root / "harness.json"
+    if not harness.is_file() or is_reparse(harness):
+        raise PluginSetupError("verified runtime has no harness declaration")
+    try:
+        document = json.loads(harness.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise PluginSetupError("cannot read harness declaration") from error
+    plugin = document.get("plugin") if isinstance(document, dict) else None
+    marketplace, separator, name = plugin.partition("/") if isinstance(plugin, str) else ("", "", "")
+    identity = f"{name}@{marketplace}"
+    if not separator or not IDENTITY.fullmatch(identity):
+        raise PluginSetupError("harness plugin identity is invalid")
+    return document, identity
+
+
+def declaration(root: Path, identity: str, document: dict | None = None) -> Target | None:
+    name, marketplace = identity.split("@", 1)
+    document, declared = harness_document(root) if document is None else (document, identity)
+    if declared != identity:
+        raise PluginSetupError(f"{identity}: harness identity does not match the selected plugin")
+    requires = document.get("requires", {})
+    if not isinstance(requires, dict):
+        raise PluginSetupError(f"{identity}: harness requires declaration is invalid")
+    setup = requires.get("setup")
+    if setup is None:
+        return None
+    valid_keys = ({"script"}, {"script", "converge"})
+    if (
+        not isinstance(setup, dict)
+        or set(setup) not in valid_keys
+        or not isinstance(setup["script"], str)
+        or ("converge" in setup and not isinstance(setup["converge"], bool))
+    ):
+        raise PluginSetupError(
+            f'{identity}: requires.setup must be {{"script": "relative/path.py"}}, '
+            'optionally with "converge": a bool'
+        )
+    script = private_path(root, setup["script"])
+    converge = bool(setup.get("converge", False))
+    return Target(
+        identity, script, setup["script"], runtime_bytes(script.parent), converge
+    )
+
+
+def converges(root: Path) -> bool:
+    try:
+        document, _ = harness_document(root)
+    except PluginSetupError:
+        return False
+    requires = document.get("requires")
+    setup = requires.get("setup") if isinstance(requires, dict) else None
+    return isinstance(setup, dict) and setup.get("converge") is True
+
+
+def targets(project: Path, host: Host, executable: str | None) -> list[Target]:
+    roots = check(project, host, executable)
+    if roots is None:
+        return []
+    found = []
+    for identity, root in sorted(roots.items()):
+        document, declared = harness_document(root)
+        if declared != identity:
+            raise PluginSetupError(f"{identity}: harness identity does not match the selected plugin")
+        target = declaration(root, identity, document)
+        if target is not None:
+            found.append(target)
+    return found
+
+
+def collect(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None]) -> CollectionResult:
+    discovered, errors, missing = {}, [], {}
+    for host in hosts:
+        try:
+            discovered[host] = {target.identity: target for target in targets(project, host, executables.get(host))}
+        except MissingRequiredPluginsError as error:
+            missing[host] = error
+        except (RequiredPluginsError, PluginSetupError, RuntimeError, OSError) as error:
+            errors.append(f"{host}: {error}")
+    if not errors and not missing and discovered:
+        reference_host = next(iter(discovered))
+        reference = discovered[reference_host]
+        for host, current in discovered.items():
+            if set(current) != set(reference):
+                errors.append(f"{host}: native host setup declarations disagree with {reference_host}")
+                continue
+            for identity, target in current.items():
+                expected = reference[identity]
+                disagree = (
+                    expected.declaration != target.declaration
+                    or expected.runtime != target.runtime
+                    or expected.converge != target.converge
+                )
+                if disagree:
+                    errors.append(f"{identity}: native host runtimes disagree on its setup declaration")
+    if errors or missing or not discovered:
+        return CollectionResult([], errors, missing)
+    return CollectionResult([reference[key] for key in sorted(reference)], errors, missing)
+
+
+def recorded_setups(state: Path) -> dict[str, str]:
+    """The setup runtime digest of each plugin's last successful setup, keyed by identity."""
+    try:
+        document = json.loads((state / SETUP_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(document, dict):
+        return {}
+    return {identity: runtime for identity, runtime in document.items()
+            if isinstance(identity, str) and isinstance(runtime, str)}
+
+
+def record_setups(state: Path, targets: Sequence[Target]) -> None:
+    document = recorded_setups(state) | {target.identity: target.runtime.hex() for target in targets}
+    state.mkdir(parents=True, exist_ok=True)
+    staged = state / f"{SETUP_RECORD}.{os.getpid()}"
+    staged.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    staged.replace(state / SETUP_RECORD)
+
+
+def install_and_recheck(project: Path, host: Host, error: MissingRequiredPluginsError,
+                        executable: str | None = None, inventory_options: tuple[str, ...] = ()) -> dict[str, Path] | None:
+    host_plugins.PLUGINS[host].install(error.project, error.missing)
+    if executable is None:
+        return check(project, host, inventory_options=inventory_options)
+    return check(project, host, executable, inventory_options=inventory_options)
+
+
+def invoke(target: Target, arguments: list[str], timeout: int, project: Path,
+           inherit: bool = False) -> subprocess.CompletedProcess:
+    command = [sys.executable, "-B", str(target.script), "setup", *arguments]
+    if inherit:
+        return process.run(command, cwd=project, timeout=timeout, check=False)
+    return process.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       cwd=project, timeout=timeout, check=False)
+
+
+def reconcile_selection(project: Path, *, check_only: bool = False) -> list[str]:
+    return reconcile_selections([project], check_only=check_only)
+
+
+def reconcile_selections(projects: Sequence[Path], *, check_only: bool = False) -> list[str]:
+    projects = sorted({project_root(project) for project in projects
+                       if repository_file(project_root(project), ".agents/plugins.json").is_file()})
+    if not projects:
+        return []
+    script = Path(__file__).resolve().parents[1] / "utility/plugins/scripts/adopt_plugins.py"
+    additional = [argument for project in projects[1:] for argument in ("--also-root", str(project))]
+    try:
+        result = process.run(
+            [sys.executable, "-B", str(script), "--root", str(projects[0]), "--converge-existing",
+             "--mode", "check" if check_only else "write", *additional],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RequiredPluginsError(f"Repository plugin selection could not converge: {error}") from error
+    detail = (result.stderr or result.stdout).strip()
+    if result.returncode:
+        if check_only and result.returncode == 1 and result.stdout.startswith("Drift in:"):
+            return [detail]
+        raise RequiredPluginsError(f"Repository plugin selection could not converge: {detail}")
+    if detail and not check_only:
+        print(f"plugins: {detail}", file=sys.stderr)
+    return []
+
+
+def check_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None],
+                state: Path) -> list[str]:
+    project = project_root(project)
+    try:
+        drift = reconcile_selection(project, check_only=True)
+    except RequiredPluginsError as error:
+        return [str(error)]
+    if drift:
+        return drift
+    collected = collect(project, hosts, executables)
+    errors = collected.errors
+    errors.extend(f"{host}: {error}" for host, error in collected.missing.items())
+    recorded = recorded_setups(state)
+    for target in collected.targets:
+        if recorded.get(target.identity) != target.runtime.hex():
+            errors.append(f"{target.identity}: setup has not succeeded with its current runtime")
+            continue
+        try:
+            result = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
+            if result.returncode:
+                errors.append(f"{target.identity}: setup --check failed: {bounded(result)}")
+        except (OSError, subprocess.SubprocessError) as error:
+            errors.append(f"{target.identity}: setup --check could not run: {error}")
+    return errors
+
+def converge_setup(project: Path, hosts: Sequence[Host], executables: Mapping[Host, str | None], state: Path,
+                   onboard: bool = False) -> list[str]:
+    project = project_root(project)
+    try:
+        reconcile_selection(project)
+    except RequiredPluginsError as error:
+        return [str(error)]
+    collected = collect(project, hosts, executables)
+    errors, missing = collected.errors, collected.missing
+    if errors:
+        errors.extend(f"{host}: {error}" for host, error in missing.items())
+        return errors
+    for host, missing_error in missing.items():
+        try:
+            install_and_recheck(project, host, missing_error, executables.get(host))
+        except (RequiredPluginsError, RuntimeError, OSError) as repair_error:
+            errors.append(f"{host}: {repair_error}")
+    if errors:
+        return errors
+    if missing:
+        collected = collect(project, hosts, executables)
+        errors = collected.errors
+    errors.extend(f"{host}: {error}" for host, error in collected.missing.items())
+    recorded = recorded_setups(state)
+    converged = []
+    for target in collected.targets:
+        try:
+            current = recorded.get(target.identity) == target.runtime.hex()
+            if current and not invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project).returncode:
+                continue
+            applied = invoke(target, ["--onboard"] if onboard else [],
+                             ONBOARD_TIMEOUT_SECONDS if onboard else CHECK_TIMEOUT_SECONDS, project, inherit=onboard)
+            if applied.returncode:
+                errors.append(f"{target.identity}: setup failed: {bounded(applied)}")
+                continue
+            checked = invoke(target, ["--check"], CHECK_TIMEOUT_SECONDS, project)
+            if checked.returncode:
+                errors.append(f"{target.identity}: setup did not converge: {bounded(checked)}")
+                continue
+            converged.append(target)
+        except (OSError, subprocess.SubprocessError) as error:
+            errors.append(f"{target.identity}: setup could not run: {error}")
+    if converged:
+        try:
+            record_setups(state, converged)
+        except OSError as error:
+            errors.append(f"plugin setup could not be recorded in {state}: {error}")
+    return errors

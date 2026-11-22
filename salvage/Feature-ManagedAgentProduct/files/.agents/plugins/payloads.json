@@ -1,0 +1,78 @@
+{
+  "payloads": {
+    "agent-store": [
+      "agent-store"
+    ],
+    "agent": [
+      "agent"
+    ],
+    "codex": [
+      "codex"
+    ]
+  },
+  "dependencies": {
+    "agent": [
+      "tj-agents/base",
+      "agent-store",
+      "tj-agents/cli"
+    ],
+    "codex": [
+      "agent"
+    ],
+    "agent-store": []
+  },
+  "resources": [
+    {
+      "plugin": "agent",
+      "distribution": "tj-cli",
+      "destination": ".agents/agent/runtime"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/agent/runtime",
+      "destination": ".agents/agent/runtime"
+    },
+    {
+      "plugin": "agent",
+      "source": ".claude/runtime",
+      "destination": ".agents/agent/runtime/claude"
+    },
+    {
+      "plugin": "agent",
+      "source": ".codex/runtime",
+      "destination": ".agents/agent/runtime/codex"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/agent/resources",
+      "destination": ".agents/agent/resources"
+    },
+    {
+      "plugin": "agent",
+      "source": ".agents/agent/resources/lanes/agents/claude",
+      "destination": "agents"
+    },
+    {
+      "plugin": "agent",
+      "source": ".claude/hooks/agent.json",
+      "destination": "hooks/claude.json"
+    },
+    {
+      "plugin": "agent",
+      "source": ".codex/hooks/agent.json",
+      "destination": "hooks/codex.json"
+    }
+  ],
+  "host_adapters": [
+    {
+      "skill": "agent:listen",
+      "host": "codex",
+      "source": ".agents/plugins/adapters/codex/agent/listen.md"
+    },
+    {
+      "skill": "agent:listen",
+      "host": "claude",
+      "source": ".agents/plugins/adapters/claude/agent/listen.md"
+    }
+  ]
+}
